@@ -104,8 +104,8 @@ set_env_value() {
 
 validate_bind_address() {
   case "$1" in
-    ""|0.0.0.0|::|*[!A-Za-z0-9._:-]*)
-      die "dashboard bind address must be one private address without whitespace or shell syntax"
+    ""|::|*[!A-Za-z0-9._:-]*)
+      die "dashboard bind address must be one address without whitespace or shell syntax"
       ;;
   esac
 }
@@ -211,14 +211,18 @@ if confirm "Enable the private dashboard on this device?" yes; then
   fi
   if [ -n "$TAILSCALE_IP" ]; then
     echo "Tailscale address candidate: $TAILSCALE_IP"
-    printf 'Dashboard bind address [%s]: ' "$TAILSCALE_IP"
+    printf 'Dashboard bind address [%s] (use 0.0.0.0 for LAN access): ' "$TAILSCALE_IP"
     IFS= read -r DASH_BIND || exit 1
     DASH_BIND=${DASH_BIND:-$TAILSCALE_IP}
   else
-    printf 'Dashboard bind address: '
+    printf 'Dashboard bind address [0.0.0.0 for LAN access]: '
     IFS= read -r DASH_BIND || exit 1
+    DASH_BIND=${DASH_BIND:-0.0.0.0}
   fi
   validate_bind_address "$DASH_BIND"
+  if [ "$DASH_BIND" = 0.0.0.0 ]; then
+    echo "Warning: the dashboard has no login and will be reachable on every connected network."
+  fi
   set_env_value MSGBOX_DASH_BIND "$DASH_BIND"
 else
   DASHBOARD=0
