@@ -34,6 +34,9 @@ sounds/listen-receipts/README.md	sounds/README.md	rewrite	Remove role-specific e
 src/button_send.py	src/button_send.py	keep	Core button, playback, recording, and routing runtime.
 src/contacts.py	src/contacts.py	keep	Private contact and NFC-routing store with synthetic examples.
 src/dashboard.py	src/dashboard.py	keep	Private device dashboard; public exposure remains unsupported.
+src/dashboard_static/app.js	src/dashboard_static/app.js	keep	Private dashboard client without third-party assets.
+src/dashboard_static/index.html	src/dashboard_static/index.html	keep	Private dashboard markup without runtime data.
+src/dashboard_static/styles.css	src/dashboard_static/styles.css	keep	Private dashboard presentation without third-party assets.
 src/guided_reply.py	src/guided_reply.py	keep	Feature defaults off when licensed audio is unavailable.
 src/listened_receipts.py	src/listened_receipts.py	keep	Receipt processing with private-state and signature checks.
 src/make_ringtones.py	src/make_ringtones.py	keep	Generates local non-voice signals.

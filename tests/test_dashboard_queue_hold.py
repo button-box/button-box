@@ -152,12 +152,27 @@ class DashboardQueueHoldTests(unittest.TestCase):
         handler.do_GET()
         self.assertEqual(response, {"code": 200, "body": expected, "ctype": "audio/wav"})
 
-    def test_dashboard_exposes_distinct_hold_controls(self):
-        self.assertIn("On hold — skipped until reinstated", dashboard.PAGE)
-        self.assertIn("act(\\'hold\\'", dashboard.PAGE)
-        self.assertIn("act(\\'resume\\'", dashboard.PAGE)
-        self.assertIn("?hold=1", dashboard.PAGE)
+    def test_dashboard_serves_static_assets(self):
+        expected_types = {
+            "/": "text/html; charset=utf-8",
+            "/static/app.js": "text/javascript; charset=utf-8",
+            "/static/styles.css": "text/css; charset=utf-8",
+        }
 
+        for path, expected_type in expected_types.items():
+            with self.subTest(path=path):
+                handler = dashboard.Handler.__new__(dashboard.Handler)
+                handler.path = path
+                response = {}
+                handler._send = lambda code, body, ctype: response.update(
+                    code=code, body=body, ctype=ctype
+                )
+
+                handler.do_GET()
+
+                self.assertEqual(response["code"], 200)
+                self.assertTrue(response["body"])
+                self.assertEqual(response["ctype"], expected_type)
 
 if __name__ == "__main__":
     unittest.main()

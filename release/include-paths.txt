@@ -15,6 +15,9 @@ scripts/test.sh
 src/button_send.py
 src/contacts.py
 src/dashboard.py
+src/dashboard_static/app.js
+src/dashboard_static/index.html
+src/dashboard_static/styles.css
 src/guided_reply.py
 src/listened_receipts.py
 src/make_ringtones.py

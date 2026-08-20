@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Message Box</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<h1>📮 Message Box</h1><div class="sub" id="gen"></div>
+<h2>Contacts</h2><section class="contactpanel"><div id="contactmode" class="contactmode">Loading contacts…</div>
+<div id="contactlist" class="contactlist"></div>
+<div class="contactform"><label>WhatsApp chat<select id="contactjid" onchange="selectContact()"></select></label>
+<label>Display name<input id="contactlabel" maxlength="80"></label><button class="rei" id="contactadd" onclick="addContact()">Add contact</button></div>
+<div class="contactactions"><button class="secondary" id="contactrefresh" onclick="loadContacts(true)">Refresh WhatsApp chats</button>
+<span class="contactstatus" id="contactstatus"></span></div>
+<h3 class="listenertitle">Listener profiles</h3><div id="listenerlist" class="listenerlist"></div>
+<div class="contactform listenerform"><label>Listener JID<input id="listenerjid" placeholder="15550001@s.whatsapp.net"></label>
+<label>Name<input id="listenername" maxlength="80"></label><label>Optional listened clip<input id="listenerclip" placeholder="/var/lib/messagebox/assets/listened.wav"></label>
+<button class="rei" onclick="saveListener()">Save profile</button></div><div class="contactstatus" id="listenerstatus"></div></section>
+<h2>On demand</h2><div class="ringbox">
+<button class="ring" id="ring" onclick="ringNow()">🔔 Ring the box</button>
+<span class="ringstatus" id="ringstatus">Call the kids when they're home.</span></div>
+<h2>At a glance — last 7 days</h2><div class="summary" id="behavior"></div>
+<h2>What happened</h2>
+<div class="privacy">Content-free timeline: no audio, transcripts, message IDs or phone numbers.</div>
+<div class="interactions" id="interactions"></div>
+<button class="morebtn" id="moreInteractions" onclick="toggleInteractions()" hidden></button>
+<details class="morestats"><summary>More stats</summary><div class="cards" id="cards"></div>
+<h2>Last 14 days</h2><div class="chart"><div class="bars" id="bars"></div>
+<div class="legend">per day:<i style="background:var(--acc)"></i>sent<i style="background:#5a8dee"></i>received</div></div>
+<h2>By chat</h2><div id="bychat"></div></details>
+<h2>Queue — plays next</h2><div id="queue"></div>
+<h2>On hold — skipped until reinstated</h2><div id="hold"></div>
+<h2>Trash — deleted, reinstatable</h2><div id="trash"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
