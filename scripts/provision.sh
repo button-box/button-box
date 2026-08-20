@@ -51,6 +51,7 @@ rsync -azR \
   "$REPO_DIR/./src/button_send.py" \
   "$REPO_DIR/./src/contacts.py" \
   "$REPO_DIR/./src/dashboard.py" \
+  "$REPO_DIR/./src/dashboard_static/" \
   "$REPO_DIR/./src/guided_reply.py" \
   "$REPO_DIR/./src/listened_receipts.py" \
   "$REPO_DIR/./src/make_ringtones.py" \

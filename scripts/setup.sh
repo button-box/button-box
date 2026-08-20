@@ -36,6 +36,9 @@ for path in \
   scripts/configure-wifi.sh \
   scripts/onboard.sh \
   scripts/messageboxctl \
+  src/dashboard_static/app.js \
+  src/dashboard_static/index.html \
+  src/dashboard_static/styles.css \
   src/onboarding/app.py \
   src/onboarding/comitup_adapter.py \
   src/onboarding/connectivity.py \
@@ -128,6 +131,7 @@ sudo usermod -a -G audio,gpio,i2c "$SERVICE_USER"
 sudo install -d -o root -g root -m 0755 \
   "$APP_DIR" \
   "$APP_DIR/config" \
+  "$APP_DIR/dashboard_static" \
   "$APP_DIR/onboarding" \
   "$APP_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
@@ -148,6 +152,11 @@ sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
 for name in $RUNTIME_PYTHON; do
   sudo install -o root -g root -m 0755 "$REPO_DIR/src/$name" "$APP_DIR/$name"
 done
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/src/dashboard_static/app.js" \
+  "$REPO_DIR/src/dashboard_static/index.html" \
+  "$REPO_DIR/src/dashboard_static/styles.css" \
+  "$APP_DIR/dashboard_static/"
 sudo install -o root -g root -m 0755 "$REPO_DIR/src/syncloop.sh" "$APP_DIR/syncloop.sh"
 sudo install -o root -g root -m 0755 "$REPO_DIR/scripts/test.sh" "$APP_DIR/test.sh"
 for source in "$REPO_DIR"/src/onboarding/*.py; do

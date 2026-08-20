@@ -88,9 +88,6 @@ class DashboardContactTests(unittest.TestCase):
         self.assertFalse(Path(dashboard.CONTACTS_FILE).exists())
         self.assertNotIn("default_recipient", dashboard.build_data())
         self.assertFalse(hasattr(dashboard, "DEFAULT_CHAT_JID"))
-        self.assertIn("Contacts", dashboard.PAGE)
-        self.assertIn("automatic destination", dashboard.PAGE)
-        self.assertIn("Cards select the outgoing contact", dashboard.PAGE)
 
     def test_discovery_accepts_only_exact_supported_direct_and_group_jids(self):
         payload = {

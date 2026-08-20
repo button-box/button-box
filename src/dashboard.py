@@ -9,6 +9,7 @@ nothing is lost by accident.
 
 Endpoints:
   GET  /               dashboard HTML
+  GET  /static/<asset> dashboard JavaScript and CSS
   GET  /api/data       stats + queue + hold + trash as JSON
   GET  /api/contacts   contact settings + WhatsApp chat discovery as JSON
   GET  /audio/<f>      stream a WAV (?hold=1 or ?trash=1)
@@ -30,6 +31,7 @@ import urllib.parse
 import wave
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 try:
     from contacts import ContactError, ContactStore, validate_contact
@@ -76,6 +78,21 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 WACLI_WEBHOOK_SECRET = os.environ.get("MSGBOX_WACLI_WEBHOOK_SECRET", "")
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 QUEUE_ACTION_LOCK = threading.Lock()
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().with_name("dashboard_static")
+DASHBOARD_STATIC = {
+    "/": (
+        DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes(),
+        "text/html; charset=utf-8",
+    ),
+    "/static/app.js": (
+        DASHBOARD_STATIC_DIR.joinpath("app.js").read_bytes(),
+        "text/javascript; charset=utf-8",
+    ),
+    "/static/styles.css": (
+        DASHBOARD_STATIC_DIR.joinpath("styles.css").read_bytes(),
+        "text/css; charset=utf-8",
+    ),
+}
 
 
 def log_event(**ev):
@@ -750,256 +767,6 @@ def build_data():
     }
 
 
-PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Message Box</title><style>
-:root{--bg:#12141a;--card:#1c2028;--ink:#e8eaf0;--dim:#8a90a0;--acc:#f5b942;--ok:#5dbb63;--bad:#e05555}
-*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--ink);
-font:15px/1.45 -apple-system,system-ui,sans-serif;padding:24px;max-width:960px;margin:0 auto}
-h1{font-size:22px;margin-bottom:4px}h2{font-size:15px;color:var(--dim);margin:26px 0 10px;
-text-transform:uppercase;letter-spacing:.06em}
-.sub{color:var(--dim);font-size:13px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:16px}
-.card{background:var(--card);border-radius:10px;padding:12px 14px}
-.card b{font-size:24px;display:block}.card span{color:var(--dim);font-size:12px}
-.ringbox{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:10px;padding:14px}
-.ring{background:var(--acc);color:#241b08;font-size:15px;font-weight:700;padding:10px 18px}
-.ring:disabled{opacity:.55;cursor:default}.ringstatus{color:var(--dim);font-size:13px}
-.contactpanel{background:var(--card);border-radius:10px;padding:14px;margin-bottom:10px}.contactmode{color:#cbd0d9;
-font-size:13px;margin-bottom:12px}.contactlist,.listenerlist{display:grid;gap:7px;margin-bottom:12px}
-.contactrow{display:grid;grid-template-columns:minmax(160px,1fr) auto;gap:10px;align-items:center;
-background:#262b35;border-radius:8px;padding:10px 11px}.contactname{font-weight:650}.contactmeta{display:block;
-color:var(--dim);font-size:11px;margin-top:2px}.contactform{display:grid;grid-template-columns:minmax(150px,1fr)
-minmax(130px,1fr) auto;gap:8px;align-items:end}.listenerform{grid-template-columns:minmax(130px,1fr)
-minmax(110px,1fr) minmax(160px,1fr) auto}.contactform label{color:var(--dim);font-size:11px}
-.contactform input,.contactform select{display:block;width:100%;margin-top:4px;background:#262b35;color:var(--ink);
-border:1px solid #353c49;border-radius:7px;padding:8px 9px;font:inherit}.contactstatus{color:var(--dim);
-font-size:12px;margin:8px 0}.contactactions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.secondary{background:#39404c}
-.listenertitle{font-size:13px;color:#cbd0d9;margin:20px 0 9px}.listenerjid,.listenerclip{display:block;color:var(--dim);
-font-size:11px;overflow-wrap:anywhere}.remove{background:var(--bad)}
-.chart{background:var(--card);border-radius:10px;padding:14px;margin-top:8px}
-.bars{display:flex;align-items:flex-end;gap:4px;height:110px}
-.bcol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:2px}
-.bar{border-radius:3px 3px 0 0;min-height:2px}.bar.s{background:var(--acc)}.bar.r{background:#5a8dee}
-.blab{font-size:9px;color:var(--dim);text-align:center;margin-top:4px;overflow:hidden}
-.legend{font-size:12px;color:var(--dim);margin-top:8px}
-.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 12px}
-table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden}
-td,th{padding:9px 12px;text-align:left;font-size:13px;border-top:1px solid #262b35}
-th{color:var(--dim);font-weight:500;border:0}
-button{border:0;border-radius:7px;padding:6px 12px;font-size:12px;cursor:pointer;color:#fff}
-.actions{display:flex;gap:6px;flex-wrap:wrap}.del{background:var(--bad)}.hold{background:#a46f17}.rei{background:var(--ok)}
-audio{height:30px;max-width:190px;vertical-align:middle}
-.empty{color:var(--dim);padding:14px;background:var(--card);border-radius:10px;font-size:13px}
-.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.summarycard{background:var(--card);
-border-radius:10px;padding:14px}.summarycard b{display:block;font-size:26px}.summarycard span{font-size:12px;
-color:var(--dim)}.summarycard small{display:block;color:#b9bfca;margin-top:5px;font-size:11px}
-.interactions{display:grid;gap:8px}.interaction{background:var(--card);border-radius:10px;padding:13px 14px}
-.itop{display:flex;justify-content:space-between;gap:12px;align-items:center}.ititle{font-weight:650}
-.itime{color:var(--dim);font-size:12px;white-space:nowrap}.railwrap{overflow-x:auto;margin-top:13px;padding:2px 0}
-.rail{display:flex;min-width:460px}.tstage{position:relative;flex:1;text-align:center;color:var(--dim);font-size:10px}
-.tstage:not(:last-child)::after{content:"";position:absolute;left:50%;right:-50%;top:9px;height:2px;
-background:#353b47;z-index:0}.tstage.done:not(:last-child)::after{background:var(--ok)}
-.tdot{position:relative;z-index:1;width:20px;height:20px;border-radius:50%;margin:0 auto 5px;
-display:grid;place-items:center;background:#353b47;color:#111;font-size:12px;font-weight:800}
-.tstage.done .tdot{background:var(--ok)}.tstage.done .tdot::after{content:"✓"}
-.tstage.failed{color:#ff8b8b}.tstage.failed .tdot{background:var(--bad);color:#fff}.tstage.failed .tdot::after{content:"!"}
-.tstage.current{color:#f5c45a}.tstage.current .tdot{background:var(--acc)}.tstage.current .tdot::after{content:"•"}
-.tstage.muted .tdot::after{content:""}
-.imeta{color:var(--dim);font-size:12px;margin-top:8px}.outcome{font-size:11px;font-weight:700;
-border-radius:999px;padding:4px 8px;white-space:nowrap}.outcome.ok{background:#203a28;color:#77d681}
-.outcome.warn{background:#45391f;color:#f5c45a}.outcome.bad{background:#472528;color:#ff8585}
-.outcome.dim{background:#2a2e37;color:#aeb4c1}.privacy{color:var(--dim);font-size:12px;margin:7px 0 10px}
-.morebtn{display:block;margin:10px auto 0;background:#2a2f39;color:#cbd0d9}.morestats{margin-top:26px}
-.morestats>summary{cursor:pointer;color:var(--dim);font-weight:650;letter-spacing:.04em;text-transform:uppercase;
-font-size:13px;padding:10px 0}.morestats[open]>summary{margin-bottom:10px}
-@media(max-width:600px){body{padding:16px}.itop{align-items:flex-start}.contactform,.listenerform{grid-template-columns:1fr}
-.summary{grid-template-columns:repeat(2,1fr)}.rail{min-width:400px}}
-</style></head><body>
-<h1>📮 Message Box</h1><div class="sub" id="gen"></div>
-<h2>Contacts</h2><section class="contactpanel"><div id="contactmode" class="contactmode">Loading contacts…</div>
-<div id="contactlist" class="contactlist"></div>
-<div class="contactform"><label>WhatsApp chat<select id="contactjid" onchange="selectContact()"></select></label>
-<label>Display name<input id="contactlabel" maxlength="80"></label><button class="rei" id="contactadd" onclick="addContact()">Add contact</button></div>
-<div class="contactactions"><button class="secondary" id="contactrefresh" onclick="loadContacts(true)">Refresh WhatsApp chats</button>
-<span class="contactstatus" id="contactstatus"></span></div>
-<h3 class="listenertitle">Listener profiles</h3><div id="listenerlist" class="listenerlist"></div>
-<div class="contactform listenerform"><label>Listener JID<input id="listenerjid" placeholder="15550001@s.whatsapp.net"></label>
-<label>Name<input id="listenername" maxlength="80"></label><label>Optional listened clip<input id="listenerclip" placeholder="/var/lib/messagebox/assets/listened.wav"></label>
-<button class="rei" onclick="saveListener()">Save profile</button></div><div class="contactstatus" id="listenerstatus"></div></section>
-<h2>On demand</h2><div class="ringbox">
-<button class="ring" id="ring" onclick="ringNow()">🔔 Ring the box</button>
-<span class="ringstatus" id="ringstatus">Call the kids when they're home.</span></div>
-<h2>At a glance — last 7 days</h2><div class="summary" id="behavior"></div>
-<h2>What happened</h2>
-<div class="privacy">Content-free timeline: no audio, transcripts, message IDs or phone numbers.</div>
-<div class="interactions" id="interactions"></div>
-<button class="morebtn" id="moreInteractions" onclick="toggleInteractions()" hidden></button>
-<details class="morestats"><summary>More stats</summary><div class="cards" id="cards"></div>
-<h2>Last 14 days</h2><div class="chart"><div class="bars" id="bars"></div>
-<div class="legend">per day:<i style="background:var(--acc)"></i>sent<i style="background:#5a8dee"></i>received</div></div>
-<h2>By chat</h2><div id="bychat"></div></details>
-<h2>Queue — plays next</h2><div id="queue"></div>
-<h2>On hold — skipped until reinstated</h2><div id="hold"></div>
-<h2>Trash — deleted, reinstatable</h2><div id="trash"></div>
-<script>
-async function act(ep,f){
- try{
-  const r=await fetch('/api/'+ep+'?f='+f,{method:'POST'});
-  if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Could not move message')}
- }catch(e){alert(e.message)}
- await load()
-}
-async function ringNow(){
- const btn=document.getElementById('ring'),status=document.getElementById('ringstatus');
- btn.disabled=true;status.textContent='Sending ring…';
- try{
-  const r=await fetch('/api/ring',{method:'POST'});
-  if(!r.ok)throw new Error();
-  status.textContent='Ring requested ✓';
- }catch(e){status.textContent='Could not request ring.'}
- setTimeout(()=>{btn.disabled=false;status.textContent="Call the kids when they're home."},3000);
-}
-let contactsData=null;
-function selectContact(){
- const jid=document.getElementById('contactjid').value;
- const chat=contactsData&&contactsData.discovered.find(item=>item.jid==jid);
- if(chat)document.getElementById('contactlabel').value=chat.label;
-}
-function renderContacts(d){
- contactsData=d;
- const contacts=Object.entries(d.contacts),automatic=contacts.length==1;
- document.getElementById('contactmode').textContent=contacts.length==0?'No contacts configured. Add a WhatsApp chat to begin.':
-  automatic?'This contact is the automatic destination for new messages.':'Cards select the outgoing contact for new messages.';
- document.getElementById('contactlist').innerHTML=contacts.length?contacts.map(([jid,c])=>{
-  const state=(automatic?'automatic · ':'')+(c.paired?'paired':'unpaired')+' · '+c.card_count+' card'+(c.card_count==1?'':'s');
-  return '<div class="contactrow"><div><span class="contactname">'+esc(c.label)+'</span><span class="contactmeta">'+esc(c.kind)+' · '+state+'</span></div>'+
-   '<button class="remove" data-jid="'+esc(jid)+'" onclick="removeContact(this.dataset.jid)">Remove</button></div>'}).join(''):
-  '<div class="empty">No contacts yet.</div>';
- const choices=d.discovered.filter(chat=>!chat.configured),select=document.getElementById('contactjid');
- select.innerHTML=choices.length?choices.map(chat=>'<option value="'+esc(chat.jid)+'">'+esc(chat.label)+' ('+esc(chat.kind)+')</option>').join(''):
-  '<option value="">No unconfigured chats found</option>';
- document.getElementById('contactadd').disabled=!choices.length;selectContact();
- const listeners=Object.entries(d.listeners);
- document.getElementById('listenerlist').innerHTML=listeners.length?listeners.map(([jid,p])=>
-  '<div class="contactrow"><div><span class="contactname">'+esc(p.name)+'</span><span class="listenerjid">'+esc(jid)+'</span><span class="listenerclip">'+
-  esc(p.listened_clip||'Default listened sound')+'</span></div><div class="actions"><button class="secondary" data-jid="'+esc(jid)+'" onclick="editListener(this.dataset.jid)">Edit</button>'+
-  '<button class="remove" data-jid="'+esc(jid)+'" onclick="removeListener(this.dataset.jid)">Remove</button></div></div>').join(''):
-  '<div class="empty">No listener profiles.</div>';
-}
-async function loadContacts(refresh=false){
- const btn=document.getElementById('contactrefresh'),status=document.getElementById('contactstatus');
- btn.disabled=true;status.textContent=refresh?'Syncing WhatsApp…':'Loading…';
- try{
-  const r=await fetch('/api/contacts'+(refresh?'?refresh=1':'')),d=await r.json();
-   if(!r.ok)throw new Error(d.error||'Could not load contacts');renderContacts(d);status.textContent=d.discovery_error||(refresh?'Refreshed ✓':'');
- }catch(e){status.textContent=e.message}
- btn.disabled=false;
-}
-async function contactMutation(payload){
- const status=document.getElementById('contactstatus');status.textContent='Saving…';
- try{
-  const r=await fetch('/api/contacts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();
-  if(!r.ok)throw new Error(d.error||'Could not save contact');await loadContacts();status.textContent='Saved ✓';
- }catch(e){status.textContent=e.message}
-}
-function addContact(){contactMutation({action:'add',jid:document.getElementById('contactjid').value,label:document.getElementById('contactlabel').value})}
-function removeContact(jid){contactMutation({action:'remove',jid})}
-function editListener(jid){
- const p=contactsData.listeners[jid];document.getElementById('listenerjid').value=jid;
- document.getElementById('listenername').value=p.name;document.getElementById('listenerclip').value=p.listened_clip;
-}
-async function listenerMutation(payload){
- const status=document.getElementById('listenerstatus');status.textContent='Saving…';
- try{
-  const r=await fetch('/api/listeners',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();
-  if(!r.ok)throw new Error(d.error||'Could not save listener');await loadContacts();status.textContent='Saved ✓';
- }catch(e){status.textContent=e.message}
-}
-function saveListener(){listenerMutation({action:'upsert',jid:document.getElementById('listenerjid').value,
- name:document.getElementById('listenername').value,listened_clip:document.getElementById('listenerclip').value})}
-function removeListener(jid){listenerMutation({action:'remove',jid})}
-function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function fmtd(s){
- if(s==null)return '—';
- if(s<60)return s.toFixed(0)+'s';
- if(s<3600)return (s/60).toFixed(1)+'m';
- if(s<86400)return (s/3600).toFixed(1)+'h';
- return (s/86400).toFixed(1)+'d';
-}
-function fmtt(ts){return new Date(ts*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
-function pct(v){return v==null?'—':v+'%'}
-let allInteractions=[],interactionsExpanded=false;
-function interactionRows(items){
- if(!items.length)return '<div class="empty">No guided interactions yet.</div>';
- return items.map(i=>{
-  const who=i.flow=='standalone'?'Child · new message':esc(i.sender)+' · reply';
-  const meta=[];
-  if(i.chat)meta.push(esc(i.chat));
-  if(i.wait_to_play_s!=null&&i.source_confidence=='exact')meta.push('waited '+fmtd(i.wait_to_play_s)+' to play');
-  if(i.duration!=null)meta.push(fmtd(i.duration)+' recording');
-  const rail=i.stages.map(s=>'<div class="tstage '+esc(s.state)+'"><div class="tdot"></div><span>'+esc(s.label)+'</span></div>').join('');
-  return '<div class="interaction"><div class="itop"><div><div class="ititle">'+who+'</div>'+
-   '<div class="itime">'+fmtt(i.ts)+'</div></div><span class="outcome '+esc(i.outcome_tone)+'">'+
-   esc(i.outcome_label)+'</span></div><div class="railwrap"><div class="rail">'+rail+
-   '</div></div>'+(meta.length?'<div class="imeta">'+meta.join(' · ')+'</div>':'')+'</div>'}).join('');
-}
-function renderInteractions(){
- const shown=interactionsExpanded?allInteractions:allInteractions.slice(0,6);
- document.getElementById('interactions').innerHTML=interactionRows(shown);
- const btn=document.getElementById('moreInteractions'),extra=allInteractions.length-6;
- btn.hidden=extra<=0;btn.textContent=interactionsExpanded?'Show less':'Show '+extra+' more';
-}
-function toggleInteractions(){interactionsExpanded=!interactionsExpanded;renderInteractions()}
-function rows(items,kind){
- if(!items.length)return '<div class="empty">'+(kind=='queue'?'Nothing waiting.':'Empty.')+'</div>';
- let btn=kind=='queue'?f=>'<div class="actions"><button class="hold" onclick="act(\\'hold\\',\\''+f+'\\')">hold</button><button class="del" onclick="act(\\'delete\\',\\''+f+'\\')">delete</button></div>'
-        :kind=='hold'?f=>'<button class="rei" onclick="act(\\'resume\\',\\''+f+'\\')">reinstate</button>'
-                     :f=>'<button class="rei" onclick="act(\\'reinstate\\',\\''+f+'\\')">reinstate</button>';
- const audioQuery=kind=='hold'?'?hold=1':kind=='trash'?'?trash=1':'';
- return '<table><tr><th>when</th><th>from</th><th>chat</th><th>len</th><th>listen</th><th></th></tr>'+
-  items.map(i=>'<tr><td>'+fmtt(i.ts)+'</td><td>'+esc(i.sender)+'</td><td>'+esc(i.chat)+'</td><td>'+fmtd(i.dur)+
-   '</td><td><audio controls preload="none" src="/audio/'+encodeURIComponent(i.file)+audioQuery+
-   '"></audio></td><td>'+btn(encodeURIComponent(i.file))+'</td></tr>').join('')+'</table>'}
-async function load(){
- const d=await (await fetch('/api/data')).json();
- document.getElementById('gen').textContent='updated '+d.generated;
- const c=d.cards;
- const cards=[['sent total',c.sent_total],['received total',c.recv_total],
-  ['sent today',c.sent_today],['received today',c.recv_today],
-  ['plays',c.plays],['rings',c.rings],['listened receipts',c.listened],
-  ['waiting to announce',c.listened_pending],
-  ['outbox pending',c.outbox_pending],['outbox attention',c.outbox_attention],
-  ['avg sent len',c.avg_sent_dur?c.avg_sent_dur+'s':'—'],
- ['avg recv len',c.avg_recv_dur?c.avg_recv_dur+'s':'—'],
- ['avg wait to play',c.avg_wait_min?c.avg_wait_min+'m':'—']];
- document.getElementById('cards').innerHTML=cards.map(x=>'<div class="card"><b>'+x[1]+'</b><span>'+x[0]+'</span></div>').join('');
- const b=d.behavior;
- const noSend=b.no_speech+b.not_sent+b.incomplete;
- const behavior=[[pct(b.reply_rate),'reply rate',b.reply_approved+' of '+b.reply_sessions+' replies approved'],
-  [pct(b.review_send_rate),'review → send',b.reviewed+' recordings reviewed'],
-  [noSend,'sessions without a send',b.no_speech+' no speech · '+b.not_sent+' not approved · '+b.incomplete+' interrupted'],
-  [b.standalone_sessions,'new messages','started directly by the kids']];
- document.getElementById('behavior').innerHTML=behavior.map(x=>'<div class="summarycard"><b>'+x[0]+'</b><span>'+x[1]+'</span><small>'+x[2]+'</small></div>').join('');
- allInteractions=d.interactions;renderInteractions();
- const mx=Math.max(1,...d.sent_per_day,...d.recv_per_day);
- document.getElementById('bars').innerHTML=d.days.map((day,i)=>{
-  const s=d.sent_per_day[i],r=d.recv_per_day[i];
-  return '<div class="bcol" title="'+day+': '+s+' sent, '+r+' recv">'+
-   '<div class="bar s" style="height:'+(s/mx*80)+'px"></div>'+
-   '<div class="bar r" style="height:'+(r/mx*80)+'px"></div>'+
-   '<div class="blab">'+day.slice(5)+'</div></div>'}).join('');
- const bc=t=>t.length?'<table>'+t.map(x=>'<tr><td>'+esc(x[0])+'</td><td>'+x[1]+'</td></tr>').join('')+'</table>':'<div class="empty">No data yet.</div>';
- document.getElementById('bychat').innerHTML=
-  '<h2 style="margin-top:0">incoming from</h2>'+bc(d.by_chat_in)+'<h2>outgoing to</h2>'+bc(d.by_chat_out);
- document.getElementById('queue').innerHTML=rows(d.queue,'queue');
- document.getElementById('hold').innerHTML=rows(d.hold,'hold');
- document.getElementById('trash').innerHTML=rows(d.trash,'trash');
-}
-load();loadContacts();setInterval(load,15000);
-</script></body></html>"""
-
-
 def safe_name(raw):
     name = os.path.basename(urllib.parse.unquote(raw))
     if not name.endswith(".wav") or "/" in name or name.startswith("."):
@@ -1013,6 +780,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1025,8 +793,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
-        if url.path == "/":
-            return self._send(200, PAGE, "text/html; charset=utf-8")
+        static = DASHBOARD_STATIC.get(url.path)
+        if static is not None:
+            return self._send(200, *static)
         if url.path == "/api/data":
             return self._send(200, json.dumps(build_data()))
         if url.path == "/api/contacts":
