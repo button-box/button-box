@@ -1,0 +1,6 @@
+[Unit]
+Description=Message Box runtime
+ConditionPathExists=!/etc/messagebox-onboarding/enabled
+
+[Install]
+WantedBy=multi-user.target

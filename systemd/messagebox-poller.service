@@ -1,0 +1,21 @@
+[Unit]
+Description=Message Box incoming voice note poller
+After=network-online.target
+Wants=network-online.target
+PartOf=messagebox.target
+
+[Service]
+User=messagebox
+Group=messagebox
+WorkingDirectory=/run/messagebox
+EnvironmentFile=/etc/messagebox/env
+Environment=HOME=/var/lib/messagebox
+Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
+UMask=0077
+ExecStartPre=/usr/bin/test -x /usr/local/bin/wacli
+ExecStart=/usr/bin/python3 /opt/messagebox/voicepoll.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=messagebox.target

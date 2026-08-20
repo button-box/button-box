@@ -1,0 +1,22 @@
+table inet messagebox_onboarding {
+    chain input {
+        type filter hook input priority filter + 10; policy accept;
+
+        # The setup address is filtered for Comitup's full lifetime, including
+        # the transitions before and after the hotspot portal is active.
+        iifname "wlan0" udp dport 67 accept
+        iifname "wlan0" ip daddr 10.41.0.1 udp dport 53 accept
+        iifname "wlan0" ip daddr 10.41.0.1 tcp dport { 53, 80 } accept
+        iifname "wlan0" ip daddr 224.0.0.251 udp dport 5353 accept
+        iifname "wlan0" ip daddr 10.41.0.1 ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem, echo-request } accept
+        iifname "wlan0" ip saddr 10.41.0.0/24 drop
+        iifname != "wlan0" ip daddr 10.41.0.1 tcp dport 80 drop
+        iifname "wlan0" ip6 saddr fe80::/10 ip6 daddr fe80::/10 drop
+    }
+
+    chain forward {
+        type filter hook forward priority filter + 10; policy accept;
+        iifname "wlan0" drop
+        oifname "wlan0" drop
+    }
+}

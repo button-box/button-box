@@ -1,0 +1,82 @@
+source_path	candidate_path	disposition	risk_or_reason
+.gitignore	.gitignore	rewrite	Public repository needs broader secret, state, media, archive, and generated-file exclusions.
+CLAUDE.md		exclude	Private agent instructions are not part of the product.
+README.md	README.md	rewrite	Legacy README links private history and overstates the completed self-service path.
+config/env.example	config/env.example	sanitize	Keep active hardware and dashboard settings; remove operator-only feature and tuning variables from the public surface.
+config/onboarding/comitup-dbus.conf	config/onboarding/comitup-dbus.conf	keep	Required least-privilege onboarding policy; imported from pinned source.
+config/onboarding/comitup.conf.template	config/onboarding/comitup.conf.template	keep	Required protected hotspot template; contains placeholders only.
+config/onboarding/firewall.nft	config/onboarding/firewall.nft	keep	Required onboarding network isolation rules.
+config/requirements-nfc.txt	config/requirements-nfc.txt	keep	Pinned NFC runtime dependencies; final license inventory still required.
+docs/PLAN_CLEAN_INSTALL.md		exclude	Internal implementation plan, superseded by public documentation.
+docs/PLAN_COMITUP_WIFI_ONBOARDING.md		exclude	Internal implementation plan, superseded by public documentation.
+docs/assembly-guide.html		exclude	Personalized, outdated Pi Zero assembly material.
+docs/assembly-guide.pdf		exclude	Generated binary of personalized, outdated Pi Zero assembly material.
+docs/live-baseline-2026-08-09.md		exclude	Production-device evidence and operational detail do not belong in the public source tree.
+docs/logbook.md		exclude	Contains family identifiers, routing details, and private operational history.
+docs/plans/2026-07-06-001-feat-message-box-plan.md		exclude	Family-specific product history; replace with generic public documentation.
+docs/whatsapp-onboarding-physical-gates.md	docs/testing.md	rewrite	Preserve generic acceptance concepts without device or operator-specific history.
+hardware/enclosure.scad		exclude	Obsolete Pi Zero draft with placeholder dimensions.
+hardware/kit/BOM.md		hold	Pi 4 BOM requires price-independent rewrite, wiring detail, and physical validation.
+hardware/kit/README.md	hardware/README.md	rewrite	Replace prototype/business framing with publication requirements.
+hardware/preview.png		exclude	Preview belongs to the obsolete enclosure design.
+scripts/configure-wifi.sh	scripts/configure-wifi.sh	keep	Required protected Wi-Fi setup.
+scripts/dev/ethernet.sh		exclude	Host-network development helper is not required for the supported public path.
+scripts/install/comitup.sh	scripts/install/comitup.sh	keep	Required pinned Wi-Fi dependency installation; license audit pending.
+scripts/install/nfc.sh	scripts/install/nfc.sh	keep	Required NFC installation.
+scripts/install/wacli.sh	scripts/install/wacli.sh	keep	Required checksum-pinned client acquisition; third-party notice required.
+scripts/messageboxctl	scripts/messageboxctl	keep	Required service operation and Wi-Fi recovery command.
+scripts/onboard.sh	scripts/onboard.sh	keep	Temporary operator bridge for recipient and NFC setup; must be replaced by self-service flow.
+scripts/provision.sh	scripts/provision.sh	keep	Copies explicit installation inputs without Git history or private state.
+scripts/setup.sh	scripts/setup.sh	keep	Canonical candidate installer; clean-card validation pending.
+scripts/test.sh	scripts/test.sh	keep	Interactive hardware test; renamed in documentation to avoid confusion with unit tests.
+sounds/guided-reply/README.md	sounds/README.md	rewrite	Remove system-voice provenance and retain only redistribution requirements.
+sounds/listen-receipts/README.md	sounds/README.md	rewrite	Remove role-specific experimental prompts and retain only redistribution requirements.
+src/button_send.py	src/button_send.py	keep	Core button, playback, recording, and routing runtime.
+src/contacts.py	src/contacts.py	keep	Private contact and NFC-routing store with synthetic examples.
+src/dashboard.py	src/dashboard.py	keep	Private device dashboard; public exposure remains unsupported.
+src/guided_reply.py	src/guided_reply.py	keep	Feature defaults off when licensed audio is unavailable.
+src/listened_receipts.py	src/listened_receipts.py	keep	Receipt processing with private-state and signature checks.
+src/make_ringtones.py	src/make_ringtones.py	keep	Generates local non-voice signals.
+src/midi_ringtone.py	src/midi_ringtone.py	keep	Generates local non-voice signals.
+src/nfc.py	src/nfc.py	keep	PN532 runtime with redacted public status.
+src/nfc_state.py	src/nfc_state.py	keep	Private NFC state and fail-closed selection logic.
+src/onboarding/__init__.py	src/onboarding/__init__.py	keep	Onboarding package marker.
+src/onboarding/app.py	src/onboarding/app.py	keep	Local onboarding HTTP application with sanitized state responses.
+src/onboarding/comitup_adapter.py	src/onboarding/comitup_adapter.py	keep	Restricted Comitup adapter that avoids credential disclosure.
+src/onboarding/connectivity.py	src/onboarding/connectivity.py	keep	Connectivity proof and safe error handling.
+src/onboarding/reset.py	src/onboarding/reset.py	keep	Fail-closed Wi-Fi reset implementation.
+src/onboarding/state.py	src/onboarding/state.py	keep	Private onboarding state machine.
+src/onboarding/static/app.js	src/onboarding/static/app.js	keep	Local onboarding client without third-party assets.
+src/onboarding/static/index.html	src/onboarding/static/index.html	keep	Local onboarding markup with synthetic phone example.
+src/onboarding/static/styles.css	src/onboarding/static/styles.css	keep	Local onboarding styles without third-party assets.
+src/onboarding/whatsapp.py	src/onboarding/whatsapp.py	keep	Isolated WhatsApp pairing worker and sanitized public status.
+src/runtime_paths.py	src/runtime_paths.py	keep	Separates repository code from private runtime paths.
+src/syncloop.sh	src/syncloop.sh	keep	WhatsApp synchronization wrapper; webhook configuration remains private.
+src/voicepoll.py	src/voicepoll.py	keep	Inbound authorization and durable queue logic.
+systemd/messagebox-button.service	systemd/messagebox-button.service	keep	Core runtime service definition.
+systemd/messagebox-dash.service	systemd/messagebox-dash.service	keep	Private dashboard service definition.
+systemd/messagebox-nfc.service	systemd/messagebox-nfc.service	keep	NFC service definition.
+systemd/messagebox-poller.service	systemd/messagebox-poller.service	keep	Inbound polling service definition.
+systemd/messagebox-sync.service	systemd/messagebox-sync.service	keep	Synchronization service definition.
+systemd/messagebox.target	systemd/messagebox.target	keep	Runtime service grouping.
+systemd/messagebox.tmpfiles.conf	systemd/messagebox.tmpfiles.conf	keep	Private runtime-directory permissions.
+systemd/onboarding/comitup-web.service.d/messagebox.conf	systemd/onboarding/comitup-web.service.d/messagebox.conf	keep	Captive-portal service override.
+systemd/onboarding/comitup.service.d/messagebox.conf	systemd/onboarding/comitup.service.d/messagebox.conf	keep	Prevents unintended onboarding activation.
+systemd/onboarding/messagebox-onboarding-home.service	systemd/onboarding/messagebox-onboarding-home.service	keep	Home-network continuation service.
+systemd/onboarding/messagebox-whatsapp-pairing.service	systemd/onboarding/messagebox-whatsapp-pairing.service	keep	Isolated pairing worker service.
+systemd/onboarding/messagebox-wifi-reset.service	systemd/onboarding/messagebox-wifi-reset.service	keep	Wi-Fi recovery service.
+tests/test_button_routing.py	tests/test_button_routing.py	keep	Synthetic routing tests.
+tests/test_comitup_adapter.py	tests/test_comitup_adapter.py	keep	Synthetic credential-redaction and adapter tests.
+tests/test_contacts.py	tests/test_contacts.py	keep	Synthetic contact and listener tests.
+tests/test_dashboard_queue_hold.py	tests/test_dashboard_queue_hold.py	keep	Synthetic queue-hold tests.
+tests/test_dashboard_recipient.py	tests/test_dashboard_recipient.py	keep	Synthetic recipient-management tests.
+tests/test_guided_reply.py	tests/test_guided_reply.py	keep	Synthetic audio-session state tests; no recordings included.
+tests/test_listened_receipts.py	tests/test_listened_receipts.py	keep	Synthetic receipt and signature tests.
+tests/test_messagebox_dashboard_guided.py	tests/test_messagebox_dashboard_guided.py	keep	Synthetic dashboard privacy and event tests.
+tests/test_nfc_onboarding.py	tests/test_nfc_onboarding.py	keep	Synthetic NFC and contact-routing tests.
+tests/test_onboarding_api.py	tests/test_onboarding_api.py	keep	Synthetic Wi-Fi and onboarding API tests using reserved phone fixtures.
+tests/test_onboarding_connectivity.py	tests/test_onboarding_connectivity.py	keep	Synthetic connectivity and secret-redaction tests.
+tests/test_onboarding_state.py	tests/test_onboarding_state.py	keep	Synthetic private-state and recovery tests.
+tests/test_voicepoll.py	tests/test_voicepoll.py	keep	Synthetic authorization and timestamp tests.
+tests/test_whatsapp_pairing.py	tests/test_whatsapp_pairing.py	keep	Synthetic pairing tests using reserved phone fixtures and fake codes.
+tests/test_wifi_reset.py	tests/test_wifi_reset.py	keep	Synthetic recovery and log-redaction tests.

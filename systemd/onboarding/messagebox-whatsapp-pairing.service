@@ -1,0 +1,32 @@
+[Unit]
+Description=Message Box private WhatsApp pairing worker
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+PartOf=comitup.service
+After=network-online.target
+Before=comitup-web.service messagebox-onboarding-home.service
+
+[Service]
+Type=simple
+User=messagebox
+Group=messagebox-onboarding
+SupplementaryGroups=messagebox
+WorkingDirectory=/opt/messagebox
+Environment=HOME=/var/lib/messagebox
+Environment=MSGBOX_PAIRING_SOCKET_GROUP=messagebox-onboarding
+UMask=0077
+RuntimeDirectory=messagebox-whatsapp-pairing
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 -m onboarding.whatsapp --serve
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/messagebox-onboarding
+ReadWritePaths=/var/lib/messagebox /run/messagebox-whatsapp-pairing
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0

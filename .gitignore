@@ -1,0 +1,54 @@
+# Editors and operating systems
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# JavaScript tooling
+node_modules/
+
+# Reports and generated output
+coverage.xml
+htmlcov/
+reports/
+dist/
+build/
+tmp/
+
+# Local configuration and private device state
+.env
+.env.*
+!.env.example
+config/env
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+*auth-store*/
+*wacli-store*/
+
+# Private or unreviewed media and binary artifacts
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.stl
+*.img
+*.iso
+*.tar
+*.tar.gz
+*.zip

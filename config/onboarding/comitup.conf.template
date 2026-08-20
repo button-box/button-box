@@ -1,0 +1,10 @@
+# Rendered by messagebox-configure-wifi. Do not put real credentials here.
+ap_name: <hostname>
+ap_password: @HOTSPOT_PASSWORD@
+web_service: messagebox-onboarding-home.service
+service_name: messagebox
+enable_appliance_mode: 0
+primary_wifi_device: wlan0
+enable_nuke: 0
+ipv6_link_local: 0
+verbose: 1

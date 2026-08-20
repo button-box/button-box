@@ -1,0 +1,10 @@
+Message Box
+Copyright (c) 2026 Message Box contributors
+
+Project software is provided under the MIT License.
+
+Message Box uses third-party software under separate licenses. See
+THIRD_PARTY_NOTICES.md before distributing a release or binary image.
+
+Message Box is not affiliated with or endorsed by WhatsApp or Meta. The current
+integration relies on an unofficial WhatsApp Web client.

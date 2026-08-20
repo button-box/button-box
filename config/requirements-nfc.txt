@@ -1,0 +1,3 @@
+adafruit-circuitpython-pn532==2.4.9
+Adafruit-Blinka==9.2.0
+lgpio==0.2.2.0

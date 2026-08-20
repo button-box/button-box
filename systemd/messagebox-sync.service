@@ -1,0 +1,22 @@
+[Unit]
+Description=Message Box wacli burst sync
+After=network-online.target
+Wants=network-online.target
+PartOf=messagebox.target
+
+[Service]
+User=messagebox
+Group=messagebox
+WorkingDirectory=/run/messagebox
+EnvironmentFile=/etc/messagebox/env
+Environment=HOME=/var/lib/messagebox
+Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
+Environment=WACLI_SYNC_MAX_DB_SIZE=2GB
+UMask=0077
+ExecStartPre=/usr/bin/test -x /usr/local/bin/wacli
+ExecStart=/opt/messagebox/syncloop.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=messagebox.target

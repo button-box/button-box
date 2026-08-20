@@ -1,0 +1,199 @@
+#!/bin/sh
+# Friendly systemd and journal commands for an installed Message Box.
+set -eu
+
+TARGET=messagebox.target
+SERVICES="button sync poller dashboard nfc"
+
+usage() {
+  cat <<'EOF'
+Usage: messageboxctl COMMAND [SERVICE...]
+
+Commands:
+  status                    Show target and service status
+  services                  Show enabled and active state for every service
+  logs [SERVICE]            Follow all logs or one service log
+  reset-wifi               Delete saved Wi-Fi and restart onboarding
+  start|stop|restart        Operate the Message Box target
+  enable SERVICE...         Select services; start them if the target is active
+  disable SERVICE...        Stop and deselect services
+
+Services: button sync poller dashboard nfc; logs also accepts onboarding
+EOF
+}
+
+unit_for() {
+  case "$1" in
+    dashboard) printf 'messagebox-dash.service\n' ;;
+    button|sync|poller|nfc) printf 'messagebox-%s.service\n' "$1" ;;
+    *) echo "Unknown Message Box service: $1" >&2; exit 2 ;;
+  esac
+}
+
+service_units() {
+  units=""
+  for service in "$@"; do
+    if ! unit=$(unit_for "$service"); then
+      return 2
+    fi
+    units="$units $unit"
+  done
+  printf '%s\n' "${units# }"
+}
+
+has_selected_service() {
+  for service in $SERVICES; do
+    unit=$(unit_for "$service")
+    if systemctl is-enabled --quiet "$unit"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Run this command with sudo." >&2
+    exit 1
+  fi
+}
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$command" in
+  help|-h|--help)
+    usage
+    ;;
+  status)
+    systemctl status --no-pager \
+      "$TARGET" \
+      messagebox-button.service \
+      messagebox-sync.service \
+      messagebox-poller.service \
+      messagebox-dash.service \
+      messagebox-nfc.service || true
+    ;;
+  services)
+    printf '%-10s %-10s %s\n' SERVICE ENABLED ACTIVE
+    for service in $SERVICES; do
+      unit=$(unit_for "$service")
+      enabled=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+      active=$(systemctl is-active "$unit" 2>/dev/null || true)
+      printf '%-10s %-10s %s\n' "$service" "${enabled:-unknown}" "${active:-unknown}"
+    done
+    ;;
+  logs)
+    if [ "$#" -gt 1 ]; then
+      usage >&2
+      exit 2
+    elif [ "$#" -eq 1 ]; then
+      if [ "$1" = onboarding ]; then
+        exec journalctl -f \
+          -u comitup.service \
+          -u comitup-web.service \
+          -u messagebox-onboarding-home.service \
+          -u messagebox-whatsapp-pairing.service \
+          -u messagebox-wifi-reset.service
+      elif ! unit=$(unit_for "$1"); then
+        exit 2
+      fi
+      exec journalctl -f -u "$unit"
+    else
+      exec journalctl -f \
+        -u messagebox-button.service \
+        -u messagebox-sync.service \
+        -u messagebox-poller.service \
+        -u messagebox-dash.service \
+        -u messagebox-nfc.service \
+        -u comitup.service \
+        -u comitup-web.service \
+        -u messagebox-onboarding-home.service \
+        -u messagebox-whatsapp-pairing.service \
+        -u messagebox-wifi-reset.service
+    fi
+    ;;
+  reset-wifi)
+    require_root
+    if [ "$#" -ne 0 ]; then
+      usage >&2
+      exit 2
+    fi
+    if [ ! -f /etc/messagebox-onboarding/configured ] || [ -L /etc/messagebox-onboarding/configured ]; then
+      echo "Configure Wi-Fi onboarding first: sudo messagebox-configure-wifi" >&2
+      exit 1
+    fi
+    exec /usr/bin/python3 /opt/messagebox/onboarding/reset.py --force
+    ;;
+  start|stop|restart)
+    require_root
+    if [ "$command" = "stop" ]; then
+      exec systemctl stop \
+        "$TARGET" \
+        messagebox-button.service \
+        messagebox-sync.service \
+        messagebox-poller.service \
+        messagebox-dash.service \
+        messagebox-nfc.service
+    fi
+    if [ "$command" != "stop" ] && [ ! -r /etc/messagebox/env ]; then
+      echo "Create and configure /etc/messagebox/env before starting." >&2
+      exit 1
+    fi
+    if [ "$command" != "stop" ]; then
+      if ! has_selected_service; then
+        echo "No services selected. Run: sudo messageboxctl enable SERVICE..." >&2
+        exit 2
+      fi
+    fi
+    exec systemctl "$command" "$TARGET"
+    ;;
+  enable)
+    require_root
+    if [ ! -r /etc/messagebox/env ]; then
+      echo "Create and configure /etc/messagebox/env before enabling services." >&2
+      exit 1
+    fi
+    if [ "$#" -eq 0 ]; then
+      usage >&2
+      exit 2
+    fi
+    if ! units=$(service_units "$@"); then
+      exit 2
+    fi
+    # shellcheck disable=SC2086
+    systemctl enable $units "$TARGET"
+    if systemctl is-active --quiet "$TARGET"; then
+      # shellcheck disable=SC2086
+      systemctl start $units
+    fi
+    case " $* " in
+      *" nfc "*) systemctl try-restart messagebox-button.service ;;
+    esac
+    ;;
+  disable)
+    require_root
+    if [ "$#" -eq 0 ]; then
+      usage >&2
+      exit 2
+    fi
+    if ! units=$(service_units "$@"); then
+      exit 2
+    fi
+    # shellcheck disable=SC2086
+    systemctl disable --now $units
+    if ! has_selected_service; then
+      systemctl disable --now "$TARGET"
+    fi
+    case " $* " in
+      *" nfc "*) systemctl try-restart messagebox-button.service ;;
+    esac
+    ;;
+  *)
+    echo "Unknown command: $command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
