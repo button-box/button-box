@@ -2,8 +2,14 @@
 
 ## Repository tests
 
-Run `make check` for Python compilation, shell syntax checks, and the synthetic
-unit suite. Run `make scan` separately when Gitleaks is installed.
+Development requires `uv` and Bun. `make lint` runs pinned Ruff and ShellCheck
+packages through `uvx` and pinned Biome through `bunx`; no project environment
+or dependency installation is required. The first run downloads and caches the
+tools.
+
+Run `make check` for Python and shell syntax, linting, and the synthetic unit
+suite. Run `make lint` for linting alone. Run `make scan` separately when
+Gitleaks is installed.
 
 Repository tests cover routing, onboarding state, credential redaction,
 WhatsApp-pairing contracts, NFC behavior, and recovery logic. They do not prove

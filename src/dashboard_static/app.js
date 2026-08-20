@@ -18,16 +18,16 @@ async function ringNow(){
 let contactsData=null;
 function selectContact(){
  const jid=document.getElementById('contactjid').value;
- const chat=contactsData&&contactsData.discovered.find(item=>item.jid==jid);
+ const chat=contactsData&&contactsData.discovered.find(item=>item.jid===jid);
  if(chat)document.getElementById('contactlabel').value=chat.label;
 }
 function renderContacts(d){
  contactsData=d;
- const contacts=Object.entries(d.contacts),automatic=contacts.length==1;
- document.getElementById('contactmode').textContent=contacts.length==0?'No contacts configured. Add a WhatsApp chat to begin.':
+ const contacts=Object.entries(d.contacts),automatic=contacts.length===1;
+ document.getElementById('contactmode').textContent=contacts.length===0?'No contacts configured. Add a WhatsApp chat to begin.':
   automatic?'This contact is the automatic destination for new messages.':'Cards select the outgoing contact for new messages.';
  document.getElementById('contactlist').innerHTML=contacts.length?contacts.map(([jid,c])=>{
-  const state=(automatic?'automatic · ':'')+(c.paired?'paired':'unpaired')+' · '+c.card_count+' card'+(c.card_count==1?'':'s');
+  const state=(automatic?'automatic · ':'')+(c.paired?'paired':'unpaired')+' · '+c.card_count+' card'+(c.card_count===1?'':'s');
   return '<div class="contactrow"><div><span class="contactname">'+esc(c.label)+'</span><span class="contactmeta">'+esc(c.kind)+' · '+state+'</span></div>'+
    '<button class="remove" data-jid="'+esc(jid)+'" onclick="removeContact(this.dataset.jid)">Remove</button></div>'}).join(''):
   '<div class="empty">No contacts yet.</div>';
@@ -88,10 +88,10 @@ let allInteractions=[],interactionsExpanded=false;
 function interactionRows(items){
  if(!items.length)return '<div class="empty">No guided interactions yet.</div>';
  return items.map(i=>{
-  const who=i.flow=='standalone'?'Child · new message':esc(i.sender)+' · reply';
+  const who=i.flow==='standalone'?'Child · new message':esc(i.sender)+' · reply';
   const meta=[];
   if(i.chat)meta.push(esc(i.chat));
-  if(i.wait_to_play_s!=null&&i.source_confidence=='exact')meta.push('waited '+fmtd(i.wait_to_play_s)+' to play');
+  if(i.wait_to_play_s!=null&&i.source_confidence==='exact')meta.push('waited '+fmtd(i.wait_to_play_s)+' to play');
   if(i.duration!=null)meta.push(fmtd(i.duration)+' recording');
   const rail=i.stages.map(s=>'<div class="tstage '+esc(s.state)+'"><div class="tdot"></div><span>'+esc(s.label)+'</span></div>').join('');
   return '<div class="interaction"><div class="itop"><div><div class="ititle">'+who+'</div>'+
@@ -107,11 +107,11 @@ function renderInteractions(){
 }
 function toggleInteractions(){interactionsExpanded=!interactionsExpanded;renderInteractions()}
 function rows(items,kind){
- if(!items.length)return '<div class="empty">'+(kind=='queue'?'Nothing waiting.':'Empty.')+'</div>';
- let btn=kind=='queue'?f=>'<div class="actions"><button class="hold" onclick="act(\'hold\',\''+f+'\')">hold</button><button class="del" onclick="act(\'delete\',\''+f+'\')">delete</button></div>'
-        :kind=='hold'?f=>'<button class="rei" onclick="act(\'resume\',\''+f+'\')">reinstate</button>'
+ if(!items.length)return '<div class="empty">'+(kind==='queue'?'Nothing waiting.':'Empty.')+'</div>';
+ let btn=kind==='queue'?f=>'<div class="actions"><button class="hold" onclick="act(\'hold\',\''+f+'\')">hold</button><button class="del" onclick="act(\'delete\',\''+f+'\')">delete</button></div>'
+        :kind==='hold'?f=>'<button class="rei" onclick="act(\'resume\',\''+f+'\')">reinstate</button>'
                      :f=>'<button class="rei" onclick="act(\'reinstate\',\''+f+'\')">reinstate</button>';
- const audioQuery=kind=='hold'?'?hold=1':kind=='trash'?'?trash=1':'';
+ const audioQuery=kind==='hold'?'?hold=1':kind==='trash'?'?trash=1':'';
  return '<table><tr><th>when</th><th>from</th><th>chat</th><th>len</th><th>listen</th><th></th></tr>'+
   items.map(i=>'<tr><td>'+fmtt(i.ts)+'</td><td>'+esc(i.sender)+'</td><td>'+esc(i.chat)+'</td><td>'+fmtd(i.dur)+
    '</td><td><audio controls preload="none" src="/audio/'+encodeURIComponent(i.file)+audioQuery+

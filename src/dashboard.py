@@ -729,7 +729,9 @@ def build_data():
         item["chat"] = label(meta.get("chat", "")) or "?"
         item["sender"] = meta.get("sender") or "?"
 
-    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None
+    def avg(values):
+        return round(sum(values) / len(values), 1) if values else None
+
     outbox = guided_outbox_counts()
     observability = build_guided_observability(
         events, names, guided_outbox_states()

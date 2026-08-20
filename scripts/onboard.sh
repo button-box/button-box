@@ -87,6 +87,8 @@ set_env_value() {
   key=$1
   value=$2
   temporary=$(mktemp)
+  # sudo grants awk read access; the redirect intentionally writes our temp file.
+  # shellcheck disable=SC2024
   if ! sudo awk -v key="$key" -v value="$value" '
     BEGIN { updated = 0 }
     $0 ~ "^" key "=" { print key "=" value; updated = 1; next }
