@@ -10,7 +10,7 @@
 </head>
 <body>
   <main class="shell">
-    <header class="brand" aria-label="Message Box">
+    <header class="brand">
       <span class="brand-mark" aria-hidden="true">M</span>
       <span>Message Box</span>
     </header>
@@ -20,6 +20,7 @@
       <h1 id="wifi-title" tabindex="-1">Choose home Wi-Fi</h1>
       <p class="lede">Select a nearby network or enter its name manually.</p>
       <div id="scan-status" class="status" role="status">Scanning for networks...</div>
+      <!-- biome-ignore lint/a11y/useSemanticElements: JavaScript adds listitem roles to the network buttons. -->
       <div id="networks" class="network-list" role="list"></div>
       <button id="scan-again" class="text-button" type="button">Scan again</button>
 

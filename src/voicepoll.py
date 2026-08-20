@@ -7,7 +7,11 @@ to play (answering-machine model: nothing auto-plays; the button's lamp
 signals waiting messages). Queue dir is persistent — survives reboots.
 Config is loaded from /etc/messagebox/env by systemd.
 """
-import json, math, os, subprocess, time
+import json
+import math
+import os
+import subprocess
+import time
 from datetime import datetime, timezone
 
 try:

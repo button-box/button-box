@@ -29,7 +29,7 @@ Source baseline: private `message-box-pi` repository, `origin/main` at
 - Replacement audio with explicit redistribution rights is missing.
 - Third-party license inventory, SBOM, release provenance, and vulnerability
   reporting channel are preliminary.
-- Ruff, ShellCheck, shfmt, and Biome are selected but not yet pinned and wired
-  into the candidate checks.
+- Ruff, ShellCheck, and Biome are pinned and wired into the candidate checks;
+  shfmt remains deferred.
 - Human editorial, PII, and embarrassing-content review is still required.
 - This candidate has not been committed, pushed, or published.
