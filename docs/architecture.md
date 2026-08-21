@@ -1,18 +1,33 @@
 # Architecture
 
 Message Box runs as separate systemd services with constrained users and
-permissions.
+permissions. Runtime services use the `messagebox` account, while the web
+onboarding service uses `messagebox-onboarding`. systemd limits filesystem,
+device, and capability access. Wi-Fi management and reset operations retain the
+root access they require.
 
-1. Comitup manages Wi-Fi through NetworkManager. The onboarding portal uses its
-   restricted D-Bus API to scan and connect.
-2. After Wi-Fi setup, systemd runs the home portal and a separate WhatsApp
-   pairing worker.
-3. Contact and NFC tools maintain approved routing state under
-   `/var/lib/messagebox`.
-4. The poller queues voice messages from configured contacts.
-5. The button service records or plays audio and sends only to the selected
-   approved contact.
-6. systemd manages service lifecycle and restart behavior.
+## Runtime services
 
-Private runtime state must remain outside Git in permission-restricted device
-paths. See [Privacy boundary](privacy.md).
+`messagebox.target` groups the enabled runtime services:
+
+| Unit | Role |
+| --- | --- |
+| `messagebox-button.service` | Record, play, and send voice messages |
+| `messagebox-poller.service` | Queue voice messages from configured contacts |
+| `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
+| `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
+| `messagebox-dash.service` | Serve the optional status and queue dashboard |
+
+## Onboarding services
+
+| Unit | Role |
+| --- | --- |
+| `comitup.service` | Use [Comitup](https://github.com/davesteele/comitup) to manage Wi-Fi and the setup hotspot through NetworkManager |
+| `comitup-web.service` | Serve the onboarding portal on the setup hotspot |
+| `messagebox-onboarding-home.service` | Serve the portal after Wi-Fi setup |
+| `messagebox-whatsapp-pairing.service` | Isolate WhatsApp pairing operations |
+
+`messagebox-wifi-reset.service` is a one-shot boot check for the physical Wi-Fi
+reset gesture. The onboarding portal accesses Comitup through a restricted
+D-Bus policy. NetworkManager and Avahi provide network management and local name
+resolution.

@@ -15,9 +15,9 @@ Some stuff doesn't work yet. Help us with a good PR.
 - `scripts/dev/`: developer onboarding and internal Pi hardware checks
 - `systemd/`: service and target definitions
 - `config/`: minimal public configuration and pinned NFC dependencies
-- `hardware/`: status of future Raspberry Pi 4 hardware files
+- `hardware/`: [prototype BOM](hardware/README.md), case and assembly files coming soon
 - `tests/`: synthetic unit and contract tests
-- `docs/`: architecture, privacy, testing, and maintainer guidance
+- `docs/`: architecture, installation, testing, and developer guidance
 
 ## Setup
 
@@ -31,14 +31,15 @@ From host machine run:
 ssh -t admin@message-box-001.local messagebox-dev-onboard
 ```
 
-## Privacy and safety
+## Support
 
-Do not commit credentials, personal data, recordings, or device state. See
-[`docs/privacy.md`](docs/privacy.md).
-
-Message Box uses [wacli](https://github.com/openclaw/wacli). It is not
-affiliated with or endorsed by WhatsApp or Meta.
+Use GitHub issues. Before sharing
+logs or screenshots, remove phone numbers, JIDs, Wi-Fi details, NFC identifiers,
+recordings, private addresses, and authentication state.
 
 ## License
 
 [MIT](LICENSE)
+
+Message Box uses [wacli](https://github.com/openclaw/wacli). It is not
+affiliated with or endorsed by WhatsApp or Meta.

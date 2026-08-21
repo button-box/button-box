@@ -3,8 +3,9 @@
 ## Repository tests
 
 - `make test` runs the synthetic Python unit suite.
-- `make lint` requires `uv` and Bun. It runs pinned Ruff, ShellCheck, and Biome
-  versions through `uvx` and `bunx`; the first run downloads them.
+- `make lint` requires `uvx` (from `uv`) and `bunx` (from Bun). It runs Ruff for
+  Python, ShellCheck for shell scripts, and Biome for frontend assets. `uvx` and
+  `bunx` download these tools on first use.
 - `make check` runs syntax checks, linting, and tests.
 
 No project virtual environment or repository-local dependency installation is

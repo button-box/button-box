@@ -109,6 +109,23 @@ contacts, present an enrolled card within the selection window (30 seconds by
 default). Without a valid selection, a standalone recording is blocked rather
 than guessed or rerouted.
 
+## Service control
+
+`messageboxctl` wraps common systemd and journal operations. Run
+`messageboxctl --help` for the full command list. Common commands are:
+
+```sh
+messageboxctl services
+messageboxctl status
+messageboxctl logs poller
+messageboxctl logs onboarding
+sudo messageboxctl restart
+sudo messageboxctl enable button sync poller nfc
+sudo messageboxctl disable dashboard
+```
+
+Service names are `button`, `sync`, `poller`, `dashboard`, and `nfc`.
+
 ## Hardware and dashboard
 
 The hardware test checks network access, speaker, microphone, LED, button,
