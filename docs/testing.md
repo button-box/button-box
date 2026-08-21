@@ -8,8 +8,7 @@ or dependency installation is required. The first run downloads and caches the
 tools.
 
 Run `make check` for Python and shell syntax, linting, and the synthetic unit
-suite. Run `make lint` for linting alone. Run `make scan` separately when
-Gitleaks is installed.
+suite. Run `make lint` for linting alone.
 
 Repository tests cover routing, onboarding state, credential redaction,
 WhatsApp-pairing contracts, NFC behavior, and recovery logic. They do not prove

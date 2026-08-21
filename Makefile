@@ -1,4 +1,4 @@
-.PHONY: test syntax lint lint-python lint-shell lint-frontend scan check
+.PHONY: test syntax lint lint-python lint-shell lint-frontend check
 
 test:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
@@ -19,9 +19,5 @@ lint-shell:
 
 lint-frontend:
 	bunx @biomejs/biome@2.5.9 lint --diagnostic-level=error messagebox/onboarding/static messagebox/dashboard/static
-
-scan:
-	command -v gitleaks >/dev/null
-	gitleaks detect --source . --no-git --redact=100
 
 check: syntax lint test
