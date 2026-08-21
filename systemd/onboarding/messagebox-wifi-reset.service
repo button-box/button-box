@@ -8,7 +8,8 @@ Conflicts=shutdown.target
 Type=oneshot
 User=root
 Group=root
-ExecStart=/usr/bin/python3 /opt/messagebox/onboarding/reset.py
+WorkingDirectory=/opt/messagebox
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.reset
 EnvironmentFile=-/etc/messagebox/env
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 Environment=HOME=/var/lib/messagebox-onboarding

@@ -6,16 +6,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
 gpiozero = types.ModuleType("gpiozero")
 gpiozero.Button = object
 gpiozero.LED = object
 with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
-    import button_send  # noqa: E402
-from contacts import ContactStore  # noqa: E402
-from nfc_state import SelectionStore  # noqa: E402
+    import messagebox.button_send as button_send  # noqa: E402
+from messagebox.contacts import ContactStore  # noqa: E402
+from messagebox.nfc_state import SelectionStore  # noqa: E402
 
 
 GRANDMA = "15551234567@s.whatsapp.net"

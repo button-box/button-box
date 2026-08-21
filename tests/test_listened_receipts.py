@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.contacts import ContactStore
-from src.listened_receipts import (
+from messagebox.contacts import ContactStore
+from messagebox.listened_receipts import (
     AnnouncementGate,
     ReceiptStore,
     canonical_jid,

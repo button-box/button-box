@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.contacts import ContactError, ContactStore, main
+from messagebox.contacts import ContactError, ContactStore, main
 
 
 PERSON = "15551234567@s.whatsapp.net"

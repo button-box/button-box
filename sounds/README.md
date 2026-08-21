@@ -1,7 +1,7 @@
-# Audio publication status
+# Audio assets
 
-No voice recordings were imported. The existing experimental system-voice
-files do not have sufficiently documented redistribution rights.
+No voice recordings are included because the experimental system-voice files
+do not have sufficiently documented redistribution rights.
 
 Before adding audio, record the prompt transcript, performer or generator,
 consent and redistribution terms, technical format, checksum, and artifact

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+cd /opt/messagebox
+exec /usr/bin/python3 -m messagebox.onboarding.initialize "$@"

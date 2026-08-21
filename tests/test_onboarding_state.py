@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateError, StateStore
+from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateError, StateStore
 
 
 class Clock:

@@ -1,0 +1,1 @@
+"""Message Box application package."""

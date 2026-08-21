@@ -2,23 +2,35 @@
 
 ## Repository tests
 
-Development requires `uv` and Bun. `make lint` runs pinned Ruff and ShellCheck
-packages through `uvx` and pinned Biome through `bunx`; no project environment
-or dependency installation is required. The first run downloads and caches the
-tools.
+- `make test` runs the synthetic Python unit suite.
+- `make lint` requires `uvx` (from `uv`) and `bunx` (from Bun). It runs Ruff for
+  Python, ShellCheck for shell scripts, and Biome for frontend assets. `uvx` and
+  `bunx` download these tools on first use.
+- `make check` runs syntax checks, linting, and tests.
 
-Run `make check` for Python and shell syntax, linting, and the synthetic unit
-suite. Run `make lint` for linting alone. Run `make scan` separately when
-Gitleaks is installed.
+No project virtual environment or repository-local dependency installation is
+required.
 
-Repository tests cover routing, onboarding state, credential redaction,
-WhatsApp-pairing contracts, NFC behavior, and recovery logic. They do not prove
-behavior on a real Pi, phone, network, microphone, speaker, button, or PN532.
+Synthetic tests cover routing, onboarding, redaction, pairing, NFC, and recovery
+contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
-## Physical acceptance
+## Physical test scenarios
 
-A release requires a clean Raspberry Pi 4 and test microSD card. Validate Wi-Fi
-success and failure recovery, WhatsApp pairing and interruption, recipient
-selection, NFC enrollment/removal/unknown cards, audio input/output, first
-send/reply, reboot, power loss, and rollback. Confirm the test did not inherit
-any state from a development or household device.
+Use a spare Raspberry Pi 4 with a freshly imaged test microSD card. Confirm it
+did not inherit state from a development or household device.
+
+For installation and consumer onboarding, test:
+
+- Clean installation and manufacturer handoff
+- Wi-Fi success, failure, and recovery
+- WhatsApp pairing and interruption
+- Reboot and power loss during onboarding transitions
+
+For the standalone developer flow and runtime, test:
+
+- Single- and multiple-recipient routing
+- NFC enrollment, removal, and unknown cards
+- Microphone, speaker, LED, and button behavior
+- First send and reply
+- Reboot and power-loss recovery
+- Rollback to the previous working release

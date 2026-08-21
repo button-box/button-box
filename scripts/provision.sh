@@ -42,43 +42,45 @@ rsync -azR \
   "$REPO_DIR/./config/onboarding/" \
   "$REPO_DIR/./config/requirements-nfc.txt" \
   "$REPO_DIR/./scripts/install/" \
-  "$REPO_DIR/./scripts/configure-wifi.sh" \
-  "$REPO_DIR/./scripts/onboard.sh" \
+  "$REPO_DIR/./scripts/commands/messagebox-comitup-state" \
+  "$REPO_DIR/./scripts/commands/messagebox-contact" \
+  "$REPO_DIR/./scripts/commands/messagebox-init-wifi-onboarding" \
+  "$REPO_DIR/./scripts/dev/onboard.sh" \
+  "$REPO_DIR/./scripts/dev/hardware-test.sh" \
   "$REPO_DIR/./scripts/messageboxctl" \
   "$REPO_DIR/./scripts/setup.sh" \
-  "$REPO_DIR/./scripts/test.sh" \
   "$REPO_DIR/./sounds/" \
-  "$REPO_DIR/./src/button_send.py" \
-  "$REPO_DIR/./src/contacts.py" \
-  "$REPO_DIR/./src/dashboard.py" \
-  "$REPO_DIR/./src/dashboard_static/" \
-  "$REPO_DIR/./src/guided_reply.py" \
-  "$REPO_DIR/./src/listened_receipts.py" \
-  "$REPO_DIR/./src/make_ringtones.py" \
-  "$REPO_DIR/./src/nfc.py" \
-  "$REPO_DIR/./src/nfc_state.py" \
-  "$REPO_DIR/./src/onboarding/" \
-  "$REPO_DIR/./src/runtime_paths.py" \
-  "$REPO_DIR/./src/syncloop.sh" \
-  "$REPO_DIR/./src/voicepoll.py" \
+  "$REPO_DIR/./messagebox/__init__.py" \
+  "$REPO_DIR/./messagebox/button_send.py" \
+  "$REPO_DIR/./messagebox/contacts.py" \
+  "$REPO_DIR/./messagebox/guided_reply.py" \
+  "$REPO_DIR/./messagebox/listened_receipts.py" \
+  "$REPO_DIR/./messagebox/make_ringtones.py" \
+  "$REPO_DIR/./messagebox/nfc.py" \
+  "$REPO_DIR/./messagebox/nfc_state.py" \
+  "$REPO_DIR/./messagebox/runtime_paths.py" \
+  "$REPO_DIR/./messagebox/syncloop.sh" \
+  "$REPO_DIR/./messagebox/voicepoll.py" \
+  "$REPO_DIR/./messagebox/dashboard/__init__.py" \
+  "$REPO_DIR/./messagebox/dashboard/app.py" \
+  "$REPO_DIR/./messagebox/dashboard/static/app.js" \
+  "$REPO_DIR/./messagebox/dashboard/static/index.html" \
+  "$REPO_DIR/./messagebox/dashboard/static/styles.css" \
+  "$REPO_DIR/./messagebox/onboarding/__init__.py" \
+  "$REPO_DIR/./messagebox/onboarding/app.py" \
+  "$REPO_DIR/./messagebox/onboarding/comitup_adapter.py" \
+  "$REPO_DIR/./messagebox/onboarding/connectivity.py" \
+  "$REPO_DIR/./messagebox/onboarding/initialize.py" \
+  "$REPO_DIR/./messagebox/onboarding/paths.py" \
+  "$REPO_DIR/./messagebox/onboarding/reset.py" \
+  "$REPO_DIR/./messagebox/onboarding/state.py" \
+  "$REPO_DIR/./messagebox/onboarding/whatsapp.py" \
+  "$REPO_DIR/./messagebox/onboarding/static/app.js" \
+  "$REPO_DIR/./messagebox/onboarding/static/index.html" \
+  "$REPO_DIR/./messagebox/onboarding/static/styles.css" \
   "$REPO_DIR/./systemd/" \
   "$TARGET:$REMOTE_SOURCE/"
 
 echo "Running setup on $TARGET"
-ssh -t "$TARGET" "'$REMOTE_SOURCE/scripts/setup.sh'"
-
-printf '\n%s\n' \
-  '============================================================' \
-  '     ✅ MESSAGE BOX PROVISIONING SUCCESSFUL ✅' \
-  '============================================================' \
-  'No Message Box or Comitup services were enabled or started.' \
-  '' \
-  'NEXT STEP' \
-  '  Configure the protected Wi-Fi setup card over direct Ethernet:' \
-  "    ssh -t $TARGET sudo messagebox-configure-wifi" \
-  '  Then start onboarding only after recording that card:' \
-  "    ssh -t $TARGET sudo messageboxctl reset-wifi" \
-  '  WhatsApp and contact onboarding follows Wi-Fi acceptance:' \
-  "    ssh $TARGET" \
-  '    onboard.sh' \
-  '============================================================'
+ssh -t "$TARGET" \
+  "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"

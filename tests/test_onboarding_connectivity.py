@@ -1,11 +1,7 @@
 import subprocess
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "src" / "onboarding"))
-
-from connectivity import (  # noqa: E402
+from messagebox.onboarding.connectivity import (
     DEFAULT_HOSTNAME,
     DEFAULT_HTTPS_URL,
     PROOF_ADDRESS,

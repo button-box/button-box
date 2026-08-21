@@ -1,7 +1,8 @@
-# Rendered by messagebox-configure-wifi. Do not put real credentials here.
+# Rendered by messagebox-init-wifi-onboarding. Do not put real credentials here.
 ap_name: <hostname>
 ap_password: @HOTSPOT_PASSWORD@
 web_service: messagebox-onboarding-home.service
+external_callback: /usr/local/sbin/messagebox-comitup-state
 service_name: messagebox
 enable_appliance_mode: 0
 primary_wifi_device: wlan0

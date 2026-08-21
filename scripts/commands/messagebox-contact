@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if [ "$(id -un)" != "messagebox" ]; then
+  exec sudo -u messagebox -H /usr/local/bin/messagebox-contact "$@"
+fi
+
+cd /opt/messagebox
+exec /usr/bin/python3 -m messagebox.contacts "$@"

@@ -122,10 +122,11 @@ case "$command" in
       exit 2
     fi
     if [ ! -f /etc/messagebox-onboarding/configured ] || [ -L /etc/messagebox-onboarding/configured ]; then
-      echo "Configure Wi-Fi onboarding first: sudo messagebox-configure-wifi" >&2
+      echo "Initialize Wi-Fi onboarding first: sudo messagebox-init-wifi-onboarding" >&2
       exit 1
     fi
-    exec /usr/bin/python3 /opt/messagebox/onboarding/reset.py --force
+    cd /opt/messagebox
+    exec /usr/bin/python3 -m messagebox.onboarding.reset --force
     ;;
   start|stop|restart)
     require_root

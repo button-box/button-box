@@ -1,16 +1,33 @@
 # Architecture
 
-Message Box runs as a set of least-privilege Linux services on a Raspberry Pi.
+Message Box runs as separate systemd services with constrained users and
+permissions. Runtime services use the `messagebox` account, while the web
+onboarding service uses `messagebox-onboarding`. systemd limits filesystem,
+device, and capability access. Wi-Fi management and reset operations retain the
+root access they require.
 
-1. Comitup and the local onboarding portal establish Wi-Fi.
-2. The home-mode portal starts an isolated WhatsApp pairing worker.
-3. Contact and NFC tools store approved routing state under
-   `/var/lib/messagebox`, outside the repository.
-4. The poller downloads eligible inbound voice messages to a durable queue.
-5. The button player records or plays audio and sends only to the selected,
-   approved destination.
-6. systemd owns startup, shutdown, service isolation, and recovery.
+## Runtime services
 
-The repository contains code and safe examples only. Authentication databases,
-contacts, NFC identifiers, audio messages, Wi-Fi credentials, and live device
-state are runtime data and must never be copied into Git.
+`messagebox.target` groups the enabled runtime services:
+
+| Unit | Role |
+| --- | --- |
+| `messagebox-button.service` | Record, play, and send voice messages |
+| `messagebox-poller.service` | Queue voice messages from configured contacts |
+| `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
+| `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
+| `messagebox-dash.service` | Serve the optional status and queue dashboard |
+
+## Onboarding services
+
+| Unit | Role |
+| --- | --- |
+| `comitup.service` | Use [Comitup](https://github.com/davesteele/comitup) to manage Wi-Fi and the setup hotspot through NetworkManager |
+| `comitup-web.service` | Serve the onboarding portal on the setup hotspot |
+| `messagebox-onboarding-home.service` | Serve the portal after Wi-Fi setup |
+| `messagebox-whatsapp-pairing.service` | Isolate WhatsApp pairing operations |
+
+`messagebox-wifi-reset.service` is a one-shot boot check for the physical Wi-Fi
+reset gesture. The onboarding portal accesses Comitup through a restricted
+D-Bus policy. NetworkManager and Avahi provide network management and local name
+resolution.

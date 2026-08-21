@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from src.onboarding.whatsapp import (
+from messagebox.onboarding.whatsapp import (
     MAX_BOOTSTRAP_MESSAGES,
     MAX_ELIGIBLE_CONVERSATIONS,
     PairingEngine,
@@ -247,7 +247,7 @@ class WhatsAppPairingTests(unittest.TestCase):
             def start(self):
                 pass
 
-        with mock.patch("src.onboarding.whatsapp.threading.Thread", DeferredThread):
+        with mock.patch("messagebox.onboarding.whatsapp.threading.Thread", DeferredThread):
             first = engine.start("+14155550123")
             duplicate = engine.start("+1 415 555 0123")
             self.assertEqual(duplicate["attempt"], first["attempt"])
@@ -351,8 +351,12 @@ class WhatsAppPairingTests(unittest.TestCase):
 class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
     def test_frontend_has_all_pairing_states_accessibility_and_no_qr(self):
         root = Path(__file__).parents[1]
-        html = (root / "src/onboarding/static/index.html").read_text(encoding="utf-8")
-        script = (root / "src/onboarding/static/app.js").read_text(encoding="utf-8")
+        html = (root / "messagebox/onboarding/static/index.html").read_text(
+            encoding="utf-8"
+        )
+        script = (root / "messagebox/onboarding/static/app.js").read_text(
+            encoding="utf-8"
+        )
         for view in (
             "whatsapp-view",
             "code-view",

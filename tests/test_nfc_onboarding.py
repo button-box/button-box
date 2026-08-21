@@ -6,13 +6,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from src.contacts import ContactError, ContactStore
-from src.nfc import (
+from messagebox.contacts import ContactError, ContactStore
+from messagebox.nfc import (
     Announcer,
     NfcRuntime,
     main,
 )
-from src.nfc_state import (
+from messagebox.nfc_state import (
     AnnouncementStore,
     EnrollmentStore,
     NfcError,
@@ -419,10 +419,10 @@ class NfcTests(unittest.TestCase):
         self.add_family(CARD_TWO)
         output = io.StringIO()
         patches = (
-            mock.patch("src.nfc.CONTACTS_FILE", self.contacts_path),
-            mock.patch("src.nfc.NFC_SELECTION_FILE", self.selection_path),
-            mock.patch("src.nfc.NFC_ENROLLMENT_FILE", self.enrollment_path),
-            mock.patch("src.nfc.NFC_ANNOUNCEMENT_FILE", self.announcement_path),
+            mock.patch("messagebox.nfc.CONTACTS_FILE", self.contacts_path),
+            mock.patch("messagebox.nfc.NFC_SELECTION_FILE", self.selection_path),
+            mock.patch("messagebox.nfc.NFC_ENROLLMENT_FILE", self.enrollment_path),
+            mock.patch("messagebox.nfc.NFC_ANNOUNCEMENT_FILE", self.announcement_path),
         )
         with patches[0], patches[1], patches[2], patches[3]:
             with contextlib.redirect_stdout(output):

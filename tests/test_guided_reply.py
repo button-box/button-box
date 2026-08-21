@@ -1,16 +1,12 @@
 import json
 import os
 import struct
-import sys
 import tempfile
 import unittest
 import wave
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from guided_reply import (  # noqa: E402
+from messagebox.guided_reply import (
     EnergyVAD,
     GuidedSession,
     OutboxStore,

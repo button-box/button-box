@@ -1,0 +1,1 @@
+"""Message Box dashboard package."""

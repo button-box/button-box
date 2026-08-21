@@ -40,7 +40,7 @@ flock -n 9 || die "Another Comitup installation is running."
 
 [ "$#" -eq 0 ] || die "Usage: $0"
 
-[ ! -e /etc/messagebox-onboarding/enabled ] || die "Refusing to modify explicitly armed onboarding."
+sudo test ! -e /etc/messagebox-onboarding/enabled || die "Refusing to modify explicitly armed onboarding."
 TMP_DIR=$(mktemp -d /tmp/messagebox-comitup.XXXXXX)
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM

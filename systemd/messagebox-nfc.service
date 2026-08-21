@@ -8,12 +8,12 @@ PartOf=messagebox.target
 Type=simple
 User=messagebox
 Group=messagebox
-WorkingDirectory=/run/messagebox
+WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
 Environment=HOME=/var/lib/messagebox
 SupplementaryGroups=i2c gpio
 UMask=0077
-ExecStart=/opt/messagebox/venv-nfc/bin/python -u /opt/messagebox/nfc.py daemon
+ExecStart=/opt/messagebox/venv-nfc/bin/python -u -m messagebox.nfc daemon
 Restart=always
 RestartSec=3
 
