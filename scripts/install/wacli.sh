@@ -5,23 +5,17 @@ set -eu
 
 VERSION="0.17.1"
 INSTALL_PATH="/usr/local/bin/wacli"
+ARCHIVE="wacli_${VERSION}_linux_arm64.tar.gz"
+SHA256="8e5d21f8d5f097e5d3a883cdb42848a9e50a7383e4de049c807cc44e6e7c81b6"
 
-case "$(uname -m)" in
-  aarch64|arm64)
-    RELEASE_ARCH="arm64"
-    SHA256="8e5d21f8d5f097e5d3a883cdb42848a9e50a7383e4de049c807cc44e6e7c81b6"
-    ;;
-  x86_64|amd64)
-    RELEASE_ARCH="amd64"
-    SHA256="cbd5e74d5b805550cc36c7479aca552970cc1b314c5c08e02367e08b785714fd"
-    ;;
+case "$(uname -s):$(uname -m)" in
+  Linux:aarch64) ;;
   *)
-    echo "Unsupported architecture: $(uname -m)" >&2
+    echo "wacli installation requires Linux arm64." >&2
     exit 1
     ;;
 esac
 
-ARCHIVE="wacli_${VERSION}_linux_${RELEASE_ARCH}.tar.gz"
 URL="https://github.com/openclaw/wacli/releases/download/v${VERSION}/${ARCHIVE}"
 
 validate_binary() {
