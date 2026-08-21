@@ -30,8 +30,7 @@ See the [developer onboarding guide](docs/developer-onboarding.md).
 - `messagebox/dashboard/static/`: private dashboard assets
 - `messagebox/onboarding/static/`: consumer onboarding portal assets
 - `scripts/`: setup, explicit-input provisioning, and installed command wrappers
-- `scripts/dev/`: developer onboarding, internal Pi hardware checks, and macOS dhcp script
-  for connecting directly to a Pi over Ethernet
+- `scripts/dev/`: developer onboarding and internal Pi hardware checks
 - `systemd/`: service and target definitions
 - `config/`: minimal public configuration and pinned NFC dependencies
 - `hardware/`: status of future Raspberry Pi 4 hardware files
