@@ -4,7 +4,8 @@ ConditionPathExists=/etc/messagebox-onboarding/enabled
 BindsTo=comitup.service
 PartOf=comitup.service
 Requires=messagebox-whatsapp-pairing.service
-After=comitup.service network-online.target messagebox-whatsapp-pairing.service
+Conflicts=comitup-web.service
+After=comitup.service network-online.target messagebox-whatsapp-pairing.service comitup-web.service
 
 [Service]
 Type=simple
@@ -14,7 +15,7 @@ WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox-onboarding
 Environment=MSGBOX_ONBOARDING_MODE=HOME
 UMask=0077
-ExecStart=/usr/bin/gunicorn --workers 1 --worker-class sync --bind 0.0.0.0:80 --error-logfile - onboarding.app:app
+ExecStart=/usr/bin/gunicorn --workers 1 --worker-class sync --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE

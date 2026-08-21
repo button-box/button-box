@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from src.onboarding import reset
-from src.onboarding.state import StateStore
+from messagebox.onboarding import reset
+from messagebox.onboarding.state import StateStore
 
 
 class Result:
@@ -161,8 +161,10 @@ class WifiResetTests(unittest.TestCase):
         self.assertIn(["systemctl", "enable", *reset.SETUP_UNITS], commands)
         self.assertIn(["systemctl", "stop", *reset.RUNTIME_UNITS], commands)
         self.assertIn(["systemctl", "stop", *reset.ONBOARDING_UNITS], commands)
+        self.assertIn(["rm", "-f", "--", "/var/lib/comitup/dhcpleaseinfo"], commands)
         self.assertIn(["nmcli", "connection", "delete", "uuid", "home"], commands)
         self.assertNotIn(["nmcli", "connection", "delete", "uuid", "hotspot"], commands)
+        self.assertEqual(commands[-2], ["nmcli", "radio", "wifi", "on"])
         self.assertEqual(
             commands[-1], ["systemctl", "--no-block", "start", *reset.HOTSPOT_UNITS]
         )
@@ -208,7 +210,7 @@ class WifiResetTests(unittest.TestCase):
 
     def test_main_requires_root_before_loading_gpio(self):
         error = io.StringIO()
-        with mock.patch("src.onboarding.reset._gpio_button") as gpio:
+        with mock.patch("messagebox.onboarding.reset._gpio_button") as gpio:
             code = reset.main(geteuid=lambda: 1000, stderr=error)
         self.assertEqual(code, reset.EXIT_NOT_ROOT)
         gpio.assert_not_called()

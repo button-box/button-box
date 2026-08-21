@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  HOTSPOT|CONNECTING)
+    exec /usr/bin/systemctl --no-block start comitup-web.service
+    ;;
+  CONNECTED)
+    exit 0
+    ;;
+  *)
+    exit 64
+    ;;
+esac

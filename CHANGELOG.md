@@ -1,12 +1,11 @@
 # Changelog
 
-All notable public changes will be documented here once releases begin.
+All notable changes will be documented here.
 
 ## Unreleased
 
-- Created the first clean-history inspection candidate from an explicit
-  allowlist pinned to the private source repository.
+- Created the public Message Box repository with clean Git history.
 - Excluded private history, production evidence, obsolete hardware files,
   personalized assembly material, and unlicensed audio.
-- Added initial open-source governance, privacy, security, provenance, and
-  synchronization documentation.
+- Added initial open-source governance, privacy, and security
+  documentation.

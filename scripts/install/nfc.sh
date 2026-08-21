@@ -23,9 +23,10 @@ if systemctl is-active --quiet messagebox-nfc.service 2>/dev/null; then
   echo "Stop NFC before repairing it: sudo systemctl stop messagebox-nfc.service" >&2
   exit 1
 fi
-if [ ! -f "$APP_DIR/nfc.py" ] || [ ! -f "$APP_DIR/nfc_state.py" ] ||
-   [ ! -f "$APP_DIR/contacts.py" ]; then
-  echo "Expected deployed NFC sources in $APP_DIR" >&2
+if [ ! -f "$APP_DIR/messagebox/nfc.py" ] ||
+   [ ! -f "$APP_DIR/messagebox/nfc_state.py" ] ||
+   [ ! -f "$APP_DIR/messagebox/contacts.py" ]; then
+  echo "Expected deployed NFC package sources in $APP_DIR/messagebox" >&2
   exit 1
 fi
 if [ ! -f "$APP_DIR/config/requirements-nfc.txt" ]; then

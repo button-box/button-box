@@ -16,7 +16,7 @@ Environment=MSGBOX_PAIRING_SOCKET_GROUP=messagebox-onboarding
 UMask=0077
 RuntimeDirectory=messagebox-whatsapp-pairing
 RuntimeDirectoryMode=0750
-ExecStart=/usr/bin/python3 -m onboarding.whatsapp --serve
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.whatsapp --serve
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes

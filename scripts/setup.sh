@@ -10,46 +10,61 @@ SERVICE_GROUP=messagebox
 ONBOARDING_USER=messagebox-onboarding
 ONBOARDING_GROUP=messagebox-onboarding
 APP_DIR=/opt/messagebox
+PACKAGE_DIR=$APP_DIR/messagebox
 CONFIG_DIR=/etc/messagebox
 DATA_DIR=/var/lib/messagebox
 ONBOARDING_CONFIG_DIR=/etc/messagebox-onboarding
 ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
-RUNTIME_PYTHON="button_send.py contacts.py dashboard.py guided_reply.py listened_receipts.py
+SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
+PACKAGE_PYTHON="__init__.py button_send.py contacts.py guided_reply.py listened_receipts.py
 make_ringtones.py nfc.py nfc_state.py runtime_paths.py voicepoll.py"
+DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
+ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py
+onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
+onboarding/paths.py onboarding/reset.py onboarding/state.py onboarding/whatsapp.py"
+STATIC_ASSETS="dashboard/static/app.js dashboard/static/index.html dashboard/static/styles.css
+onboarding/static/app.js onboarding/static/index.html onboarding/static/styles.css"
+
+case "$SSH_TARGET" in
+  '') ;;
+  -*|*[!A-Za-z0-9._@-]*)
+    echo "Invalid SSH target supplied for completion instructions." >&2
+    exit 2
+    ;;
+esac
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run as a sudo-capable administrator, not root." >&2
   exit 1
 fi
 
-for name in $RUNTIME_PYTHON; do
-  if [ ! -r "$REPO_DIR/src/$name" ]; then
-    echo "Missing repository file: src/$name" >&2
+for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON $STATIC_ASSETS; do
+  if [ ! -r "$REPO_DIR/messagebox/$name" ]; then
+    echo "Missing repository file: messagebox/$name" >&2
     exit 1
   fi
 done
 for path in \
+  config/env.example \
+  config/requirements-nfc.txt \
   config/onboarding/comitup.conf.template \
   config/onboarding/comitup-dbus.conf \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
-  scripts/configure-wifi.sh \
-  scripts/onboard.sh \
+  scripts/install/nfc.sh \
+  scripts/install/wacli.sh \
+  scripts/commands/messagebox-comitup-state \
+  scripts/commands/messagebox-contact \
+  scripts/commands/messagebox-init-wifi-onboarding \
+  scripts/dev/onboard.sh \
+  scripts/dev/hardware-test.sh \
   scripts/messageboxctl \
-  src/dashboard_static/app.js \
-  src/dashboard_static/index.html \
-  src/dashboard_static/styles.css \
-  src/onboarding/app.py \
-  src/onboarding/comitup_adapter.py \
-  src/onboarding/connectivity.py \
-  src/onboarding/__init__.py \
-  src/onboarding/reset.py \
-  src/onboarding/state.py \
-  src/onboarding/whatsapp.py \
-  src/onboarding/static/app.js \
-  src/onboarding/static/index.html \
-  src/onboarding/static/styles.css \
+  messagebox/syncloop.sh \
   systemd/messagebox-button.service \
+  systemd/messagebox-sync.service \
+  systemd/messagebox-poller.service \
+  systemd/messagebox-dash.service \
+  systemd/messagebox-nfc.service \
   systemd/onboarding/comitup.service.d/messagebox.conf \
   systemd/onboarding/comitup-web.service.d/messagebox.conf \
   systemd/onboarding/messagebox-onboarding-home.service \
@@ -63,10 +78,27 @@ for path in \
   fi
 done
 
-[ ! -e "$ONBOARDING_CONFIG_DIR/enabled" ] || {
+for destination in \
+  /usr/local/bin/messagebox-contact \
+  /usr/local/bin/messagebox-dev-onboard \
+  /usr/local/bin/messageboxctl \
+  /usr/local/sbin/messagebox-comitup-state \
+  /usr/local/sbin/messagebox-init-wifi-onboarding; do
+  if [ -L "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+    echo "Cannot replace non-regular command path: $destination" >&2
+    exit 1
+  fi
+done
+
+if [ -L "$APP_DIR" ] || { [ -e "$APP_DIR" ] && [ ! -d "$APP_DIR" ]; }; then
+  echo "Cannot install into non-directory application path: $APP_DIR" >&2
+  exit 1
+fi
+
+if sudo test -e "$ONBOARDING_CONFIG_DIR/enabled"; then
   echo "Refusing to update while Wi-Fi onboarding is armed." >&2
   exit 1
-}
+fi
 
 for unit in \
   messagebox.target \
@@ -75,6 +107,7 @@ for unit in \
   messagebox-poller.service \
   messagebox-dash.service \
   messagebox-nfc.service \
+  messagebox-wifi-reset.service \
   comitup.service \
   comitup-web.service \
   messagebox-onboarding-home.service \
@@ -122,18 +155,25 @@ fi
 echo "Installing Message Box in $APP_DIR as $SERVICE_USER"
 
 sudo apt-get update
-sudo apt-get install -y \
+sudo apt-get install -y --no-install-recommends \
   alsa-utils ca-certificates curl ffmpeg gunicorn=23.0.0-1 i2c-tools nftables \
   liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv swig
 
 sudo usermod -a -G audio,gpio,i2c "$SERVICE_USER"
 
+sudo rm -rf \
+  "$PACKAGE_DIR" \
+  "$APP_DIR/dev" \
+  "$APP_DIR/ringtones"
 sudo install -d -o root -g root -m 0755 \
   "$APP_DIR" \
   "$APP_DIR/config" \
-  "$APP_DIR/dashboard_static" \
-  "$APP_DIR/onboarding" \
-  "$APP_DIR/onboarding/static" \
+  "$APP_DIR/dev" \
+  "$PACKAGE_DIR" \
+  "$PACKAGE_DIR/dashboard" \
+  "$PACKAGE_DIR/dashboard/static" \
+  "$PACKAGE_DIR/onboarding" \
+  "$PACKAGE_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
   "$APP_DIR/sounds/guided-reply" \
   "$APP_DIR/sounds/listen-receipts" \
@@ -149,23 +189,38 @@ sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
   "$DATA_DIR/state" \
   "$DATA_DIR/wacli"
 
-for name in $RUNTIME_PYTHON; do
-  sudo install -o root -g root -m 0755 "$REPO_DIR/src/$name" "$APP_DIR/$name"
+for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON; do
+  sudo install -o root -g root -m 0644 \
+    "$REPO_DIR/messagebox/$name" "$PACKAGE_DIR/$name"
 done
-sudo install -o root -g root -m 0644 \
-  "$REPO_DIR/src/dashboard_static/app.js" \
-  "$REPO_DIR/src/dashboard_static/index.html" \
-  "$REPO_DIR/src/dashboard_static/styles.css" \
-  "$APP_DIR/dashboard_static/"
-sudo install -o root -g root -m 0755 "$REPO_DIR/src/syncloop.sh" "$APP_DIR/syncloop.sh"
-sudo install -o root -g root -m 0755 "$REPO_DIR/scripts/test.sh" "$APP_DIR/test.sh"
-for source in "$REPO_DIR"/src/onboarding/*.py; do
-  sudo install -o root -g root -m 0644 "$source" "$APP_DIR/onboarding/$(basename "$source")"
+for name in $STATIC_ASSETS; do
+  sudo install -o root -g root -m 0644 \
+    "$REPO_DIR/messagebox/$name" "$PACKAGE_DIR/$name"
 done
-sudo rm -f "$APP_DIR/onboarding/auth.py" "$ONBOARDING_DATA_DIR/session.key"
-for source in "$REPO_DIR"/src/onboarding/static/*; do
-  sudo install -o root -g root -m 0644 "$source" "$APP_DIR/onboarding/static/$(basename "$source")"
-done
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/messagebox/syncloop.sh" "$PACKAGE_DIR/syncloop.sh"
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/scripts/dev/hardware-test.sh" "$APP_DIR/dev/hardware-test.sh"
+sudo rm -rf \
+  "$APP_DIR/__pycache__" \
+  "$APP_DIR/dashboard_static" \
+  "$APP_DIR/onboarding"
+sudo rm -f \
+  "$APP_DIR/button_send.py" \
+  "$APP_DIR/contacts.py" \
+  "$APP_DIR/dashboard.py" \
+  "$APP_DIR/guided_reply.py" \
+  "$APP_DIR/listened_receipts.py" \
+  "$APP_DIR/make_ringtones.py" \
+  "$APP_DIR/nfc.py" \
+  "$APP_DIR/nfc_state.py" \
+  "$APP_DIR/runtime_paths.py" \
+  "$APP_DIR/syncloop.sh" \
+  "$APP_DIR/test.sh" \
+  "$APP_DIR/voicepoll.py" \
+  /usr/local/sbin/messagebox-arm-wifi \
+  /usr/local/sbin/messagebox-configure-wifi
+sudo rm -f "$ONBOARDING_DATA_DIR/session.key"
 
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/config/requirements-nfc.txt" "$APP_DIR/config/requirements-nfc.txt"
@@ -180,7 +235,8 @@ done
 sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   "$REPO_DIR/config/env.example" "$CONFIG_DIR/env.example"
 
-sudo python3 "$APP_DIR/make_ringtones.py"
+(cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
+sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
 "$SCRIPT_DIR/install/wacli.sh"
 "$SCRIPT_DIR/install/comitup.sh"
 
@@ -194,15 +250,15 @@ sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/messagebox.tmpfiles.conf" /etc/tmpfiles.d/messagebox.conf
 sudo install -o root -g root -m 0755 \
   "$REPO_DIR/scripts/messageboxctl" /usr/local/bin/messageboxctl
-if [ -e /usr/local/bin/contact ] && [ ! -f /usr/local/bin/contact ] &&
-   [ ! -L /usr/local/bin/contact ]; then
-  echo "Cannot replace non-file path: /usr/local/bin/contact" >&2
-  exit 1
-fi
-sudo ln -sfn "$APP_DIR/contacts.py" /usr/local/bin/contact
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/scripts/commands/messagebox-contact" \
+  /usr/local/bin/messagebox-contact
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/scripts/commands/messagebox-comitup-state" \
+  /usr/local/sbin/messagebox-comitup-state
 MSGBOX_SKIP_APT=1 "$SCRIPT_DIR/install/nfc.sh"
 sudo install -o root -g root -m 0755 \
-  "$REPO_DIR/scripts/onboard.sh" /usr/local/bin/onboard.sh
+  "$REPO_DIR/scripts/dev/onboard.sh" /usr/local/bin/messagebox-dev-onboard
 
 sudo install -d -o root -g root -m 0755 \
   /usr/share/messagebox/onboarding \
@@ -214,9 +270,8 @@ sudo install -o root -g "$ONBOARDING_GROUP" -m 0640 \
   "$REPO_DIR/config/onboarding/firewall.nft" \
   "$ONBOARDING_CONFIG_DIR/firewall.nft"
 sudo install -o root -g root -m 0755 \
-  "$REPO_DIR/scripts/configure-wifi.sh" \
-  /usr/local/sbin/messagebox-configure-wifi
-sudo rm -f /usr/local/sbin/messagebox-arm-wifi
+  "$REPO_DIR/scripts/commands/messagebox-init-wifi-onboarding" \
+  /usr/local/sbin/messagebox-init-wifi-onboarding
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/onboarding/comitup-web.service.d/messagebox.conf" \
   /etc/systemd/system/comitup-web.service.d/messagebox.conf
@@ -233,19 +288,58 @@ sudo systemd-analyze verify \
   /etc/systemd/system/messagebox-poller.service \
   /etc/systemd/system/messagebox-dash.service \
   /etc/systemd/system/messagebox-nfc.service \
+  /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \
   /etc/systemd/system/messagebox-whatsapp-pairing.service \
   /etc/systemd/system/messagebox-wifi-reset.service
 
 PYTHONPYCACHEPREFIX=$(mktemp -d)
 export PYTHONPYCACHEPREFIX
-python3 -m py_compile "$APP_DIR"/*.py
-python3 -m py_compile "$APP_DIR"/onboarding/*.py
+(cd "$APP_DIR" && /usr/bin/python3 -m compileall -q messagebox)
 rm -rf "$PYTHONPYCACHEPREFIX"
 
-if sudo test -e "$ONBOARDING_CONFIG_DIR/configured"; then
-  echo "Wi-Fi onboarding remains configured but was not started."
+if [ -n "$SSH_TARGET" ]; then
+  dev_command="ssh -t $SSH_TARGET messagebox-dev-onboard"
+  initialize_command="ssh -t $SSH_TARGET sudo messagebox-init-wifi-onboarding"
+  reset_command="ssh -t $SSH_TARGET sudo messageboxctl reset-wifi"
+  shutdown_command="ssh -t $SSH_TARGET sudo shutdown now"
 else
-  echo "Wi-Fi onboarding was installed but not configured or armed."
-  echo "Configure it with: sudo messagebox-configure-wifi"
+  dev_command=messagebox-dev-onboard
+  initialize_command="sudo messagebox-init-wifi-onboarding"
+  reset_command="sudo messageboxctl reset-wifi"
+  shutdown_command="sudo shutdown now"
 fi
+
+printf '%s\n' \
+  '' \
+  '============================================================' \
+  '             ✅ MESSAGE BOX SETUP COMPLETE ✅' \
+  '============================================================' \
+  'No Message Box or Comitup services were enabled or started.' \
+  '' \
+  'DEV FLOW' \
+  '  Run the standalone shell setup and hardware checks:' \
+  "    $dev_command" \
+  '' \
+  '============================= OR =============================' \
+  '' \
+  'CONSUMER HANDOFF (MANUFACTURER)'
+if sudo test -e "$ONBOARDING_CONFIG_DIR/configured"; then
+  printf '%s\n' \
+    '  Wi-Fi credentials already exist. Confirm they are recorded.'
+else
+  printf '%s\n' \
+    '  Generate the Wi-Fi hotspot password and setup URL:' \
+    "    $initialize_command" \
+    '  Print the box number, hotspot, password, and setup URL' \
+    '     as an insert packaged with the box.'
+fi
+printf '%s\n' \
+  '  Arm onboarding for the recipient:' \
+  "    $reset_command" \
+  '  Optionally verify the hotspot, then shut down:' \
+  "    $shutdown_command" \
+  '' \
+  '  Do not complete the browser flow. The recipient does that' \
+  '  after powering on the box.' \
+  '============================================================'

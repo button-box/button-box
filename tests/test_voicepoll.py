@@ -3,8 +3,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.contacts import ContactStore
-from src.voicepoll import (
+from messagebox.contacts import ContactStore
+from messagebox.voicepoll import (
     load_contact_authorizations,
     message_is_authorized,
     parse_wacli_timestamp,

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from urllib.parse import urlencode
 
-from src.onboarding.app import create_app
-from src.onboarding.comitup_adapter import ComitupError
-from src.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
+from messagebox.onboarding.app import create_app
+from messagebox.onboarding.comitup_adapter import ComitupError
+from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
 
 
 HOST = "message-box-A7K2.local"
@@ -233,18 +233,32 @@ class OnboardingAPITests(unittest.TestCase):
         response = self.client.request("GET", "/")
         self.assertEqual(response["status"], "200 OK")
         self.assertIn(b"Choose home Wi-Fi", response["body"])
+        self.assertIn(f"http://{HOST}/".encode(), response["body"])
+        self.assertNotIn(b"__MESSAGEBOX_URL__", response["body"])
         self.assertIsNone(header(response, "Set-Cookie"))
         self.assertIn("default-src 'self'", header(response, "Content-Security-Policy"))
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
 
-    def test_noncanonical_get_redirects_but_mutation_is_rejected(self):
+    def test_hotspot_ip_is_allowed_and_other_hosts_redirect_to_it(self):
         response = self.client.request("GET", "/api/state", host="10.41.0.1")
+        self.assertEqual(response["status"], "200 OK")
+        accepted = self.client.form(
+            "POST",
+            "/wifi/connect",
+            {"ssid": "Cafe", "security": "open", "password": ""},
+            host="10.41.0.1",
+            close=False,
+        )
+        self.assertEqual(accepted["status"], "202 Accepted")
+        accepted["iterable"].close()
+
+        response = self.client.request("GET", "/api/state", host="captive.example")
         self.assertEqual(response["status"], "302 Found")
-        self.assertEqual(header(response, "Location"), f"http://{HOST}/api/state")
+        self.assertEqual(header(response, "Location"), "http://10.41.0.1/api/state")
         response = self.client.form(
-            "POST", "/wifi/connect", {}, host="10.41.0.1"
+            "POST", "/wifi/connect", {}, host="captive.example"
         )
         self.assertEqual(response["status"], "400 Bad Request")
         self.assertIsNone(header(response, "Set-Cookie"))
@@ -323,9 +337,8 @@ class OnboardingAPITests(unittest.TestCase):
             "POST", "/wifi/connect", fields, close=False
         )
         self.assertEqual(response["status"], "202 Accepted")
-        self.assertIn(b"Connecting your Message Box", response["body"])
-        self.assertNotIn(b"/static/app.js", response["body"])
         self.assertIn(b"messagebox-handoff", response["body"])
+        self.assertIn(f'href="http://{HOST}/"'.encode(), response["body"])
         self.assertEqual(self.adapter.calls, [])
         self.assertNotIn(password, self.state_path.read_text(encoding="utf-8"))
         self.assertNotIn(password.encode(), response["body"])
@@ -366,7 +379,7 @@ class OnboardingAPITests(unittest.TestCase):
             with self.subTest(path=path):
                 response = self.client.request("GET", path, host="captive.example")
                 self.assertEqual(response["status"], "302 Found")
-                self.assertEqual(header(response, "Location"), f"http://{HOST}/")
+                self.assertEqual(header(response, "Location"), "http://10.41.0.1/")
 
     def test_hotspot_startup_reconciles_stale_connecting_without_dbus(self):
         stale_path = Path(self.directory.name) / "stale.json"

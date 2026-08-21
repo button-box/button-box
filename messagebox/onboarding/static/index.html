@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Set up Message Box</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <span>Message Box</span>
+    </header>
+
+    <section class="card" id="wifi-view" aria-labelledby="wifi-title">
+      <p class="eyebrow">Step 1 of 2</p>
+      <h1 id="wifi-title" tabindex="-1">Choose home Wi-Fi</h1>
+      <p class="lede">Select a nearby network or enter its name manually.</p>
+      <div id="scan-status" class="status" role="status">Scanning for networks...</div>
+      <!-- biome-ignore lint/a11y/useSemanticElements: JavaScript adds listitem roles to the network buttons. -->
+      <div id="networks" class="network-list" role="list"></div>
+      <button id="scan-again" class="text-button" type="button">Scan again</button>
+
+      <form action="/wifi/connect" method="post" id="wifi-form">
+        <label for="ssid">Wi-Fi name</label>
+        <input id="ssid" name="ssid" required maxlength="32" autocomplete="off">
+        <fieldset>
+          <legend>Network security</legend>
+          <label class="choice"><input type="radio" name="security" value="protected" checked> Password protected</label>
+          <label class="choice"><input type="radio" name="security" value="open"> Open network</label>
+        </fieldset>
+        <div id="password-field">
+          <label for="wifi-password">Wi-Fi password</label>
+          <input id="wifi-password" name="password" type="password" minlength="8" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <aside class="notice">
+          <strong>After you connect</strong>
+          <span>Rejoin home Wi-Fi and open:</span>
+          <code class="setup-url" id="setup-url">__MESSAGEBOX_URL__</code>
+          <button type="button" id="copy-setup-url" class="secondary">Copy setup URL</button>
+          <span class="field-help" id="setup-url-copy-status" role="status" aria-live="polite"></span>
+        </aside>
+        <button type="submit" id="connect-wifi">Connect Message Box</button>
+      </form>
+    </section>
+
+    <section class="card" id="checking-view" aria-labelledby="checking-title" hidden>
+      <p class="eyebrow">Step 2 of 2</p>
+      <div class="pulse" aria-hidden="true"></div>
+      <h1 id="checking-title" tabindex="-1">Checking the internet</h1>
+      <p class="lede">Your box joined Wi-Fi. Now it is confirming a secure internet connection.</p>
+      <p class="status" role="status">Connected to Wi-Fi, checking internet...</p>
+      <button type="button" data-recheck>Check again</button>
+    </section>
+
+    <section class="card" id="whatsapp-view" aria-labelledby="whatsapp-title" hidden>
+      <p class="eyebrow success">Wi-Fi complete</p>
+      <h1 id="whatsapp-title" tabindex="-1">Link WhatsApp</h1>
+      <p class="lede">Enter the WhatsApp number you want this Message Box to use. It must start with + and the international country code.</p>
+      <form id="whatsapp-form">
+        <label for="whatsapp-phone">WhatsApp number (+ and country code)</label>
+        <input id="whatsapp-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" value="+" placeholder="+1 415 555 0123" pattern="\+[1-9][0-9 \-]{7,18}" title="Start with +, then enter the country code and phone number" required aria-describedby="phone-help">
+        <p class="field-help" id="phone-help">Start with +, then the country code and number. For example, +14155550123. Do not enter a local-only number.</p>
+        <button type="submit">Get pairing code</button>
+      </form>
+    </section>
+
+    <section class="card" id="code-view" aria-labelledby="code-title" hidden>
+      <p class="eyebrow">WhatsApp pairing</p>
+      <h1 id="code-title" tabindex="-1">Enter this code</h1>
+      <p class="pairing-code" id="pairing-code" aria-live="polite" aria-atomic="true"></p>
+      <button type="button" id="copy-pairing-code" class="secondary">Copy code</button>
+      <p class="field-help" id="copy-status" role="status" aria-live="polite"></p>
+      <ol class="steps">
+        <li>Open WhatsApp on your phone.</li>
+        <li>Open <strong>Settings → Linked Devices → Link a Device</strong>.</li>
+        <li>Choose <strong>Link with phone number instead</strong> and enter this code.</li>
+      </ol>
+      <p class="status" id="code-status" role="status" aria-live="polite">Waiting for WhatsApp…</p>
+      <button type="button" id="cancel-pairing" class="secondary">Cancel</button>
+    </section>
+
+    <section class="card" id="pairing-progress-view" aria-labelledby="pairing-progress-title" hidden>
+      <p class="eyebrow">WhatsApp pairing</p>
+      <div class="pulse" aria-hidden="true"></div>
+      <h1 id="pairing-progress-title" tabindex="-1">Finishing the link</h1>
+      <p class="lede" id="pairing-progress-copy">Starting a private WhatsApp session…</p>
+      <p class="status" role="status" aria-live="polite">Keep this page open.</p>
+      <button type="button" id="cancel-progress" class="secondary">Cancel</button>
+    </section>
+
+    <section class="card" id="pairing-error-view" aria-labelledby="pairing-error-title" hidden>
+      <p class="eyebrow danger">WhatsApp needs attention</p>
+      <h1 id="pairing-error-title" tabindex="-1">Pairing did not finish</h1>
+      <p class="lede" id="pairing-error-copy">The code expired or the link was interrupted. No account was saved.</p>
+      <button type="button" id="retry-pairing">Try again</button>
+    </section>
+
+    <section class="card" id="ready-view" aria-labelledby="ready-title" hidden>
+      <p class="eyebrow success">WhatsApp ready</p>
+      <h1 id="ready-title" tabindex="-1">WhatsApp is ready</h1>
+      <p class="lede" id="linked-account">WhatsApp is linked and connected.</p>
+      <div class="notice success-notice">
+        <strong>Connection verified</strong>
+        <span id="eligible-count">Recent conversations are ready for the next setup step.</span>
+      </div>
+      <button type="button" id="show-unlink" class="text-button">Link a different account</button>
+      <form id="unlink-form" class="confirm-panel" hidden>
+        <input type="hidden" name="confirm" value="unlink">
+        <p><strong>Link a different account?</strong></p>
+        <p>This logs out the current WhatsApp account and removes its private device store before a new link can begin.</p>
+        <div class="button-row">
+          <button type="submit" class="danger-button">Log out and continue</button>
+          <button type="button" id="keep-account" class="secondary">Keep this account</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" id="failed-view" aria-labelledby="failed-title" hidden>
+      <p class="eyebrow danger">Connection needs attention</p>
+      <h1 id="failed-title" tabindex="-1">Could not connect</h1>
+      <p class="lede" id="failure-copy">Check the network details, then try again.</p>
+      <button type="button" id="failure-recheck" data-recheck hidden>Check again</button>
+      <button type="button" id="try-again">Choose a network</button>
+      <form action="/wifi/change" method="post" class="compact-form" id="change-network" hidden>
+        <button type="submit" class="secondary">Remove this network and start over</button>
+      </form>
+    </section>
+
+    <p id="page-error" class="page-error" role="alert" hidden></p>
+  </main>
+</body>
+</html>

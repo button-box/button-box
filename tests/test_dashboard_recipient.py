@@ -1,4 +1,3 @@
-import importlib.util
 import io
 import json
 import tempfile
@@ -8,12 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "messagebox_contact_dashboard", ROOT / "src" / "dashboard.py"
-)
-dashboard = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(dashboard)
+import messagebox.dashboard.app as dashboard
 
 
 class DashboardContactTests(unittest.TestCase):

@@ -7,7 +7,7 @@ PartOf=messagebox.target
 [Service]
 User=messagebox
 Group=messagebox
-WorkingDirectory=/run/messagebox
+WorkingDirectory=/opt/messagebox
 Environment=MSGBOX_MIC_CARD=mic
 Environment=MSGBOX_MIC_CONTROL=Mic
 Environment=MSGBOX_MIC_GAIN=100%%
@@ -22,7 +22,7 @@ SupplementaryGroups=gpio audio
 UMask=0077
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_MIC_CARD} sset ${MSGBOX_MIC_CONTROL} ${MSGBOX_MIC_GAIN} cap
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_SPEAKER_CARD} sset ${MSGBOX_SPEAKER_CONTROL} ${MSGBOX_SPEAKER_VOLUME} unmute
-ExecStart=/usr/bin/python3 -u /opt/messagebox/button_send.py
+ExecStart=/usr/bin/python3 -u -m messagebox.button_send
 Restart=always
 RestartSec=5
 

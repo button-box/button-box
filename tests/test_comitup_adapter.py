@@ -1,12 +1,8 @@
 import logging
-import sys
 import unittest
-from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "src" / "onboarding"))
-
-from comitup_adapter import (  # noqa: E402
+from messagebox.onboarding.comitup_adapter import (
     ComitupAdapter,
     ComitupError,
 )

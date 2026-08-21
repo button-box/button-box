@@ -1,18 +1,11 @@
-import importlib.util
 import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "messagebox_device_dashboard", ROOT / "src" / "dashboard.py"
-)
-dashboard = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(dashboard)
-
-from src.listened_receipts import webhook_signature  # noqa: E402
+import messagebox.dashboard.app as dashboard
+from messagebox.listened_receipts import webhook_signature
 
 
 class GuidedOutboxDashboardTests(unittest.TestCase):

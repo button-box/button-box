@@ -7,12 +7,12 @@ PartOf=messagebox.target
 [Service]
 User=messagebox
 Group=messagebox
-WorkingDirectory=/run/messagebox
+WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
 Environment=HOME=/var/lib/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 UMask=0077
-ExecStart=/usr/bin/python3 /opt/messagebox/dashboard.py
+ExecStart=/usr/bin/python3 -m messagebox.dashboard.app
 Restart=always
 RestartSec=5
 

@@ -1,7 +1,7 @@
 # Third-party notices
 
-This is a preliminary source-candidate inventory, not the final distribution
-notice. No third-party binaries or operating-system images are committed here.
+This inventory covers third-party software used by the source installation. No
+third-party binaries or operating-system images are committed here.
 
 | Component | How it is used | Distribution treatment |
 | --- | --- | --- |
@@ -12,6 +12,5 @@ notice. No third-party binaries or operating-system images are committed here.
 | `lgpio` | GPIO access installed from PyPI and Debian packages | Preserve upstream license and dependency notices. |
 | Raspberry Pi OS and Debian packages | Operating system and runtime dependencies | Not vendored here; any image distribution requires a complete license inventory and corresponding-source review. |
 
-Release blocker: replace this preliminary table with verified versions,
-licenses, copyright notices, source links, and any required license text. A
-prebuilt image additionally requires an SBOM and provenance record.
+Before distributing a prebuilt image, verify versions, licenses, copyright
+notices, source links, and required license text, and produce an SBOM.
