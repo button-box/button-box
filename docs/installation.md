@@ -47,7 +47,7 @@ selection, NFC enrollment, and runtime startup are not yet implemented there.
 Do not continue with `messagebox-dev-onboard`; that installed command is a
 separate, standalone developer workflow for configuring a prototype from an
 interactive shell. See [`developer-onboarding.md`](developer-onboarding.md) for
-that flow, direct Ethernet setup, contact routing, and dashboard precautions.
+that flow, macOS Internet Sharing, contact routing, and dashboard precautions.
 
 The installed Python code is the top-level `messagebox/` package and is invoked
 with `python3 -m messagebox...` from `/opt/messagebox`; installation does not

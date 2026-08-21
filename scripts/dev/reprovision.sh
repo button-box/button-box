@@ -1,6 +1,6 @@
 #!/bin/sh
 # Reset consumer onboarding on a disposable test box, then deploy this tree.
-# Supports direct Ethernet, routed Ethernet, and macOS Internet Sharing.
+# Supports routed Ethernet and macOS Internet Sharing.
 #
 # This helper is intentionally narrower than a clean-card installation. It
 # preserves Raspberry Pi OS, packages, users, NetworkManager profiles, contacts,
@@ -14,8 +14,7 @@ usage() {
   printf '%s\n' \
     "Usage: $0 user@host" \
     "Examples:" \
-    "  $0 admin@message-box-001.local" \
-    "  $0 admin@10.77.77.77" >&2
+    "  $0 admin@message-box-001.local" >&2
 }
 
 die() {

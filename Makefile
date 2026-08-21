@@ -8,8 +8,6 @@ syntax:
 	for file in scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh; do sh -n "$$file"; done
 	sh -n scripts/messageboxctl
 	bash -n messagebox/syncloop.sh
-	@command -v zsh >/dev/null || { echo "error: zsh is required to check scripts/dev/macos-direct-ethernet.sh" >&2; exit 1; }
-	zsh -n scripts/dev/macos-direct-ethernet.sh
 
 lint: lint-python lint-shell lint-frontend
 

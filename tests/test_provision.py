@@ -83,7 +83,6 @@ for arg in "$@"; do printf '%s\\0' "$arg"; done >"$RSYNC_LOG"
         self.assertIn("scripts/dev/onboard.sh", staged_paths)
         self.assertIn("scripts/dev/hardware-test.sh", staged_paths)
         self.assertNotIn("scripts/dev/", staged_paths)
-        self.assertNotIn("scripts/dev/macos-direct-ethernet.sh", staged_paths)
         self.assertIn("messagebox/onboarding/initialize.py", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
 

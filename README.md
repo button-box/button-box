@@ -52,22 +52,20 @@ Run all local checks available on the machine:
 make check
 ```
 
-Provision a prepared Pi, open its installed dev flow, or start the macOS direct
-Ethernet helper with the repository scripts. Shipped boxes use a zero-padded
-three-digit number that matches the physical label:
+Provision a prepared Pi or open its installed dev flow with the repository
+scripts. Shipped boxes use a zero-padded three-digit number that matches the
+physical label:
 
 ```sh
 ./scripts/provision.sh admin@message-box-001.local
 ./scripts/dev/reprovision.sh admin@message-box-001.local
 ssh -t admin@message-box-001.local messagebox-dev-onboard
-sudo ./scripts/dev/macos-direct-ethernet.sh en8
 ```
 
 `reprovision` is a destructive dev shortcut for a disposable box reachable by
-SSH, including through routed Ethernet, macOS Internet Sharing, or the direct
-Ethernet helper at `10.77.77.77`. It clears consumer onboarding and WhatsApp
-test credentials before deploying the current tree. It does not replace a
-clean-card installation test.
+SSH, including through routed Ethernet or macOS Internet Sharing. It clears
+consumer onboarding and WhatsApp test credentials before deploying the current
+tree. It does not replace a clean-card installation test.
 
 Flash Raspberry Pi OS with Raspberry Pi Imager rather than a Make target so the
 target disk, hostname, SSH, and administrator settings stay explicit.
@@ -82,8 +80,8 @@ The installer targets Raspberry Pi 4 and Raspberry Pi OS Lite 64-bit based on
 Debian 13. The setup path is documented in
 [`docs/installation.md`](docs/installation.md).
 
-Dev setup, direct Ethernet access, contact routing, and dashboard
-exposure are documented separately in
+Dev setup, macOS Internet Sharing, contact routing, and dashboard exposure are
+documented separately in
 [`docs/developer-onboarding.md`](docs/developer-onboarding.md).
 
 ## Privacy and safety
