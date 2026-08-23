@@ -24,11 +24,21 @@ For installation and consumer onboarding, test:
 - Clean installation and manufacturer handoff
 - Wi-Fi success, failure, and recovery
 - WhatsApp pairing and interruption
+- Empty-account recipient discovery and manual refresh
+- Manual international-number selection and allow-listing, including invalid
+  formats, duplicates, and default preservation when merely adding a recipient
+- People displayed by valid international phone number, invalid direct-chat
+  placeholders excluded, and refresh after the 100-message pairing bootstrap
+  cap has been reached
+- Initial default selection, switching the default among allowed recipients,
+  protection from removing the current default, no-card routing after a switch,
+  defer/resume, and recipient-manager recovery
+- New voice note, physical playback, guided reply review, and accepted send
 - Reboot and power loss during onboarding transitions
 
 For the standalone developer flow and runtime, test:
 
-- Single- and multiple-recipient routing
+- Explicit-default and multiple-recipient routing
 - NFC enrollment, removal, and unknown cards
 - Microphone, speaker, LED, and button behavior
 - First send and reply

@@ -166,7 +166,8 @@ class WifiResetTests(unittest.TestCase):
         self.assertNotIn(["nmcli", "connection", "delete", "uuid", "hotspot"], commands)
         self.assertEqual(commands[-2], ["nmcli", "radio", "wifi", "on"])
         self.assertEqual(
-            commands[-1], ["systemctl", "--no-block", "start", *reset.HOTSPOT_UNITS]
+            commands[-1],
+            ["systemctl", "--no-block", "start", *reset.ONBOARDING_START_UNITS],
         )
 
     def test_confirmed_reset_is_idempotent(self):
@@ -179,7 +180,13 @@ class WifiResetTests(unittest.TestCase):
         self.assertEqual(StateStore(self.state).load()["phase"], "WIFI_SELECT")
         self.assertEqual(
             sum(
-                call[0] == ["systemctl", "--no-block", "start", *reset.HOTSPOT_UNITS]
+                call[0]
+                == [
+                    "systemctl",
+                    "--no-block",
+                    "start",
+                    *reset.ONBOARDING_START_UNITS,
+                ]
                 for call in runner.calls
             ),
             2,

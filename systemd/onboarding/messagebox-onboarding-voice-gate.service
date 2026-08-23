@@ -1,0 +1,21 @@
+[Unit]
+Description=Validate and activate Message Box onboarding voice flow
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+After=messagebox-whatsapp-pairing.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/messagebox
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.voice_gate
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/messagebox-onboarding /var/lib/messagebox
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0

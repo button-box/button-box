@@ -23,11 +23,11 @@ function selectContact(){
 }
 function renderContacts(d){
  contactsData=d;
- const contacts=Object.entries(d.contacts),automatic=contacts.length===1;
+ const contacts=Object.entries(d.contacts),hasDefault=Boolean(d.default_recipient);
  document.getElementById('contactmode').textContent=contacts.length===0?'No contacts configured. Add a WhatsApp chat to begin.':
-  automatic?'This contact is the automatic destination for new messages.':'Cards select the outgoing contact for new messages.';
+  hasDefault?'The default receives new messages when no recipient card is selected.':'Outgoing messages are blocked until a default is configured.';
  document.getElementById('contactlist').innerHTML=contacts.length?contacts.map(([jid,c])=>{
-  const state=(automatic?'automatic · ':'')+(c.paired?'paired':'unpaired')+' · '+c.card_count+' card'+(c.card_count===1?'':'s');
+  const state=(jid===d.default_recipient?'default · ':'')+(c.paired?'paired':'unpaired')+' · '+c.card_count+' card'+(c.card_count===1?'':'s');
   return '<div class="contactrow"><div><span class="contactname">'+esc(c.label)+'</span><span class="contactmeta">'+esc(c.kind)+' · '+state+'</span></div>'+
    '<button class="remove" data-jid="'+esc(jid)+'" onclick="removeContact(this.dataset.jid)">Remove</button></div>'}).join(''):
   '<div class="empty">No contacts yet.</div>';

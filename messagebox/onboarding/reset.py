@@ -32,6 +32,8 @@ CONFIGURED_PATH = ONBOARDING_CONFIGURED_PATH
 STATE_PATH = ONBOARDING_STATE_PATH
 
 RUNTIME_UNITS = (
+    "messagebox-onboarding-voice.target",
+    "messagebox-onboarding-button.service",
     "messagebox.target",
     "messagebox-button.service",
     "messagebox-sync.service",
@@ -43,7 +45,10 @@ SETUP_UNITS = (
     "messagebox-wifi-reset.service",
     "comitup.service",
 )
-HOTSPOT_UNITS = ("comitup.service",)
+ONBOARDING_START_UNITS = (
+    "messagebox-onboarding-voice.path",
+    "comitup.service",
+)
 ONBOARDING_UNITS = (
     "comitup-web.service",
     "messagebox-onboarding-home.service",
@@ -201,7 +206,7 @@ def perform_reset(
 
     _run(runner, ["nmcli", "radio", "wifi", "on"])
     # During the boot-button service this is queued until that service exits.
-    _run(runner, ["systemctl", "--no-block", "start", *HOTSPOT_UNITS])
+    _run(runner, ["systemctl", "--no-block", "start", *ONBOARDING_START_UNITS])
 
 
 def reset_if_held(

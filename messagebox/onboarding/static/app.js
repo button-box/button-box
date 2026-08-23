@@ -8,12 +8,19 @@ const views = [
   "pairing-progress",
   "pairing-error",
   "ready",
+  "recipients",
+  "deferred",
+  "voice-test",
+  "voice-success",
+  "recipient-manager",
   "failed",
 ];
 const activePairingStates = new Set(["starting", "code_pending", "bootstrapping", "verifying"]);
 let pollTimer = null;
 let loadingState = false;
 let lastView = "";
+let recipientsData = null;
+let managerOpen = false;
 
 function showView(name) {
   for (const view of views) {
@@ -117,9 +124,56 @@ function pairingErrorCopy(error, status) {
   return messages[error] || "Pairing did not finish. No account was saved.";
 }
 
-function schedulePoll(status) {
+function schedulePoll(status, recipientStatus = null) {
   window.clearTimeout(pollTimer);
-  pollTimer = activePairingStates.has(status) ? window.setTimeout(loadState, 1500) : null;
+  pollTimer = activePairingStates.has(status) || recipientStatus === "testing"
+    ? window.setTimeout(loadState, 1500)
+    : null;
+}
+
+function setProof(id, complete) {
+  const row = document.getElementById(id);
+  row.classList.toggle("done", complete);
+  row.querySelector("span").textContent = complete ? "✓" : "○";
+}
+
+function applyRecipientState(recipient) {
+  const summary = recipient || {
+    status: "choose",
+    default: null,
+    proof: { received: false, played: false, replied: false },
+  };
+  schedulePoll("ready", summary.status);
+  if (summary.status === "deferred") {
+    showView("deferred");
+    return;
+  }
+  if (summary.status === "error") {
+    showView("ready");
+    showError("Recipient setup is temporarily unavailable. Try again in a moment.");
+    pollTimer = window.setTimeout(loadState, 3000);
+    return;
+  }
+  if (summary.status === "testing") {
+    managerOpen = false;
+    document.getElementById("voice-recipient").textContent = summary.default?.label || "your recipient";
+    setProof("proof-received", summary.proof.received);
+    setProof("proof-played", summary.proof.played);
+    setProof("proof-replied", summary.proof.replied);
+    showView("voice-test");
+    return;
+  }
+  if (summary.status === "complete") {
+    document.getElementById("success-recipient").textContent = summary.default?.label || "your recipient";
+    if (managerOpen && recipientsData) {
+      renderRecipientManager(recipientsData);
+      showView("recipient-manager");
+    } else {
+      showView("voice-success");
+    }
+    return;
+  }
+  showView("ready");
 }
 
 function applyWhatsAppState(state) {
@@ -132,7 +186,6 @@ function applyWhatsAppState(state) {
   };
   schedulePoll(whatsapp.status);
   if (state.phase === "WHATSAPP_READY" || whatsapp.status === "ready") {
-    showView("ready");
     document.getElementById("linked-account").textContent = whatsapp.phone_hint
       ? `${whatsapp.phone_hint} is linked and connected.`
       : "WhatsApp is linked and connected.";
@@ -140,6 +193,7 @@ function applyWhatsAppState(state) {
     document.getElementById("eligible-count").textContent = count === 1
       ? "1 recent group or chat is ready for the next setup step."
       : `${count} recent groups or chats are ready for the next setup step.`;
+    applyRecipientState(state.recipient_setup);
     return;
   }
   switch (whatsapp.status) {
@@ -175,6 +229,138 @@ function applyWhatsAppState(state) {
         whatsapp.safe_error,
         whatsapp.status,
       );
+  }
+}
+
+function recipientRow(recipient, actions = []) {
+  const row = document.createElement("li");
+  row.className = "recipient-row";
+  const copy = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = recipient.label;
+  const meta = document.createElement("span");
+  meta.textContent = recipient.is_default
+    ? `${recipient.kind} · default`
+    : recipient.kind;
+  copy.append(name, meta);
+  row.append(copy);
+  if (actions.length) {
+    const controls = document.createElement("div");
+    controls.className = "recipient-actions";
+    actions.forEach(({ action, label }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "remove" ? "danger-button compact" : "compact";
+    button.textContent = label;
+    button.addEventListener("click", () => mutateRecipient(action, recipient.token, button));
+      controls.append(button);
+    });
+    row.append(controls);
+  }
+  return row;
+}
+
+function renderRecipientPicker(data) {
+  recipientsData = data;
+  const list = document.getElementById("recipient-list");
+  const choices = data.recipients.filter((recipient) => recipient.available);
+  list.replaceChildren(...choices.map((recipient) => recipientRow(
+    recipient,
+    [{ action: "select", label: "Choose" }],
+  )));
+  document.getElementById("recipient-empty").hidden = choices.length !== 0;
+}
+
+function renderRecipientManager(data) {
+  recipientsData = data;
+  const configured = data.recipients.filter((recipient) => recipient.configured);
+  const available = data.recipients.filter((recipient) => recipient.available && !recipient.configured);
+  document.getElementById("configured-recipient-list").replaceChildren(
+    ...configured.map((recipient) => recipientRow(recipient, recipient.is_default ? [] : [
+      { action: "default", label: "Make default" },
+      { action: "remove", label: "Remove" },
+    ])),
+  );
+  document.getElementById("available-recipient-list").replaceChildren(
+    ...available.map((recipient) => recipientRow(
+      recipient,
+      [{ action: "add", label: "Allow" }],
+    )),
+  );
+  document.getElementById("manager-empty").hidden = available.length !== 0;
+}
+
+async function loadRecipients({ refresh = false, manager = false } = {}) {
+  const status = document.getElementById(manager ? "manager-status" : "recipient-status");
+  status.textContent = refresh ? "Refreshing WhatsApp…" : "Loading…";
+  try {
+    const data = refresh
+      ? await formRequest("/recipients/refresh")
+      : await request("/api/recipients");
+    if (manager) renderRecipientManager(data);
+    else renderRecipientPicker(data);
+    status.textContent = refresh ? "WhatsApp refreshed." : "";
+    return data;
+  } catch (error) {
+    status.textContent = error.message;
+    throw error;
+  }
+}
+
+async function mutateRecipient(action, token, button = null) {
+  if (button) button.disabled = true;
+  showError("");
+  try {
+    const data = await formRequest(`/recipients/${action}`, { token });
+    recipientsData = data;
+    if (action === "select") {
+      applyRecipientState(data);
+    } else {
+      renderRecipientManager(data);
+      document.getElementById("manager-status").textContent = action === "default"
+        ? "Default changed."
+        : "Saved.";
+    }
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function mutateRecipientNumber(event, action) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const phone = new FormData(form).get("phone");
+  const manager = action === "add";
+  const status = document.getElementById(manager ? "manager-status" : "recipient-status");
+  button.disabled = true;
+  showError("");
+  status.textContent = "Saving…";
+  try {
+    const data = await formRequest(`/recipients/${action}-number`, { phone });
+    recipientsData = data;
+    form.reset();
+    if (manager) {
+      renderRecipientManager(data);
+      status.textContent = "Number allowed.";
+    } else {
+      applyRecipientState(data);
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deferRecipients() {
+  showError("");
+  try {
+    applyRecipientState(await formRequest("/recipients/defer"));
+  } catch (error) {
+    showError(error.message);
   }
 }
 
@@ -359,4 +545,38 @@ document.getElementById("keep-account").addEventListener("click", () => {
   document.getElementById("show-unlink").focus();
 });
 document.getElementById("unlink-form").addEventListener("submit", unlinkWhatsApp);
+document.getElementById("continue-recipients").addEventListener("click", async () => {
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("refresh-recipients").addEventListener("click", () => loadRecipients({ refresh: true }));
+document.getElementById("defer-recipients").addEventListener("click", deferRecipients);
+document.getElementById("manual-default-form").addEventListener("submit", (event) => {
+  mutateRecipientNumber(event, "select");
+});
+document.getElementById("resume-recipients").addEventListener("click", async () => {
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("open-recipient-manager").addEventListener("click", async () => {
+  managerOpen = true;
+  try {
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("manager-refresh").addEventListener("click", () => loadRecipients({ refresh: true, manager: true }));
+document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
+  mutateRecipientNumber(event, "add");
+});
 loadState();

@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc_state import (
@@ -24,6 +25,7 @@ from messagebox.runtime_paths import (
     CONTACTS_FILE,
     NFC_ANNOUNCEMENT_FILE,
     NFC_ENROLLMENT_FILE,
+    NFC_HEALTH_FILE,
     NFC_SELECTION_FILE,
 )
 
@@ -32,6 +34,17 @@ UNKNOWN_TOKEN_WAV = os.environ.get("MSGBOX_UNKNOWN_TOKEN_WAV", "")
 REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
+HEALTH_INTERVAL_S = 2.0
+
+
+def mark_healthy(path=NFC_HEALTH_FILE):
+    path = os.fspath(path)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
+    os.utime(path, None)
 
 
 class PN532I2CReader:
@@ -156,7 +169,12 @@ def run_daemon():
         print("NFC reader ready: transport=i2c", flush=True)
         if recovered is not None:
             print(f"NFC enrolled: {recovered.contact['label']}", flush=True)
+        last_health = 0.0
         while True:
+            now = time.monotonic()
+            if now - last_health >= HEALTH_INTERVAL_S:
+                mark_healthy()
+                last_health = now
             uid = reader.read()
             result = runtime.observe(
                 bytes(uid) if uid is not None else None, time.monotonic()
@@ -165,6 +183,10 @@ def run_daemon():
                 label = result.contact["label"] if result.contact else "unknown"
                 print(f"NFC {result.action}: {label}", flush=True)
     finally:
+        try:
+            Path(NFC_HEALTH_FILE).unlink()
+        except FileNotFoundError:
+            pass
         nfc_router.selection.clear()
         announcement_store.clear()
 

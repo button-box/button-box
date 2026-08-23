@@ -176,7 +176,11 @@ def contact_settings(refresh=False):
     )
     contact_count = len(public["contacts"])
     public["mode"] = (
-        "empty" if contact_count == 0 else "automatic" if contact_count == 1 else "cards"
+        "empty"
+        if contact_count == 0
+        else "default"
+        if public["default_recipient"] is not None
+        else "no_default"
     )
     public["discovery_error"] = discovery_error
     return public

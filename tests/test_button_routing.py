@@ -12,7 +12,7 @@ gpiozero.LED = object
 with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
 from messagebox.contacts import ContactStore  # noqa: E402
-from messagebox.nfc_state import SelectionStore  # noqa: E402
+from messagebox.nfc_state import AnnouncementStore, SelectionStore  # noqa: E402
 
 
 GRANDMA = "15551234567@s.whatsapp.net"
@@ -31,12 +31,22 @@ class ButtonRoutingTests(unittest.TestCase):
         root = Path(self.directory.name)
         self.contacts_path = root / "contacts.json"
         self.selection_path = root / "nfc-selection.json"
+        self.health_path = root / "nfc-health"
+        self.announcement_path = root / "nfc-announcement.json"
         self.contacts = ContactStore(self.contacts_path, clock=lambda: 1000)
+        self.announcements = AnnouncementStore(
+            self.announcement_path, clock=lambda: 1000
+        )
         self.paths = (
             mock.patch.object(button_send, "CONTACTS_FILE", str(self.contacts_path)),
             mock.patch.object(
                 button_send, "NFC_SELECTION_FILE", str(self.selection_path)
             ),
+            mock.patch.object(button_send, "NFC_HEALTH_FILE", self.health_path),
+            mock.patch.object(
+                button_send, "nfc_announcement_store", self.announcements
+            ),
+            mock.patch.object(button_send.time, "time", return_value=1000),
             mock.patch.object(button_send, "log"),
         )
         for patcher in self.paths:
@@ -55,6 +65,9 @@ class ButtonRoutingTests(unittest.TestCase):
             receive_after=0,
         )
 
+    def mark_nfc_healthy(self):
+        self.health_path.write_text("ready\n", encoding="ascii")
+
     def add_family(self):
         return self.contacts.add_contact(FAMILY, "Family", receive_after=0)
 
@@ -69,23 +82,41 @@ class ButtonRoutingTests(unittest.TestCase):
             sole = button_send.current_recipient_context(claim=True)
         self.assertEqual(sole["contact"]["jid"], GRANDMA)
         self.assertFalse(sole["via_card"])
-        self.assertEqual(button_send.routing_mode(), "single_contact")
+        self.assertEqual(button_send.routing_mode(), "default_recipient")
 
         self.contacts.assign_card(GRANDMA, CARD)
+        self.mark_nfc_healthy()
         self.add_family()
-        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        default = button_send.current_recipient_context(claim=True)
+        self.assertEqual(default["contact"]["jid"], GRANDMA)
+        self.assertFalse(default["via_card"])
         selection = SelectionStore(self.selection_path)
         selection.select(CARD, GRANDMA, self.contacts.load()["revision"])
         selected = button_send.current_recipient_context(claim=True)
         self.assertEqual(selected["contact"]["jid"], GRANDMA)
         self.assertTrue(selected["via_card"])
         self.assertIsNone(selection.load())
-        self.assertEqual(button_send.routing_mode(), "card_selection")
+        self.assertEqual(button_send.routing_mode(), "default_recipient")
 
     def test_corrupt_contacts_fail_closed(self):
         self.contacts_path.write_text("not json", encoding="utf-8")
         self.assertIsNone(button_send.current_recipient_context(claim=True))
         self.assertEqual(button_send.routing_mode(), "unavailable")
+
+    def test_cards_block_default_when_reader_or_card_state_is_unsafe(self):
+        self.add_grandma()
+        self.contacts.assign_card(GRANDMA, CARD)
+
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+
+        self.mark_nfc_healthy()
+        self.announcements.put(action="unknown", uid="04:00:00:01", prompt="unknown.wav")
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+
+        self.announcements.clear()
+        safe_default = button_send.current_recipient_context(claim=True)
+        self.assertEqual(safe_default["contact"]["jid"], GRANDMA)
+        self.assertFalse(safe_default["via_card"])
 
     def test_short_legacy_press_plays_without_resolving_or_claiming(self):
         button_send.button = types.SimpleNamespace(is_pressed=False)

@@ -17,6 +17,7 @@ from messagebox.onboarding.whatsapp import (
     pairing_environment,
     parse_event,
 )
+from messagebox.onboarding.recipients import RecipientSetup
 
 
 class FakeProcess:
@@ -47,11 +48,14 @@ class RecordingPopen:
 
 
 class WacliRunner:
-    def __init__(self, *, authenticated=True, connected=True, logout_ok=True, chats=None):
+    def __init__(
+        self, *, authenticated=True, connected=True, logout_ok=True, chats=None, sync_ok=True
+    ):
         self.authenticated = authenticated
         self.connected = connected
         self.logout_ok = logout_ok
         self.chats = chats or []
+        self.sync_ok = sync_ok
         self.calls = []
 
     def __call__(self, arguments, **kwargs):
@@ -78,6 +82,12 @@ class WacliRunner:
             return SimpleNamespace(
                 returncode=0,
                 stdout=json.dumps({"chats": self.chats}),
+                stderr="",
+            )
+        if "sync" in arguments:
+            return SimpleNamespace(
+                returncode=0 if self.sync_ok else 1,
+                stdout="{}",
                 stderr="",
             )
         if arguments[-2:] == ["auth", "logout"]:
@@ -180,6 +190,70 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(len(result), MAX_ELIGIBLE_CONVERSATIONS)
         self.assertEqual(len({row["jid"] for row in result}), len(result))
         self.assertNotIn("status@broadcast", {row["jid"] for row in result})
+
+    def test_people_always_use_valid_phone_number_without_exposing_jid(self):
+        result = eligible_conversations(
+            {"chats": [{"jid": "15551234567@s.whatsapp.net", "name": "+1 555 123 4567"}]}
+        )
+        self.assertEqual(result[0]["label"], "+15551234567")
+
+        result = eligible_conversations(
+            {"chats": [{"jid": "15551234567@s.whatsapp.net", "name": "15551234567@s.whatsapp.net"}]}
+        )
+        self.assertEqual(result[0]["label"], "+15551234567")
+
+        result = eligible_conversations(
+            {"chats": [{"jid": "15551234567@s.whatsapp.net"}]}
+        )
+        self.assertEqual(result[0]["label"], "+15551234567")
+        self.assertNotIn("@s.whatsapp.net", result[0]["label"])
+
+        result = eligible_conversations(
+            {"chats": [{"jid": "15551234567@s.whatsapp.net", "name": "Grandma"}]}
+        )
+        self.assertEqual(result[0]["label"], "+15551234567")
+
+        self.assertEqual(
+            eligible_conversations({"chats": [{"jid": "0@s.whatsapp.net", "name": "Invalid"}]}),
+            [],
+        )
+
+    def test_recipient_refresh_is_bounded_private_and_preserves_last_list_on_failure(self):
+        recipient_setup = RecipientSetup(
+            state_path=self.root / "recipient-state.json",
+            contacts_path=self.root / "contacts.json",
+            events_path=self.root / "events.jsonl",
+            voice_request_path=self.root / "voice-request.json",
+            token_factory=lambda: "recipient-token-0001",
+        )
+        runner = WacliRunner(
+            chats=[{"jid": "15551234567@s.whatsapp.net", "name": "Grandma"}]
+        )
+        engine = self.engine(runner=runner)
+        engine.recipients = recipient_setup
+        self.live_store.mkdir()
+        self.candidates.write_text(
+            json.dumps({"version": 1, "conversations": []}), encoding="utf-8"
+        )
+        engine._set_state(
+            "ready", phone_hint="WhatsApp number ending in 0123", eligible_count=0
+        )
+
+        refreshed = engine.recipient_list(refresh=True)
+
+        self.assertEqual(refreshed["recipients"][0]["label"], "+15551234567")
+        self.assertNotIn("@s.whatsapp.net", json.dumps(refreshed))
+        commands = [call[0] for call in runner.calls]
+        self.assertTrue(any("--refresh-groups" in command for command in commands))
+        refresh_command = next(command for command in commands if "--refresh-groups" in command)
+        self.assertIn("--max-messages", refresh_command)
+        self.assertEqual(refresh_command[refresh_command.index("--max-messages") + 1], "1000")
+        preserved = self.candidates.read_bytes()
+
+        engine.run = WacliRunner(sync_ok=False)
+        with self.assertRaisesRegex(PairingError, "recipient_refresh_failed"):
+            engine.recipient_list(refresh=True)
+        self.assertEqual(self.candidates.read_bytes(), preserved)
 
     def test_refreshed_code_auth_doctor_bootstrap_and_atomic_promotion(self):
         chats = [
@@ -363,6 +437,11 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             "pairing-progress-view",
             "pairing-error-view",
             "ready-view",
+            "recipients-view",
+            "deferred-view",
+            "voice-test-view",
+            "voice-success-view",
+            "recipient-manager-view",
         ):
             self.assertIn(f'id="{view}"', html)
         self.assertIn('aria-live="polite"', html)
@@ -382,8 +461,21 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             self.assertIn(status, script)
         self.assertIn(".focus(", script)
         self.assertIn("retry-pairing", script)
+        self.assertIn('formRequest("/recipients/refresh")', script)
+        self.assertIn("formRequest(`/recipients/${action}`", script)
+        self.assertIn("formRequest(`/recipients/${action}-number`", script)
+        self.assertIn('formRequest("/recipients/defer")', script)
+        self.assertIn('id="manual-default-form"', html)
+        self.assertIn('id="manual-allow-form"', html)
+        self.assertIn('type="tel"', html)
+        self.assertIn('label: "Make default"', script)
+        self.assertIn("summary.proof.received", script)
+        self.assertIn("summary.proof.played", script)
+        self.assertIn("summary.proof.replied", script)
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
+        self.assertNotIn("@s.whatsapp.net", html + script)
+        self.assertNotIn("@g.us", html + script)
 
     def test_service_separates_web_user_from_live_store_and_keeps_runtime_stopped(self):
         root = Path(__file__).parents[1]
@@ -393,12 +485,28 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         web = (root / "systemd/onboarding/messagebox-onboarding-home.service").read_text(
             encoding="utf-8"
         )
+        comitup = (
+            root / "systemd/onboarding/comitup.service.d/messagebox.conf"
+        ).read_text(encoding="utf-8")
+        button = (root / "systemd/messagebox-button.service").read_text(
+            encoding="utf-8"
+        )
+        onboarding_button = (
+            root / "systemd/onboarding/messagebox-onboarding-button.service"
+        ).read_text(encoding="utf-8")
         self.assertIn("User=messagebox\n", worker)
         self.assertIn("RuntimeDirectory=messagebox-whatsapp-pairing", worker)
         self.assertIn("ReadWritePaths=/var/lib/messagebox", worker)
         self.assertNotIn("/var/lib/messagebox/wacli", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)
         self.assertNotIn("messagebox.target", worker)
+        self.assertIn("Conflicts=messagebox.target", comitup)
+        self.assertNotIn("messagebox-sync.service", comitup)
+        self.assertNotIn("messagebox-poller.service", comitup)
+        for unit in (button, onboarding_button):
+            self.assertIn("RuntimeDirectory=messagebox-button", unit)
+            self.assertIn("WorkingDirectory=/run/messagebox-button", unit)
+            self.assertIn("Environment=PYTHONPATH=/opt/messagebox", unit)
 
 
 if __name__ == "__main__":

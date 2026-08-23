@@ -185,7 +185,7 @@ class DashboardContactTests(unittest.TestCase):
                 200,
             )
             one = dashboard.contact_settings()
-            self.assertEqual(one["mode"], "automatic")
+            self.assertEqual(one["mode"], "default")
             self.assertFalse(one["contacts"][direct]["paired"])
             self.assertEqual(one["contacts"][direct]["card_count"], 0)
 
@@ -200,7 +200,7 @@ class DashboardContactTests(unittest.TestCase):
             )
             code, multiple = self.get("/api/contacts")
             self.assertEqual(code, 200)
-            self.assertEqual(multiple["mode"], "cards")
+            self.assertEqual(multiple["mode"], "default")
             self.assertTrue(multiple["contacts"][direct]["paired"])
             self.assertEqual(multiple["contacts"][direct]["card_count"], 1)
             rendered = json.dumps(multiple)

@@ -107,6 +107,7 @@
         <strong>Connection verified</strong>
         <span id="eligible-count">Recent conversations are ready for the next setup step.</span>
       </div>
+      <button type="button" id="continue-recipients">Choose a recipient</button>
       <button type="button" id="show-unlink" class="text-button">Link a different account</button>
       <form id="unlink-form" class="confirm-panel" hidden>
         <input type="hidden" name="confirm" value="unlink">
@@ -117,6 +118,91 @@
           <button type="button" id="keep-account" class="secondary">Keep this account</button>
         </div>
       </form>
+    </section>
+
+    <section class="card" id="recipients-view" aria-labelledby="recipients-title" hidden>
+      <p class="eyebrow">Recipient setup</p>
+      <h1 id="recipients-title" tabindex="-1">Who should the box message?</h1>
+      <p class="lede">Choose one person or group as the box’s default recipient. You can change it later.</p>
+      <ul id="recipient-list" class="recipient-list"></ul>
+      <div id="recipient-empty" class="notice" hidden>
+        <strong>No conversations found yet</strong>
+        <span>Ask someone to message the WhatsApp number you just linked. Then refresh this list.</span>
+      </div>
+      <div class="manual-recipient">
+        <h2 class="section-title">Enter a phone number</h2>
+        <form id="manual-default-form">
+          <label for="manual-default-phone">International phone number</label>
+          <input id="manual-default-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="manual-default-help" required>
+          <p id="manual-default-help" class="field-help">Include + and the country code.</p>
+          <button type="submit">Choose this number</button>
+        </form>
+      </div>
+      <div class="button-row">
+        <button type="button" id="refresh-recipients" class="secondary">Refresh WhatsApp</button>
+        <button type="button" id="defer-recipients" class="text-button">Do this later</button>
+      </div>
+      <p id="recipient-status" class="field-help" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" id="deferred-view" aria-labelledby="deferred-title" hidden>
+      <p class="eyebrow">Setup paused</p>
+      <h1 id="deferred-title" tabindex="-1">Come back when you’re ready</h1>
+      <p class="lede">Messaging and NFC setup stay off until you choose a default recipient.</p>
+      <button type="button" id="resume-recipients">Choose a recipient</button>
+    </section>
+
+    <section class="card" id="voice-test-view" aria-labelledby="voice-test-title" hidden>
+      <p class="eyebrow">Try your Message Box</p>
+      <h1 id="voice-test-title" tabindex="-1">Say hello to <span id="voice-recipient">your recipient</span></h1>
+      <ol class="steps voice-steps">
+        <li>Ask them to send a <strong>new voice message</strong> now.</li>
+        <li>When the box rings, press the button once to hear it.</li>
+        <li>After the prompt, speak your reply. The box will play it back.</li>
+        <li>Press the button when asked to send.</li>
+      </ol>
+      <div class="proof-list" aria-live="polite">
+        <div id="proof-received" class="proof-row"><span aria-hidden="true">○</span> Voice message received</div>
+        <div id="proof-played" class="proof-row"><span aria-hidden="true">○</span> Message played on the box</div>
+        <div id="proof-replied" class="proof-row"><span aria-hidden="true">○</span> Reply sent</div>
+      </div>
+      <p class="status">Keep this page open while you use the box.</p>
+    </section>
+
+    <section class="card" id="voice-success-view" aria-labelledby="voice-success-title" hidden>
+      <p class="eyebrow success">Message Box ready</p>
+      <h1 id="voice-success-title" tabindex="-1">You sent a voice message</h1>
+      <p class="lede">The box received, played, and replied to <span id="success-recipient">your recipient</span>.</p>
+      <button type="button" id="open-recipient-manager">Manage recipients</button>
+    </section>
+
+    <section class="card" id="recipient-manager-view" aria-labelledby="recipient-manager-title" hidden>
+      <p class="eyebrow success">Messaging ready</p>
+      <h1 id="recipient-manager-title" tabindex="-1">Recipients</h1>
+      <p class="lede">Choose which allowed person or group receives messages when no NFC card is used. NFC cards can be assigned later.</p>
+      <h2 class="section-title">Allowed recipients</h2>
+      <ul id="configured-recipient-list" class="recipient-list"></ul>
+      <div class="manual-recipient">
+        <h2 class="section-title">Allow a phone number</h2>
+        <form id="manual-allow-form">
+          <label for="manual-allow-phone">International phone number</label>
+          <input id="manual-allow-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="manual-allow-help" required>
+          <p id="manual-allow-help" class="field-help">Include + and the country code. This will not change the default recipient.</p>
+          <button type="submit">Allow this number</button>
+        </form>
+      </div>
+      <h2 class="section-title">Available from WhatsApp</h2>
+      <ul id="available-recipient-list" class="recipient-list"></ul>
+      <div id="manager-empty" class="notice" hidden>
+        <strong>No other conversations found</strong>
+        <span>Ask someone to message the linked WhatsApp number, then refresh.</span>
+      </div>
+      <button type="button" id="manager-refresh" class="secondary">Refresh WhatsApp</button>
+      <p id="manager-status" class="field-help" role="status" aria-live="polite"></p>
+      <div class="notice success-notice manager-next">
+        <strong>NFC cards come next</strong>
+        <span>Your default recipient already works without a card.</span>
+      </div>
     </section>
 
     <section class="card" id="failed-view" aria-labelledby="failed-title" hidden>

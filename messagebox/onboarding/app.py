@@ -48,6 +48,7 @@ _CANONICAL_HOST = re.compile(r"message-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNO
 _HEX_PSK = re.compile(r"[0-9a-fA-F]{64}\Z")
 _PERCENT_ESCAPE = re.compile(br"%(?![0-9A-Fa-f]{2})")
 _PHONE_HINT = re.compile(r"WhatsApp number ending in [0-9]{4}\Z")
+_RECIPIENT_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
 _OPEN_SECURITY = frozenset({"open", "unencrypted", "none"})
 _PROTECTED_SECURITY = frozenset(
     {"protected", "encrypted", "secured", "wpa", "wpa2", "wpa3"}
@@ -463,12 +464,88 @@ def create_app(
         whatsapp_state = safe_whatsapp_state(state)
         if whatsapp_state["status"] == "ready" and state["phase"] == WHATSAPP_PENDING:
             state = store.load()
+        recipient_setup = {
+            "status": "choose",
+            "default": None,
+            "proof": {"received": False, "played": False, "replied": False},
+        }
+        if whatsapp_state["status"] == "ready":
+            try:
+                recipient_setup = safe_recipient_state(
+                    whatsapp.recipient_state(), include_list=False
+                )
+            except (OSError, PairingError):
+                recipient_setup["status"] = "error"
         return {
             "phase": state["phase"],
             "safe_error": state["safe_error"],
             "mode": selected_mode,
             "whatsapp": whatsapp_state,
+            "recipient_setup": recipient_setup,
         }
+
+    def safe_recipient_state(document, *, include_list=True):
+        if not isinstance(document, dict) or set(document) != {
+            "status", "default", "proof", "recipients"
+        }:
+            raise PairingError("recipient_response_invalid")
+        if document["status"] not in {"choose", "deferred", "testing", "complete", "error"}:
+            raise PairingError("recipient_response_invalid")
+        proof = document["proof"]
+        if (
+            not isinstance(proof, dict)
+            or set(proof) != {"received", "played", "replied"}
+            or any(not isinstance(value, bool) for value in proof.values())
+        ):
+            raise PairingError("recipient_response_invalid")
+        recipients = document["recipients"]
+        if not isinstance(recipients, list) or len(recipients) > 20:
+            raise PairingError("recipient_response_invalid")
+        cleaned = []
+        for recipient in recipients:
+            if not isinstance(recipient, dict) or set(recipient) != {
+                "token", "label", "kind", "configured", "is_default", "available"
+            }:
+                raise PairingError("recipient_response_invalid")
+            token = recipient["token"]
+            label = recipient["label"]
+            if (
+                not isinstance(token, str)
+                or not _RECIPIENT_TOKEN.fullmatch(token)
+                or not isinstance(label, str)
+                or not label.strip()
+                or len(label) > 80
+                or recipient["kind"] not in {"person", "group"}
+                or any(
+                    not isinstance(recipient[key], bool)
+                    for key in ("configured", "is_default", "available")
+                )
+            ):
+                raise PairingError("recipient_response_invalid")
+            cleaned.append(dict(recipient))
+        default = document["default"]
+        if default is not None:
+            if not isinstance(default, dict) or set(default) != {"token", "label", "kind"}:
+                raise PairingError("recipient_response_invalid")
+            match = next(
+                (recipient for recipient in cleaned if recipient["token"] == default["token"]),
+                None,
+            )
+            if (
+                match is None
+                or not match["is_default"]
+                or default["label"] != match["label"]
+                or default["kind"] != match["kind"]
+            ):
+                raise PairingError("recipient_response_invalid")
+        result = {
+            "status": document["status"],
+            "default": default,
+            "proof": dict(proof),
+        }
+        if include_list:
+            result["recipients"] = cleaned
+        return result
 
     def handoff(start_response, callback=None, body=None):
         if body is None:
@@ -570,6 +647,13 @@ def create_app(
                         {"error": "Wi-Fi scan is unavailable"}, "503 Service Unavailable"
                     )(start_response)
                 return _json_response({"networks": networks})(start_response)
+
+            if method == "GET" and path == "/api/recipients":
+                if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
+                    raise RequestError("409 Conflict", "Recipient setup requires linked WhatsApp")
+                return _json_response(
+                    safe_recipient_state(whatsapp.recipient_list())
+                )(start_response)
 
             if method == "POST" and path == "/wifi/connect":
                 if selected_mode != "HOTSPOT":
@@ -681,14 +765,83 @@ def create_app(
                 store.mark_whatsapp_unlinked()
                 return _json_response(safe_state(store.load()))(start_response)
 
+            if method == "POST" and path in {
+                "/recipients/refresh",
+                "/recipients/select",
+                "/recipients/select-number",
+                "/recipients/add",
+                "/recipients/add-number",
+                "/recipients/remove",
+                "/recipients/default",
+                "/recipients/defer",
+            }:
+                _require_same_origin(environ, canonical_host)
+                if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
+                    raise RequestError("409 Conflict", "Recipient setup requires linked WhatsApp")
+                document = _form(environ, body_limit)
+                try:
+                    if path == "/recipients/refresh":
+                        if document:
+                            raise RequestError("400 Bad Request", "Invalid refresh request")
+                        result = whatsapp.recipient_list(refresh=True)
+                    elif path == "/recipients/defer":
+                        if document:
+                            raise RequestError("400 Bad Request", "Invalid defer request")
+                        result = whatsapp.recipient_defer()
+                    elif path in {
+                        "/recipients/select-number",
+                        "/recipients/add-number",
+                    }:
+                        if set(document) != {"phone"}:
+                            raise RequestError(
+                                "400 Bad Request", "Invalid recipient number request"
+                            )
+                        phone = normalize_phone(document["phone"])
+                        operation = {
+                            "/recipients/select-number": whatsapp.recipient_select_phone,
+                            "/recipients/add-number": whatsapp.recipient_add_phone,
+                        }[path]
+                        result = operation(phone)
+                    else:
+                        if set(document) != {"token"} or not _RECIPIENT_TOKEN.fullmatch(
+                            document["token"]
+                        ):
+                            raise RequestError("400 Bad Request", "Invalid recipient request")
+                        operation = {
+                            "/recipients/select": whatsapp.recipient_select,
+                            "/recipients/add": whatsapp.recipient_add,
+                            "/recipients/remove": whatsapp.recipient_remove,
+                            "/recipients/default": whatsapp.recipient_default,
+                        }[path]
+                        result = operation(document["token"])
+                except PairingError as exc:
+                    if str(exc) == "phone_number_invalid":
+                        raise RequestError(
+                            "400 Bad Request",
+                            "Enter a valid international number beginning with +",
+                        ) from exc
+                    raise RequestError(
+                        "409 Conflict", "Recipient setup could not be updated; refresh and try again"
+                    ) from exc
+                return _json_response(safe_recipient_state(result))(start_response)
+
             if path in {
                 "/api/state",
                 "/api/networks",
+                "/api/recipients",
                 "/wifi/connect",
                 "/wifi/change",
                 "/whatsapp/pair/start",
                 "/whatsapp/pair/cancel",
                 "/whatsapp/unlink",
+                "/recipients/refresh",
+                "/recipients/select",
+                "/recipients/select-number",
+                "/recipients/add",
+                "/recipients/add-number",
+                "/recipients/remove",
+                "/recipients/default",
+                "/recipients/defer",
             }:
                 return _json_response(
                     {"error": "Method not allowed"},
@@ -710,11 +863,20 @@ def _allowed_methods(path):
     return {
         "/api/state": "GET",
         "/api/networks": "GET",
+        "/api/recipients": "GET",
         "/wifi/connect": "POST",
         "/wifi/change": "POST",
         "/whatsapp/pair/start": "POST",
         "/whatsapp/pair/cancel": "POST",
         "/whatsapp/unlink": "POST",
+        "/recipients/refresh": "POST",
+        "/recipients/select": "POST",
+        "/recipients/select-number": "POST",
+        "/recipients/add": "POST",
+        "/recipients/add-number": "POST",
+        "/recipients/remove": "POST",
+        "/recipients/default": "POST",
+        "/recipients/defer": "POST",
     }[path]
 
 

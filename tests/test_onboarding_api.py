@@ -79,6 +79,12 @@ class FakeWhatsApp:
         }
         self.calls = []
         self.logout_succeeds = True
+        self.recipient = {
+            "status": "choose",
+            "default": None,
+            "proof": {"received": False, "played": False, "replied": False},
+            "recipients": [],
+        }
 
     def status(self):
         self.calls.append(("status",))
@@ -106,6 +112,42 @@ class FakeWhatsApp:
         else:
             self.state["safe_error"] = "UNLINK_FAILED"
         return dict(self.state)
+
+    def recipient_state(self):
+        self.calls.append(("recipient_state",))
+        return json.loads(json.dumps(self.recipient))
+
+    def recipient_list(self, refresh=False):
+        self.calls.append(("recipient_list", refresh))
+        return json.loads(json.dumps(self.recipient))
+
+    def recipient_defer(self):
+        self.recipient["status"] = "deferred"
+        return self.recipient_state()
+
+    def recipient_select(self, token):
+        self.calls.append(("recipient_select", token))
+        return self.recipient_state()
+
+    def recipient_select_phone(self, phone):
+        self.calls.append(("recipient_select_phone", phone))
+        return self.recipient_state()
+
+    def recipient_add(self, token):
+        self.calls.append(("recipient_add", token))
+        return self.recipient_state()
+
+    def recipient_add_phone(self, phone):
+        self.calls.append(("recipient_add_phone", phone))
+        return self.recipient_state()
+
+    def recipient_remove(self, token):
+        self.calls.append(("recipient_remove", token))
+        return self.recipient_state()
+
+    def recipient_default(self, token):
+        self.calls.append(("recipient_default", token))
+        return self.recipient_state()
 
 
 class WSGIHarness:
@@ -286,7 +328,7 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(response["status"], "200 OK")
         self.assertEqual(
             set(json.loads(response["body"])),
-            {"mode", "phase", "safe_error", "whatsapp"},
+            {"mode", "phase", "safe_error", "whatsapp", "recipient_setup"},
         )
         self.assertIsNone(header(response, "Set-Cookie"))
 
@@ -573,6 +615,76 @@ class OnboardingAPITests(unittest.TestCase):
             {"confirm": "unlink"},
         )
         self.assertEqual(response["status"], "409 Conflict")
+        self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_recipient_api_uses_opaque_tokens_and_same_origin_mutations(self):
+        token = "recipient-token-0001"
+        private_jid = "15551234567@s.whatsapp.net"
+        worker = FakeWhatsApp(
+            {
+                "status": "ready",
+                "pairing_code": None,
+                "phone_hint": "WhatsApp number ending in 0123",
+                "eligible_count": 1,
+                "safe_error": None,
+                "attempt": 1,
+            }
+        )
+        worker.recipient["recipients"] = [
+            {
+                "token": token,
+                "label": "Grandma",
+                "kind": "person",
+                "configured": False,
+                "is_default": False,
+                "available": True,
+            }
+        ]
+        client, store, _ = self.home_pairing_client(worker)
+        client.request("GET", "/api/state")
+
+        response = client.request("GET", "/api/recipients")
+        self.assertEqual(response["status"], "200 OK")
+        self.assertNotIn(private_jid.encode(), response["body"])
+        self.assertIn(token.encode(), response["body"])
+
+        rejected = client.form(
+            "POST",
+            "/recipients/refresh",
+            {},
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(rejected["status"], "403 Forbidden")
+        malformed = client.form("POST", "/recipients/select", {"token": "short"})
+        self.assertEqual(malformed["status"], "400 Bad Request")
+        accepted = client.form("POST", "/recipients/select", {"token": token})
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(("recipient_select", token), worker.calls)
+        changed = client.form("POST", "/recipients/default", {"token": token})
+        self.assertEqual(changed["status"], "200 OK")
+        self.assertIn(("recipient_default", token), worker.calls)
+
+        bad_phone = client.form(
+            "POST", "/recipients/select-number", {"phone": "0555"}
+        )
+        self.assertEqual(bad_phone["status"], "400 Bad Request")
+        denied_phone = client.form(
+            "POST",
+            "/recipients/add-number",
+            {"phone": "+1 415 555 0199"},
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(denied_phone["status"], "403 Forbidden")
+        selected_phone = client.form(
+            "POST", "/recipients/select-number", {"phone": "+1 415-555-0199"}
+        )
+        self.assertEqual(selected_phone["status"], "200 OK")
+        self.assertIn(("recipient_select_phone", "+14155550199"), worker.calls)
+        added_phone = client.form(
+            "POST", "/recipients/add-number", {"phone": "+44 7700 900123"}
+        )
+        self.assertEqual(added_phone["status"], "200 OK")
+        self.assertIn(("recipient_add_phone", "+447700900123"), worker.calls)
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
 
     def test_home_captive_probes_report_success(self):

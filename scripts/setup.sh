@@ -21,9 +21,11 @@ make_ringtones.py nfc.py nfc_state.py runtime_paths.py voicepoll.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
-onboarding/paths.py onboarding/reset.py onboarding/state.py onboarding/whatsapp.py"
+onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
+onboarding/voice_gate.py onboarding/whatsapp.py"
 STATIC_ASSETS="dashboard/static/app.js dashboard/static/index.html dashboard/static/styles.css
 onboarding/static/app.js onboarding/static/index.html onboarding/static/styles.css"
+GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
 
 case "$SSH_TARGET" in
   '') ;;
@@ -68,6 +70,10 @@ for path in \
   systemd/onboarding/comitup.service.d/messagebox.conf \
   systemd/onboarding/comitup-web.service.d/messagebox.conf \
   systemd/onboarding/messagebox-onboarding-home.service \
+  systemd/onboarding/messagebox-onboarding-button.service \
+  systemd/onboarding/messagebox-onboarding-voice-gate.service \
+  systemd/onboarding/messagebox-onboarding-voice.path \
+  systemd/onboarding/messagebox-onboarding-voice.target \
   systemd/onboarding/messagebox-whatsapp-pairing.service \
   systemd/onboarding/messagebox-wifi-reset.service \
   systemd/messagebox.target \
@@ -77,6 +83,41 @@ for path in \
     exit 1
   fi
 done
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "$GUIDED_PROMPT_DIR" <<'PY'
+import sys
+import wave
+from pathlib import Path
+
+root = Path(sys.argv[1])
+invalid = []
+for name in (
+    "reply-countdown.wav",
+    "standalone-countdown.wav",
+    "press-to-send.wav",
+    "delete-warning.wav",
+    "not-sent.wav",
+):
+    path = root / name
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise OSError
+        with wave.open(str(path), "rb") as prompt:
+            if prompt.getnframes() <= 0 or prompt.getnchannels() != 1:
+                raise wave.Error
+    except (OSError, EOFError, wave.Error):
+        invalid.append(name)
+if invalid:
+    print(
+        "Missing or invalid guided-reply prompts: " + ", ".join(invalid),
+        file=sys.stderr,
+    )
+    print(
+        "Supply a complete licensed prompt set before running setup.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
 
 for destination in \
   /usr/local/bin/messagebox-contact \
@@ -92,6 +133,10 @@ done
 
 if [ -L "$APP_DIR" ] || { [ -e "$APP_DIR" ] && [ ! -d "$APP_DIR" ]; }; then
   echo "Cannot install into non-directory application path: $APP_DIR" >&2
+  exit 1
+fi
+if [ -L "$CONFIG_DIR/env" ] || { [ -e "$CONFIG_DIR/env" ] && [ ! -f "$CONFIG_DIR/env" ]; }; then
+  echo "Cannot use non-regular runtime configuration: $CONFIG_DIR/env" >&2
   exit 1
 fi
 
@@ -111,6 +156,9 @@ for unit in \
   comitup.service \
   comitup-web.service \
   messagebox-onboarding-home.service \
+  messagebox-onboarding-button.service \
+  messagebox-onboarding-voice-gate.service \
+  messagebox-onboarding-voice.target \
   messagebox-whatsapp-pairing.service; do
   if systemctl is-active --quiet "$unit" 2>/dev/null; then
     echo "Stop Message Box before updating: sudo messageboxctl stop" >&2
@@ -234,6 +282,10 @@ done
 
 sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   "$REPO_DIR/config/env.example" "$CONFIG_DIR/env.example"
+if ! sudo test -e "$CONFIG_DIR/env"; then
+  sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
+    "$REPO_DIR/config/env.example" "$CONFIG_DIR/env"
+fi
 
 (cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
 sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
@@ -275,12 +327,18 @@ sudo install -o root -g root -m 0755 \
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/onboarding/comitup-web.service.d/messagebox.conf" \
   /etc/systemd/system/comitup-web.service.d/messagebox.conf
-for name in messagebox-onboarding-home messagebox-whatsapp-pairing messagebox-wifi-reset; do
+for name in messagebox-onboarding-home messagebox-onboarding-button \
+  messagebox-onboarding-voice-gate messagebox-whatsapp-pairing messagebox-wifi-reset; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/onboarding/$name.service" "/etc/systemd/system/$name.service"
 done
+for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target; do
+  sudo install -o root -g root -m 0644 \
+    "$REPO_DIR/systemd/onboarding/$name" "/etc/systemd/system/$name"
+done
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
+sudo systemctl enable messagebox-onboarding-voice.path
 sudo systemd-analyze verify \
   /etc/systemd/system/messagebox.target \
   /etc/systemd/system/messagebox-button.service \
@@ -290,6 +348,10 @@ sudo systemd-analyze verify \
   /etc/systemd/system/messagebox-nfc.service \
   /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \
+  /etc/systemd/system/messagebox-onboarding-button.service \
+  /etc/systemd/system/messagebox-onboarding-voice-gate.service \
+  /etc/systemd/system/messagebox-onboarding-voice.path \
+  /etc/systemd/system/messagebox-onboarding-voice.target \
   /etc/systemd/system/messagebox-whatsapp-pairing.service \
   /etc/systemd/system/messagebox-wifi-reset.service
 
@@ -315,7 +377,7 @@ printf '%s\n' \
   '============================================================' \
   '             ✅ MESSAGE BOX SETUP COMPLETE ✅' \
   '============================================================' \
-  'No Message Box or Comitup services were enabled or started.' \
+  'No Message Box runtime or Comitup services were started.' \
   '' \
   'DEV FLOW' \
   '  Run the standalone shell setup and hardware checks:' \

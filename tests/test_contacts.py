@@ -40,7 +40,13 @@ class ContactStoreTests(unittest.TestCase):
     def test_missing_store_loads_empty_without_writing(self):
         self.assertEqual(
             self.store.load(),
-            {"version": 1, "revision": 0, "contacts": {}, "listeners": {}},
+            {
+                "version": 2,
+                "revision": 0,
+                "default_recipient": None,
+                "contacts": {},
+                "listeners": {},
+            },
         )
         self.assertFalse(self.path.exists())
         self.assertFalse(self.path.parent.exists())
@@ -216,6 +222,33 @@ class ContactStoreTests(unittest.TestCase):
         self.assertFalse(self.store.remove_card(CARD_ONE))
         self.assertEqual(self.store.load()["revision"], revision)
 
+    def test_explicit_default_can_be_set_once_for_existing_contacts(self):
+        self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        self.store.add_contact(GROUP, "Family", receive_after=0)
+        document = self.store.load()
+        document["default_recipient"] = None
+        self.path.write_text(json.dumps(document), encoding="utf-8")
+
+        self.store.set_default_recipient(GROUP)
+        self.assertEqual(self.store.load()["default_recipient"], GROUP)
+        with self.assertRaisesRegex(ContactError, "already exists"):
+            self.store.set_default_recipient(PERSON)
+
+    def test_configured_default_can_be_changed_atomically(self):
+        self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        self.store.add_contact(GROUP, "Family", receive_after=0)
+        revision = self.store.load()["revision"]
+
+        selected = self.store.choose_default_recipient(GROUP)
+
+        self.assertEqual(selected["jid"], GROUP)
+        self.assertEqual(self.store.load()["default_recipient"], GROUP)
+        self.assertEqual(self.store.load()["revision"], revision + 1)
+        self.store.choose_default_recipient(GROUP)
+        self.assertEqual(self.store.load()["revision"], revision + 1)
+        with self.assertRaisesRegex(ContactError, "does not exist"):
+            self.store.choose_default_recipient("447700900123@s.whatsapp.net")
+
     def test_contacts_and_listeners_are_isolated(self):
         self.store.add_contact(PERSON, "Grandma", receive_after=0)
         self.store.upsert_listener("15550001@s.whatsapp.net", "Mom")
@@ -319,8 +352,7 @@ class ContactCliTests(unittest.TestCase):
         self.assertNotIn("multiple contacts", self.stdout.getvalue())
 
         self.assertEqual(self.run_cli(["add", "Family", GROUP, "--no-card"]), 0)
-        self.assertIn("multiple contacts", self.stdout.getvalue())
-        self.assertIn("requires a recently presented enrolled card", self.stdout.getvalue())
+        self.assertIn("existing default remains active", self.stdout.getvalue())
 
     def test_default_add_stages_enrollment_without_creating_contact(self):
         enrollment = FakeEnrollmentStore("ignored")

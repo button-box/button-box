@@ -2,7 +2,7 @@
 Description=Message Box wacli burst sync
 After=network-online.target
 Wants=network-online.target
-PartOf=messagebox.target
+PartOf=messagebox.target messagebox-onboarding-voice.target
 
 [Service]
 User=messagebox
