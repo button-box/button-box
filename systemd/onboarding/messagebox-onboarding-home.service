@@ -3,9 +3,9 @@ Description=Message Box onboarding portal on the home network
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 BindsTo=comitup.service
 PartOf=comitup.service
-Requires=messagebox-whatsapp-pairing.service
+Requires=messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service
 Conflicts=comitup-web.service
-After=comitup.service network-online.target messagebox-whatsapp-pairing.service comitup-web.service
+After=comitup.service network-online.target messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service comitup-web.service
 
 [Service]
 Type=simple

@@ -63,14 +63,23 @@ not overwrite a working device without a tested backup.
 8. After the two-way proof, optionally allow-list more recent people or groups
    in the recipient manager, or enter another international phone number
    manually. You can switch the default among allowed recipients in the manager;
-   NFC card enrollment is a later setup step.
+   removing a recipient also removes that recipient's tag mappings.
+9. Select **Continue to NFC setup**. Hold a tag over the reader until the box
+   beeps, remove it, and choose the person or group it should represent. Pair as
+   many tags as needed; multiple tags may point to one recipient.
+10. An already-paired tag shows its current recipient and requires an explicit
+    **Reassign** before it can move. The flow reads tag identifiers but never
+    writes data to a tag.
+11. Choose **Skip NFC setup** before the first tag or **Done** after pairing.
+    Either action completes onboarding and activates messaging. If no tags are
+    mapped, the default recipient works without the NFC reader.
 
 The manufacturer must not complete these steps for the recipient.
 
-The consumer flow currently stops in the recipient manager after the two-way
-voice proof. NFC enrollment and final runtime activation are not yet included.
-Do not continue with `messagebox-dev-onboard`; it is an independent prototype
-workflow documented in [Developer onboarding](developer-onboarding.md).
+If the reader is unavailable, Retry or skip NFC setup. Once any tag is mapped,
+runtime routing remains fail-closed when the NFC reader is unhealthy; it never
+guesses the default while mapped-card state is unsafe. Do not continue with
+`messagebox-dev-onboard`; it remains an independent prototype workflow.
 
 Before deployment, run the [physical test scenarios](testing.md#physical-test-scenarios)
 on a spare device.

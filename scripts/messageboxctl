@@ -95,6 +95,8 @@ case "$command" in
           -u comitup.service \
           -u comitup-web.service \
           -u messagebox-onboarding-home.service \
+          -u messagebox-onboarding-nfc.service \
+          -u messagebox-onboarding-complete.service \
           -u messagebox-whatsapp-pairing.service \
           -u messagebox-wifi-reset.service
       elif ! unit=$(unit_for "$1"); then
@@ -111,6 +113,8 @@ case "$command" in
         -u comitup.service \
         -u comitup-web.service \
         -u messagebox-onboarding-home.service \
+        -u messagebox-onboarding-nfc.service \
+        -u messagebox-onboarding-complete.service \
         -u messagebox-whatsapp-pairing.service \
         -u messagebox-wifi-reset.service
     fi

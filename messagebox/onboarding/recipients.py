@@ -369,6 +369,36 @@ class RecipientSetup:
         self._write(state)
         return self.public_state(state)
 
+    @synchronized
+    def configured_candidate(self, token):
+        """Resolve an opaque browser token only inside a private worker."""
+        state = self._load()
+        if state["status"] != "complete":
+            raise RecipientError("recipient setup is incomplete")
+        candidate = self._candidate(state, token, require_available=False)
+        contact = self.contacts.contact(candidate["jid"])
+        if contact is None:
+            raise RecipientError("recipient is not configured")
+        return {
+            "token": token,
+            "jid": candidate["jid"],
+            "label": _public_label(candidate),
+            "kind": candidate["kind"],
+        }
+
+    @synchronized
+    def configured_candidate_by_jid(self, jid):
+        """Resolve a private exact identity to its browser-safe display fields."""
+        state = self._load()
+        for token, candidate in state["candidates"].items():
+            if candidate["jid"] == jid and self.contacts.contact(jid) is not None:
+                return {
+                    "token": token,
+                    "label": _public_label(candidate),
+                    "kind": candidate["kind"],
+                }
+        raise RecipientError("recipient is not configured")
+
     def _events(self, started_at):
         try:
             with open(self.events_path, encoding="utf-8") as handle:
@@ -454,6 +484,9 @@ class RecipientSetup:
                     "configured": is_configured,
                     "is_default": token == state["default_token"],
                     "available": candidate["available"],
+                    "card_count": len(configured[candidate["jid"]]["card_uids"])
+                    if is_configured
+                    else 0,
                 }
             )
         recipients.sort(key=lambda item: (not item["is_default"], item["label"].casefold()))

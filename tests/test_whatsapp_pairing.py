@@ -442,6 +442,12 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             "voice-test-view",
             "voice-success-view",
             "recipient-manager-view",
+            "nfc-view",
+            "nfc-choose-view",
+            "nfc-mapped-view",
+            "nfc-success-view",
+            "nfc-unavailable-view",
+            "complete-view",
         ):
             self.assertIn(f'id="{view}"', html)
         self.assertIn('aria-live="polite"', html)
@@ -472,6 +478,12 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("summary.proof.received", script)
         self.assertIn("summary.proof.played", script)
         self.assertIn("summary.proof.replied", script)
+        self.assertIn('formRequest("/nfc/start")', script)
+        self.assertIn('formRequest("/nfc/assign", { token: recipient.token })', script)
+        self.assertIn('formRequest("/onboarding/complete", { intent })', script)
+        self.assertIn("Skip NFC setup", html)
+        self.assertIn("Reassign", html)
+        self.assertIn("Pair another tag", html)
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
         self.assertNotIn("@s.whatsapp.net", html + script)
@@ -494,11 +506,23 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         onboarding_button = (
             root / "systemd/onboarding/messagebox-onboarding-button.service"
         ).read_text(encoding="utf-8")
+        nfc_worker = (
+            root / "systemd/onboarding/messagebox-onboarding-nfc.service"
+        ).read_text(encoding="utf-8")
+        completion = (
+            root / "systemd/onboarding/messagebox-onboarding-complete.service"
+        ).read_text(encoding="utf-8")
         self.assertIn("User=messagebox\n", worker)
         self.assertIn("RuntimeDirectory=messagebox-whatsapp-pairing", worker)
         self.assertIn("ReadWritePaths=/var/lib/messagebox", worker)
         self.assertNotIn("/var/lib/messagebox/wacli", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)
+        self.assertIn("Requires=messagebox-whatsapp-pairing.service", nfc_worker)
+        self.assertIn("User=messagebox\n", nfc_worker)
+        self.assertIn("SupplementaryGroups=messagebox i2c gpio audio", nfc_worker)
+        self.assertIn("RestrictAddressFamilies=AF_UNIX", nfc_worker)
+        self.assertIn("User=root\n", completion)
+        self.assertNotIn("PrivateDevices=no", web)
         self.assertNotIn("messagebox.target", worker)
         self.assertIn("Conflicts=messagebox.target", comitup)
         self.assertNotIn("messagebox-sync.service", comitup)

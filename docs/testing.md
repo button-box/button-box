@@ -34,6 +34,11 @@ For installation and consumer onboarding, test:
   protection from removing the current default, no-card routing after a switch,
   defer/resume, and recipient-manager recovery
 - New voice note, physical playback, guided reply review, and accepted send
+- Zero-tag Skip, person and group pairing, multiple tags per recipient,
+  explicit reassignment, remove-after-beep behavior, Retry/Skip when the reader
+  is unavailable, and the distinct read/success tones
+- Reload within and after the two-minute pending-tag window, completion with and
+  without mappings, and the onboarding-to-runtime service handoff
 - Reboot and power loss during onboarding transitions
 
 For the standalone developer flow and runtime, test:

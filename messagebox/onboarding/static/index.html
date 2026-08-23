@@ -203,6 +203,68 @@
         <strong>NFC cards come next</strong>
         <span>Your default recipient already works without a card.</span>
       </div>
+      <button type="button" id="continue-nfc">Continue to NFC setup</button>
+    </section>
+
+    <section class="card" id="nfc-view" aria-labelledby="nfc-title" hidden>
+      <p class="eyebrow">NFC setup</p>
+      <h1 id="nfc-title" tabindex="-1">Hold a tag over the box</h1>
+      <p class="lede">Keep it near the NFC reader until the box beeps. After the beep, you can remove it.</p>
+      <div class="nfc-reader" aria-hidden="true"><span>NFC</span></div>
+      <p id="nfc-waiting-status" class="status" role="status" aria-live="polite">Waiting for a tag…</p>
+      <p id="nfc-count" class="field-help"></p>
+      <div class="button-row">
+        <button type="button" id="back-from-nfc" class="secondary">Back</button>
+        <button type="button" id="finish-nfc" class="text-button">Skip NFC setup</button>
+      </div>
+    </section>
+
+    <section class="card" id="nfc-choose-view" aria-labelledby="nfc-choose-title" hidden>
+      <p class="eyebrow success">Tag detected</p>
+      <h1 id="nfc-choose-title" tabindex="-1">Who is this tag for?</h1>
+      <p class="lede">The tag is ready. You can remove it from the box now.</p>
+      <ul id="nfc-recipient-list" class="recipient-list"></ul>
+      <button type="button" id="cancel-nfc-tag" class="secondary">Back</button>
+      <p id="nfc-choose-status" class="field-help" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" id="nfc-mapped-view" aria-labelledby="nfc-mapped-title" hidden>
+      <p class="eyebrow">Tag already paired</p>
+      <h1 id="nfc-mapped-title" tabindex="-1">This tag belongs to <span id="nfc-mapped-recipient">a recipient</span></h1>
+      <p class="lede">Keep this pairing, or explicitly choose a different recipient.</p>
+      <div class="button-row">
+        <button type="button" id="keep-nfc-pairing">Keep this pairing</button>
+        <button type="button" id="reassign-nfc" class="secondary">Reassign</button>
+      </div>
+      <button type="button" id="cancel-mapped-tag" class="text-button">Back</button>
+    </section>
+
+    <section class="card" id="nfc-success-view" aria-labelledby="nfc-success-title" hidden>
+      <p class="eyebrow success">Tag paired</p>
+      <h1 id="nfc-success-title" tabindex="-1">Ready for <span id="nfc-success-recipient">your recipient</span></h1>
+      <p class="lede">Using this tag will route a new message to this recipient.</p>
+      <p id="nfc-sound-warning" class="notice" hidden>The tag was saved, but the confirmation sound could not play.</p>
+      <div class="button-row">
+        <button type="button" id="pair-another-nfc">Pair another tag</button>
+        <button type="button" id="done-nfc" class="secondary">Done</button>
+      </div>
+    </section>
+
+    <section class="card" id="nfc-unavailable-view" aria-labelledby="nfc-unavailable-title" hidden>
+      <p class="eyebrow danger">NFC needs attention</p>
+      <h1 id="nfc-unavailable-title" tabindex="-1">The NFC reader is unavailable</h1>
+      <p class="lede" id="nfc-unavailable-copy">Check the reader connection and try again. You can also skip NFC setup; the default recipient will still work.</p>
+      <div class="button-row">
+        <button type="button" id="retry-nfc">Retry</button>
+        <button type="button" id="skip-unavailable-nfc" class="secondary">Skip NFC setup</button>
+      </div>
+      <button type="button" id="back-from-unavailable" class="text-button">Back</button>
+    </section>
+
+    <section class="card" id="complete-view" aria-labelledby="complete-title" hidden>
+      <p class="eyebrow success">Setup complete</p>
+      <h1 id="complete-title" tabindex="-1">Your Message Box is ready</h1>
+      <p class="lede">Messaging is now active. You can close this page.</p>
     </section>
 
     <section class="card" id="failed-view" aria-labelledby="failed-title" hidden>

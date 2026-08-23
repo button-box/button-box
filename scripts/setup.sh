@@ -21,7 +21,7 @@ make_ringtones.py nfc.py nfc_state.py runtime_paths.py voicepoll.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
-onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
+onboarding/completion.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
 STATIC_ASSETS="dashboard/static/app.js dashboard/static/index.html dashboard/static/styles.css
 onboarding/static/app.js onboarding/static/index.html onboarding/static/styles.css"
@@ -70,6 +70,9 @@ for path in \
   systemd/onboarding/comitup.service.d/messagebox.conf \
   systemd/onboarding/comitup-web.service.d/messagebox.conf \
   systemd/onboarding/messagebox-onboarding-home.service \
+  systemd/onboarding/messagebox-onboarding-nfc.service \
+  systemd/onboarding/messagebox-onboarding-complete.service \
+  systemd/onboarding/messagebox-onboarding-complete.path \
   systemd/onboarding/messagebox-onboarding-button.service \
   systemd/onboarding/messagebox-onboarding-voice-gate.service \
   systemd/onboarding/messagebox-onboarding-voice.path \
@@ -156,6 +159,8 @@ for unit in \
   comitup.service \
   comitup-web.service \
   messagebox-onboarding-home.service \
+  messagebox-onboarding-nfc.service \
+  messagebox-onboarding-complete.service \
   messagebox-onboarding-button.service \
   messagebox-onboarding-voice-gate.service \
   messagebox-onboarding-voice.target \
@@ -328,17 +333,19 @@ sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/onboarding/comitup-web.service.d/messagebox.conf" \
   /etc/systemd/system/comitup-web.service.d/messagebox.conf
 for name in messagebox-onboarding-home messagebox-onboarding-button \
-  messagebox-onboarding-voice-gate messagebox-whatsapp-pairing messagebox-wifi-reset; do
+  messagebox-onboarding-voice-gate messagebox-onboarding-nfc \
+  messagebox-onboarding-complete messagebox-whatsapp-pairing messagebox-wifi-reset; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/onboarding/$name.service" "/etc/systemd/system/$name.service"
 done
-for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target; do
+for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target \
+  messagebox-onboarding-complete.path; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/onboarding/$name" "/etc/systemd/system/$name"
 done
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
-sudo systemctl enable messagebox-onboarding-voice.path
+sudo systemctl enable messagebox-onboarding-voice.path messagebox-onboarding-complete.path
 sudo systemd-analyze verify \
   /etc/systemd/system/messagebox.target \
   /etc/systemd/system/messagebox-button.service \
@@ -348,6 +355,9 @@ sudo systemd-analyze verify \
   /etc/systemd/system/messagebox-nfc.service \
   /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \
+  /etc/systemd/system/messagebox-onboarding-nfc.service \
+  /etc/systemd/system/messagebox-onboarding-complete.service \
+  /etc/systemd/system/messagebox-onboarding-complete.path \
   /etc/systemd/system/messagebox-onboarding-button.service \
   /etc/systemd/system/messagebox-onboarding-voice-gate.service \
   /etc/systemd/system/messagebox-onboarding-voice.path \

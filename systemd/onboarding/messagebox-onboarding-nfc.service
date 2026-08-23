@@ -1,0 +1,33 @@
+[Unit]
+Description=Message Box private NFC onboarding worker
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+PartOf=comitup.service
+After=local-fs.target sound.target messagebox-whatsapp-pairing.service
+Requires=messagebox-whatsapp-pairing.service
+Conflicts=messagebox-nfc.service
+
+[Service]
+Type=simple
+User=messagebox
+Group=messagebox-onboarding
+SupplementaryGroups=messagebox i2c gpio audio
+WorkingDirectory=/opt/messagebox
+Environment=HOME=/var/lib/messagebox
+Environment=MSGBOX_NFC_ONBOARDING_SOCKET_GROUP=messagebox-onboarding
+Environment=MSGBOX_SPEAKER_CARD=Device
+UMask=0077
+RuntimeDirectory=messagebox-onboarding-nfc
+RuntimeDirectoryMode=0750
+ExecStart=/opt/messagebox/venv-nfc/bin/python -u -m messagebox.onboarding.nfc --serve
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/messagebox-onboarding
+ReadWritePaths=/var/lib/messagebox /run/messagebox-onboarding-nfc
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0

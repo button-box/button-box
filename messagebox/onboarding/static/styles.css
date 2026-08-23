@@ -197,6 +197,19 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 .proof-row.done { color: var(--text); font-weight: 700; }
 .proof-row.done span { border-color: var(--action); background: var(--action); color: var(--action-text); }
 .manager-next { margin-top: 2rem; }
+.nfc-reader {
+  width: 8rem;
+  aspect-ratio: 1;
+  margin: 2rem auto;
+  border: 2px solid var(--action);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--action);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  box-shadow: 0 0 0 0.7rem rgba(105, 197, 165, 0.14);
+}
 .network-list { display: grid; border-top: 1px solid var(--line); }
 .network {
   justify-content: space-between;

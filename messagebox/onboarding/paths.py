@@ -12,6 +12,7 @@ ONBOARDING_ENABLED_PATH = ONBOARDING_CONFIG_DIR / "enabled"
 ONBOARDING_STATE_DIR = Path("/var/lib/messagebox-onboarding")
 ONBOARDING_STATE_PATH = ONBOARDING_STATE_DIR / "state.json"
 ONBOARDING_OBSOLETE_SESSION_KEY_PATH = ONBOARDING_STATE_DIR / "session.key"
+ONBOARDING_COMPLETION_REQUEST_PATH = ONBOARDING_STATE_DIR / "completion-request.json"
 
 COMITUP_CONFIG_PATH = Path("/etc/comitup.conf")
 COMITUP_TEMPLATE_PATH = Path("/usr/share/messagebox/onboarding/comitup.conf.template")
@@ -21,6 +22,7 @@ RUNTIME_DIR = Path("/run")
 INITIALIZER_LOCK_PATH = Path("/run/lock/messagebox-init-wifi-onboarding.lock")
 
 WHATSAPP_SOCKET_PATH = Path("/run/messagebox-whatsapp-pairing/worker.sock")
+NFC_ONBOARDING_SOCKET_PATH = Path("/run/messagebox-onboarding-nfc/worker.sock")
 WHATSAPP_PAIRING_ROOT = Path("/var/lib/messagebox/whatsapp-pairing")
 WHATSAPP_LIVE_STORE = Path("/var/lib/messagebox/wacli")
 WHATSAPP_CANDIDATES_PATH = WHATSAPP_LIVE_STORE / "onboarding-candidates.json"

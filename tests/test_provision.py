@@ -110,6 +110,8 @@ esac
         self.assertIn("scripts/dev/hardware-test.sh", staged_paths)
         self.assertNotIn("scripts/dev/", staged_paths)
         self.assertIn("messagebox/onboarding/initialize.py", staged_paths)
+        self.assertIn("messagebox/onboarding/nfc.py", staged_paths)
+        self.assertIn("messagebox/onboarding/completion.py", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
 
         prompt_args = rsync_calls[1][1:]

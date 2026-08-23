@@ -98,7 +98,9 @@ rsync -azR \
   "$REPO_DIR/./messagebox/onboarding/app.py" \
   "$REPO_DIR/./messagebox/onboarding/comitup_adapter.py" \
   "$REPO_DIR/./messagebox/onboarding/connectivity.py" \
+  "$REPO_DIR/./messagebox/onboarding/completion.py" \
   "$REPO_DIR/./messagebox/onboarding/initialize.py" \
+  "$REPO_DIR/./messagebox/onboarding/nfc.py" \
   "$REPO_DIR/./messagebox/onboarding/paths.py" \
   "$REPO_DIR/./messagebox/onboarding/recipients.py" \
   "$REPO_DIR/./messagebox/onboarding/reset.py" \

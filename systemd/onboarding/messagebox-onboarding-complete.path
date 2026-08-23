@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Message Box onboarding completion
+
+[Path]
+PathChanged=/var/lib/messagebox-onboarding/completion-request.json
+Unit=messagebox-onboarding-complete.service
+
+[Install]
+WantedBy=multi-user.target
