@@ -57,7 +57,7 @@ for arg in "$@"; do printf '%s\\0' "$arg"; done >"$RSYNC_LOG"
         )
         return subprocess.run(
             [str(PROVISION), target],
-            cwd=ROOT,
+            cwd=self.root,
             env=env,
             text=True,
             capture_output=True,
@@ -73,6 +73,10 @@ for arg in "$@"; do printf '%s\\0' "$arg"; done >"$RSYNC_LOG"
         self.assertEqual(
             rsync_args[-1],
             "admin@message-box.local:/tmp/messagebox-provision.test/",
+        )
+        self.assertTrue(
+            all(not os.path.isabs(path) for path in rsync_args[1:-1]),
+            rsync_args,
         )
 
         staged_paths = {
