@@ -37,6 +37,9 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 echo "Copying installation files to $TARGET:$REMOTE_SOURCE"
+(
+cd "$REPO_DIR"
+REPO_DIR=.
 rsync -azR \
   "$REPO_DIR/./config/env.example" \
   "$REPO_DIR/./config/onboarding/" \
@@ -80,6 +83,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/onboarding/static/styles.css" \
   "$REPO_DIR/./systemd/" \
   "$TARGET:$REMOTE_SOURCE/"
+)
 
 echo "Running setup on $TARGET"
 ssh -t "$TARGET" \
