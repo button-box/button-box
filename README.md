@@ -70,7 +70,7 @@ You will also need:
 - **Hook-up wire and insulated connectors:** [0.25-inch arcade-button wire pairs](https://www.adafruit.com/product/3838) and an [assorted 2.8/4.8/6.3 mm spade-connector kit](https://www.adafruit.com/product/4748) are examples; confirm the terminal sizes on your button before ordering
 - **A microSD-card reader that fits your computer:** [USB-C example](https://www.adafruit.com/product/5212) or [USB-A example](https://www.adafruit.com/product/939)
 - **For Pi Zero 2 W, a suitable OTG USB hub**, powered if your selected audio devices require it. This [micro-USB OTG mini hub](https://www.adafruit.com/product/2991) is an example only; it has not yet been physically validated with the reference microphone and speaker.
-- **An enclosure:** a shoebox or another sturdy, non-conductive container works for a first prototype. Validated printable enclosure files are not published yet.
+- **An enclosure:** use the [printable prototype enclosure](hardware/enclosure/README.md), a shoebox, or another sturdy, non-conductive container.
 - **A computer with internet access** for preparing and provisioning the Pi
 - **A new, dedicated phone number for the Button Box WhatsApp account.** Add a line or eSIM through your mobile provider, activate it in the WhatsApp mobile app on a phone, and then link Button Box as a companion device.
 
@@ -152,8 +152,8 @@ The default public GPIO configuration is:
 > pin numbering, and PN532 I²C mode before applying power. Never connect or
 > disconnect GPIO wiring while the Pi is powered.
 
-Printable shell and lid files exist in an earlier prototype, but they contain
-placeholder dimensions and are not published here as build-ready artifacts.
+For the printable prototype, download the [top](hardware/enclosure/button-box-enclosure-top.stl)
+and [bottom](hardware/enclosure/button-box-enclosure-bottom.stl) enclosure files.
 
 **Done when:** the unpowered assembly is mechanically secure, every connection
 has been independently checked, and there are no loose conductors or shorts.
@@ -386,7 +386,7 @@ on the physical device.
 | Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
 | Recipient and NFC browser onboarding | **Not yet included** | Use the terminal-assisted workflow for now. |
-| Enclosure | **Prototype** | A shoebox works for a first build; validated public STL downloads are still pending. |
+| Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
 | Complete first-message journey from public instructions | **In progress** | Physical proof is still needed for recipient setup, NFC where used, runtime startup, send, reply, playback, and reboot using only this README. |
 
 Automated tests and repository review do not prove a physical Pi, phone, Wi-Fi,
@@ -534,7 +534,7 @@ GPIO, NFC, Wi-Fi, or WhatsApp behaviors were physically tested.
 - `scripts/dev/`: experimental developer onboarding and hardware checks
 - `systemd/`: device services and runtime target
 - `config/`: public configuration and pinned dependencies
-- `hardware/`: hardware list and future assembly sources
+- `hardware/`: [hardware list and printable enclosure files](hardware/README.md)
 - `sounds/`: audio licensing requirements and future assets
 - `tests/`: synthetic unit and contract tests
 - `docs/`: architecture, installation, testing, and developer documentation
