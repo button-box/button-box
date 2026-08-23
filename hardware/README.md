@@ -13,3 +13,12 @@
 | VGBUY 750-piece M2.5 screw, nut, and washer kit | $10 | [Amazon](https://www.amazon.com/dp/B0FJ1XN2XP) |
 | HiLetgo PN532 NFC/RFID V3 module kit | $9 | [Amazon](https://www.amazon.com/dp/B01I1J17LC) |
 | **Approx. total** | **$150** | |
+
+## Enclosure
+
+The prototype Button Box enclosure has two printable parts:
+
+- [Top](enclosure/button-box-enclosure-top.stl)
+- [Bottom](enclosure/button-box-enclosure-bottom.stl)
+
+See the [enclosure notes](enclosure/README.md) for dimensions.
