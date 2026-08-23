@@ -44,7 +44,7 @@ HOTSPOT_URL = f"http://{HOTSPOT_HOST}/"
 STATIC_DIR = Path(__file__).with_name("static")
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9-]{1,32}\Z")
-_CANONICAL_HOST = re.compile(r"message-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE)
+_CANONICAL_HOST = re.compile(r"button-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE)
 _HEX_PSK = re.compile(r"[0-9a-fA-F]{64}\Z")
 _PERCENT_ESCAPE = re.compile(br"%(?![0-9A-Fa-f]{2})")
 _PHONE_HINT = re.compile(r"WhatsApp number ending in [0-9]{4}\Z")
@@ -336,7 +336,7 @@ def create_app(
     device_id = config.get("device_id")
     if not isinstance(device_id, str) or not _DEVICE_ID.fullmatch(device_id):
         raise RuntimeError("onboarding device ID is invalid")
-    canonical_host = config.get("canonical_host", f"message-box-{device_id}.local")
+    canonical_host = config.get("canonical_host", f"button-box-{device_id}.local")
     if not isinstance(canonical_host, str) or not _CANONICAL_HOST.fullmatch(canonical_host):
         raise RuntimeError("onboarding canonical hostname is invalid")
     canonical_url = f"http://{canonical_host}/"

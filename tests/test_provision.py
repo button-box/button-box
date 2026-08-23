@@ -65,14 +65,14 @@ for arg in "$@"; do printf '%s\\0' "$arg"; done >"$RSYNC_LOG"
         )
 
     def test_stages_only_pi_installation_inputs_and_cleans_up(self):
-        result = self._run("admin@message-box.local")
+        result = self._run("admin@button-box.local")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         rsync_args = self.rsync_log.read_bytes().decode().rstrip("\0").split("\0")
         self.assertEqual(rsync_args[0], "-azR")
         self.assertEqual(
             rsync_args[-1],
-            "admin@message-box.local:/tmp/messagebox-provision.test/",
+            "admin@button-box.local:/tmp/messagebox-provision.test/",
         )
 
         staged_paths = {
@@ -90,17 +90,17 @@ for arg in "$@"; do printf '%s\\0' "$arg"; done >"$RSYNC_LOG"
         self.assertEqual(len(ssh_calls), 3)
         self.assertEqual(
             ssh_calls[0],
-            "CALL\tadmin@message-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
+            "CALL\tadmin@button-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
         )
         self.assertEqual(
             ssh_calls[1],
-            "CALL\t-t\tadmin@message-box.local\t"
-            "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
+            "CALL\t-t\tadmin@button-box.local\t"
+            "MESSAGEBOX_SSH_TARGET='admin@button-box.local' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
         self.assertEqual(
             ssh_calls[2],
-            "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
+            "CALL\tadmin@button-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
         )
 
     def test_rejects_ssh_option_before_running_external_commands(self):

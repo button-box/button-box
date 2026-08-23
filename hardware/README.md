@@ -1,5 +1,7 @@
 # Hardware
 
+v0 is BOM-only. No CAD, case files, or assembly drawings are required.
+
 ## BOM
 
 | Item | Approx. price | Sources |

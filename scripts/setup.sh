@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Message Box into fixed system paths under the messagebox service user.
+# Install Button Box into fixed system paths under the messagebox service user.
 # Usage on the Pi: ./scripts/setup.sh
 set -eu
 
@@ -113,7 +113,7 @@ for unit in \
   messagebox-onboarding-home.service \
   messagebox-whatsapp-pairing.service; do
   if systemctl is-active --quiet "$unit" 2>/dev/null; then
-    echo "Stop Message Box before updating: sudo messageboxctl stop" >&2
+    echo "Stop Button Box before updating: sudo messageboxctl stop" >&2
     exit 1
   fi
 done
@@ -152,7 +152,7 @@ else
     "$ONBOARDING_USER"
 fi
 
-echo "Installing Message Box in $APP_DIR as $SERVICE_USER"
+echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
@@ -313,9 +313,9 @@ fi
 printf '%s\n' \
   '' \
   '============================================================' \
-  '             ✅ MESSAGE BOX SETUP COMPLETE ✅' \
+  '             ✅ BUTTON BOX SETUP COMPLETE ✅' \
   '============================================================' \
-  'No Message Box or Comitup services were enabled or started.' \
+  'No Button Box or Comitup services were enabled or started.' \
   '' \
   'DEV FLOW' \
   '  Run the standalone shell setup and hardware checks:' \

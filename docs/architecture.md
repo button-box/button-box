@@ -1,6 +1,6 @@
 # Architecture
 
-Message Box runs as separate systemd services with constrained users and
+Button Box runs as separate systemd services with constrained users and
 permissions. Runtime services use the `messagebox` account, while the web
 onboarding service uses `messagebox-onboarding`. systemd limits filesystem,
 device, and capability access. Wi-Fi management and reset operations retain the

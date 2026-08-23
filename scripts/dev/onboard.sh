@@ -183,7 +183,7 @@ if [ "$NEED_PAIRING" -eq 1 ]; then
 fi
 
 echo ""
-echo "2. Configure Message Box"
+echo "2. Configure Button Box"
 echo "Synced chats are shown below with their exact JIDs."
 run_wacli --read-only chats list --limit 200
 CONTACT_COUNT=$(run_contact count)
@@ -253,9 +253,9 @@ if confirm "Run the interactive hardware test now?" yes; then
 fi
 
 echo ""
-echo "4. Start Message Box"
+echo "4. Start Button Box"
 if [ "$HARDWARE_OVERRIDE" -ne 1 ] &&
-   ! confirm "Enable the selected services and start Message Box?" yes; then
+   ! confirm "Enable the selected services and start Button Box?" yes; then
   echo "Services were not enabled or started."
   finish_instructions
   exit 0

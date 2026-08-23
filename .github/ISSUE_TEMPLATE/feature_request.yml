@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a small, non-sensitive improvement
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: Do not include phone numbers, JIDs, Wi-Fi details, NFC identifiers, recordings, authentication data, or private addresses.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing?
+      description: Describe the user-visible gap using synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed secrets, personal data, recordings, device state, and private URLs.
+          required: true

@@ -14,7 +14,7 @@ usage() {
   printf '%s\n' \
     "Usage: $0 user@host" \
     "Examples:" \
-    "  $0 admin@message-box-001.local" >&2
+    "  $0 admin@button-box-001.local" >&2
 }
 
 die() {
@@ -40,15 +40,15 @@ REPO_DIR=$(dirname "$(dirname "$SCRIPT_DIR")")
 
 BOX_HOSTNAME=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" hostname)
 MACHINE_ID=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" cat /etc/machine-id)
-box_id=${BOX_HOSTNAME#message-box-}
+box_id=${BOX_HOSTNAME#button-box-}
 case "$BOX_HOSTNAME" in
-  message-box-*) ;;
-  *) die "remote hostname is not a valid message-box hostname" ;;
+  button-box-*) ;;
+  *) die "remote hostname is not a valid button-box hostname" ;;
 esac
 case "$box_id" in
-  ''|*[!a-z0-9-]*) die "remote hostname is not a valid message-box hostname" ;;
+  ''|*[!a-z0-9-]*) die "remote hostname is not a valid button-box hostname" ;;
 esac
-[ "${#box_id}" -le 32 ] || die "remote hostname is not a valid message-box hostname"
+[ "${#box_id}" -le 32 ] || die "remote hostname is not a valid button-box hostname"
 case "$MACHINE_ID" in
   *[!a-f0-9]*) die "remote machine identity is invalid" ;;
 esac
@@ -58,13 +58,13 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" sudo -n true ||
 
 cat <<EOF
 
-MESSAGE BOX TEST REPROVISION
+BUTTON BOX TEST REPROVISION
 
 Target:   $TARGET
 Hostname: $BOX_HOSTNAME
 
 This deletes the generated Wi-Fi onboarding credentials and state, WhatsApp
-pairing state, the Message Box WhatsApp store, and pending outbound recordings.
+pairing state, the Button Box WhatsApp store, and pending outbound recordings.
 It preserves the operating system, packages, service users, current network
 profile, contacts, incoming queue, and hardware configuration. It is not a
 clean-card test.

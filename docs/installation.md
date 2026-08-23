@@ -7,18 +7,18 @@ not overwrite a working device without a tested backup.
 
 1. In Raspberry Pi Imager, install Raspberry Pi OS Lite 64-bit based on Debian
    13. Enable SSH and create a non-root sudo-capable administrator. Set the
-   hostname to the box's zero-padded number, such as `message-box-001`, and use
+   hostname to the box's zero-padded number, such as `button-box-001`, and use
    the same number on the physical label and in inventory.
 2. From a repository clone on another computer, provision over SSH:
 
    ```sh
-   ./scripts/provision.sh admin@message-box-NNN.local
+   ./scripts/provision.sh admin@button-box-NNN.local
    ```
 
    This transfers the installer's explicit source allowlist and runs setup on
    the Pi. Alternatively, clone the repository onto the Pi and run
    `./scripts/setup.sh` there as a non-root sudo-capable administrator. Neither
-   method transfers device runtime state, pairs WhatsApp, or starts Message Box
+   method transfers device runtime state, pairs WhatsApp, or starts Button Box
    services.
 
    The Pi needs internet access during setup. See
@@ -38,7 +38,7 @@ not overwrite a working device without a tested backup.
 2. Join its setup hotspot with the supplied password and open the printed URL.
 3. Submit the home Wi-Fi credentials. The setup hotspot will disappear.
 4. Reconnect the phone to home Wi-Fi and reopen the same URL, such as
-   `http://message-box-001.local/`. The network switch may take up to two
+   `http://button-box-001.local/`. The network switch may take up to two
    minutes; retry if the page is not ready.
 5. Pair WhatsApp using a number beginning with `+` and its international country
    code.

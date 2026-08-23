@@ -140,7 +140,7 @@ class InitializeTests(unittest.TestCase):
 
         self.dependencies = initialize.Dependencies(
             geteuid=lambda: 0,
-            gethostname=lambda: "message-box-a7",
+            gethostname=lambda: "button-box-a7",
             getpwnam=lambda name: SimpleNamespace(pw_uid=501),
             getgrnam=lambda name: SimpleNamespace(gr_gid=502),
             choice=lambda alphabet: next(char for char in alphabet if char.isalpha()),
@@ -344,10 +344,10 @@ class InitializeTests(unittest.TestCase):
 
     def test_hostname_is_lowercased_and_strictly_validated(self):
         for hostname in (
-            "messagebox-a7",
-            "message-box-",
-            "message-box-under_score",
-            "message-box-" + "a" * 33,
+            "buttonbox-a7",
+            "button-box-",
+            "button-box-under_score",
+            "button-box-" + "a" * 33,
         ):
             with self.subTest(hostname=hostname):
                 dependencies = replace(
@@ -360,12 +360,12 @@ class InitializeTests(unittest.TestCase):
                 self.assert_temporary_material_removed()
 
         dependencies = replace(
-            self.dependencies, gethostname=lambda: "MESSAGE-BOX-A7"
+            self.dependencies, gethostname=lambda: "BUTTON-BOX-A7"
         )
         code, output, error = self.call_main(dependencies=dependencies)
         self.assertEqual((code, error), (initialize.EXIT_OK, ""))
         self.assertIn("Device ID:        a7", output)
-        self.assertIn("Hotspot:          message-box-a7", output)
+        self.assertIn("Hotspot:          button-box-a7", output)
 
     def test_confirmation_declined_installs_nothing(self):
         self.paths.comitup_config.write_bytes(b"old config\n")
@@ -395,18 +395,18 @@ class InitializeTests(unittest.TestCase):
         self.assertEqual(observed_card["mode"], 0o600)
         self.assertEqual(
             observed_card["content"],
-            "a7\nmessage-box-a7\naaaa-aaaa\n",
+            "a7\nbutton-box-a7\naaaa-aaaa\n",
         )
 
         expected_metadata = {
-            "canonical_host": "message-box-a7.local",
+            "canonical_host": "button-box-a7.local",
             "device_id": "a7",
             "version": 1,
         }
         self.assertEqual(json.loads(self.paths.config.read_text()), expected_metadata)
         self.assertEqual(
             self.paths.config.read_bytes(),
-            b'{"canonical_host":"message-box-a7.local","device_id":"a7","version":1}\n',
+            b'{"canonical_host":"button-box-a7.local","device_id":"a7","version":1}\n',
         )
         self.assertNotIn(b"aaaa-aaaa", self.paths.config.read_bytes())
         self.assertEqual(StateStore(self.paths.state).load()["phase"], "WIFI_SELECT")

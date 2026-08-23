@@ -1,5 +1,5 @@
 #!/bin/sh
-# Interactively test Message Box network and attached hardware without messaging.
+# Interactively test Button Box network and attached hardware without messaging.
 # Installed helper: /opt/messagebox/dev/hardware-test.sh
 set -u
 
@@ -93,7 +93,7 @@ confirm() {
   done
 }
 
-printf '\nMessage Box guided hardware test\n'
+printf '\nButton Box guided hardware test\n'
 printf 'No WhatsApp messages will be sent and no NFC card IDs will be shown.\n\n'
 
 printf '1. Network\n'

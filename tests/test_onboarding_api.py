@@ -10,7 +10,7 @@ from messagebox.onboarding.comitup_adapter import ComitupError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
 
 
-HOST = "message-box-A7K2.local"
+HOST = "button-box-A7K2.local"
 
 
 class Clock:

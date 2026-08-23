@@ -1,4 +1,4 @@
-# Message Box
+# Button Box
 
 Screen-free WhatsApp voice notes
 
@@ -27,8 +27,8 @@ Tested on Raspberry Pi 4B with Raspberry Pi OS Lite (64-bit). See
 From host machine run:
 
 ```sh
-./scripts/provision.sh admin@message-box-001.local
-ssh -t admin@message-box-001.local messagebox-dev-onboard
+./scripts/provision.sh admin@button-box-001.local
+ssh -t admin@button-box-001.local messagebox-dev-onboard
 ```
 
 ## Support
@@ -41,5 +41,5 @@ recordings, private addresses, and authentication state.
 
 [MIT](LICENSE)
 
-Message Box uses [wacli](https://github.com/openclaw/wacli). It is not
+Button Box uses [wacli](https://github.com/openclaw/wacli). It is not
 affiliated with or endorsed by WhatsApp or Meta.

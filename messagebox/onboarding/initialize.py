@@ -37,7 +37,7 @@ INTERRUPT_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 COMITUP_BIN = "/usr/sbin/comitup"
 UNAMBIGUOUS_CHARACTERS = "23456789abcdefghjkmnpqrstuvwxyz"
 PASSWORD_PLACEHOLDER = "@HOTSPOT_PASSWORD@"
-_HOSTNAME = re.compile(r"message-box-([a-z0-9-]{1,32})\Z")
+_HOSTNAME = re.compile(r"button-box-([a-z0-9-]{1,32})\Z")
 _PLACEHOLDER = re.compile(r"@[A-Z0-9_]+@")
 
 EXIT_OK = 0
@@ -286,7 +286,7 @@ def _make_candidates(paths, temporary_dir, dependencies):
     hostname = dependencies.gethostname().lower()
     match = _HOSTNAME.fullmatch(hostname)
     if match is None:
-        raise InitializationError("hostname must match message-box-ID")
+        raise InitializationError("hostname must match button-box-ID")
     device_id = match.group(1)
     password_raw = "".join(
         dependencies.choice(UNAMBIGUOUS_CHARACTERS) for _ in range(8)
