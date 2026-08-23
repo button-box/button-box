@@ -12,11 +12,6 @@ presses the button to listen.
 [Join the WhatsApp community](https://chat.whatsapp.com/KkVOY76T0go1J6lGElwQJg?mode=gi_t) ·
 [Report an issue](https://github.com/button-box/button-box/issues)
 
-> [!WARNING]
-> Button Box is alpha software and hardware. Raspberry Pi 4B is the best-tested
-> public build path. Raspberry Pi Zero 2 W is a supported device target, but the
-> current installer still reaches a Pi-4-only Wi-Fi-onboarding gate. See
-> [Choose a Raspberry Pi](#choose-a-raspberry-pi) before buying parts.
 
 ## Build a Button Box
 
