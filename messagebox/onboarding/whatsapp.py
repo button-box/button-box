@@ -25,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 from messagebox.onboarding.paths import (
     MESSAGEBOX_HOME,
     WACLI_PATH,
@@ -40,6 +41,7 @@ LIVE_STORE = str(WHATSAPP_LIVE_STORE)
 CANDIDATES_PATH = str(WHATSAPP_CANDIDATES_PATH)
 WACLI_BIN = str(WACLI_PATH)
 MAX_BOOTSTRAP_MESSAGES = 100
+MAX_DISCOVERY_MESSAGES = 1000
 MAX_ELIGIBLE_CONVERSATIONS = 10
 MAX_REQUEST_BYTES = 4096
 
@@ -80,7 +82,9 @@ _FAILURE_CLASS = {
 _PHONE = re.compile(r"\+[1-9][0-9]{7,14}\Z")
 _PAIR_CODE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9 -]{2,30}[A-Za-z0-9])?\Z")
 _PHONE_HINT = re.compile(r"WhatsApp number ending in [0-9]{4}\Z")
-_JID = re.compile(r"(?:[0-9]+(?:-[0-9]+)?@g\.us|[0-9]+@s\.whatsapp\.net)\Z")
+_JID = re.compile(
+    r"(?:[0-9]+(?:-[0-9]+)?@g\.us|[1-9][0-9]{7,14}@s\.whatsapp\.net)\Z"
+)
 
 
 class PairingError(RuntimeError):
@@ -191,9 +195,16 @@ def eligible_conversations(value, limit=MAX_ELIGIBLE_CONVERSATIONS):
             or row.get("label")
             or "WhatsApp conversation"
         )
-        result.append(
-            {"jid": jid, "label": str(label).strip()[:80] or "WhatsApp conversation"}
-        )
+        label = str(label).strip()[:80] or "WhatsApp conversation"
+        if jid.endswith("@s.whatsapp.net"):
+            label = f"+{jid.split('@', 1)[0]}"
+        elif (
+            label == "WhatsApp conversation"
+            or _JID.fullmatch(label.casefold())
+            or re.fullmatch(r"\+?[0-9 ().-]{7,}", label)
+        ):
+            label = "WhatsApp group"
+        result.append({"jid": jid, "label": label})
         seen.add(jid)
         if len(result) >= limit:
             break
@@ -228,6 +239,7 @@ class PairingEngine:
         clock=time.time,
         popen=subprocess.Popen,
         run=subprocess.run,
+        recipient_setup=None,
         recover=True,
     ):
         self.root = Path(pairing_root)
@@ -241,6 +253,7 @@ class PairingEngine:
         self.clock = clock
         self.popen = popen
         self.run = run
+        self.recipients = recipient_setup or RecipientSetup()
         self._lock = threading.RLock()
         self._process = None
         self._cancel_requested = False
@@ -251,6 +264,10 @@ class PairingEngine:
             self._write_state(self._default_state())
         if recover:
             self._recover_interrupted_attempt()
+            try:
+                self.recipients.ensure_voice_request()
+            except RecipientError:
+                pass
 
     def _default_state(self):
         return {
@@ -429,6 +446,11 @@ class PairingEngine:
             state = self._load_state()
             if state["status"] != "ready":
                 raise PairingError("whatsapp_not_ready")
+            try:
+                if self.recipients.public_state()["default"] is not None:
+                    raise PairingError("recipient_setup_started")
+            except RecipientError as exc:
+                raise PairingError("recipient_state_failed") from exc
             result = self._run_wacli(
                 self.live_store,
                 ["--json", "--timeout", "15s", "auth", "logout"],
@@ -445,6 +467,114 @@ class PairingEngine:
             self.live_store.mkdir(parents=True, mode=0o700)
             self.candidates_path.unlink(missing_ok=True)
             return self._set_state("idle")
+
+    def _require_ready(self):
+        if self._load_state()["status"] != "ready":
+            raise PairingError("whatsapp_not_ready")
+
+    def _live_candidates(self, *, refresh=False):
+        self._require_ready()
+        if refresh:
+            synced = self._run_wacli(
+                self.live_store,
+                [
+                    "--json",
+                    "--lock-wait",
+                    "10s",
+                    "sync",
+                    "--once",
+                    "--idle-exit",
+                    "5s",
+                    "--presence-mode",
+                    "quiet",
+                    "--refresh-groups",
+                    "--max-messages",
+                    str(MAX_DISCOVERY_MESSAGES),
+                ],
+                timeout=25,
+            )
+            if synced.returncode != 0:
+                raise PairingError("recipient_refresh_failed")
+            chats = self._run_wacli(
+                self.live_store,
+                ["--read-only", "--json", "--full", "chats", "list", "--limit", "50"],
+                timeout=15,
+            )
+            if chats.returncode != 0:
+                raise PairingError("recipient_refresh_failed")
+            candidates = eligible_conversations(_json_document(chats.stdout))
+            self._write_candidates(candidates, self.candidates_path)
+        else:
+            try:
+                document = json.loads(self.candidates_path.read_text(encoding="utf-8"))
+                candidates = document["conversations"]
+            except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+                raise PairingError("recipient_list_failed") from exc
+            if not isinstance(candidates, list) or eligible_conversations(candidates) != candidates:
+                raise PairingError("recipient_list_failed")
+        try:
+            return self.recipients.reconcile(candidates)
+        except RecipientError as exc:
+            raise PairingError("recipient_state_failed") from exc
+
+    def recipient_state(self):
+        self._require_ready()
+        try:
+            return self.recipients.public_state()
+        except RecipientError as exc:
+            raise PairingError("recipient_state_failed") from exc
+
+    def recipient_list(self, *, refresh=False):
+        return self._live_candidates(refresh=refresh)
+
+    def recipient_defer(self):
+        self._require_ready()
+        try:
+            return self.recipients.defer()
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_select(self, token):
+        self._require_ready()
+        try:
+            return self.recipients.select_default(token)
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_select_phone(self, phone):
+        self._require_ready()
+        try:
+            return self.recipients.select_phone(normalize_phone(phone))
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_add(self, token):
+        self._require_ready()
+        try:
+            return self.recipients.add(token)
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_add_phone(self, phone):
+        self._require_ready()
+        try:
+            return self.recipients.add_phone(normalize_phone(phone))
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_remove(self, token):
+        self._require_ready()
+        try:
+            return self.recipients.remove(token)
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
+
+    def recipient_default(self, token):
+        self._require_ready()
+        try:
+            return self.recipients.choose_default(token)
+        except RecipientError as exc:
+            raise PairingError(str(exc)) from exc
 
     def _pair(self, phone):
         process = None
@@ -790,6 +920,40 @@ class WhatsAppPairingClient:
     def unlink(self):
         return self._request({"action": "unlink"}, timeout=25)
 
+    def recipient_state(self):
+        return self._request({"action": "recipient_state"})
+
+    def recipient_list(self, *, refresh=False):
+        return self._request(
+            {"action": "recipient_list", "refresh": bool(refresh)},
+            timeout=35 if refresh else None,
+        )
+
+    def recipient_defer(self):
+        return self._request({"action": "recipient_defer"})
+
+    def recipient_select(self, token):
+        return self._request({"action": "recipient_select", "token": token})
+
+    def recipient_select_phone(self, phone):
+        return self._request(
+            {"action": "recipient_select_phone", "phone": normalize_phone(phone)}
+        )
+
+    def recipient_add(self, token):
+        return self._request({"action": "recipient_add", "token": token})
+
+    def recipient_add_phone(self, phone):
+        return self._request(
+            {"action": "recipient_add_phone", "phone": normalize_phone(phone)}
+        )
+
+    def recipient_remove(self, token):
+        return self._request({"action": "recipient_remove", "token": token})
+
+    def recipient_default(self, token):
+        return self._request({"action": "recipient_default", "token": token})
+
 
 class _PairingHandler(socketserver.StreamRequestHandler):
     def handle(self):
@@ -809,6 +973,26 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 state = self.server.engine.cancel()
             elif action == "unlink" and set(request) == {"action"}:
                 state = self.server.engine.unlink()
+            elif action == "recipient_state" and set(request) == {"action"}:
+                state = self.server.engine.recipient_state()
+            elif action == "recipient_list" and set(request) == {"action", "refresh"}:
+                if not isinstance(request["refresh"], bool):
+                    raise PairingError("invalid_action")
+                state = self.server.engine.recipient_list(refresh=request["refresh"])
+            elif action == "recipient_defer" and set(request) == {"action"}:
+                state = self.server.engine.recipient_defer()
+            elif action == "recipient_select" and set(request) == {"action", "token"}:
+                state = self.server.engine.recipient_select(request["token"])
+            elif action == "recipient_select_phone" and set(request) == {"action", "phone"}:
+                state = self.server.engine.recipient_select_phone(request["phone"])
+            elif action == "recipient_add" and set(request) == {"action", "token"}:
+                state = self.server.engine.recipient_add(request["token"])
+            elif action == "recipient_add_phone" and set(request) == {"action", "phone"}:
+                state = self.server.engine.recipient_add_phone(request["phone"])
+            elif action == "recipient_remove" and set(request) == {"action", "token"}:
+                state = self.server.engine.recipient_remove(request["token"])
+            elif action == "recipient_default" and set(request) == {"action", "token"}:
+                state = self.server.engine.recipient_default(request["token"])
             else:
                 raise PairingError("invalid_action")
             return self._respond({"ok": True, "state": state})
@@ -819,6 +1003,7 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 "pairing_already_in_progress",
                 "unlink_current_account_first",
                 "whatsapp_not_ready",
+                "recipient_setup_started",
             }:
                 error = "pairing_request_failed"
             return self._respond({"ok": False, "error": error})

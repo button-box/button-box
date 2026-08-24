@@ -423,6 +423,24 @@ class AnnouncementStore:
         except FileNotFoundError:
             pass
 
+    def pending_action(self, max_age=10):
+        """Return only the safe action for a fresh unplayed announcement."""
+        for path in (self.path, self.claimed_path):
+            payload = _load_json(path)
+            if payload is None or payload.get("version") != ANNOUNCEMENT_VERSION:
+                continue
+            try:
+                created_at = float(payload.get("created_at"))
+            except (TypeError, ValueError):
+                return "invalid"
+            if created_at > self.clock() + 5 or self.clock() - created_at > max_age:
+                continue
+            action = payload.get("action")
+            if not isinstance(action, str) or not action or len(action) > 32:
+                return "invalid"
+            return action
+        return None
+
     def take(self, max_age=10):
         try:
             os.replace(self.path, self.claimed_path)

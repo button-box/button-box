@@ -170,6 +170,46 @@ h1:focus-visible { outline: none; }
 .confirm-panel strong { color: var(--text); }
 .button-row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 .success-notice { border-left-color: var(--action); }
+.recipient-list { display: grid; gap: 0.65rem; margin: 1.25rem 0; padding: 0; list-style: none; }
+.recipient-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.85rem 1rem;
+  background: var(--soft);
+}
+.recipient-row strong { display: block; overflow-wrap: anywhere; }
+.recipient-row span { display: block; margin-top: 0.2rem; color: var(--muted); font-size: 0.8rem; text-transform: capitalize; }
+.recipient-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; }
+button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
+.section-title { margin: 1.5rem 0 -0.5rem; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.manual-recipient { margin: 1.5rem 0; border-top: 1px solid var(--line); padding-top: 0.25rem; }
+.manual-recipient form { margin-top: 1rem; }
+.manual-recipient .section-title { margin-bottom: 0; }
+.manual-recipient .field-help { margin-bottom: 0; }
+.manual-recipient button { justify-self: start; }
+.proof-list { display: grid; gap: 0.65rem; margin: 1.5rem 0; }
+.proof-row { display: flex; gap: 0.75rem; align-items: center; color: var(--muted); }
+.proof-row span { display: inline-grid; width: 1.5rem; height: 1.5rem; place-items: center; border: 1px solid var(--line); border-radius: 50%; }
+.proof-row.done { color: var(--text); font-weight: 700; }
+.proof-row.done span { border-color: var(--action); background: var(--action); color: var(--action-text); }
+.manager-next { margin-top: 2rem; }
+.nfc-reader {
+  width: 8rem;
+  aspect-ratio: 1;
+  margin: 2rem auto;
+  border: 2px solid var(--action);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--action);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  box-shadow: 0 0 0 0.7rem rgba(105, 197, 165, 0.14);
+}
 .network-list { display: grid; border-top: 1px solid var(--line); }
 .network {
   justify-content: space-between;

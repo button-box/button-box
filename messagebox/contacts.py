@@ -23,7 +23,7 @@ from typing import Any
 from messagebox.runtime_paths import ASSET_DIR, CONTACTS_FILE, NFC_ENROLLMENT_FILE
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ASSET_ROOT = str(ASSET_DIR)
 MAX_LABEL_LENGTH = 80
 MAX_NAME_LENGTH = 80
@@ -33,7 +33,8 @@ ENV_FILE = Path("/etc/messagebox/env")
 _GROUP_JID = re.compile(r"^[0-9]+(?:-[0-9]+)?@g\.us$")
 _PERSON_JID = re.compile(r"^[0-9]+@s\.whatsapp\.net$")
 _UID = re.compile(r"^[0-9A-F]+$")
-_ROOT_KEYS = {"version", "revision", "contacts", "listeners"}
+_LEGACY_ROOT_KEYS = {"version", "revision", "contacts", "listeners"}
+_ROOT_KEYS = _LEGACY_ROOT_KEYS | {"default_recipient"}
 _CONTACT_KEYS = {
     "label",
     "kind",
@@ -53,6 +54,7 @@ def _empty_document() -> JsonObject:
     return {
         "version": SCHEMA_VERSION,
         "revision": 0,
+        "default_recipient": None,
         "contacts": {},
         "listeners": {},
     }
@@ -156,10 +158,14 @@ def validate_contact(jid, label, *, card_clip="") -> JsonObject:
 
 
 def _validate_document(document: object) -> JsonObject:
-    if not isinstance(document, dict) or set(document) != _ROOT_KEYS:
+    if not isinstance(document, dict):
         raise ContactError("contact store has an invalid schema")
-    if type(document["version"]) is not int or document["version"] != SCHEMA_VERSION:
+    version = document.get("version")
+    if type(version) is not int or version not in {1, SCHEMA_VERSION}:
         raise ContactError("contact store version is unsupported")
+    expected_keys = _LEGACY_ROOT_KEYS if version == 1 else _ROOT_KEYS
+    if set(document) != expected_keys:
+        raise ContactError("contact store has an invalid schema")
     revision = document["revision"]
     if type(revision) is not int or revision < 0:
         raise ContactError("contact store has an invalid revision")
@@ -197,7 +203,22 @@ def _validate_document(document: object) -> JsonObject:
             raise ContactError("contact store contains an invalid listener name")
         if _clean_clip(listener["listened_clip"], "listened clip") != listener["listened_clip"]:
             raise ContactError("contact store contains an invalid listened clip")
-    return document
+    upgraded = copy.deepcopy(document)
+    if version == 1:
+        upgraded["version"] = SCHEMA_VERSION
+        upgraded["default_recipient"] = (
+            next(iter(contacts)) if len(contacts) == 1 else None
+        )
+    default_recipient = upgraded["default_recipient"]
+    if default_recipient is not None:
+        try:
+            default_recipient = _clean_chat_jid(default_recipient)
+        except ContactError as exc:
+            raise ContactError("contact store has an invalid default recipient") from exc
+        if default_recipient not in contacts:
+            raise ContactError("contact store has an invalid default recipient")
+        upgraded["default_recipient"] = default_recipient
+    return upgraded
 
 
 def _contact_result(jid: str, contact: JsonObject) -> JsonObject:
@@ -297,14 +318,19 @@ class ContactStore:
         *,
         card_clip="",
         receive_after=None,
+        make_default=False,
     ) -> JsonObject:
         jid = _clean_chat_jid(jid)
         label = _clean_text(label, "label", MAX_LABEL_LENGTH)
         card_clip = _clean_clip(card_clip, "card clip")
+        if not isinstance(make_default, bool):
+            raise ContactError("make_default must be true or false")
 
         def add(document):
             if jid in document["contacts"]:
                 raise ContactError("contact already exists")
+            if make_default and document["default_recipient"] is not None:
+                raise ContactError("default recipient already exists")
             if receive_after is None:
                 try:
                     effective_receive_after = self.clock()
@@ -321,6 +347,11 @@ class ContactStore:
                 "card_clip": card_clip,
             }
             document["contacts"][jid] = contact
+            if make_default or (
+                len(document["contacts"]) == 1
+                and document["default_recipient"] is None
+            ):
+                document["default_recipient"] = jid
             return True, _contact_result(jid, contact)
 
         return self._mutate(add)
@@ -332,9 +363,44 @@ class ContactStore:
             if jid not in document["contacts"]:
                 return False, False
             del document["contacts"][jid]
+            if document["default_recipient"] == jid:
+                document["default_recipient"] = None
             return True, True
 
         return self._mutate(remove)
+
+    def set_default_recipient(self, jid) -> JsonObject:
+        """Set the first explicit default without replacing an existing one."""
+        jid = _clean_chat_jid(jid)
+
+        def set_default(document):
+            contact = document["contacts"].get(jid)
+            if contact is None:
+                raise ContactError("contact does not exist")
+            existing = document["default_recipient"]
+            if existing is not None:
+                if existing == jid:
+                    return False, _contact_result(jid, contact)
+                raise ContactError("default recipient already exists")
+            document["default_recipient"] = jid
+            return True, _contact_result(jid, contact)
+
+        return self._mutate(set_default)
+
+    def choose_default_recipient(self, jid) -> JsonObject:
+        """Choose any configured contact as the current default recipient."""
+        jid = _clean_chat_jid(jid)
+
+        def choose_default(document):
+            contact = document["contacts"].get(jid)
+            if contact is None:
+                raise ContactError("contact does not exist")
+            if document["default_recipient"] == jid:
+                return False, _contact_result(jid, contact)
+            document["default_recipient"] = jid
+            return True, _contact_result(jid, contact)
+
+        return self._mutate(choose_default)
 
     def assign_card(self, jid, uid) -> JsonObject:
         jid = _clean_chat_jid(jid)
@@ -389,6 +455,8 @@ class ContactStore:
                     "card_uids": [],
                     "card_clip": candidate["card_clip"],
                 }
+                if len(contacts) == 1 and document["default_recipient"] is None:
+                    document["default_recipient"] = jid
                 changed = True
             for other_jid, contact in contacts.items():
                 if other_jid != jid and uid in contact["card_uids"]:
@@ -480,6 +548,7 @@ class ContactStore:
         return {
             "version": document["version"],
             "revision": document["revision"],
+            "default_recipient": document["default_recipient"],
             "contacts": contacts,
             "listeners": copy.deepcopy(document["listeners"]),
         }
@@ -672,8 +741,8 @@ def main(
                 print(f"Added {candidate['label']} without an NFC card.")
                 if count > 1:
                     print(
-                        "There are now multiple contacts; recording requires a "
-                        "recently presented enrolled card."
+                        "The existing default remains active; an enrolled card can "
+                        "temporarily select another contact."
                     )
                 return 0
             check_services()

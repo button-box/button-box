@@ -16,6 +16,7 @@ from enum import Enum
 from pathlib import Path
 
 from messagebox.onboarding.paths import (
+    ONBOARDING_COMPLETION_REQUEST_PATH,
     ONBOARDING_CONFIGURED_PATH,
     ONBOARDING_ENABLED_PATH,
     ONBOARDING_STATE_PATH,
@@ -32,6 +33,10 @@ CONFIGURED_PATH = ONBOARDING_CONFIGURED_PATH
 STATE_PATH = ONBOARDING_STATE_PATH
 
 RUNTIME_UNITS = (
+    "messagebox-onboarding-voice.target",
+    "messagebox-onboarding-button.service",
+    "messagebox-onboarding-nfc.service",
+    "messagebox-onboarding-complete.service",
     "messagebox.target",
     "messagebox-button.service",
     "messagebox-sync.service",
@@ -41,12 +46,19 @@ RUNTIME_UNITS = (
 )
 SETUP_UNITS = (
     "messagebox-wifi-reset.service",
+    "messagebox-onboarding-complete.path",
     "comitup.service",
 )
-HOTSPOT_UNITS = ("comitup.service",)
+ONBOARDING_START_UNITS = (
+    "messagebox-onboarding-voice.path",
+    "messagebox-onboarding-complete.path",
+    "comitup.service",
+)
 ONBOARDING_UNITS = (
     "comitup-web.service",
     "messagebox-onboarding-home.service",
+    "messagebox-onboarding-nfc.service",
+    "messagebox-onboarding-complete.service",
     "messagebox-whatsapp-pairing.service",
     "comitup.service",
 )
@@ -178,6 +190,7 @@ def perform_reset(
     enabled_path=ENABLED_PATH,
     configured_path=CONFIGURED_PATH,
     state_path=STATE_PATH,
+    completion_request_path=ONBOARDING_COMPLETION_REQUEST_PATH,
     state_clock=time.time,
 ):
     """Perform the confirmed reset transaction and restart Wi-Fi onboarding."""
@@ -195,13 +208,14 @@ def perform_reset(
     _run(runner, ["systemctl", "stop", *ONBOARDING_UNITS])
     _run(runner, ["rm", "-f", "--", "/var/lib/comitup/dhcpleaseinfo"])
     StateStore(state_path, clock=state_clock, owner=state_owner).reset(recreate=True)
+    Path(completion_request_path).unlink(missing_ok=True)
 
     for uuid in list_infrastructure_wifi_profiles(runner):
         _run(runner, ["nmcli", "connection", "delete", "uuid", uuid])
 
     _run(runner, ["nmcli", "radio", "wifi", "on"])
     # During the boot-button service this is queued until that service exits.
-    _run(runner, ["systemctl", "--no-block", "start", *HOTSPOT_UNITS])
+    _run(runner, ["systemctl", "--no-block", "start", *ONBOARDING_START_UNITS])
 
 
 def reset_if_held(
@@ -213,6 +227,7 @@ def reset_if_held(
     enabled_path=ENABLED_PATH,
     configured_path=CONFIGURED_PATH,
     state_path=STATE_PATH,
+    completion_request_path=ONBOARDING_COMPLETION_REQUEST_PATH,
     state_clock=time.time,
     hold_seconds=HOLD_SECONDS,
     poll_seconds=POLL_SECONDS,
@@ -233,6 +248,7 @@ def reset_if_held(
         enabled_path=enabled_path,
         configured_path=configured_path,
         state_path=state_path,
+        completion_request_path=completion_request_path,
         state_clock=state_clock,
     )
     return ResetStatus.RESET_COMPLETE

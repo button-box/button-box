@@ -50,6 +50,7 @@ from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
     CONTACTS_FILE,
     NFC_ANNOUNCEMENT_FILE,
+    NFC_HEALTH_FILE,
     NFC_SELECTION_FILE,
     RUNTIME_DIR,
     STATE_DIR as DEFAULT_STATE_DIR,
@@ -84,6 +85,7 @@ NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
 )
 NFC_DETECTION_BEEP = env_flag("MSGBOX_NFC_DETECTION_BEEP", default=False)
+NFC_HEALTH_MAX_AGE_S = float(os.environ.get("MSGBOX_NFC_HEALTH_MAX_AGE_S", "5"))
 PLACE_TOKEN_WAV = os.environ.get(
     "MSGBOX_PLACE_TOKEN_WAV",
     str(APP_DIR / "sounds" / "nfc" / "place-token.wav"),
@@ -218,22 +220,46 @@ def current_recipient_context(*, claim=False):
     try:
         document = ContactStore(CONTACTS_FILE).load()
         contacts = document["contacts"]
-        if not contacts:
-            log("recipient unavailable: no contacts configured")
+        has_cards = any(contact["card_uids"] for contact in contacts.values())
+        if has_cards:
+            try:
+                if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
+                    log("recipient unavailable: NFC reader health is stale")
+                    return None
+            except OSError:
+                log("recipient unavailable: NFC reader health is unavailable")
+                return None
+            resolver = claim_selection if claim else active_selection
+            selection_existed = Path(NFC_SELECTION_FILE).exists()
+            context = resolver(
+                CONTACTS_FILE,
+                NFC_SELECTION_FILE,
+                max_age=NFC_SELECTION_TTL_S,
+            )
+            if context is not None:
+                return {
+                    "contact": context["contact"],
+                    "uid": context["uid"],
+                    "via_card": True,
+                }
+            if selection_existed:
+                log("recipient unavailable: stale card selection")
+                return None
+            if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
+                log("recipient unavailable: unrecognized card presentation")
+                return None
+        default_recipient = document["default_recipient"]
+        if default_recipient is None:
+            log("recipient unavailable: no default configured")
             return None
-        if len(contacts) == 1:
-            jid, contact = next(iter(contacts.items()))
-            return {"contact": {"jid": jid, **contact}, "via_card": False}
-        resolver = claim_selection if claim else active_selection
-        context = resolver(
-            CONTACTS_FILE,
-            NFC_SELECTION_FILE,
-            max_age=NFC_SELECTION_TTL_S,
-        )
-        if context is None:
-            log("recipient unavailable: no active card selection")
+        contact = contacts.get(default_recipient)
+        if contact is None:
+            log("recipient unavailable: default is invalid")
             return None
-        return {"contact": context["contact"], "uid": context["uid"], "via_card": True}
+        return {
+            "contact": {"jid": default_recipient, **contact},
+            "via_card": False,
+        }
     except (ContactError, NfcError, OSError) as exc:
         log(f"contact routing unavailable: {exc}")
         return None
@@ -242,15 +268,15 @@ def current_recipient_context(*, claim=False):
 def routing_mode():
     """Describe startup routing without exposing a contact JID."""
     try:
-        count = len(ContactStore(CONTACTS_FILE).load()["contacts"])
+        document = ContactStore(CONTACTS_FILE).load()
     except (ContactError, OSError) as exc:
         log(f"contact routing unavailable: {exc}")
         return "unavailable"
-    if count == 0:
+    if not document["contacts"]:
         return "no_contacts"
-    if count == 1:
-        return "single_contact"
-    return "card_selection"
+    if document["default_recipient"] is None:
+        return "no_default"
+    return "default_recipient"
 
 
 def wait_for_hold_intent(
@@ -286,9 +312,12 @@ def block_unavailable_recipient():
     """Give safe feedback without treating an unconfigured box as card-ready."""
     mode = routing_mode()
     log_event("recipient_required", routing_mode=mode)
-    if mode == "card_selection":
+    if mode in {"card_selection", "default_recipient"}:
         if play_pending_nfc_announcement(force=True) != "unknown":
-            prompt_for_token()
+            if mode == "card_selection":
+                prompt_for_token()
+            else:
+                beep("fail")
     else:
         beep("fail")
 

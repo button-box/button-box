@@ -8,12 +8,27 @@ const views = [
   "pairing-progress",
   "pairing-error",
   "ready",
+  "recipients",
+  "deferred",
+  "voice-test",
+  "voice-success",
+  "recipient-manager",
+  "nfc",
+  "nfc-choose",
+  "nfc-mapped",
+  "nfc-success",
+  "nfc-unavailable",
+  "complete",
   "failed",
 ];
 const activePairingStates = new Set(["starting", "code_pending", "bootstrapping", "verifying"]);
 let pollTimer = null;
 let loadingState = false;
 let lastView = "";
+let recipientsData = null;
+let managerOpen = false;
+let nfcData = null;
+let nfcPollTimer = null;
 
 function showView(name) {
   for (const view of views) {
@@ -117,9 +132,62 @@ function pairingErrorCopy(error, status) {
   return messages[error] || "Pairing did not finish. No account was saved.";
 }
 
-function schedulePoll(status) {
+function schedulePoll(status, recipientStatus = null) {
   window.clearTimeout(pollTimer);
-  pollTimer = activePairingStates.has(status) ? window.setTimeout(loadState, 1500) : null;
+  pollTimer = activePairingStates.has(status) || recipientStatus === "testing"
+    ? window.setTimeout(loadState, 1500)
+    : null;
+}
+
+function setProof(id, complete) {
+  const row = document.getElementById(id);
+  row.classList.toggle("done", complete);
+  row.querySelector("span").textContent = complete ? "✓" : "○";
+}
+
+function applyRecipientState(recipient, nfcSummary = null) {
+  const summary = recipient || {
+    status: "choose",
+    default: null,
+    proof: { received: false, played: false, replied: false },
+  };
+  schedulePoll("ready", summary.status);
+  if (summary.status === "deferred") {
+    showView("deferred");
+    return;
+  }
+  if (summary.status === "error") {
+    showView("ready");
+    showError("Recipient setup is temporarily unavailable. Try again in a moment.");
+    pollTimer = window.setTimeout(loadState, 3000);
+    return;
+  }
+  if (summary.status === "testing") {
+    managerOpen = false;
+    document.getElementById("voice-recipient").textContent = summary.default?.label || "your recipient";
+    setProof("proof-received", summary.proof.received);
+    setProof("proof-played", summary.proof.played);
+    setProof("proof-replied", summary.proof.replied);
+    showView("voice-test");
+    return;
+  }
+  if (summary.status === "complete") {
+    if (nfcSummary && new Set([
+      "waiting", "choose", "already_paired", "success", "unavailable",
+    ]).has(nfcSummary.status)) {
+      loadNfc();
+      return;
+    }
+    document.getElementById("success-recipient").textContent = summary.default?.label || "your recipient";
+    if (managerOpen && recipientsData) {
+      renderRecipientManager(recipientsData);
+      showView("recipient-manager");
+    } else {
+      showView("voice-success");
+    }
+    return;
+  }
+  showView("ready");
 }
 
 function applyWhatsAppState(state) {
@@ -132,7 +200,6 @@ function applyWhatsAppState(state) {
   };
   schedulePoll(whatsapp.status);
   if (state.phase === "WHATSAPP_READY" || whatsapp.status === "ready") {
-    showView("ready");
     document.getElementById("linked-account").textContent = whatsapp.phone_hint
       ? `${whatsapp.phone_hint} is linked and connected.`
       : "WhatsApp is linked and connected.";
@@ -140,6 +207,7 @@ function applyWhatsAppState(state) {
     document.getElementById("eligible-count").textContent = count === 1
       ? "1 recent group or chat is ready for the next setup step."
       : `${count} recent groups or chats are ready for the next setup step.`;
+    applyRecipientState(state.recipient_setup, state.nfc_setup);
     return;
   }
   switch (whatsapp.status) {
@@ -175,6 +243,275 @@ function applyWhatsAppState(state) {
         whatsapp.safe_error,
         whatsapp.status,
       );
+  }
+}
+
+function recipientRow(recipient, actions = []) {
+  const row = document.createElement("li");
+  row.className = "recipient-row";
+  const copy = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = recipient.label;
+  const meta = document.createElement("span");
+  const tagCopy = recipient.card_count
+    ? ` · ${recipient.card_count} tag${recipient.card_count === 1 ? "" : "s"}`
+    : "";
+  meta.textContent = recipient.is_default
+    ? `${recipient.kind} · default${tagCopy}`
+    : `${recipient.kind}${tagCopy}`;
+  copy.append(name, meta);
+  row.append(copy);
+  if (actions.length) {
+    const controls = document.createElement("div");
+    controls.className = "recipient-actions";
+    actions.forEach(({ action, label }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "remove" ? "danger-button compact" : "compact";
+    button.textContent = label;
+    button.addEventListener("click", () => mutateRecipient(action, recipient.token, button));
+      controls.append(button);
+    });
+    row.append(controls);
+  }
+  return row;
+}
+
+function renderRecipientPicker(data) {
+  recipientsData = data;
+  const list = document.getElementById("recipient-list");
+  const choices = data.recipients.filter((recipient) => recipient.available);
+  list.replaceChildren(...choices.map((recipient) => recipientRow(
+    recipient,
+    [{ action: "select", label: "Choose" }],
+  )));
+  document.getElementById("recipient-empty").hidden = choices.length !== 0;
+}
+
+function renderRecipientManager(data) {
+  recipientsData = data;
+  const configured = data.recipients.filter((recipient) => recipient.configured);
+  const available = data.recipients.filter((recipient) => recipient.available && !recipient.configured);
+  document.getElementById("configured-recipient-list").replaceChildren(
+    ...configured.map((recipient) => recipientRow(recipient, recipient.is_default ? [] : [
+      { action: "default", label: "Make default" },
+      { action: "remove", label: "Remove" },
+    ])),
+  );
+  document.getElementById("available-recipient-list").replaceChildren(
+    ...available.map((recipient) => recipientRow(
+      recipient,
+      [{ action: "add", label: "Allow" }],
+    )),
+  );
+  document.getElementById("manager-empty").hidden = available.length !== 0;
+}
+
+async function loadRecipients({ refresh = false, manager = false } = {}) {
+  const status = document.getElementById(manager ? "manager-status" : "recipient-status");
+  status.textContent = refresh ? "Refreshing WhatsApp…" : "Loading…";
+  try {
+    const data = refresh
+      ? await formRequest("/recipients/refresh")
+      : await request("/api/recipients");
+    if (manager) renderRecipientManager(data);
+    else renderRecipientPicker(data);
+    status.textContent = refresh ? "WhatsApp refreshed." : "";
+    return data;
+  } catch (error) {
+    status.textContent = error.message;
+    throw error;
+  }
+}
+
+async function mutateRecipient(action, token, button = null) {
+  if (button) button.disabled = true;
+  showError("");
+  try {
+    const data = await formRequest(`/recipients/${action}`, { token });
+    recipientsData = data;
+    if (action === "select") {
+      applyRecipientState(data);
+    } else {
+      renderRecipientManager(data);
+      document.getElementById("manager-status").textContent = action === "default"
+        ? "Default changed."
+        : "Saved.";
+    }
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function mutateRecipientNumber(event, action) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const phone = new FormData(form).get("phone");
+  const manager = action === "add";
+  const status = document.getElementById(manager ? "manager-status" : "recipient-status");
+  button.disabled = true;
+  showError("");
+  status.textContent = "Saving…";
+  try {
+    const data = await formRequest(`/recipients/${action}-number`, { phone });
+    recipientsData = data;
+    form.reset();
+    if (manager) {
+      renderRecipientManager(data);
+      status.textContent = "Number allowed.";
+    } else {
+      applyRecipientState(data);
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deferRecipients() {
+  showError("");
+  try {
+    applyRecipientState(await formRequest("/recipients/defer"));
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function scheduleNfcPoll(active = true) {
+  window.clearTimeout(nfcPollTimer);
+  nfcPollTimer = active ? window.setTimeout(loadNfc, 700) : null;
+}
+
+function nfcRecipientRow(recipient) {
+  const row = recipientRow(recipient);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact";
+  button.textContent = "Choose";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    document.getElementById("nfc-choose-status").textContent = "Saving…";
+    try {
+      renderNfc(await formRequest("/nfc/assign", { token: recipient.token }));
+    } catch (error) {
+      document.getElementById("nfc-choose-status").textContent = error.message;
+      button.disabled = false;
+    }
+  });
+  row.append(button);
+  return row;
+}
+
+function renderNfc(data) {
+  nfcData = data;
+  const mapped = data.mapped_count;
+  const countCopy = mapped === 1 ? "1 tag paired." : `${mapped} tags paired.`;
+  switch (data.status) {
+    case "waiting": {
+      showView("nfc");
+      document.getElementById("nfc-waiting-status").textContent = data.remove_tag
+        ? "Remove the last tag before presenting another."
+        : "Waiting for a tag…";
+      document.getElementById("nfc-count").textContent = countCopy;
+      const finish = document.getElementById("finish-nfc");
+      finish.textContent = mapped ? "Done" : "Skip NFC setup";
+      finish.dataset.intent = mapped ? "done" : "skip";
+      scheduleNfcPoll();
+      break;
+    }
+    case "choose":
+      showView("nfc-choose");
+      document.getElementById("nfc-recipient-list").replaceChildren(
+        ...data.recipients.map(nfcRecipientRow),
+      );
+      document.getElementById("nfc-choose-status").textContent = data.sound_warning
+        ? "Tag detected, but the read sound could not play."
+        : "";
+      scheduleNfcPoll();
+      break;
+    case "already_paired":
+      showView("nfc-mapped");
+      document.getElementById("nfc-mapped-recipient").textContent = data.recipient?.label || "a recipient";
+      scheduleNfcPoll();
+      break;
+    case "success":
+      showView("nfc-success");
+      document.getElementById("nfc-success-recipient").textContent = data.recipient?.label || "your recipient";
+      document.getElementById("nfc-sound-warning").hidden = !data.sound_warning;
+      scheduleNfcPoll(false);
+      break;
+    case "unavailable":
+      showView("nfc-unavailable");
+      document.getElementById("nfc-unavailable-copy").textContent = mapped
+        ? "Check the reader connection and try again. Your saved tag mappings are preserved."
+        : "Check the reader connection and try again. You can also skip NFC setup; the default recipient will still work.";
+      document.getElementById("skip-unavailable-nfc").textContent = mapped
+        ? "Done"
+        : "Skip NFC setup";
+      document.getElementById("skip-unavailable-nfc").dataset.intent = mapped
+        ? "done"
+        : "skip";
+      scheduleNfcPoll(false);
+      break;
+    case "idle":
+    default:
+      scheduleNfcPoll(false);
+  }
+}
+
+async function loadNfc() {
+  try {
+    renderNfc(await request("/api/nfc"));
+  } catch (error) {
+    showError(error.message);
+    showView("nfc-unavailable");
+    scheduleNfcPoll(false);
+  }
+}
+
+async function openNfc() {
+  showError("");
+  try {
+    renderNfc(await formRequest("/nfc/start"));
+  } catch (error) {
+    showError(error.message);
+    showView("nfc-unavailable");
+  }
+}
+
+async function nfcAction(path) {
+  showError("");
+  try {
+    renderNfc(await formRequest(path));
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function backToRecipients() {
+  window.clearTimeout(nfcPollTimer);
+  try {
+    await formRequest("/nfc/cancel");
+    managerOpen = true;
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function completeOnboarding(intent) {
+  window.clearTimeout(nfcPollTimer);
+  showError("");
+  try {
+    await formRequest("/onboarding/complete", { intent });
+    showView("complete");
+  } catch (error) {
+    showError(error.message);
   }
 }
 
@@ -359,4 +696,54 @@ document.getElementById("keep-account").addEventListener("click", () => {
   document.getElementById("show-unlink").focus();
 });
 document.getElementById("unlink-form").addEventListener("submit", unlinkWhatsApp);
+document.getElementById("continue-recipients").addEventListener("click", async () => {
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("refresh-recipients").addEventListener("click", () => loadRecipients({ refresh: true }));
+document.getElementById("defer-recipients").addEventListener("click", deferRecipients);
+document.getElementById("manual-default-form").addEventListener("submit", (event) => {
+  mutateRecipientNumber(event, "select");
+});
+document.getElementById("resume-recipients").addEventListener("click", async () => {
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("open-recipient-manager").addEventListener("click", async () => {
+  managerOpen = true;
+  try {
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+document.getElementById("manager-refresh").addEventListener("click", () => loadRecipients({ refresh: true, manager: true }));
+document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
+  mutateRecipientNumber(event, "add");
+});
+document.getElementById("continue-nfc").addEventListener("click", openNfc);
+document.getElementById("back-from-nfc").addEventListener("click", backToRecipients);
+document.getElementById("back-from-unavailable").addEventListener("click", backToRecipients);
+document.getElementById("cancel-nfc-tag").addEventListener("click", backToRecipients);
+document.getElementById("cancel-mapped-tag").addEventListener("click", backToRecipients);
+document.getElementById("retry-nfc").addEventListener("click", () => nfcAction("/nfc/retry"));
+document.getElementById("reassign-nfc").addEventListener("click", () => nfcAction("/nfc/reassign"));
+document.getElementById("keep-nfc-pairing").addEventListener("click", () => nfcAction("/nfc/next"));
+document.getElementById("pair-another-nfc").addEventListener("click", () => nfcAction("/nfc/next"));
+document.getElementById("finish-nfc").addEventListener("click", (event) => {
+  completeOnboarding(event.currentTarget.dataset.intent || "skip");
+});
+document.getElementById("skip-unavailable-nfc").addEventListener("click", (event) => {
+  completeOnboarding(event.currentTarget.dataset.intent || "skip");
+});
+document.getElementById("done-nfc").addEventListener("click", () => completeOnboarding("done"));
 loadState();

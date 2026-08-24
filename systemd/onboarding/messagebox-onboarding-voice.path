@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Message Box onboarding voice activation
+
+[Path]
+PathChanged=/var/lib/messagebox/state/onboarding-voice-request.json
+Unit=messagebox-onboarding-voice-gate.service
+
+[Install]
+WantedBy=multi-user.target

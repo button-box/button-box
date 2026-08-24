@@ -1,0 +1,9 @@
+[Unit]
+Description=Message Box onboarding two-way voice proof
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+ConditionPathExists=/var/lib/messagebox/state/onboarding-voice-request.json
+Wants=messagebox-sync.service messagebox-poller.service messagebox-onboarding-button.service
+After=messagebox-sync.service messagebox-poller.service messagebox-onboarding-button.service
+
+[Install]
+WantedBy=multi-user.target

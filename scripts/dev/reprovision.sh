@@ -101,7 +101,7 @@ flock -n 8 || { echo "Wi-Fi initialization is running." >&2; exit 1; }
 exec 9>/run/lock/messagebox-comitup-install.lock
 flock -n 9 || { echo "Comitup installation is running." >&2; exit 1; }
 
-units="messagebox.target messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-reset.service messagebox-onboarding-home.service messagebox-whatsapp-pairing.service comitup-web.service comitup.service"
+units="messagebox.target messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-reset.service messagebox-onboarding-home.service messagebox-onboarding-nfc.service messagebox-onboarding-complete.service messagebox-whatsapp-pairing.service comitup-web.service comitup.service"
 systemctl stop $units 2>/dev/null || true
 systemctl disable messagebox-wifi-reset.service comitup.service 2>/dev/null || true
 for unit in $units; do
@@ -127,7 +127,8 @@ rm -rf \
   /var/lib/messagebox/outbox \
   /var/lib/messagebox/whatsapp-pairing \
   /var/lib/messagebox/wacli \
-  /run/messagebox-whatsapp-pairing
+  /run/messagebox-whatsapp-pairing \
+  /run/messagebox-onboarding-nfc
 systemctl reset-failed $units 2>/dev/null || true
 REMOTE
 

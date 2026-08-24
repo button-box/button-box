@@ -79,6 +79,12 @@ class FakeWhatsApp:
         }
         self.calls = []
         self.logout_succeeds = True
+        self.recipient = {
+            "status": "choose",
+            "default": None,
+            "proof": {"received": False, "played": False, "replied": False},
+            "recipients": [],
+        }
 
     def status(self):
         self.calls.append(("status",))
@@ -106,6 +112,88 @@ class FakeWhatsApp:
         else:
             self.state["safe_error"] = "UNLINK_FAILED"
         return dict(self.state)
+
+    def recipient_state(self):
+        self.calls.append(("recipient_state",))
+        return json.loads(json.dumps(self.recipient))
+
+    def recipient_list(self, refresh=False):
+        self.calls.append(("recipient_list", refresh))
+        return json.loads(json.dumps(self.recipient))
+
+    def recipient_defer(self):
+        self.recipient["status"] = "deferred"
+        return self.recipient_state()
+
+    def recipient_select(self, token):
+        self.calls.append(("recipient_select", token))
+        return self.recipient_state()
+
+    def recipient_select_phone(self, phone):
+        self.calls.append(("recipient_select_phone", phone))
+        return self.recipient_state()
+
+    def recipient_add(self, token):
+        self.calls.append(("recipient_add", token))
+        return self.recipient_state()
+
+    def recipient_add_phone(self, phone):
+        self.calls.append(("recipient_add_phone", phone))
+        return self.recipient_state()
+
+    def recipient_remove(self, token):
+        self.calls.append(("recipient_remove", token))
+        return self.recipient_state()
+
+    def recipient_default(self, token):
+        self.calls.append(("recipient_default", token))
+        return self.recipient_state()
+
+
+class FakeNfc:
+    def __init__(self):
+        self.calls = []
+        self.state = {
+            "status": "idle",
+            "recipients": [],
+            "mapped_count": 0,
+            "recipient": None,
+            "remove_tag": False,
+            "sound_warning": False,
+        }
+
+    def status(self):
+        self.calls.append(("status",))
+        return json.loads(json.dumps(self.state))
+
+    def _action(self, action, status=None):
+        self.calls.append((action,))
+        if status is not None:
+            self.state["status"] = status
+        return json.loads(json.dumps(self.state))
+
+    def start(self):
+        return self._action("start", "waiting")
+
+    def retry(self):
+        return self._action("retry", "waiting")
+
+    def reassign(self):
+        return self._action("reassign", "choose")
+
+    def assign(self, token):
+        self.calls.append(("assign", token))
+        self.state["status"] = "success"
+        return json.loads(json.dumps(self.state))
+
+    def next(self):
+        return self._action("next", "waiting")
+
+    def cancel(self):
+        return self._action("cancel", "idle")
+
+    def finish(self):
+        return self._action("finish", "idle")
 
 
 class WSGIHarness:
@@ -206,7 +294,7 @@ class OnboardingAPITests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def home_pairing_client(self, whatsapp=None):
+    def home_pairing_client(self, whatsapp=None, nfc=None, completion_request=None):
         path = Path(self.directory.name) / "whatsapp-home.json"
         store = StateStore(path, clock=self.clock)
         store.initialize()
@@ -214,6 +302,9 @@ class OnboardingAPITests(unittest.TestCase):
         store.mark_associated(1)
         store.record_connectivity_result(PROOFS)
         worker = whatsapp or FakeWhatsApp()
+        options = {}
+        if completion_request is not None:
+            options["completion_request"] = completion_request
         application = create_app(
             mode="HOME",
             config={"device_id": "A7K2"},
@@ -221,7 +312,9 @@ class OnboardingAPITests(unittest.TestCase):
             adapter=FakeAdapter("CONNECTED"),
             connectivity_checker=self.checker,
             whatsapp_client=worker,
+            nfc_client=nfc or FakeNfc(),
             clock=self.clock,
+            **options,
         )
         return WSGIHarness(application), store, worker
 
@@ -286,7 +379,7 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(response["status"], "200 OK")
         self.assertEqual(
             set(json.loads(response["body"])),
-            {"mode", "phase", "safe_error", "whatsapp"},
+            {"mode", "phase", "safe_error", "whatsapp", "recipient_setup", "nfc_setup"},
         )
         self.assertIsNone(header(response, "Set-Cookie"))
 
@@ -574,6 +667,192 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(response["status"], "409 Conflict")
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_recipient_api_uses_opaque_tokens_and_same_origin_mutations(self):
+        token = "recipient-token-0001"
+        private_jid = "15551234567@s.whatsapp.net"
+        worker = FakeWhatsApp(
+            {
+                "status": "ready",
+                "pairing_code": None,
+                "phone_hint": "WhatsApp number ending in 0123",
+                "eligible_count": 1,
+                "safe_error": None,
+                "attempt": 1,
+            }
+        )
+        worker.recipient["recipients"] = [
+            {
+                "token": token,
+                "label": "Grandma",
+                "kind": "person",
+                "configured": False,
+                "is_default": False,
+                "available": True,
+                "card_count": 0,
+            }
+        ]
+        client, store, _ = self.home_pairing_client(worker)
+        client.request("GET", "/api/state")
+
+        response = client.request("GET", "/api/recipients")
+        self.assertEqual(response["status"], "200 OK")
+        self.assertNotIn(private_jid.encode(), response["body"])
+        self.assertIn(token.encode(), response["body"])
+
+        rejected = client.form(
+            "POST",
+            "/recipients/refresh",
+            {},
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(rejected["status"], "403 Forbidden")
+        malformed = client.form("POST", "/recipients/select", {"token": "short"})
+        self.assertEqual(malformed["status"], "400 Bad Request")
+        accepted = client.form("POST", "/recipients/select", {"token": token})
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(("recipient_select", token), worker.calls)
+        changed = client.form("POST", "/recipients/default", {"token": token})
+        self.assertEqual(changed["status"], "200 OK")
+        self.assertIn(("recipient_default", token), worker.calls)
+
+        bad_phone = client.form(
+            "POST", "/recipients/select-number", {"phone": "0555"}
+        )
+        self.assertEqual(bad_phone["status"], "400 Bad Request")
+        denied_phone = client.form(
+            "POST",
+            "/recipients/add-number",
+            {"phone": "+1 415 555 0199"},
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(denied_phone["status"], "403 Forbidden")
+        selected_phone = client.form(
+            "POST", "/recipients/select-number", {"phone": "+1 415-555-0199"}
+        )
+        self.assertEqual(selected_phone["status"], "200 OK")
+        self.assertIn(("recipient_select_phone", "+14155550199"), worker.calls)
+        added_phone = client.form(
+            "POST", "/recipients/add-number", {"phone": "+44 7700 900123"}
+        )
+        self.assertEqual(added_phone["status"], "200 OK")
+        self.assertIn(("recipient_add_phone", "+447700900123"), worker.calls)
+        self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_nfc_api_is_opaque_same_origin_and_completes_asynchronously(self):
+        token = "recipient-token-0001"
+        private_jid = "15551234567@s.whatsapp.net"
+        whatsapp = FakeWhatsApp(
+            {
+                "status": "ready",
+                "pairing_code": None,
+                "phone_hint": "WhatsApp number ending in 0123",
+                "eligible_count": 1,
+                "safe_error": None,
+                "attempt": 1,
+            }
+        )
+        whatsapp.recipient.update(
+            status="complete",
+            default={"token": token, "label": "+15551234567", "kind": "person"},
+        )
+        whatsapp.recipient["recipients"] = [
+            {
+                "token": token,
+                "label": "+15551234567",
+                "kind": "person",
+                "configured": True,
+                "is_default": True,
+                "available": True,
+                "card_count": 0,
+            }
+        ]
+        nfc = FakeNfc()
+        nfc.state["recipients"] = [
+            {
+                "token": token,
+                "label": "+15551234567",
+                "kind": "person",
+                "is_default": True,
+                "card_count": 0,
+            }
+        ]
+        completions = []
+        client, _, _ = self.home_pairing_client(
+            whatsapp, nfc, lambda: completions.append(True)
+        )
+        client.request("GET", "/api/state")
+
+        listed = client.request("GET", "/api/nfc")
+        self.assertEqual(listed["status"], "200 OK")
+        self.assertNotIn(private_jid.encode(), listed["body"])
+        self.assertNotIn(b"04:01:02:03", listed["body"])
+        denied = client.form(
+            "POST",
+            "/nfc/start",
+            {},
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(denied["status"], "403 Forbidden")
+        self.assertEqual(client.form("POST", "/nfc/start", {})["status"], "200 OK")
+        self.assertEqual(
+            client.form("POST", "/nfc/assign", {"token": "short"})["status"],
+            "400 Bad Request",
+        )
+        self.assertEqual(
+            client.form("POST", "/nfc/assign", {"token": token})["status"],
+            "200 OK",
+        )
+        completed = client.form(
+            "POST", "/onboarding/complete", {"intent": "done"}
+        )
+        self.assertEqual(completed["status"], "202 Accepted")
+        self.assertEqual(completions, [True])
+        self.assertIn(("finish",), nfc.calls)
+
+    def test_skip_can_finish_when_the_optional_nfc_worker_is_down(self):
+        token = "recipient-token-0001"
+        whatsapp = FakeWhatsApp(
+            {
+                "status": "ready",
+                "pairing_code": None,
+                "phone_hint": "Linked account",
+                "eligible_count": 0,
+                "safe_error": None,
+                "attempt": 1,
+            }
+        )
+        whatsapp.recipient.update(
+            status="complete",
+            default={"token": token, "label": "+15551234567", "kind": "person"},
+            recipients=[
+                {
+                    "token": token,
+                    "label": "+15551234567",
+                    "kind": "person",
+                    "configured": True,
+                    "is_default": True,
+                    "available": False,
+                    "card_count": 0,
+                }
+            ],
+        )
+        nfc = FakeNfc()
+
+        def unavailable():
+            raise OSError("private socket detail")
+
+        nfc.finish = unavailable
+        completions = []
+        client, _, _ = self.home_pairing_client(
+            whatsapp, nfc, lambda: completions.append(True)
+        )
+        client.request("GET", "/api/state")
+        response = client.form(
+            "POST", "/onboarding/complete", {"intent": "skip"}
+        )
+        self.assertEqual(response["status"], "202 Accepted")
+        self.assertEqual(completions, [True])
 
     def test_home_captive_probes_report_success(self):
         application = create_app(

@@ -23,7 +23,7 @@ The complete journey is:
 4. Download this repository.
 5. Connect to and inspect the Pi.
 6. Provision Button Box.
-7. Link WhatsApp and choose an approved recipient.
+7. Link WhatsApp, choose approved recipients, and optionally pair NFC tags.
 8. Test the physical hardware.
 9. Send, receive, play, and repeat after a reboot.
 
@@ -292,8 +292,8 @@ enabled and started.
 
 ### Path B: browser Wi-Fi and WhatsApp onboarding
 
-This path demonstrates the intended household experience, but it currently
-stops before recipient configuration and runtime activation.
+This path is the intended household experience from Wi-Fi through normal
+runtime activation.
 
 Initialize the protected onboarding identity:
 
@@ -316,13 +316,18 @@ On a phone:
 4. Rejoin home Wi-Fi when the setup hotspot disappears.
 5. Open the same `http://message-box-001.local/` address.
 6. Link WhatsApp with the displayed phone code.
+7. Choose a default recipient and complete the guided two-way voice test.
+8. Allow any additional recipients and optionally pair NFC tags.
+9. Skip NFC setup or choose Done to activate messaging.
 
-This browser path currently ends when WhatsApp is verified. It does not yet
-select a recipient, enroll an NFC card, or start the runtime. Use Path A for the
-current end-to-end DIY build; the two paths are independent prototypes, not
+NFC is optional. A zero-tag setup routes new standalone messages to the default
+recipient without depending on the reader. Once any tag is mapped, unsafe NFC
+health or unknown tag state blocks rather than silently choosing the default.
+Path A remains the terminal-assisted developer workflow; the two paths are not
 continuations of one another.
 
-**Done when:** the browser path reports verified WhatsApp readiness.
+**Done when:** the browser reports that Message Box is ready and the intended
+default and optional tag mappings pass the physical scenarios below.
 
 ## Step 8 — Test the hardware
 
@@ -380,7 +385,7 @@ on the physical device.
 | Raspberry Pi 4B | **Supported** | A brand-new-card installation has been physically completed through Wi-Fi and WhatsApp onboarding. |
 | Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
-| Recipient and NFC browser onboarding | **Not yet included** | Use the terminal-assisted workflow for now. |
+| Recipient and NFC browser onboarding | **Experimental** | Repository coverage is included; fresh-Pi NFC and final activation acceptance are still required. |
 | Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
 | Complete first-message journey from public instructions | **In progress** | Physical proof is still needed for recipient setup, NFC where used, runtime startup, send, reply, playback, and reboot using only this README. |
 

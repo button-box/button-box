@@ -2,8 +2,15 @@
 
 ## Consumer and developer boundaries
 
-Consumer onboarding ends at verified Wi-Fi and WhatsApp readiness. It does not
-select recipients, enroll NFC cards, or start the runtime.
+Consumer onboarding verifies Wi-Fi and WhatsApp, selects an initial default
+recipient, proves one received-and-replied voice exchange, and then exposes a
+recipient manager where the default can be changed, optionally pairs NFC tags,
+and then activates the normal runtime. Zero, partial, or full tag coverage is
+valid.
+During the proof it starts only the scoped onboarding sync, poller, and guided
+button target; the normal `messagebox.target` remains gated. Consumer completion
+enables button, sync, and poller, enables NFC only when mappings exist, and
+leaves the technical dashboard off.
 
 `messagebox-dev-onboard` is an independent prototype workflow. It pairs
 WhatsApp, configures contacts and the dashboard, tests hardware, and can start
@@ -23,6 +30,10 @@ Provision from the repository root on the development computer:
 ```sh
 ./scripts/provision.sh admin@message-box-001.local
 ```
+
+Provisioning refuses to connect to the Pi if any required prompt is absent.
+This keeps a clean card from reaching recipient onboarding with an unusable
+button service. Pass `--guided-prompts DIR` to test an alternate licensed set.
 
 Use the Pi's `.local` hostname instead of assuming a fixed address. Turn
 Internet Sharing off before testing consumer Wi-Fi onboarding.
@@ -104,10 +115,11 @@ adding a contact without a card:
 messagebox-contact add "Direct example" 15551234567@s.whatsapp.net --no-card
 ```
 
-With one contact, standalone recordings route there automatically. With multiple
-contacts, present an enrolled card within the selection window (30 seconds by
-default). Without a valid selection, a standalone recording is blocked rather
-than guessed or rerouted.
+The contact store has an explicit default recipient. With no valid card
+selection, standalone recordings route to that default. A recognized card can
+override it within the selection window (30 seconds by default). A missing
+default or an unknown or invalid card state blocks rather than guessing or
+rerouting. Replies to incoming messages always use the exact originating chat.
 
 ## Service control
 
@@ -124,7 +136,11 @@ sudo messageboxctl enable button sync poller nfc
 sudo messageboxctl disable dashboard
 ```
 
-Service names are `button`, `sync`, `poller`, `dashboard`, and `nfc`.
+Service names are `button`, `sync`, `poller`, `dashboard`, and `nfc`. Consumer
+voice proof uses `messagebox-onboarding-voice.target` and
+`messagebox-onboarding-button.service`; they are not operator-selectable runtime
+services. Tag pairing uses `messagebox-onboarding-nfc.service`, not the normal
+runtime NFC daemon.
 
 ## Hardware and dashboard
 

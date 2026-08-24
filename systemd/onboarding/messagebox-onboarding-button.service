@@ -1,8 +1,9 @@
 [Unit]
-Description=Message Box record button (hold to record, release to send)
+Description=Message Box guided button during onboarding
 After=network-online.target sound.target
 Wants=network-online.target
-PartOf=messagebox.target
+PartOf=messagebox-onboarding-voice.target
+Conflicts=messagebox-button.service
 
 [Service]
 User=messagebox
@@ -21,6 +22,8 @@ Environment=HOME=/var/lib/messagebox
 Environment=PYTHONPATH=/opt/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 Environment=GPIOZERO_PIN_FACTORY=lgpio
+Environment=MSGBOX_GUIDED_REPLY=1
+Environment=MSGBOX_AUTO_RECORD_AFTER_INCOMING=1
 SupplementaryGroups=gpio audio
 UMask=0077
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_MIC_CARD} sset ${MSGBOX_MIC_CONTROL} ${MSGBOX_MIC_GAIN} cap
@@ -28,6 +31,3 @@ ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_SPEAKER_CARD} sset ${MSGBOX_SPEAKER_CO
 ExecStart=/usr/bin/python3 -u -m messagebox.button_send
 Restart=always
 RestartSec=5
-
-[Install]
-WantedBy=messagebox.target
