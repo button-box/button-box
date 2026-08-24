@@ -30,6 +30,9 @@ No default, an unknown card, or invalid routing state fails closed.
 | `comitup-web.service` | Serve the onboarding portal on the setup hotspot |
 | `messagebox-onboarding-home.service` | Serve the portal after Wi-Fi setup |
 | `messagebox-whatsapp-pairing.service` | Isolate WhatsApp pairing operations |
+| `messagebox-onboarding-nfc.service` | Read tags and own private tag-first pairing state |
+| `messagebox-onboarding-complete.path` | Watch for the content-free completion request |
+| `messagebox-onboarding-complete.service` | Validate setup and perform the fixed runtime handoff |
 | `messagebox-onboarding-voice.path` | Watch for the private fixed voice-proof request |
 | `messagebox-onboarding-voice-gate.service` | Validate the request and default before activating hardware |
 | `messagebox-onboarding-voice.target` | Run sync, polling, and the guided onboarding button without the normal runtime target |
@@ -39,16 +42,29 @@ onboarding portal while the shared sync and poller services run. The normal
 `messagebox.target`, button, dashboard, and NFC services remain conflicted and
 inactive.
 
+The NFC onboarding worker runs as `messagebox`, owns I2C and tone playback, and
+offers only a group-restricted Unix socket to the isolated web portal. A read
+tag UID is held privately for at most two minutes while the caregiver chooses
+an opaque recipient token. Browser responses contain labels, kinds, default
+state, counts, and progress only. Assignment reuses the contact store's atomic
+one-tag/one-recipient transaction; tags are never written.
+
+Skip or Done creates a fixed, content-free completion request. The root gate
+validates the completed recipient state and default, enables button/sync/poller,
+enables NFC only when mappings exist, keeps the technical dashboard disabled,
+removes the onboarding gate, and starts `messagebox.target`. A failed handoff
+restores onboarding instead of leaving both modes partially active.
+
 `messagebox-wifi-reset.service` is a one-shot boot check for the physical Wi-Fi
 reset gesture. The onboarding portal accesses Comitup through a restricted
 D-Bus policy. NetworkManager and Avahi provide network management and local name
 resolution.
 
-WhatsApp pairing, recipient identities, message IDs, and voice-proof
+WhatsApp pairing, recipient identities, message IDs, tag identifiers, and voice-proof
 correlation remain behind a group-restricted Unix socket owned by the private
 worker. The browser receives only opaque recipient tokens, labels, kinds, and
 content-free progress booleans. Person labels are international phone numbers;
-group labels use their WhatsApp names. Exact JIDs and message IDs never cross
+group labels use their WhatsApp names. Exact JIDs, message IDs, and tag UIDs never cross
 the worker boundary.
 Same-origin manual-number mutations accept a strict international number. The
 private worker converts it to the exact direct-chat identity and persists it in

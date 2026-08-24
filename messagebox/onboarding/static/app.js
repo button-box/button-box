@@ -13,6 +13,12 @@ const views = [
   "voice-test",
   "voice-success",
   "recipient-manager",
+  "nfc",
+  "nfc-choose",
+  "nfc-mapped",
+  "nfc-success",
+  "nfc-unavailable",
+  "complete",
   "failed",
 ];
 const activePairingStates = new Set(["starting", "code_pending", "bootstrapping", "verifying"]);
@@ -21,6 +27,8 @@ let loadingState = false;
 let lastView = "";
 let recipientsData = null;
 let managerOpen = false;
+let nfcData = null;
+let nfcPollTimer = null;
 
 function showView(name) {
   for (const view of views) {
@@ -137,7 +145,7 @@ function setProof(id, complete) {
   row.querySelector("span").textContent = complete ? "✓" : "○";
 }
 
-function applyRecipientState(recipient) {
+function applyRecipientState(recipient, nfcSummary = null) {
   const summary = recipient || {
     status: "choose",
     default: null,
@@ -164,6 +172,12 @@ function applyRecipientState(recipient) {
     return;
   }
   if (summary.status === "complete") {
+    if (nfcSummary && new Set([
+      "waiting", "choose", "already_paired", "success", "unavailable",
+    ]).has(nfcSummary.status)) {
+      loadNfc();
+      return;
+    }
     document.getElementById("success-recipient").textContent = summary.default?.label || "your recipient";
     if (managerOpen && recipientsData) {
       renderRecipientManager(recipientsData);
@@ -193,7 +207,7 @@ function applyWhatsAppState(state) {
     document.getElementById("eligible-count").textContent = count === 1
       ? "1 recent group or chat is ready for the next setup step."
       : `${count} recent groups or chats are ready for the next setup step.`;
-    applyRecipientState(state.recipient_setup);
+    applyRecipientState(state.recipient_setup, state.nfc_setup);
     return;
   }
   switch (whatsapp.status) {
@@ -239,9 +253,12 @@ function recipientRow(recipient, actions = []) {
   const name = document.createElement("strong");
   name.textContent = recipient.label;
   const meta = document.createElement("span");
+  const tagCopy = recipient.card_count
+    ? ` · ${recipient.card_count} tag${recipient.card_count === 1 ? "" : "s"}`
+    : "";
   meta.textContent = recipient.is_default
-    ? `${recipient.kind} · default`
-    : recipient.kind;
+    ? `${recipient.kind} · default${tagCopy}`
+    : `${recipient.kind}${tagCopy}`;
   copy.append(name, meta);
   row.append(copy);
   if (actions.length) {
@@ -359,6 +376,140 @@ async function deferRecipients() {
   showError("");
   try {
     applyRecipientState(await formRequest("/recipients/defer"));
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function scheduleNfcPoll(active = true) {
+  window.clearTimeout(nfcPollTimer);
+  nfcPollTimer = active ? window.setTimeout(loadNfc, 700) : null;
+}
+
+function nfcRecipientRow(recipient) {
+  const row = recipientRow(recipient);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact";
+  button.textContent = "Choose";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    document.getElementById("nfc-choose-status").textContent = "Saving…";
+    try {
+      renderNfc(await formRequest("/nfc/assign", { token: recipient.token }));
+    } catch (error) {
+      document.getElementById("nfc-choose-status").textContent = error.message;
+      button.disabled = false;
+    }
+  });
+  row.append(button);
+  return row;
+}
+
+function renderNfc(data) {
+  nfcData = data;
+  const mapped = data.mapped_count;
+  const countCopy = mapped === 1 ? "1 tag paired." : `${mapped} tags paired.`;
+  switch (data.status) {
+    case "waiting": {
+      showView("nfc");
+      document.getElementById("nfc-waiting-status").textContent = data.remove_tag
+        ? "Remove the last tag before presenting another."
+        : "Waiting for a tag…";
+      document.getElementById("nfc-count").textContent = countCopy;
+      const finish = document.getElementById("finish-nfc");
+      finish.textContent = mapped ? "Done" : "Skip NFC setup";
+      finish.dataset.intent = mapped ? "done" : "skip";
+      scheduleNfcPoll();
+      break;
+    }
+    case "choose":
+      showView("nfc-choose");
+      document.getElementById("nfc-recipient-list").replaceChildren(
+        ...data.recipients.map(nfcRecipientRow),
+      );
+      document.getElementById("nfc-choose-status").textContent = data.sound_warning
+        ? "Tag detected, but the read sound could not play."
+        : "";
+      scheduleNfcPoll();
+      break;
+    case "already_paired":
+      showView("nfc-mapped");
+      document.getElementById("nfc-mapped-recipient").textContent = data.recipient?.label || "a recipient";
+      scheduleNfcPoll();
+      break;
+    case "success":
+      showView("nfc-success");
+      document.getElementById("nfc-success-recipient").textContent = data.recipient?.label || "your recipient";
+      document.getElementById("nfc-sound-warning").hidden = !data.sound_warning;
+      scheduleNfcPoll(false);
+      break;
+    case "unavailable":
+      showView("nfc-unavailable");
+      document.getElementById("nfc-unavailable-copy").textContent = mapped
+        ? "Check the reader connection and try again. Your saved tag mappings are preserved."
+        : "Check the reader connection and try again. You can also skip NFC setup; the default recipient will still work.";
+      document.getElementById("skip-unavailable-nfc").textContent = mapped
+        ? "Done"
+        : "Skip NFC setup";
+      document.getElementById("skip-unavailable-nfc").dataset.intent = mapped
+        ? "done"
+        : "skip";
+      scheduleNfcPoll(false);
+      break;
+    case "idle":
+    default:
+      scheduleNfcPoll(false);
+  }
+}
+
+async function loadNfc() {
+  try {
+    renderNfc(await request("/api/nfc"));
+  } catch (error) {
+    showError(error.message);
+    showView("nfc-unavailable");
+    scheduleNfcPoll(false);
+  }
+}
+
+async function openNfc() {
+  showError("");
+  try {
+    renderNfc(await formRequest("/nfc/start"));
+  } catch (error) {
+    showError(error.message);
+    showView("nfc-unavailable");
+  }
+}
+
+async function nfcAction(path) {
+  showError("");
+  try {
+    renderNfc(await formRequest(path));
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function backToRecipients() {
+  window.clearTimeout(nfcPollTimer);
+  try {
+    await formRequest("/nfc/cancel");
+    managerOpen = true;
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function completeOnboarding(intent) {
+  window.clearTimeout(nfcPollTimer);
+  showError("");
+  try {
+    await formRequest("/onboarding/complete", { intent });
+    showView("complete");
   } catch (error) {
     showError(error.message);
   }
@@ -579,4 +730,20 @@ document.getElementById("manager-refresh").addEventListener("click", () => loadR
 document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
   mutateRecipientNumber(event, "add");
 });
+document.getElementById("continue-nfc").addEventListener("click", openNfc);
+document.getElementById("back-from-nfc").addEventListener("click", backToRecipients);
+document.getElementById("back-from-unavailable").addEventListener("click", backToRecipients);
+document.getElementById("cancel-nfc-tag").addEventListener("click", backToRecipients);
+document.getElementById("cancel-mapped-tag").addEventListener("click", backToRecipients);
+document.getElementById("retry-nfc").addEventListener("click", () => nfcAction("/nfc/retry"));
+document.getElementById("reassign-nfc").addEventListener("click", () => nfcAction("/nfc/reassign"));
+document.getElementById("keep-nfc-pairing").addEventListener("click", () => nfcAction("/nfc/next"));
+document.getElementById("pair-another-nfc").addEventListener("click", () => nfcAction("/nfc/next"));
+document.getElementById("finish-nfc").addEventListener("click", (event) => {
+  completeOnboarding(event.currentTarget.dataset.intent || "skip");
+});
+document.getElementById("skip-unavailable-nfc").addEventListener("click", (event) => {
+  completeOnboarding(event.currentTarget.dataset.intent || "skip");
+});
+document.getElementById("done-nfc").addEventListener("click", () => completeOnboarding("done"));
 loadState();

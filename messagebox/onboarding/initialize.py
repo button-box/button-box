@@ -31,6 +31,8 @@ ONBOARDING_SERVICES = (
     "comitup.service",
     "comitup-web.service",
     "messagebox-onboarding-home.service",
+    "messagebox-onboarding-nfc.service",
+    "messagebox-onboarding-complete.service",
     "messagebox-whatsapp-pairing.service",
 )
 INTERRUPT_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)

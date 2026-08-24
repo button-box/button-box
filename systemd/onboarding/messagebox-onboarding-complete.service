@@ -1,0 +1,21 @@
+[Unit]
+Description=Validate and complete Message Box onboarding
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+After=messagebox-onboarding-home.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/messagebox
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.completion
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/messagebox
+ReadWritePaths=/etc/messagebox-onboarding /etc/systemd/system /var/lib/messagebox-onboarding /run
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0

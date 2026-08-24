@@ -4,10 +4,13 @@
 
 Consumer onboarding verifies Wi-Fi and WhatsApp, selects an initial default
 recipient, proves one received-and-replied voice exchange, and then exposes a
-recipient manager where the default can be changed. It does not enroll NFC cards
-or finalize the normal runtime.
+recipient manager where the default can be changed, optionally pairs NFC tags,
+and then activates the normal runtime. Zero, partial, or full tag coverage is
+valid.
 During the proof it starts only the scoped onboarding sync, poller, and guided
-button target; the normal `messagebox.target` remains gated.
+button target; the normal `messagebox.target` remains gated. Consumer completion
+enables button, sync, and poller, enables NFC only when mappings exist, and
+leaves the technical dashboard off.
 
 `messagebox-dev-onboard` is an independent prototype workflow. It pairs
 WhatsApp, configures contacts and the dashboard, tests hardware, and can start
@@ -25,14 +28,12 @@ sharing on. Reconnect the cable or reboot the Pi to request a DHCP lease.
 Provision from the repository root on the development computer:
 
 ```sh
-./scripts/provision.sh \
-  --guided-prompts /path/to/licensed/guided-reply \
-  admin@message-box-001.local
+./scripts/provision.sh admin@message-box-001.local
 ```
 
 Provisioning refuses to connect to the Pi if any required prompt is absent.
 This keeps a clean card from reaching recipient onboarding with an unusable
-button service.
+button service. Pass `--guided-prompts DIR` to test an alternate licensed set.
 
 Use the Pi's `.local` hostname instead of assuming a fixed address. Turn
 Internet Sharing off before testing consumer Wi-Fi onboarding.
@@ -138,7 +139,8 @@ sudo messageboxctl disable dashboard
 Service names are `button`, `sync`, `poller`, `dashboard`, and `nfc`. Consumer
 voice proof uses `messagebox-onboarding-voice.target` and
 `messagebox-onboarding-button.service`; they are not operator-selectable runtime
-services.
+services. Tag pairing uses `messagebox-onboarding-nfc.service`, not the normal
+runtime NFC daemon.
 
 ## Hardware and dashboard
 
