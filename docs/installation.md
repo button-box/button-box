@@ -9,23 +9,22 @@ not overwrite a working device without a tested backup.
    13. Enable SSH and create a non-root sudo-capable administrator. Set the
    hostname to the box's zero-padded number, such as `message-box-001`, and use
    the same number on the physical label and in inventory.
-2. Obtain a licensed guided-reply prompt set containing the five files listed
-   in [`sounds/README.md`](../sounds/README.md). These recordings are required
-   for the two-way voice proof but are intentionally not distributed in this
-   repository.
-3. From a repository clone on another computer, provision over SSH and supply
-   the prompt directory explicitly:
+2. Review the included licensed guided-reply prompt set described in
+   [`sounds/README.md`](../sounds/README.md). These recordings are required for
+   the two-way voice proof.
+3. From a repository clone on another computer, provision over SSH:
 
    ```sh
-   ./scripts/provision.sh --guided-prompts /path/to/guided-reply admin@message-box-NNN.local
+   ./scripts/provision.sh admin@message-box-NNN.local
    ```
 
    This transfers the installer's explicit source allowlist and runs setup on
    the Pi. The installer validates every prompt before making system changes.
-   Alternatively, clone the repository onto the Pi, put the licensed files in
-   `sounds/guided-reply/`, and run `./scripts/setup.sh` there as a non-root
-   sudo-capable administrator. Neither method transfers device runtime state,
-   pairs WhatsApp, or starts Message Box services.
+   To use an alternate licensed prompt set, pass its directory with
+   `--guided-prompts DIR`. Alternatively, clone the repository onto the Pi and
+   run `./scripts/setup.sh` there as a non-root sudo-capable administrator.
+   Neither method transfers device runtime state, pairs WhatsApp, or starts
+   Message Box services.
 
    Setup installs the supported hardware defaults as `/etc/messagebox/env` only
    when that file does not already exist. Later updates preserve operator

@@ -43,6 +43,7 @@ config/env
 
 # Private or unreviewed media and binary artifacts
 *.wav
+!sounds/guided-reply/*.wav
 *.mp3
 *.m4a
 *.ogg

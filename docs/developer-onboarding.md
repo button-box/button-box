@@ -28,14 +28,12 @@ sharing on. Reconnect the cable or reboot the Pi to request a DHCP lease.
 Provision from the repository root on the development computer:
 
 ```sh
-./scripts/provision.sh \
-  --guided-prompts /path/to/licensed/guided-reply \
-  admin@message-box-001.local
+./scripts/provision.sh admin@message-box-001.local
 ```
 
 Provisioning refuses to connect to the Pi if any required prompt is absent.
 This keeps a clean card from reaching recipient onboarding with an unusable
-button service.
+button service. Pass `--guided-prompts DIR` to test an alternate licensed set.
 
 Use the Pi's `.local` hostname instead of assuming a fixed address. Turn
 Internet Sharing off before testing consumer Wi-Fi onboarding.
