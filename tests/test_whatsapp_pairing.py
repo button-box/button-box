@@ -520,6 +520,7 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", nfc_worker)
         self.assertIn("User=messagebox\n", nfc_worker)
         self.assertIn("SupplementaryGroups=messagebox i2c gpio audio", nfc_worker)
+        self.assertIn("EnvironmentFile=/etc/messagebox/env", nfc_worker)
         self.assertIn("RestrictAddressFamilies=AF_UNIX", nfc_worker)
         self.assertIn("User=root\n", completion)
         self.assertNotIn("PrivateDevices=no", web)

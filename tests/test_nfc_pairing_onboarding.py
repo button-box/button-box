@@ -1,10 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from messagebox.contacts import ContactStore
-from messagebox.onboarding.nfc import NfcOnboardingEngine, NfcOnboardingError
+from messagebox.onboarding.nfc import NfcOnboardingEngine, NfcOnboardingError, TonePlayer
 from messagebox.onboarding.recipients import RecipientSetup
 
 
@@ -27,6 +29,24 @@ class Clock:
 class Reader:
     def read(self):
         return None
+
+
+class TonePlayerTests(unittest.TestCase):
+    def test_uses_complete_configured_speaker_device(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {"MSGBOX_SPK_DEV": "plughw:CARD=speaker,DEV=2"},
+        ):
+            player = TonePlayer(
+                directory, run=lambda *args, **kwargs: calls.append((args, kwargs))
+            )
+            player("read")
+
+        self.assertEqual(
+            calls[0][0][0][0:4],
+            ["aplay", "-q", "-D", "plughw:CARD=speaker,DEV=2"],
+        )
 
 
 def completed_recipients(root, clock):

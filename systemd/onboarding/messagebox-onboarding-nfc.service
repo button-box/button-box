@@ -14,7 +14,7 @@ SupplementaryGroups=messagebox i2c gpio audio
 WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox
 Environment=MSGBOX_NFC_ONBOARDING_SOCKET_GROUP=messagebox-onboarding
-Environment=MSGBOX_SPEAKER_CARD=Device
+EnvironmentFile=/etc/messagebox/env
 UMask=0077
 RuntimeDirectory=messagebox-onboarding-nfc
 RuntimeDirectoryMode=0750
