@@ -13,7 +13,13 @@ from functools import wraps
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
-from messagebox.runtime_paths import CONTACTS_FILE, STATE_DIR
+from messagebox.runtime_paths import (
+    CONTACTS_FILE,
+    NFC_ANNOUNCEMENT_FILE,
+    NFC_ENROLLMENT_FILE,
+    NFC_SELECTION_FILE,
+    STATE_DIR,
+)
 
 
 STATE_VERSION = 1
@@ -85,6 +91,7 @@ class RecipientSetup:
         contacts_path=CONTACTS_FILE,
         events_path=EVENTS_FILE,
         voice_request_path=VOICE_REQUEST_FILE,
+        account_reset_paths=None,
         clock=time.time,
         token_factory=None,
     ):
@@ -92,6 +99,19 @@ class RecipientSetup:
         self.contacts = ContactStore(contacts_path, clock=clock)
         self.events_path = Path(events_path)
         self.voice_request_path = Path(voice_request_path)
+        self.account_reset_paths = tuple(
+            Path(path)
+            for path in (
+                account_reset_paths
+                if account_reset_paths is not None
+                else (
+                    STATE_DIR / "nfc-onboarding.json",
+                    NFC_SELECTION_FILE,
+                    NFC_ENROLLMENT_FILE,
+                    NFC_ANNOUNCEMENT_FILE,
+                )
+            )
+        )
         self.clock = clock
         self.token_factory = token_factory or (lambda: secrets.token_urlsafe(TOKEN_BYTES))
         self._lock = threading.RLock()
@@ -194,6 +214,17 @@ class RecipientSetup:
 
     def _write(self, state):
         _atomic_json(self.state_path, state)
+
+    @synchronized
+    def reset_for_whatsapp_relink(self):
+        """Erase all state that could route to the previously linked account."""
+        self.contacts.clear_for_whatsapp_relink()
+        for path in (
+            self.state_path,
+            self.voice_request_path,
+            *self.account_reset_paths,
+        ):
+            Path(path).unlink(missing_ok=True)
 
     def _candidate(self, state, token, *, require_available=True):
         if not isinstance(token, str):

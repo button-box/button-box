@@ -58,13 +58,13 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" sudo -n true ||
 
 cat <<EOF
 
-MESSAGE BOX TEST REPROVISION
+BUTTON BOX TEST REPROVISION
 
 Target:   $TARGET
 Hostname: $BOX_HOSTNAME
 
 This deletes the generated Wi-Fi onboarding credentials and state, WhatsApp
-pairing state, the Message Box WhatsApp store, and pending outbound recordings.
+pairing state, the Button Box WhatsApp store, and pending outbound recordings.
 It preserves the operating system, packages, service users, current network
 profile, contacts, incoming queue, and hardware configuration. It is not a
 clean-card test.

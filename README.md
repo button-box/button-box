@@ -259,7 +259,7 @@ PATH="/opt/homebrew/bin:$PATH" ./scripts/provision.sh admin@message-box-001.loca
 The script transfers an explicit set of installation files, installs Button Box
 in fixed system paths, and leaves runtime and onboarding services stopped.
 
-**Done when:** setup prints `MESSAGE BOX SETUP COMPLETE` without an error.
+**Done when:** setup prints `BUTTON BOX SETUP COMPLETE` without an error.
 
 ## Step 7 — Choose an onboarding path
 
@@ -326,7 +326,7 @@ health or unknown tag state blocks rather than silently choosing the default.
 Path A remains the terminal-assisted developer workflow; the two paths are not
 continuations of one another.
 
-**Done when:** the browser reports that Message Box is ready and the intended
+**Done when:** the browser reports that Button Box is ready and the intended
 default and optional tag mappings pass the physical scenarios below.
 
 ## Step 8 — Test the hardware

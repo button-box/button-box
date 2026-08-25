@@ -1,5 +1,5 @@
 #!/bin/bash
-# Message Box wacli burst-sync loop (v0 production rig).
+# Button Box wacli burst-sync loop (v0 production rig).
 # Short sync bursts keep the store lock free between runs so the poller can download.
 IDLE_EXIT="${MSGBOX_SYNC_IDLE_EXIT:-5s}"
 GAP_S="${MSGBOX_SYNC_GAP_S:-3}"

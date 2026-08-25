@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box wacli burst sync
+Description=Button Box wacli burst sync
 After=network-online.target
 Wants=network-online.target
 PartOf=messagebox.target messagebox-onboarding-voice.target

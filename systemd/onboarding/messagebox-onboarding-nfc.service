@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box private NFC onboarding worker
+Description=Button Box private NFC setup worker
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 PartOf=comitup.service
 After=local-fs.target sound.target messagebox-whatsapp-pairing.service

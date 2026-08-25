@@ -1,7 +1,7 @@
 """Wi-Fi onboarding reset for the operator command and physical button.
 
 This module deliberately knows only about onboarding state and NetworkManager.
-It must not read or modify Message Box contact or runtime data.
+It must not read or modify Button Box contact or runtime data.
 """
 
 from __future__ import annotations
@@ -192,6 +192,7 @@ def perform_reset(
     state_path=STATE_PATH,
     completion_request_path=ONBOARDING_COMPLETION_REQUEST_PATH,
     state_clock=time.time,
+    enable_units=True,
 ):
     """Perform the confirmed reset transaction and restart Wi-Fi onboarding."""
 
@@ -202,7 +203,8 @@ def perform_reset(
     state_path = Path(state_path)
     state_directory = state_path.parent.stat()
     state_owner = (state_directory.st_uid, state_directory.st_gid)
-    _run(runner, ["systemctl", "enable", *SETUP_UNITS])
+    if enable_units:
+        _run(runner, ["systemctl", "enable", *SETUP_UNITS])
     _atomic_write(enabled_path, b"enabled\n", mode=0o600, preserve_owner=True)
     _run(runner, ["systemctl", "stop", *RUNTIME_UNITS])
     _run(runner, ["systemctl", "stop", *ONBOARDING_UNITS])

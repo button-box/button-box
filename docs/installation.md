@@ -24,7 +24,7 @@ not overwrite a working device without a tested backup.
    `--guided-prompts DIR`. Alternatively, clone the repository onto the Pi and
    run `./scripts/setup.sh` there as a non-root sudo-capable administrator.
    Neither method transfers device runtime state, pairs WhatsApp, or starts
-   Message Box services.
+   Button Box services.
 
    Connect the microphone and USB speaker before running setup. On a fresh
    installation, setup selects the lowest-numbered ALSA capture device and USB
@@ -43,9 +43,9 @@ not overwrite a working device without a tested backup.
    `sudo shutdown now` and package the printed insert with the powered-down box.
    Do not complete browser onboarding during manufacturing.
 
-## Recipient onboarding
+## Recipient setup
 
-1. Power on the box.
+1. Power on Button Box.
 2. Join its setup hotspot with the supplied password and open the printed URL.
 3. Submit the home Wi-Fi credentials. The setup hotspot will disappear.
 4. Reconnect the phone to home Wi-Fi and reopen the same URL, such as
@@ -58,24 +58,35 @@ not overwrite a working device without a tested backup.
    account, the selected person or group must still send the linked number a
    new message before the voice proof. Choosing **Do this later** pauses setup
    and leaves messaging and NFC disabled.
-7. Ask the selected recipient to send a new voice note. Press the box button to
+7. Ask the selected recipient to send a new voice note. Press the Button Box button to
    hear it, record the prompted reply, review it, and press again to approve the
    send. Messages received before selection are deliberately excluded.
 8. After the two-way proof, optionally allow-list more recent people or groups
    in the recipient manager, or enter another international phone number
    manually. You can switch the default among allowed recipients in the manager;
    removing a recipient also removes that recipient's tag mappings.
-9. Select **Continue to NFC setup**. Hold a tag over the reader until the box
+9. Select **Continue to NFC setup**. Hold a tag over the reader until Button Box
    beeps, remove it, and choose the person or group it should represent. Pair as
    many tags as needed; multiple tags may point to one recipient.
 10. An already-paired tag shows its current recipient and requires an explicit
     **Reassign** before it can move. The flow reads tag identifiers but never
     writes data to a tag.
 11. Choose **Skip NFC setup** before the first tag or **Done** after pairing.
-    Either action completes onboarding and activates messaging. If no tags are
+    Either action completes setup and activates messaging. If no tags are
     mapped, the default recipient works without the NFC reader.
 
 The manufacturer must not complete these steps for the recipient.
+
+After setup, the same printed URL opens the canonical Button Box dashboard.
+Home shows connection and runtime health; Setup preserves the completed task
+list; Settings controls button behavior, message length, ringtone, volume,
+arrival signal, quiet hours, time zone, and the NFC confirmation beep. Activity
+contains the privacy-sensitive timeline, browser audio, and queue controls.
+Advanced contains concise health and listener-profile information.
+
+The dashboard intentionally has no login. Anyone on household Wi-Fi can change
+settings and play queued audio. Do not forward port 80 or publish the dashboard
+through a tunnel. Runtime binds only to the Wi-Fi interface.
 
 If the reader is unavailable, Retry or skip NFC setup. Once any tag is mapped,
 runtime routing remains fail-closed when the NFC reader is unhealthy; it never

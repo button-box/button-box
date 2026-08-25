@@ -57,7 +57,7 @@ class InitializeTests(unittest.TestCase):
         self.paths.run_dir.mkdir(parents=True)
         self.paths.lock.parent.mkdir(parents=True)
         self.paths.template.write_text(
-            "ap_name: Message Box\nap_password: @HOTSPOT_PASSWORD@\n",
+            "ap_name: Button Box\nap_password: @HOTSPOT_PASSWORD@\n",
             encoding="ascii",
         )
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box private WhatsApp pairing worker
+Description=Button Box private WhatsApp pairing worker
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 PartOf=comitup.service
 After=network-online.target

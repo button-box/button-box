@@ -2,15 +2,15 @@
 
 ## Consumer and developer boundaries
 
-Consumer onboarding verifies Wi-Fi and WhatsApp, selects an initial default
+Consumer setup verifies Wi-Fi and WhatsApp, selects an initial default
 recipient, proves one received-and-replied voice exchange, and then exposes a
 recipient manager where the default can be changed, optionally pairs NFC tags,
 and then activates the normal runtime. Zero, partial, or full tag coverage is
 valid.
-During the proof it starts only the scoped onboarding sync, poller, and guided
+During the proof it starts only the scoped setup sync, poller, and guided
 button target; the normal `messagebox.target` remains gated. Consumer completion
-enables button, sync, and poller, enables NFC only when mappings exist, and
-leaves the technical dashboard off.
+enables button, sync, poller, NFC reader, and the canonical dashboard. With no
+card mappings, NFC cannot affect the default-recipient route.
 
 `messagebox-dev-onboard` is an independent prototype workflow. It pairs
 WhatsApp, configures contacts and the dashboard, tests hardware, and can start
@@ -80,7 +80,7 @@ Or run it remotely:
 ssh -t admin@message-box-001.local messagebox-dev-onboard
 ```
 
-The flow stops Message Box services before configuration and testing. If it
+The flow stops Button Box services before configuration and testing. If it
 exits early, they may remain stopped. It shows synced chats and their exact JIDs.
 To list them again later, run:
 

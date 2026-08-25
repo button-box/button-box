@@ -1,1 +1,1 @@
-"""Message Box application package."""
+"""Button Box application package."""

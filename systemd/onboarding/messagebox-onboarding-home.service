@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box onboarding portal on the home network
+Description=Button Box setup portal on the home network
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 BindsTo=comitup.service
 PartOf=comitup.service
@@ -11,9 +11,11 @@ After=comitup.service network-online.target messagebox-whatsapp-pairing.service 
 Type=simple
 User=messagebox-onboarding
 Group=messagebox-onboarding
+SupplementaryGroups=messagebox-settings audio
 WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox-onboarding
 Environment=MSGBOX_ONBOARDING_MODE=HOME
+EnvironmentFile=/etc/messagebox/env
 UMask=0077
 ExecStart=/usr/bin/gunicorn --workers 1 --worker-class sync --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
 Restart=on-failure
@@ -26,5 +28,5 @@ PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/etc/messagebox-onboarding
-ReadWritePaths=/var/lib/messagebox-onboarding
+ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings
 LimitCORE=0

@@ -4,18 +4,163 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Set up Message Box</title>
+  <title>Button Box</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <main class="shell">
     <header class="brand">
-      <span class="brand-mark" aria-hidden="true">M</span>
-      <span>Message Box</span>
+      <span class="brand-mark" aria-hidden="true">B</span>
+      <span>Button Box</span>
     </header>
 
-    <section class="card" id="wifi-view" aria-labelledby="wifi-title">
+    <nav class="primary-nav" aria-label="Button Box">
+      <a href="#home" data-route="home">Home</a>
+      <a href="#setup" data-route="setup">Setup</a>
+      <a href="#settings" data-route="settings">Settings</a>
+      <a href="#activity" data-route="activity">Activity</a>
+      <a href="#advanced" data-route="advanced">Advanced</a>
+    </nav>
+
+    <section class="card" id="home-view" aria-labelledby="home-title">
+      <p class="eyebrow success">Button Box</p>
+      <h1 id="home-title" tabindex="-1">Home</h1>
+      <div id="home-attention" class="notice" hidden>
+        <strong>Setup needs attention</strong>
+        <span id="home-attention-copy">Finish the required tasks before Button Box is ready.</span>
+        <a class="button" href="#setup">Continue setup</a>
+      </div>
+      <div class="status-grid" aria-live="polite">
+        <div class="status-card"><span>Wi-Fi</span><strong id="home-wifi">Checking…</strong></div>
+        <div class="status-card"><span>WhatsApp</span><strong id="home-whatsapp">Checking…</strong></div>
+        <div class="status-card"><span>Runtime</span><strong id="home-runtime">Checking…</strong></div>
+      </div>
+      <h2>Configure Button Box</h2>
+      <div class="shortcut-grid">
+        <a href="#settings" class="shortcut"><strong>Button and recording</strong><span>Choose tap and review or press and hold.</span></a>
+        <a href="#settings" class="shortcut"><strong>Sounds and quiet hours</strong><span>Ringtone, volume, lamp, and schedule.</span></a>
+        <a href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and NFC.</span></a>
+      </div>
+      <button type="button" id="ring-now" class="secondary">Ring Button Box now</button>
+      <p id="ring-now-status" class="field-help" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" id="setup-view" aria-labelledby="setup-title" hidden>
+      <p class="eyebrow">Resumable setup</p>
+      <h1 id="setup-title" tabindex="-1">Set up Button Box</h1>
+      <p class="lede">Complete required tasks in any order available. Every completed task is saved.</p>
+      <h2 class="section-title">Required</h2>
+      <ol class="task-list" id="required-tasks"></ol>
+      <h2 class="section-title">Optional</h2>
+      <ol class="task-list" id="optional-tasks"></ol>
+    </section>
+
+    <section class="card" id="settings-view" aria-labelledby="settings-title" hidden>
+      <p class="eyebrow">Caregiver settings</p>
+      <h1 id="settings-title" tabindex="-1">Settings</h1>
+      <div id="settings-attention" class="notice" hidden><strong>Settings need attention</strong><span>Button Box is using the last valid settings. Review and save this page.</span></div>
+      <form id="settings-form">
+        <h2>Button and recording</h2>
+        <fieldset class="stacked-choices">
+          <legend>Button behavior</legend>
+          <label class="choice-card"><input type="radio" name="recording_mode" value="tap_review"><span><strong>Tap and review</strong><small>Press to start, press to stop, listen back, then press to send. Unsent recordings are warned about and deleted.</small></span></label>
+          <label class="choice-card"><input type="radio" name="recording_mode" value="hold_release"><span><strong>Press and hold</strong><small>Short press plays a waiting message. Hold about 0.7 seconds to record; releasing sends immediately without review.</small></span></label>
+        </fieldset>
+        <fieldset>
+          <legend>After listening</legend>
+          <label class="choice"><input type="radio" name="after_listening" value="play_only"> Play only</label>
+          <label class="choice"><input type="radio" name="after_listening" value="invite_reply"> Invite a reply</label>
+        </fieldset>
+        <label for="max-recording">Maximum message length</label>
+        <select id="max-recording" name="max_recording_seconds"><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option></select>
+        <p class="field-help">Applies to both modes. The no-speech timeout remains 20 seconds.</p>
+
+        <h2>Sounds and notifications</h2>
+        <label for="ringtone">Ringtone</label>
+        <div class="inline-control"><select id="ringtone" name="ringtone_id"><option value="gentle_music_box">Gentle music box</option><option value="playful_chiptune">Playful chiptune</option><option value="ding_dong">Ding-dong chime</option><option value="cuckoo_clock">Cuckoo clock</option></select><button type="button" id="preview-ringtone" class="secondary compact">Preview</button></div>
+        <label for="master-volume">Master volume: <output id="volume-output">50%</output></label>
+        <input id="master-volume" name="master_volume_percent" type="range" min="0" max="100" step="5">
+        <p class="field-help">Controls voice messages, prompts, beeps, and ringtones.</p>
+        <label for="arrival-signal">New-message signal</label>
+        <select id="arrival-signal" name="arrival_signal"><option value="ring_and_lamp">Ring and lamp</option><option value="ring_only">Ring only</option><option value="lamp_only">Lamp only</option><option value="silent">Silent</option></select>
+
+        <h2>Quiet hours</h2>
+        <label class="choice"><input id="quiet-enabled" name="quiet_enabled" type="checkbox"> Enable quiet hours</label>
+        <div class="two-column">
+          <label>Start<input id="quiet-start" name="quiet_start" type="time"></label>
+          <label>End<input id="quiet-end" name="quiet_end" type="time"></label>
+        </div>
+        <label for="timezone">Time zone</label>
+        <input id="timezone" name="timezone" autocomplete="off" aria-describedby="timezone-help">
+        <p id="timezone-help" class="field-help"></p>
+        <p class="field-help">During quiet hours, new messages queue without ringing or lighting the lamp. Deliberate playback still works and overnight messages do not ring later.</p>
+
+        <h2>NFC</h2>
+        <label class="choice"><input id="nfc-beep" name="nfc_confirmation_beep" type="checkbox"> Beep when an NFC card is detected or confirmed</label>
+        <button type="submit">Save settings</button>
+        <p id="settings-status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="card" id="activity-view" aria-labelledby="activity-title" hidden>
+      <p class="eyebrow">Privacy-sensitive</p>
+      <h1 id="activity-title" tabindex="-1">Activity</h1>
+      <p class="lede">The timeline is content-free: no transcripts, raw NFC identifiers, or internal message identifiers. Household users can play queued audio below.</p>
+      <div id="activity-summary" class="status-grid"></div>
+      <div id="activity-timeline" class="activity-list"></div>
+      <h2>Queue</h2><div id="activity-queue"></div>
+      <h2>On hold</h2><div id="activity-hold"></div>
+      <h2>Trash</h2><div id="activity-trash"></div>
+    </section>
+
+    <section class="card" id="advanced-view" aria-labelledby="advanced-title" hidden>
+      <p class="eyebrow">Support and recovery</p>
+      <h1 id="advanced-title" tabindex="-1">Advanced</h1>
+      <div class="notice"><strong>Household network access</strong><span>This dashboard has no login. Anyone on the household Wi-Fi or Button Box setup hotspot can change settings and play queued audio.</span></div>
+      <div id="advanced-health" class="status-grid"></div>
+      <h2>Connections and people</h2>
+      <div class="shortcut-grid">
+        <a href="#setup" class="shortcut"><strong>Wi-Fi and WhatsApp</strong><span>Reconnect, relink, or continue setup.</span></a>
+        <a href="#setup" class="shortcut"><strong>Recipients and NFC cards</strong><span>Add, remove, select, pair, reassign, or unpair.</span></a>
+      </div>
+      <div class="button-row">
+        <button type="button" id="manage-whatsapp" class="secondary">Manage WhatsApp</button>
+        <button type="button" id="manage-recipients" class="secondary">Manage recipients</button>
+      </div>
+      <details class="settings-detail">
+        <summary>Change Wi-Fi network</summary>
+        <form id="wifi-change-form" class="compact-form">
+          <label for="new-wifi-name">New Wi-Fi name</label>
+          <input id="new-wifi-name" maxlength="32" autocomplete="off" required>
+          <fieldset>
+            <legend>Network security</legend>
+            <label class="choice"><input type="radio" name="new_wifi_security" value="protected" checked> Password protected</label>
+            <label class="choice"><input type="radio" name="new_wifi_security" value="open"> Open network</label>
+          </fieldset>
+          <label for="new-wifi-password">New Wi-Fi password</label>
+          <input id="new-wifi-password" type="password" minlength="8" maxlength="63" autocomplete="off" required>
+          <div class="notice"><strong>The old Wi-Fi is kept during checks</strong><span>Button Box tests association, address, DNS, and internet access. If the new network fails, it restores the old one. If recovery also fails, the protected setup hotspot returns.</span></div>
+          <button type="submit">Change Wi-Fi</button>
+          <p id="wifi-change-status" class="status" role="status" aria-live="polite"></p>
+        </form>
+      </details>
+      <h2>Listener profiles</h2>
+      <div id="listener-profiles" class="activity-list"></div>
+      <form id="listener-form" class="compact-form">
+        <label for="listener-jid">WhatsApp listener ID</label>
+        <input id="listener-jid" autocomplete="off" required>
+        <label for="listener-name">Name</label>
+        <input id="listener-name" maxlength="80" required>
+        <label for="listener-clip">Optional listened sound path</label>
+        <input id="listener-clip" autocomplete="off">
+        <button type="submit">Save listener profile</button>
+        <p id="listener-status" class="field-help" role="status" aria-live="polite"></p>
+      </form>
+      <p class="field-help">GPIO pins, audio devices, microphone gain, retry timing, and service internals remain operator-only.</p>
+    </section>
+
+    <section class="card" id="wifi-view" aria-labelledby="wifi-title" hidden>
       <p class="eyebrow">Step 1 of 2</p>
       <h1 id="wifi-title" tabindex="-1">Choose home Wi-Fi</h1>
       <p class="lede">Select a nearby network or enter its name manually.</p>
@@ -43,7 +188,7 @@
           <button type="button" id="copy-setup-url" class="secondary">Copy setup URL</button>
           <span class="field-help" id="setup-url-copy-status" role="status" aria-live="polite"></span>
         </aside>
-        <button type="submit" id="connect-wifi">Connect Message Box</button>
+        <button type="submit" id="connect-wifi">Connect Button Box</button>
       </form>
     </section>
 
@@ -59,7 +204,7 @@
     <section class="card" id="whatsapp-view" aria-labelledby="whatsapp-title" hidden>
       <p class="eyebrow success">Wi-Fi complete</p>
       <h1 id="whatsapp-title" tabindex="-1">Link WhatsApp</h1>
-      <p class="lede">Enter the WhatsApp number you want this Message Box to use. It must start with + and the international country code.</p>
+      <p class="lede">Enter the WhatsApp number you want this Button Box to use. It must start with + and the international country code.</p>
       <form id="whatsapp-form">
         <label for="whatsapp-phone">WhatsApp number (+ and country code)</label>
         <input id="whatsapp-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" value="+" placeholder="+1 415 555 0123" pattern="\+[1-9][0-9 \-]{7,18}" title="Start with +, then enter the country code and phone number" required aria-describedby="phone-help">
@@ -122,8 +267,8 @@
 
     <section class="card" id="recipients-view" aria-labelledby="recipients-title" hidden>
       <p class="eyebrow">Recipient setup</p>
-      <h1 id="recipients-title" tabindex="-1">Who should the box message?</h1>
-      <p class="lede">Choose one person or group as the box’s default recipient. You can change it later.</p>
+      <h1 id="recipients-title" tabindex="-1">Who should Button Box message?</h1>
+      <p class="lede">Choose one person or group as the Button Box default recipient. You can change it later.</p>
       <ul id="recipient-list" class="recipient-list"></ul>
       <div id="recipient-empty" class="notice" hidden>
         <strong>No conversations found yet</strong>
@@ -153,27 +298,27 @@
     </section>
 
     <section class="card" id="voice-test-view" aria-labelledby="voice-test-title" hidden>
-      <p class="eyebrow">Try your Message Box</p>
+      <p class="eyebrow">Try your Button Box</p>
       <h1 id="voice-test-title" tabindex="-1">Say hello to <span id="voice-recipient">your recipient</span></h1>
       <ol class="steps voice-steps">
         <li>Ask them to send a <strong>new voice message</strong> now.</li>
-        <li>When the box rings, press the button once to hear it.</li>
+        <li>When Button Box rings, press the button once to hear it.</li>
         <li>After the prompt, speak your reply.</li>
-        <li>When you’re done recording, press the button. The box will play your reply back once.</li>
+        <li>When you’re done recording, press the button. Button Box will play your reply back once.</li>
         <li>When prompted to send it, press the button again.</li>
       </ol>
       <div class="proof-list" aria-live="polite">
         <div id="proof-received" class="proof-row"><span aria-hidden="true">○</span> Voice message received</div>
-        <div id="proof-played" class="proof-row"><span aria-hidden="true">○</span> Message played on the box</div>
+        <div id="proof-played" class="proof-row"><span aria-hidden="true">○</span> Message played on Button Box</div>
         <div id="proof-replied" class="proof-row"><span aria-hidden="true">○</span> Reply sent</div>
       </div>
-      <p class="status">Keep this page open while you use the box.</p>
+      <p class="status">Keep this page open while you use Button Box.</p>
     </section>
 
     <section class="card" id="voice-success-view" aria-labelledby="voice-success-title" hidden>
-      <p class="eyebrow success">Message Box ready</p>
+      <p class="eyebrow success">Button Box ready</p>
       <h1 id="voice-success-title" tabindex="-1">You sent a voice message</h1>
-      <p class="lede">The box received, played, and replied to <span id="success-recipient">your recipient</span>.</p>
+      <p class="lede">Button Box received, played, and replied to <span id="success-recipient">your recipient</span>.</p>
       <button type="button" id="open-recipient-manager">Manage recipients</button>
     </section>
 
@@ -202,15 +347,19 @@
       <p id="manager-status" class="field-help" role="status" aria-live="polite"></p>
       <div class="notice success-notice manager-next">
         <strong>NFC cards come next</strong>
-        <span>Your default recipient already works without a card.</span>
+        <span>Your default recipient already works without a card. To unpair one card, present it to Button Box and choose Unpair presented card.</span>
       </div>
-      <button type="button" id="continue-nfc">Continue to NFC setup</button>
+      <div class="button-row">
+        <button type="button" id="continue-nfc">Continue to NFC setup</button>
+        <button type="button" id="unpair-presented-nfc" class="secondary">Unpair presented card</button>
+        <button type="button" id="cancel-runtime-nfc" class="text-button" hidden>Cancel card pairing</button>
+      </div>
     </section>
 
     <section class="card" id="nfc-view" aria-labelledby="nfc-title" hidden>
       <p class="eyebrow">NFC setup</p>
-      <h1 id="nfc-title" tabindex="-1">Hold a tag over the box</h1>
-      <p class="lede">Keep it near the NFC reader until the box beeps. After the beep, you can remove it.</p>
+      <h1 id="nfc-title" tabindex="-1">Hold a tag over Button Box</h1>
+      <p class="lede">Keep it near the NFC reader until Button Box beeps. After the beep, you can remove it.</p>
       <div class="nfc-reader" aria-hidden="true"><span>NFC</span></div>
       <p id="nfc-waiting-status" class="status" role="status" aria-live="polite">Waiting for a tag…</p>
       <p id="nfc-count" class="field-help"></p>
@@ -223,7 +372,7 @@
     <section class="card" id="nfc-choose-view" aria-labelledby="nfc-choose-title" hidden>
       <p class="eyebrow success">Tag detected</p>
       <h1 id="nfc-choose-title" tabindex="-1">Who is this tag for?</h1>
-      <p class="lede">The tag is ready. You can remove it from the box now.</p>
+      <p class="lede">The tag is ready. You can remove it from Button Box now.</p>
       <ul id="nfc-recipient-list" class="recipient-list"></ul>
       <button type="button" id="cancel-nfc-tag" class="secondary">Back</button>
       <p id="nfc-choose-status" class="field-help" role="status" aria-live="polite"></p>
@@ -264,7 +413,7 @@
 
     <section class="card" id="complete-view" aria-labelledby="complete-title" hidden>
       <p class="eyebrow success">Setup complete</p>
-      <h1 id="complete-title" tabindex="-1">Your Message Box is ready</h1>
+      <h1 id="complete-title" tabindex="-1">Your Button Box is ready</h1>
       <p class="lede">Messaging is now active. You can close this page.</p>
     </section>
 

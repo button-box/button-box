@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box PN532 recipient-card reader
+Description=Button Box PN532 recipient-card reader
 After=local-fs.target
 Before=messagebox-button.service
 PartOf=messagebox.target

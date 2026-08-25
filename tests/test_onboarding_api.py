@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
+from messagebox.settings import SettingsStore
 
 
 HOST = "message-box-A7K2.local"
@@ -279,12 +280,16 @@ class OnboardingAPITests(unittest.TestCase):
         self.adapter = FakeAdapter()
         self.checker = FakeChecker()
         self.sleeps = []
+        self.settings = SettingsStore(
+            Path(self.directory.name) / "settings.json", environ={"TZ": "UTC"}
+        )
         self.app = create_app(
             mode="HOTSPOT",
             config={"device_id": "A7K2"},
             state_store=self.store,
             adapter=self.adapter,
             connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
             clock=self.clock,
             sleep=self.sleeps.append,
             handoff_delay=0.25,
@@ -313,6 +318,7 @@ class OnboardingAPITests(unittest.TestCase):
             connectivity_checker=self.checker,
             whatsapp_client=worker,
             nfc_client=nfc or FakeNfc(),
+            caregiver_settings=self.settings,
             clock=self.clock,
             **options,
         )
@@ -333,6 +339,41 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
+
+    def test_settings_are_revision_checked_and_cross_site_writes_are_rejected(self):
+        loaded = self.client.request("GET", "/api/settings", host="10.41.0.1")
+        self.assertEqual(loaded["status"], "200 OK")
+        document = json.loads(loaded["body"])["settings"]
+        candidate = {
+            key: value
+            for key, value in document.items()
+            if key not in {"version", "revision"}
+        }
+        candidate["max_recording_seconds"] = 120
+        saved = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 0, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://10.41.0.1"},
+        )
+        self.assertEqual(saved["status"], "200 OK")
+        conflict = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 0, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://10.41.0.1"},
+        )
+        self.assertEqual(conflict["status"], "409 Conflict")
+        rejected = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 1, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(rejected["status"], "403 Forbidden")
 
     def test_hotspot_ip_is_allowed_and_other_hosts_redirect_to_it(self):
         response = self.client.request("GET", "/api/state", host="10.41.0.1")

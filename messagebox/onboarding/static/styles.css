@@ -38,7 +38,7 @@ body {
   align-items: center;
   gap: 0.7rem;
   min-height: 3rem;
-  margin-bottom: 2.5rem;
+  margin-bottom: 1rem;
   color: var(--muted);
   font-size: 0.9rem;
   font-weight: 700;
@@ -58,6 +58,27 @@ body {
 
 .card { padding: 0.5rem 0 3rem; }
 [hidden] { display: none !important; }
+
+.primary-nav {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0 -0.5rem 2.25rem;
+  padding: 0.5rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(23, 26, 29, 0.88);
+}
+.primary-nav a {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.55rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+.primary-nav a[aria-current="page"] { background: var(--action); color: var(--action-text); }
 
 .eyebrow {
   margin: 0 0 1rem;
@@ -97,7 +118,7 @@ label, legend {
   font-weight: 700;
 }
 
-input[type="text"], input[type="password"], input[type="tel"], input:not([type]) {
+input[type="text"], input[type="password"], input[type="tel"], input[type="time"], input:not([type]), select {
   width: 100%;
   min-height: 3.25rem;
   border: 1px solid var(--line);
@@ -107,6 +128,8 @@ input[type="text"], input[type="password"], input[type="tel"], input:not([type])
   color: var(--text);
   font: inherit;
 }
+select { appearance: auto; }
+input[type="range"] { width: 100%; accent-color: var(--action); }
 
 fieldset {
   display: flex;
@@ -119,6 +142,23 @@ fieldset {
 legend { margin-bottom: 0.65rem; }
 .choice { display: flex; align-items: center; gap: 0.5rem; min-height: 2.75rem; }
 .choice input { accent-color: var(--action); width: 1.15rem; height: 1.15rem; }
+.stacked-choices { display: grid; }
+.choice-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  padding: 1rem;
+  background: var(--soft);
+}
+.choice-card input { width: 1.15rem; height: 1.15rem; accent-color: var(--action); }
+.choice-card strong, .choice-card small { display: block; }
+.choice-card strong { color: var(--text); font-size: 1rem; }
+.choice-card small { margin-top: 0.35rem; color: var(--muted); font-weight: 500; line-height: 1.45; }
+.inline-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.65rem; align-items: center; }
+.two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.two-column label { display: grid; gap: 0.4rem; }
 
 button, .button {
   display: inline-flex;
@@ -237,6 +277,28 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 .notice strong { color: var(--text); }
 .setup-url { overflow-wrap: anywhere; color: var(--text); font-weight: 700; user-select: all; }
 .notice button { justify-self: start; margin-top: 0.35rem; }
+.notice .button { justify-self: start; margin-top: 0.35rem; }
+
+.status-grid, .shortcut-grid { display: grid; gap: 0.75rem; margin: 1.5rem 0 2rem; }
+.status-grid { grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); }
+.status-card, .shortcut, .activity-row {
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  padding: 1rem;
+  background: var(--soft);
+}
+.status-card span, .shortcut span, .activity-row span { display: block; margin-top: 0.3rem; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+.status-card strong, .shortcut strong, .activity-row strong { color: var(--text); }
+.shortcut { display: block; color: var(--text); text-decoration: none; }
+.task-list { margin: 0.5rem 0 2rem; padding: 0; list-style: none; }
+.task-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; border-top: 1px solid var(--line); padding: 1rem 0; }
+.task-row:last-child { border-bottom: 1px solid var(--line); }
+.task-row a { color: var(--text); font-weight: 750; text-decoration-color: var(--action); text-underline-offset: 0.2rem; }
+.task-status { border-radius: 999px; padding: 0.25rem 0.55rem; background: var(--soft); color: var(--muted); font-size: 0.72rem; font-weight: 800; }
+.task-status.complete { background: var(--action); color: var(--action-text); }
+.activity-list { display: grid; gap: 0.65rem; margin: 1rem 0 2rem; color: var(--muted); }
+.activity-row { display: grid; gap: 0.75rem; }
+.activity-row audio { width: 100%; }
 
 .steps { margin: 0 0 2rem; padding-left: 1.4rem; color: var(--muted); line-height: 1.55; }
 .steps li { margin: 0.75rem 0; padding-left: 0.35rem; }
@@ -259,8 +321,14 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 }
 
 @media (min-width: 40rem) {
-  .shell { padding: 3rem 2.5rem; }
+  .shell { max-width: 58rem; padding: 3rem 2.5rem; }
   .card { border: 1px solid var(--line); border-radius: 1rem; padding: 3rem; background: var(--surface); }
+  .shortcut-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 24rem) {
+  .two-column, .inline-control { grid-template-columns: 1fr; }
+  .primary-nav { border-radius: 0.8rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

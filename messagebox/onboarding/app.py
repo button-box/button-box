@@ -1,10 +1,11 @@
-"""Dependency-free WSGI application for Message Box Wi-Fi onboarding."""
+"""Dependency-free WSGI application for Button Box setup."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import unicodedata
@@ -35,6 +36,7 @@ from messagebox.onboarding.whatsapp import (
     normalize_pair_code,
     normalize_phone,
 )
+from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path
 
 
 CONFIG_PATH = str(ONBOARDING_CONFIG_PATH)
@@ -44,6 +46,7 @@ HANDOFF_DELAY = 3.0
 HOTSPOT_HOST = "10.41.0.1"
 HOTSPOT_URL = f"http://{HOTSPOT_HOST}/"
 STATIC_DIR = Path(__file__).with_name("static")
+RINGTONE_PREVIEW_LOCK = threading.Lock()
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9-]{1,32}\Z")
 _CANONICAL_HOST = re.compile(r"message-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE)
@@ -75,7 +78,7 @@ _HANDOFF_HTML = b"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Connecting | Message Box</title>
+  <title>Connecting | Button Box</title>
   <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede,.status{color:#adb7b0}.pulse{width:34px;height:34px;border:4px solid #363b3d;border-top-color:#69c5a5;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.pulse{animation:none;border-color:#69c5a5}}.button{display:inline-block;color:#07120e;background:#69c5a5;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:700}</style>
   <script nonce="messagebox-handoff">"use strict";let remaining=120;const status=()=>{const element=document.getElementById("handoff-status");if(remaining>0){const minutes=Math.floor(remaining/60);const seconds=String(remaining%60).padStart(2,"0");element.textContent=`Connecting to home Wi-Fi... ${minutes}:${seconds} remaining`;}else{element.textContent="Still waiting. Rejoin home Wi-Fi, then try the setup URL.";}remaining=Math.max(0,remaining-1);};window.addEventListener("DOMContentLoaded",status);window.setInterval(status,1000);</script>
 </head>
@@ -104,7 +107,7 @@ _CHANGE_HTML = b"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Changing Wi-Fi | Message Box</title>
+  <title>Changing Wi-Fi | Button Box</title>
   <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede{color:#adb7b0}</style>
 </head>
 <body>
@@ -112,11 +115,11 @@ _CHANGE_HTML = b"""<!doctype html>
     <section class="card" aria-labelledby="change-title">
       <p class="eyebrow">Wi-Fi setup</p>
       <h1 id="change-title">Returning to setup mode</h1>
-      <p class="lede">The Message Box setup hotspot may take up to five minutes to return.</p>
+      <p class="lede">The Button Box setup hotspot may take up to five minutes to return.</p>
       <ol class="steps">
         <li>Open Wi-Fi settings on this phone.</li>
-        <li>Join the printed Message Box hotspot when it appears.</li>
-        <li>Open the printed Message Box address to continue.</li>
+        <li>Join the printed Button Box hotspot when it appears.</li>
+        <li>Open the printed Button Box address to continue.</li>
       </ol>
       <a class="button secondary" href="/">Return if the hotspot does not come back</a>
     </section>
@@ -241,6 +244,18 @@ def _form(environ, limit):
     return _pairs_to_dict(pairs)
 
 
+def _json_body(environ, limit):
+    if _media_type(environ) != "application/json":
+        raise RequestError("415 Unsupported Media Type", "Expected JSON")
+    try:
+        document = json.loads(_read_body(environ, limit).decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise RequestError("400 Bad Request", "Invalid JSON") from exc
+    if not isinstance(document, dict):
+        raise RequestError("400 Bad Request", "JSON body must be an object")
+    return document
+
+
 def _load_config(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -324,6 +339,7 @@ def create_app(
     connectivity_checker=None,
     whatsapp_client=None,
     nfc_client=None,
+    caregiver_settings=None,
     completion_request=request_completion,
     clock=time.time,
     sleep=time.sleep,
@@ -352,6 +368,7 @@ def create_app(
     checker = connectivity_checker or ConnectivityChecker()
     whatsapp = whatsapp_client or WhatsAppPairingClient()
     nfc = nfc_client or NfcOnboardingClient()
+    settings = caregiver_settings or SettingsStore()
 
     def reconcile_home():
         try:
@@ -671,6 +688,28 @@ def create_app(
             except StateError:
                 pass
 
+    def preview_ringtone(ringtone_id):
+        if ringtone_id not in RINGTONES:
+            raise RequestError("400 Bad Request", "Ringtone is invalid")
+        document, _warning = settings.load()
+        path = ringtone_path({**document, "ringtone_id": ringtone_id})
+        if not path.is_file():
+            raise RequestError("409 Conflict", "Ringtone is unavailable")
+        if not RINGTONE_PREVIEW_LOCK.acquire(blocking=False):
+            raise RequestError("409 Conflict", "Button Box audio is busy")
+
+        def play():
+            try:
+                subprocess.run(
+                    ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                    check=False,
+                    timeout=30,
+                )
+            finally:
+                RINGTONE_PREVIEW_LOCK.release()
+
+        threading.Thread(target=play, daemon=True).start()
+
     def application(environ, start_response):
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "")
@@ -710,7 +749,7 @@ def create_app(
                         "302 Found",
                         [("Location", location), ("Content-Type", "text/plain; charset=utf-8")],
                     )(start_response)
-                raise RequestError("400 Bad Request", "Use the printed Message Box address")
+                raise RequestError("400 Bad Request", "Use the printed Button Box address")
 
             if method == "GET" and path == "/":
                 body, content_type = static_files["index.html"]
@@ -726,6 +765,35 @@ def create_app(
             if method == "GET" and path == "/api/state":
                 state = reconcile_home() if selected_mode == "HOME" else store.load()
                 return _json_response(safe_state(state))(start_response)
+
+            if method == "GET" and path == "/api/settings":
+                document, warning = settings.load()
+                return _json_response({"settings": document, "attention": warning})(start_response)
+
+            if method == "PUT" and path == "/api/settings":
+                _require_same_origin(
+                    environ, HOTSPOT_HOST if selected_mode == "HOTSPOT" else canonical_host
+                )
+                request = _json_body(environ, body_limit)
+                if set(request) != {"revision", "settings"}:
+                    raise RequestError("400 Bad Request", "Invalid settings request")
+                try:
+                    document = settings.update(request["settings"], request["revision"])
+                except RevisionConflict as exc:
+                    raise RequestError("409 Conflict", str(exc)) from exc
+                except SettingsError as exc:
+                    raise RequestError("400 Bad Request", str(exc)) from exc
+                return _json_response({"settings": document, "attention": False})(start_response)
+
+            if method == "POST" and path == "/api/ringtone-preview":
+                _require_same_origin(
+                    environ, HOTSPOT_HOST if selected_mode == "HOTSPOT" else canonical_host
+                )
+                request = _json_body(environ, body_limit)
+                if set(request) != {"ringtone_id"}:
+                    raise RequestError("400 Bad Request", "Invalid ringtone preview request")
+                preview_ringtone(request["ringtone_id"])
+                return _json_response({"ok": True}, "202 Accepted")(start_response)
 
             if method == "GET" and path == "/api/networks":
                 if selected_mode != "HOTSPOT":
@@ -980,6 +1048,8 @@ def create_app(
 
             if path in {
                 "/api/state",
+                "/api/settings",
+                "/api/ringtone-preview",
                 "/api/networks",
                 "/api/recipients",
                 "/api/nfc",
@@ -1023,6 +1093,8 @@ def create_app(
 def _allowed_methods(path):
     return {
         "/api/state": "GET",
+        "/api/settings": "GET, PUT",
+        "/api/ringtone-preview": "POST",
         "/api/networks": "GET",
         "/api/recipients": "GET",
         "/api/nfc": "GET",

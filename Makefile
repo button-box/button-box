@@ -18,6 +18,6 @@ lint-shell:
 	uvx --from shellcheck-py==0.11.0.1 shellcheck --exclude=SC1007,SC1091,SC2029 scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh scripts/messageboxctl messagebox/syncloop.sh
 
 lint-frontend:
-	bunx @biomejs/biome@2.5.9 lint --diagnostic-level=error messagebox/onboarding/static messagebox/dashboard/static
+	bunx @biomejs/biome@2.5.9 lint --diagnostic-level=error messagebox/onboarding/static
 
 check: syntax lint test

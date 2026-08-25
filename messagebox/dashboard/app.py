@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Message Box dashboard: stats + queue manager, served over Tailscale.
+"""Button Box caregiver dashboard and local queue manager.
 
 Stdlib only (http.server) — the Pi Zero doesn't need Flask. Reads the
 events JSONL written by voicepoll/button_send and the queue dir. Held messages
@@ -23,7 +23,11 @@ Endpoints:
   POST /api/reinstate  ?f=<file>   trash -> queue
 """
 import json
+import fcntl
 import os
+import secrets
+import socket
+import struct
 import subprocess
 import threading
 import time
@@ -34,18 +38,31 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
+from messagebox.nfc import router as nfc_router
+from messagebox.nfc_state import NfcError, active_selection
 from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
-from messagebox.runtime_paths import RUNTIME_DIR, STATE_DIR
+from messagebox.runtime_paths import NFC_HEALTH_FILE, NFC_SELECTION_FILE, RUNTIME_DIR, STATE_DIR
 from messagebox.listened_receipts import (
     MAX_WEBHOOK_BYTES,
     ReceiptStore,
     load_listener_profiles,
     valid_webhook_signature,
 )
+from messagebox.onboarding.recipients import RecipientError, RecipientSetup
+from messagebox.onboarding.whatsapp import PairingEngine, PairingError, normalize_phone
+from messagebox.settings import (
+    RINGTONES,
+    RevisionConflict,
+    SettingsError,
+    SettingsStore,
+    ringtone_path,
+)
+from messagebox.wifi_change import WifiChangeError, load_status as wifi_change_status
+from messagebox.wifi_change import request_change as request_wifi_change
 
-BIND = os.environ.get("MSGBOX_DASH_BIND", "").strip()
-PORT = int(os.environ.get("MSGBOX_DASH_PORT", "8080"))
+BIND = os.environ.get("MSGBOX_DASH_BIND", "wlan0").strip()
+PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
 HOLD_DIR = os.path.join(QUEUE_DIR, ".hold")
 TRASH_DIR = os.path.join(QUEUE_DIR, ".trash")
@@ -60,7 +77,7 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 WACLI_WEBHOOK_SECRET = os.environ.get("MSGBOX_WACLI_WEBHOOK_SECRET", "")
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 QUEUE_ACTION_LOCK = threading.Lock()
-DASHBOARD_STATIC_DIR = Path(__file__).resolve().with_name("static")
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().parents[1] / "onboarding" / "static"
 DASHBOARD_STATIC = {
     "/": (
         DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes(),
@@ -75,6 +92,154 @@ DASHBOARD_STATIC = {
         "text/css; charset=utf-8",
     ),
 }
+RINGTONE_PREVIEW_LOCK = threading.Lock()
+PUBLIC_MESSAGE_LOCK = threading.Lock()
+PUBLIC_MESSAGES = {}
+PUBLIC_MESSAGE_REVERSE = {}
+PAIRING_ENGINE_LOCK = threading.Lock()
+_PAIRING_ENGINE = None
+
+
+def resolve_bind(value):
+    """Resolve an interface name without broadening the no-login listener."""
+    if not value:
+        raise ValueError("dashboard bind interface is required")
+    if not Path("/sys/class/net", value).is_dir():
+        return value
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
+        request = struct.pack("256s", value[:15].encode("ascii"))
+        response = fcntl.ioctl(control.fileno(), 0x8915, request)
+    return socket.inet_ntoa(response[20:24])
+
+
+def settings_store():
+    return SettingsStore()
+
+
+def pairing_engine():
+    global _PAIRING_ENGINE
+    with PAIRING_ENGINE_LOCK:
+        if _PAIRING_ENGINE is None:
+            _PAIRING_ENGINE = PairingEngine()
+        return _PAIRING_ENGINE
+
+
+def settings_payload():
+    document, warning = settings_store().load()
+    return {"ok": True, "settings": document, "attention": warning}
+
+
+def whatsapp_authenticated(value):
+    """Recognize the bounded public result of `wacli auth status`."""
+    if isinstance(value, dict):
+        return value.get("authenticated") is True or any(
+            whatsapp_authenticated(item) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(whatsapp_authenticated(item) for item in value)
+    return False
+
+
+def runtime_state():
+    contacts = {"contacts": {}}
+    try:
+        contacts = contacts_store().public_view()
+        recipient_ready = bool(contacts.get("default_recipient"))
+        recipient_count = len(contacts.get("contacts", {}))
+    except (ContactError, OSError):
+        recipient_ready = False
+        recipient_count = 0
+    wifi_connected = False
+    network_name = None
+    try:
+        for line in Path("/proc/net/route").read_text(encoding="ascii").splitlines()[1:]:
+            fields = line.split()
+            if len(fields) >= 4 and fields[0] == "wlan0" and fields[1] == "00000000":
+                wifi_connected = bool(int(fields[3], 16) & 0x2)
+                break
+    except (OSError, ValueError):
+        pass
+    if wifi_connected:
+        try:
+            connection = subprocess.run(
+                ["nmcli", "--get-values", "GENERAL.CONNECTION", "device", "show", "wlan0"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=2,
+            )
+            candidate = connection.stdout.strip()
+            if connection.returncode == 0 and candidate and len(candidate) <= 64:
+                network_name = candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
+    whatsapp_connected = False
+    first_message_ready = False
+    try:
+        recipient_state = RecipientSetup().public_state()
+        first_message_ready = recipient_state.get("status") == "complete"
+    except (OSError, RecipientError):
+        pass
+    try:
+        result = subprocess.run(
+            [WACLI_BIN, "--read-only", "--json", "auth", "status"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+        status = json.loads(result.stdout) if result.returncode == 0 else {}
+
+        whatsapp_connected = whatsapp_authenticated(status)
+    except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+        pass
+    return {
+        "mode": "RUNTIME",
+        "phase": "COMPLETE",
+        "product": "Button Box",
+        "setup": {
+            "wifi": "complete" if wifi_connected else "attention",
+            "whatsapp": "complete" if whatsapp_connected else "attention",
+            "recipient": "complete" if recipient_ready else "attention",
+            "first_message": "complete" if first_message_ready else "attention",
+            "nfc": "complete" if any(
+                contact.get("card_count", 0)
+                for contact in contacts.get("contacts", {}).values()
+            ) else "optional",
+        },
+        "recipient_count": recipient_count,
+        "health": {
+            "wifi": "connected" if wifi_connected else "attention",
+            "network_name": network_name,
+            "whatsapp": "connected" if whatsapp_connected else "attention",
+            "runtime": "running",
+            "software_version": os.environ.get("MSGBOX_VERSION", "installed"),
+        },
+    }
+
+
+def preview_ringtone(ringtone_id):
+    document, _warning = settings_store().load()
+    if ringtone_id not in RINGTONES:
+        raise SettingsError("ringtone is invalid")
+    preview = {**document, "ringtone_id": ringtone_id}
+    path = ringtone_path(preview)
+    if not path.is_file():
+        raise SettingsError("ringtone is unavailable")
+    if not RINGTONE_PREVIEW_LOCK.acquire(blocking=False):
+        raise SettingsError("Button Box audio is busy")
+
+    def play():
+        try:
+            subprocess.run(
+                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                check=False,
+                timeout=30,
+            )
+        finally:
+            RINGTONE_PREVIEW_LOCK.release()
+
+    threading.Thread(target=play, daemon=True).start()
 
 
 def log_event(**ev):
@@ -225,6 +390,28 @@ def list_wavs(d):
         return sorted(items, key=lambda x: x["ts"])
     except FileNotFoundError:
         return []
+
+
+def public_message_token(kind, name):
+    """Return a process-local opaque handle; never expose the queue filename."""
+    key = (kind, name)
+    with PUBLIC_MESSAGE_LOCK:
+        token = PUBLIC_MESSAGE_REVERSE.get(key)
+        if token is None:
+            token = secrets.token_urlsafe(18)
+            PUBLIC_MESSAGE_REVERSE[key] = token
+            PUBLIC_MESSAGES[token] = key
+        return token
+
+
+def resolve_message_token(token, expected_kind):
+    if not isinstance(token, str) or len(token) > 64:
+        return None
+    with PUBLIC_MESSAGE_LOCK:
+        value = PUBLIC_MESSAGES.get(token)
+    if value is None or value[0] != expected_kind:
+        return None
+    return value[1]
 
 
 def move_queue_message(source_dir, destination_dir, name, *, exposing_to_player):
@@ -710,10 +897,12 @@ def build_data():
     queue = list_wavs(QUEUE_DIR)
     hold = list_wavs(HOLD_DIR)
     trash = list_wavs(TRASH_DIR)
-    for item in queue + hold + trash:
-        meta = file_meta.get(item["file"], {})
-        item["chat"] = label(meta.get("chat", "")) or "?"
-        item["sender"] = meta.get("sender") or "?"
+    for kind, items in (("queue", queue), ("hold", hold), ("trash", trash)):
+        for item in items:
+            meta = file_meta.get(item["file"], {})
+            item["chat"] = label(meta.get("chat", "")) or "?"
+            item["sender"] = meta.get("sender") or "?"
+            item["token"] = public_message_token(kind, item.pop("file"))
 
     def avg(values):
         return round(sum(values) / len(values), 1) if values else None
@@ -769,6 +958,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+            "form-action 'self'; object-src 'none'; script-src 'self'; "
+            "style-src 'self'; connect-src 'self'; media-src 'self'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.end_headers()
         self.wfile.write(data)
 
@@ -779,11 +978,97 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _require_same_origin(self):
+        headers = getattr(self, "headers", {})
+        if headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            self._send(403, json.dumps({"ok": False, "error": "cross-site request rejected"}))
+            return False
+        origin = headers.get("Origin")
+        if origin and origin.rstrip("/").casefold() != f"http://{headers.get('Host', '')}".casefold():
+            self._send(403, json.dumps({"ok": False, "error": "cross-site request rejected"}))
+            return False
+        return True
+
+    def _json_body(self, limit=16384):
+        if not self._require_json():
+            return None
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send(400, json.dumps({"ok": False, "error": "invalid request size"}))
+            return None
+        if length < 2 or length > limit:
+            self._send(400, json.dumps({"ok": False, "error": "invalid request size"}))
+            return None
+        try:
+            payload = json.loads(self.rfile.read(length))
+        except (UnicodeError, json.JSONDecodeError):
+            self._send(400, json.dumps({"ok": False, "error": "invalid JSON"}))
+            return None
+        if not isinstance(payload, dict):
+            self._send(400, json.dumps({"ok": False, "error": "request must be an object"}))
+            return None
+        return payload
+
+    def _form_body(self, limit=8192):
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/x-www-form-urlencoded":
+            self._send(415, json.dumps({"ok": False, "error": "form submission required"}))
+            return None
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > limit:
+                raise ValueError
+            text = self.rfile.read(length).decode("utf-8")
+            pairs = urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=True)
+            if len({key for key, _value in pairs}) != len(pairs):
+                raise ValueError
+            return dict(pairs)
+        except (UnicodeError, ValueError):
+            self._send(400, json.dumps({"ok": False, "error": "invalid form submission"}))
+            return None
+
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
             return self._send(200, *static)
+        if url.path == "/api/state":
+            return self._send(200, json.dumps(runtime_state()))
+        if url.path == "/api/settings":
+            return self._send(200, json.dumps(settings_payload()))
+        if url.path == "/api/whatsapp":
+            try:
+                return self._send(200, json.dumps(pairing_engine().public_state()))
+            except (OSError, PairingError):
+                return self._send(503, json.dumps({"error": "WhatsApp status is unavailable"}))
+        if url.path == "/api/recipients":
+            try:
+                return self._send(200, json.dumps(pairing_engine().recipient_list()))
+            except (OSError, PairingError):
+                return self._send(409, json.dumps({"error": "Recipient setup is unavailable"}))
+        if url.path == "/api/nfc-runtime":
+            try:
+                enrollment = nfc_router().enrollment.active()
+                health_path = Path(NFC_HEALTH_FILE)
+                healthy = health_path.is_file() and time.time() - health_path.stat().st_mtime <= 10
+                return self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "status": "waiting" if enrollment else "idle",
+                            "recipient": enrollment.get("label") if enrollment else None,
+                            "healthy": healthy,
+                        }
+                    ),
+                )
+            except (ContactError, NfcError, OSError):
+                return self._send(503, json.dumps({"error": "NFC status is unavailable"}))
+        if url.path == "/api/wifi-change":
+            try:
+                return self._send(200, json.dumps(wifi_change_status()))
+            except WifiChangeError as exc:
+                return self._send(503, json.dumps({"error": str(exc)}))
         if url.path == "/api/data":
             return self._send(200, json.dumps(build_data()))
         if url.path == "/api/contacts":
@@ -797,16 +1082,17 @@ class Handler(BaseHTTPRequestHandler):
             ) as exc:
                 return self._send(503, json.dumps({"ok": False, "error": str(exc)}))
         if url.path.startswith("/audio/"):
-            name = safe_name(url.path[len("/audio/"):])
-            if not name:
-                return self._send(400, "{}")
             query = urllib.parse.parse_qs(url.query or "")
             if query.get("hold") == ["1"]:
-                d = HOLD_DIR
+                d, kind = HOLD_DIR, "hold"
             elif query.get("trash") == ["1"]:
-                d = TRASH_DIR
+                d, kind = TRASH_DIR, "trash"
             else:
-                d = QUEUE_DIR
+                d, kind = QUEUE_DIR, "queue"
+            token = urllib.parse.unquote(url.path[len("/audio/"):])
+            name = resolve_message_token(token, kind)
+            if not name:
+                return self._send(400, "{}")
             path = os.path.join(d, name)
             if not os.path.exists(path):
                 return self._send(404, "{}")
@@ -814,8 +1100,166 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "audio/wav")
         return self._send(404, "{}")
 
+    def do_PUT(self):
+        url = urllib.parse.urlparse(self.path)
+        if url.path != "/api/settings":
+            return self._send(404, "{}")
+        if not self._require_same_origin():
+            return
+        payload = self._json_body()
+        if payload is None:
+            return
+        try:
+            if set(payload) != {"revision", "settings"}:
+                raise SettingsError("settings request has an invalid schema")
+            document = settings_store().update(payload["settings"], payload["revision"])
+        except RevisionConflict as exc:
+            return self._send(409, json.dumps({"ok": False, "error": str(exc)}))
+        except (OSError, SettingsError) as exc:
+            return self._send(400, json.dumps({"ok": False, "error": str(exc)}))
+        log_event(type="settings_updated", revision=document["revision"])
+        return self._send(200, json.dumps({"ok": True, "settings": document, "attention": False}))
+
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        if url.path != "/api/wacli-receipt" and not self._require_same_origin():
+            return
+        if url.path == "/api/ringtone-preview":
+            payload = self._json_body(1024)
+            if payload is None:
+                return
+            try:
+                if set(payload) != {"ringtone_id"}:
+                    raise SettingsError("ringtone preview request is invalid")
+                preview_ringtone(payload["ringtone_id"])
+            except SettingsError as exc:
+                return self._send(409, json.dumps({"ok": False, "error": str(exc)}))
+            return self._send(202, json.dumps({"ok": True}))
+        if url.path in {"/whatsapp/pair/start", "/whatsapp/pair/cancel", "/whatsapp/unlink"}:
+            payload = self._form_body()
+            if payload is None:
+                return
+            try:
+                engine = pairing_engine()
+                if url.path == "/whatsapp/pair/start":
+                    if set(payload) != {"phone"}:
+                        raise PairingError("phone_number_invalid")
+                    result = engine.start(normalize_phone(payload["phone"]))
+                elif url.path == "/whatsapp/pair/cancel":
+                    if payload:
+                        raise PairingError("pairing_request_invalid")
+                    result = engine.cancel()
+                else:
+                    if payload != {"confirm": "unlink"}:
+                        raise PairingError("unlink_confirmation_required")
+                    result = engine.relink()
+                phase = "WHATSAPP_READY" if result.get("status") == "ready" else "WHATSAPP_PENDING"
+                return self._send(200, json.dumps({"mode": "RUNTIME", "phase": phase, "whatsapp": result}))
+            except PairingError as exc:
+                code = 400 if str(exc) in {"phone_number_invalid", "unlink_confirmation_required"} else 409
+                return self._send(code, json.dumps({"error": str(exc).replace("_", " ")}))
+            except OSError:
+                return self._send(503, json.dumps({"error": "WhatsApp pairing is unavailable"}))
+        if url.path in {
+            "/recipients/refresh",
+            "/recipients/select",
+            "/recipients/select-number",
+            "/recipients/add",
+            "/recipients/add-number",
+            "/recipients/remove",
+            "/recipients/default",
+            "/recipients/defer",
+        }:
+            payload = self._form_body()
+            if payload is None:
+                return
+            try:
+                engine = pairing_engine()
+                if url.path == "/recipients/refresh":
+                    if payload:
+                        raise PairingError("recipient_request_invalid")
+                    result = engine.recipient_list(refresh=True)
+                elif url.path == "/recipients/defer":
+                    if payload:
+                        raise PairingError("recipient_request_invalid")
+                    result = engine.recipient_defer()
+                elif url.path in {"/recipients/select-number", "/recipients/add-number"}:
+                    if set(payload) != {"phone"}:
+                        raise PairingError("phone_number_invalid")
+                    operation = (
+                        engine.recipient_select_phone
+                        if url.path == "/recipients/select-number"
+                        else engine.recipient_add_phone
+                    )
+                    result = operation(normalize_phone(payload["phone"]))
+                else:
+                    if set(payload) != {"token"}:
+                        raise PairingError("recipient_request_invalid")
+                    operation = {
+                        "/recipients/add": engine.recipient_add,
+                        "/recipients/select": engine.recipient_select,
+                        "/recipients/remove": engine.recipient_remove,
+                        "/recipients/default": engine.recipient_default,
+                    }[url.path]
+                    result = operation(payload["token"])
+                return self._send(200, json.dumps(result))
+            except PairingError as exc:
+                return self._send(409, json.dumps({"error": str(exc).replace("_", " ")}))
+            except OSError:
+                return self._send(503, json.dumps({"error": "Recipient setup is unavailable"}))
+        if url.path in {"/nfc/enroll", "/nfc/cancel-runtime", "/nfc/unpair-presented"}:
+            payload = self._form_body()
+            if payload is None:
+                return
+            try:
+                if url.path == "/nfc/enroll":
+                    if set(payload) != {"token"}:
+                        raise NfcError("recipient token is invalid")
+                    candidate = pairing_engine().recipients.configured_candidate(payload["token"])
+                    nfc_router().begin_enrollment(
+                        label=candidate["label"],
+                        jid=candidate["jid"],
+                        ttl_s=120,
+                        create_contact=False,
+                    )
+                    return self._send(
+                        202,
+                        json.dumps({"status": "waiting", "recipient": candidate["label"]}),
+                    )
+                if payload:
+                    raise NfcError("NFC request is invalid")
+                if url.path == "/nfc/cancel-runtime":
+                    nfc_router().cancel_enrollment()
+                    return self._send(200, json.dumps({"status": "idle"}))
+                selection = active_selection(CONTACTS_FILE, NFC_SELECTION_FILE)
+                if selection is None:
+                    raise NfcError("Present a paired NFC card, then try again")
+                ContactStore(CONTACTS_FILE).remove_card(selection["uid"])
+                Path(NFC_SELECTION_FILE).unlink(missing_ok=True)
+                return self._send(200, json.dumps({"status": "unpaired"}))
+            except (ContactError, NfcError, PairingError) as exc:
+                return self._send(409, json.dumps({"error": str(exc)}))
+            except OSError:
+                return self._send(503, json.dumps({"error": "NFC setup is unavailable"}))
+        if url.path == "/api/wifi-change":
+            payload = self._json_body(2048)
+            if payload is None:
+                return
+            try:
+                request_wifi_change(payload)
+                return self._send(
+                    202,
+                    json.dumps(
+                        {
+                            "status": "connecting",
+                            "message": "Reconnect this phone after Button Box changes networks",
+                        }
+                    ),
+                )
+            except WifiChangeError as exc:
+                return self._send(409, json.dumps({"error": str(exc)}))
+            except OSError:
+                return self._send(503, json.dumps({"error": "Wi-Fi change is unavailable"}))
         if url.path == "/api/wacli-receipt":
             if not WACLI_WEBHOOK_SECRET:
                 return self._send(
@@ -950,34 +1394,35 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, json.dumps({"ok": False, "error": str(e)}))
             return self._send(202, '{"ok":true,"status":"queued"}')
         q = urllib.parse.parse_qs(url.query or "")
-        name = safe_name((q.get("f") or [""])[0])
-        if not name:
-            return self._send(400, "{}")
         if url.path == "/api/hold":
-            src, dst = os.path.join(QUEUE_DIR, name), os.path.join(HOLD_DIR, name)
+            source_kind, source_dir, destination_dir = "queue", QUEUE_DIR, HOLD_DIR
             ev = "dash_hold"
         elif url.path == "/api/resume":
-            src, dst = os.path.join(HOLD_DIR, name), os.path.join(QUEUE_DIR, name)
+            source_kind, source_dir, destination_dir = "hold", HOLD_DIR, QUEUE_DIR
             ev = "dash_resume"
         elif url.path == "/api/delete":
-            src, dst = os.path.join(QUEUE_DIR, name), os.path.join(TRASH_DIR, name)
+            source_kind, source_dir, destination_dir = "queue", QUEUE_DIR, TRASH_DIR
             ev = "dash_delete"
         elif url.path == "/api/reinstate":
-            src, dst = os.path.join(TRASH_DIR, name), os.path.join(QUEUE_DIR, name)
+            source_kind, source_dir, destination_dir = "trash", TRASH_DIR, QUEUE_DIR
             ev = "dash_reinstate"
         else:
             return self._send(404, "{}")
+        token = (q.get("f") or [""])[0]
+        name = resolve_message_token(token, source_kind)
+        if not name:
+            return self._send(400, "{}")
         try:
             move_queue_message(
-                os.path.dirname(src),
-                os.path.dirname(dst),
+                source_dir,
+                destination_dir,
                 name,
-                exposing_to_player=os.path.dirname(dst) == QUEUE_DIR,
+                exposing_to_player=destination_dir == QUEUE_DIR,
             )
         except FileNotFoundError:
             return self._send(
                 409,
-                json.dumps({"ok": False, "error": "Message was claimed by the box"}),
+                json.dumps({"ok": False, "error": "Message was claimed by Button Box"}),
             )
         except FileExistsError:
             return self._send(
@@ -996,9 +1441,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    if not BIND:
-        raise SystemExit("configure MSGBOX_DASH_BIND")
+    bind_address = resolve_bind(BIND)
     os.makedirs(HOLD_DIR, exist_ok=True)
     os.makedirs(TRASH_DIR, exist_ok=True)
-    print(f"dashboard on http://{BIND}:{PORT}", flush=True)
-    ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
+    print(f"dashboard on http://{bind_address}:{PORT}", flush=True)
+    ThreadingHTTPServer((bind_address, PORT), Handler).serve_forever()

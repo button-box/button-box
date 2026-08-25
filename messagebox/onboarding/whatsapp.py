@@ -468,6 +468,34 @@ class PairingEngine:
             self.candidates_path.unlink(missing_ok=True)
             return self._set_state("idle")
 
+    def relink(self):
+        """Log out and erase every account-scoped routing and setup proof."""
+        with self._lock:
+            state = self._load_state()
+            if state["status"] != "ready":
+                raise PairingError("whatsapp_not_ready")
+            result = self._run_wacli(
+                self.live_store,
+                ["--json", "--timeout", "15s", "auth", "logout"],
+                timeout=20,
+            )
+            if result.returncode != 0:
+                return self._set_state(
+                    "ready",
+                    phone_hint=state["phone_hint"],
+                    eligible_count=state["eligible_count"],
+                    error="UNLINK_FAILED",
+                )
+            self._remove_directory(self.live_store)
+            self.live_store.mkdir(parents=True, mode=0o700)
+            self.candidates_path.unlink(missing_ok=True)
+            try:
+                self.recipients.reset_for_whatsapp_relink()
+            except (OSError, RecipientError) as exc:
+                self._set_state("failed", error="CLEANUP_FAILED")
+                raise PairingError("cleanup_required") from exc
+            return self._set_state("idle")
+
     def _require_ready(self):
         if self._load_state()["status"] != "ready":
             raise PairingError("whatsapp_not_ready")
@@ -1042,7 +1070,7 @@ def serve(socket_path=SOCKET_PATH):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Message Box WhatsApp pairing worker")
+    parser = argparse.ArgumentParser(description="Button Box WhatsApp pairing worker")
     parser.add_argument("--serve", action="store_true")
     arguments = parser.parse_args(argv)
     if not arguments.serve:

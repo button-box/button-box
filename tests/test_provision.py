@@ -112,6 +112,9 @@ esac
         self.assertIn("messagebox/onboarding/initialize.py", staged_paths)
         self.assertIn("messagebox/onboarding/nfc.py", staged_paths)
         self.assertIn("messagebox/onboarding/completion.py", staged_paths)
+        self.assertIn("messagebox/settings.py", staged_paths)
+        self.assertIn("messagebox/wifi_change.py", staged_paths)
+        self.assertNotIn("messagebox/dashboard/static/app.js", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
 
         prompt_args = rsync_calls[1][1:]
