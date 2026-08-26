@@ -141,9 +141,9 @@ class TonePlayer:
             sequence = [(1760, 0.08)] if kind == "read" else [(1320, 0.08), (1760, 0.11)]
             self._write_tone(path, sequence)
             os.chmod(path, 0o600)
-        card = os.environ.get("MSGBOX_SPEAKER_CARD", "Device")
+        device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
         self.run(
-            ["aplay", "-q", "-D", f"plughw:CARD={card}", os.fspath(path)],
+            ["aplay", "-q", "-D", device, os.fspath(path)],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

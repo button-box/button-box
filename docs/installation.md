@@ -26,9 +26,11 @@ not overwrite a working device without a tested backup.
    Neither method transfers device runtime state, pairs WhatsApp, or starts
    Message Box services.
 
-   Setup installs the supported hardware defaults as `/etc/messagebox/env` only
-   when that file does not already exist. Later updates preserve operator
-   customization.
+   Connect the microphone and USB speaker before running setup. On a fresh
+   installation, setup selects the lowest-numbered ALSA capture device and USB
+   playback device, then records their card names in `/etc/messagebox/env`;
+   setup fails if either is unavailable. Later updates preserve the existing
+   file and operator customization.
 
    The Pi needs internet access during setup. See
    [Internet access for a fresh card](developer-onboarding.md#internet-access-for-a-fresh-card).

@@ -53,6 +53,7 @@ for path in \
   config/onboarding/comitup-dbus.conf \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
+  scripts/install/audio_config.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
   scripts/commands/messagebox-comitup-state \
@@ -138,11 +139,6 @@ if [ -L "$APP_DIR" ] || { [ -e "$APP_DIR" ] && [ ! -d "$APP_DIR" ]; }; then
   echo "Cannot install into non-directory application path: $APP_DIR" >&2
   exit 1
 fi
-if [ -L "$CONFIG_DIR/env" ] || { [ -e "$CONFIG_DIR/env" ] && [ ! -f "$CONFIG_DIR/env" ]; }; then
-  echo "Cannot use non-regular runtime configuration: $CONFIG_DIR/env" >&2
-  exit 1
-fi
-
 if sudo test -e "$ONBOARDING_CONFIG_DIR/enabled"; then
   echo "Refusing to update while Wi-Fi onboarding is armed." >&2
   exit 1
@@ -170,6 +166,31 @@ for unit in \
     exit 1
   fi
 done
+
+GENERATED_ENV=
+CONFIG_STAGE=
+cleanup() {
+  if [ -n "$GENERATED_ENV" ]; then
+    rm -f "$GENERATED_ENV"
+  fi
+  if [ -n "$CONFIG_STAGE" ]; then
+    sudo rm -f "$CONFIG_STAGE"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+if sudo test -L "$CONFIG_DIR/env" || {
+  sudo test -e "$CONFIG_DIR/env" && ! sudo test -f "$CONFIG_DIR/env"
+}; then
+  echo "Cannot use non-regular runtime configuration: $CONFIG_DIR/env" >&2
+  exit 1
+fi
+if ! sudo test -e "$CONFIG_DIR/env"; then
+  GENERATED_ENV=$(mktemp)
+  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" \
+    "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
+fi
 
 if account=$(getent passwd "$SERVICE_USER"); then
   account_home=$(printf '%s\n' "$account" | cut -d: -f6)
@@ -287,9 +308,18 @@ done
 
 sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   "$REPO_DIR/config/env.example" "$CONFIG_DIR/env.example"
-if ! sudo test -e "$CONFIG_DIR/env"; then
+if [ -n "$GENERATED_ENV" ]; then
+  CONFIG_STAGE=$(sudo mktemp "$CONFIG_DIR/.env.XXXXXX")
   sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
-    "$REPO_DIR/config/env.example" "$CONFIG_DIR/env"
+    "$GENERATED_ENV" "$CONFIG_STAGE"
+  if ! sudo ln -T "$CONFIG_STAGE" "$CONFIG_DIR/env"; then
+    echo "Runtime configuration appeared during setup: $CONFIG_DIR/env" >&2
+    exit 1
+  fi
+  sudo rm -f "$CONFIG_STAGE"
+  CONFIG_STAGE=
+  rm -f "$GENERATED_ENV"
+  GENERATED_ENV=
 fi
 
 (cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
