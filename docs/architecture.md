@@ -17,10 +17,28 @@ root access they require.
 | `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the optional status and queue dashboard |
+| `messagebox-signal-poller.service` | Queue voice messages from Signal contacts |
+| `messagebox-signal-rest.service` | Run the signal-cli-rest-api container (Signal channel backend) |
 
 One exact default recipient is stored with the private contact allow-list. A
 recognized NFC selection overrides that default; otherwise the default is used.
 No default, an unknown card, or invalid routing state fails closed.
+
+## Messaging channels
+
+Each contact has a `channel` (`whatsapp` or `signal`) alongside its identifier.
+`messagebox.providers.MessagingProvider` is the interface both channels
+implement (`send_voice`, `react`, `set_presence`); `button_send.py` and the
+pollers dispatch to `WhatsAppProvider` (wraps `wacli`) or `SignalProvider`
+(talks HTTP to the signal-cli-rest-api container) based on a contact's or
+queued message's `channel` field, so the two channels share one send/receive
+pipeline rather than duplicating it. signal-cli is GPLv3; it runs as an
+isolated container reached over HTTP, not linked into Message Box's own
+process, to keep that boundary clean.
+
+Signal onboarding/pairing (linked-device QR flow) is not yet implemented —
+adding a Signal contact today requires the `messagebox-contact` CLI
+(`--channel signal`) rather than the web onboarding portal.
 
 ## Onboarding services
 

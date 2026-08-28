@@ -246,12 +246,13 @@ class EnrollmentStore:
         *,
         label,
         jid,
+        channel="whatsapp",
         card_clip="",
         create_contact=True,
         ttl_s=DEFAULT_ENROLLMENT_TTL_S,
     ):
         try:
-            contact = validate_contact(jid, label, card_clip=card_clip or "")
+            contact = validate_contact(jid, label, channel=channel, card_clip=card_clip or "")
         except ContactError as exc:
             raise NfcError(str(exc)) from exc
         if type(ttl_s) not in (int, float) or ttl_s <= 0 or ttl_s > 1800:
@@ -264,6 +265,7 @@ class EnrollmentStore:
             "request_id": uuid.uuid4().hex,
             "label": contact["label"],
             "jid": contact["jid"],
+            "channel": contact["channel"],
             "card_clip": contact["card_clip"],
             "create_contact": create_contact,
             "created_at": now,
@@ -292,6 +294,7 @@ class EnrollmentStore:
             contact = validate_contact(
                 payload.get("jid"),
                 payload.get("label"),
+                channel=payload.get("channel", "whatsapp"),
                 card_clip=payload.get("card_clip", ""),
             )
             created_at = float(payload.get("created_at"))
@@ -309,6 +312,7 @@ class EnrollmentStore:
                 "request_id": request_id,
                 "label": contact["label"],
                 "jid": contact["jid"],
+                "channel": contact["channel"],
                 "card_clip": contact["card_clip"],
                 "create_contact": create_contact,
                 "created_at": created_at,
@@ -508,6 +512,7 @@ class NfcRouter:
         *,
         label,
         jid,
+        channel="whatsapp",
         ttl_s=DEFAULT_ENROLLMENT_TTL_S,
         card_clip="",
         create_contact=True,
@@ -515,6 +520,7 @@ class NfcRouter:
         return self.enrollment.begin(
             label=label,
             jid=jid,
+            channel=channel,
             card_clip=card_clip,
             create_contact=create_contact,
             ttl_s=ttl_s,
@@ -600,6 +606,7 @@ class NfcRouter:
             request["jid"],
             request["claimed_uid"],
             label=request["label"],
+            channel=request.get("channel", "whatsapp"),
             card_clip=request["card_clip"],
             create_contact=request["create_contact"],
         )

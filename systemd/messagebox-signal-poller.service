@@ -1,0 +1,19 @@
+[Unit]
+Description=Message Box incoming voice note poller (Signal)
+After=network-online.target messagebox-signal-rest.service
+Wants=network-online.target
+PartOf=messagebox.target messagebox-onboarding-voice.target
+
+[Service]
+User=messagebox
+Group=messagebox
+WorkingDirectory=/opt/messagebox
+EnvironmentFile=/etc/messagebox/env
+Environment=HOME=/var/lib/messagebox
+UMask=0077
+ExecStart=/usr/bin/python3 -m messagebox.signalpoll
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=messagebox.target

@@ -133,13 +133,22 @@ class ButtonRoutingTests(unittest.TestCase):
     def test_missing_or_corrupt_legacy_recipient_sidecar_blocks(self):
         wav = Path(self.directory.name) / "legacy.wav"
         wav.write_bytes(b"audio")
-        self.assertIsNone(button_send.legacy_job_recipient(str(wav)))
+        self.assertEqual(button_send.legacy_job_recipient(str(wav)), (None, None))
         Path(str(wav) + ".json").write_text("not json", encoding="utf-8")
-        self.assertIsNone(button_send.legacy_job_recipient(str(wav)))
+        self.assertEqual(button_send.legacy_job_recipient(str(wav)), (None, None))
         Path(str(wav) + ".json").write_text(
             json.dumps({"recipient": GRANDMA}), encoding="utf-8"
         )
-        self.assertEqual(button_send.legacy_job_recipient(str(wav)), GRANDMA)
+        self.assertEqual(
+            button_send.legacy_job_recipient(str(wav)), (GRANDMA, "whatsapp")
+        )
+        Path(str(wav) + ".json").write_text(
+            json.dumps({"recipient": "+15551234567", "channel": "signal"}),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            button_send.legacy_job_recipient(str(wav)), ("+15551234567", "signal")
+        )
 
     def test_exact_guided_reply_never_resolves_or_claims_a_card(self):
         incoming = Path(self.directory.name) / "incoming.wav"

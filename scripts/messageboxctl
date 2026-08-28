@@ -3,7 +3,7 @@
 set -eu
 
 TARGET=messagebox.target
-SERVICES="button sync poller dashboard nfc"
+SERVICES="button sync poller dashboard nfc signal-poller signal-rest"
 
 usage() {
   cat <<'EOF'
@@ -18,14 +18,14 @@ Commands:
   enable SERVICE...         Select services; start them if the target is active
   disable SERVICE...        Stop and deselect services
 
-Services: button sync poller dashboard nfc; logs also accepts onboarding
+Services: button sync poller dashboard nfc signal-poller signal-rest; logs also accepts onboarding
 EOF
 }
 
 unit_for() {
   case "$1" in
     dashboard) printf 'messagebox-dash.service\n' ;;
-    button|sync|poller|nfc) printf 'messagebox-%s.service\n' "$1" ;;
+    button|sync|poller|nfc|signal-poller|signal-rest) printf 'messagebox-%s.service\n' "$1" ;;
     *) echo "Unknown Message Box service: $1" >&2; exit 2 ;;
   esac
 }

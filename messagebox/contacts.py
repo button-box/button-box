@@ -23,7 +23,7 @@ from typing import Any
 from messagebox.runtime_paths import ASSET_DIR, CONTACTS_FILE, NFC_ENROLLMENT_FILE
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ASSET_ROOT = str(ASSET_DIR)
 MAX_LABEL_LENGTH = 80
 MAX_NAME_LENGTH = 80
@@ -32,16 +32,20 @@ ENV_FILE = Path("/etc/messagebox/env")
 
 _GROUP_JID = re.compile(r"^[0-9]+(?:-[0-9]+)?@g\.us$")
 _PERSON_JID = re.compile(r"^[0-9]+@s\.whatsapp\.net$")
+_SIGNAL_GROUP_ID = re.compile(r"^group\.[A-Za-z0-9+/=]{8,128}$")
+_SIGNAL_PERSON_ID = re.compile(r"^\+[1-9][0-9]{6,14}$")
 _UID = re.compile(r"^[0-9A-F]+$")
+_CHANNELS = {"whatsapp", "signal"}
 _LEGACY_ROOT_KEYS = {"version", "revision", "contacts", "listeners"}
 _ROOT_KEYS = _LEGACY_ROOT_KEYS | {"default_recipient"}
-_CONTACT_KEYS = {
+_CONTACT_KEYS_LEGACY = {
     "label",
     "kind",
     "receive_after",
     "card_uids",
     "card_clip",
 }
+_CONTACT_KEYS = _CONTACT_KEYS_LEGACY | {"channel"}
 _LISTENER_KEYS = {"name", "listened_clip"}
 JsonObject = dict[str, Any]
 
@@ -60,22 +64,37 @@ def _empty_document() -> JsonObject:
     }
 
 
-def _chat_kind(value: object) -> str:
+def _chat_kind(value: object, channel: str | None = "whatsapp") -> str:
+    """Derive person/group kind for one channel, or any channel if unset."""
     if not isinstance(value, str):
-        raise ContactError("contact JID is invalid")
-    if _GROUP_JID.fullmatch(value):
-        return "group"
-    if _PERSON_JID.fullmatch(value):
-        return "person"
-    raise ContactError("contact JID is invalid")
+        raise ContactError("contact identifier is invalid")
+    candidates = (channel,) if channel is not None else ("whatsapp", "signal")
+    for candidate in candidates:
+        if candidate == "signal":
+            if _SIGNAL_GROUP_ID.fullmatch(value):
+                return "group"
+            if _SIGNAL_PERSON_ID.fullmatch(value):
+                return "person"
+        else:
+            if _GROUP_JID.fullmatch(value):
+                return "group"
+            if _PERSON_JID.fullmatch(value):
+                return "person"
+    raise ContactError("contact identifier is invalid")
 
 
-def _clean_chat_jid(value: object) -> str:
+def _clean_chat_jid(value: object, channel: str | None = "whatsapp") -> str:
     if not isinstance(value, str):
-        raise ContactError("contact JID is invalid")
+        raise ContactError("contact identifier is invalid")
     jid = value.strip()
-    _chat_kind(jid)
+    _chat_kind(jid, channel)
     return jid
+
+
+def _clean_channel(value: object) -> str:
+    if value not in _CHANNELS:
+        raise ContactError("channel must be 'whatsapp' or 'signal'")
+    return value
 
 
 def _canonical_listener_jid(value: object) -> str:
@@ -146,13 +165,15 @@ def normalize_card_uid(value: object) -> str:
     return _normalize_uid(value)
 
 
-def validate_contact(jid, label, *, card_clip="") -> JsonObject:
+def validate_contact(jid, label, *, channel="whatsapp", card_clip="") -> JsonObject:
     """Validate contact input without reading or changing the store."""
-    jid = _clean_chat_jid(jid)
+    channel = _clean_channel(channel)
+    jid = _clean_chat_jid(jid, channel)
     return {
         "jid": jid,
         "label": _clean_text(label, "label", MAX_LABEL_LENGTH),
-        "kind": _chat_kind(jid),
+        "kind": _chat_kind(jid, channel),
+        "channel": channel,
         "card_clip": _clean_clip(card_clip, "card clip"),
     }
 
@@ -161,7 +182,7 @@ def _validate_document(document: object) -> JsonObject:
     if not isinstance(document, dict):
         raise ContactError("contact store has an invalid schema")
     version = document.get("version")
-    if type(version) is not int or version not in {1, SCHEMA_VERSION}:
+    if type(version) is not int or version not in {1, 2, SCHEMA_VERSION}:
         raise ContactError("contact store version is unsupported")
     expected_keys = _LEGACY_ROOT_KEYS if version == 1 else _ROOT_KEYS
     if set(document) != expected_keys:
@@ -175,10 +196,12 @@ def _validate_document(document: object) -> JsonObject:
         raise ContactError("contact store has an invalid schema")
 
     seen_uids: set[str] = set()
+    contact_keys = _CONTACT_KEYS if version == SCHEMA_VERSION else _CONTACT_KEYS_LEGACY
     for jid, contact in contacts.items():
-        kind = _chat_kind(jid)
-        if not isinstance(contact, dict) or set(contact) != _CONTACT_KEYS:
+        if not isinstance(contact, dict) or set(contact) != contact_keys:
             raise ContactError("contact store contains an invalid contact")
+        channel = _clean_channel(contact["channel"]) if version == SCHEMA_VERSION else "whatsapp"
+        kind = _chat_kind(jid, channel)
         if contact["kind"] != kind:
             raise ContactError("contact store contains an invalid contact kind")
         if _clean_text(contact["label"], "label", MAX_LABEL_LENGTH) != contact["label"]:
@@ -205,16 +228,18 @@ def _validate_document(document: object) -> JsonObject:
             raise ContactError("contact store contains an invalid listened clip")
     upgraded = copy.deepcopy(document)
     if version == 1:
-        upgraded["version"] = SCHEMA_VERSION
         upgraded["default_recipient"] = (
             next(iter(contacts)) if len(contacts) == 1 else None
         )
+    if version < SCHEMA_VERSION:
+        upgraded["version"] = SCHEMA_VERSION
+        for contact in upgraded["contacts"].values():
+            contact.setdefault("channel", "whatsapp")
     default_recipient = upgraded["default_recipient"]
     if default_recipient is not None:
-        try:
-            default_recipient = _clean_chat_jid(default_recipient)
-        except ContactError as exc:
-            raise ContactError("contact store has an invalid default recipient") from exc
+        if not isinstance(default_recipient, str):
+            raise ContactError("contact store has an invalid default recipient")
+        default_recipient = default_recipient.strip()
         if default_recipient not in contacts:
             raise ContactError("contact store has an invalid default recipient")
         upgraded["default_recipient"] = default_recipient
@@ -316,11 +341,13 @@ class ContactStore:
         jid,
         label,
         *,
+        channel="whatsapp",
         card_clip="",
         receive_after=None,
         make_default=False,
     ) -> JsonObject:
-        jid = _clean_chat_jid(jid)
+        channel = _clean_channel(channel)
+        jid = _clean_chat_jid(jid, channel)
         label = _clean_text(label, "label", MAX_LABEL_LENGTH)
         card_clip = _clean_clip(card_clip, "card clip")
         if not isinstance(make_default, bool):
@@ -341,7 +368,8 @@ class ContactStore:
             effective_receive_after = _clean_receive_after(effective_receive_after)
             contact = {
                 "label": label,
-                "kind": _chat_kind(jid),
+                "kind": _chat_kind(jid, channel),
+                "channel": channel,
                 "receive_after": effective_receive_after,
                 "card_uids": [],
                 "card_clip": card_clip,
@@ -357,7 +385,7 @@ class ContactStore:
         return self._mutate(add)
 
     def remove_contact(self, jid) -> bool:
-        jid = _clean_chat_jid(jid)
+        jid = _clean_chat_jid(jid, channel=None)
 
         def remove(document):
             if jid not in document["contacts"]:
@@ -371,7 +399,7 @@ class ContactStore:
 
     def set_default_recipient(self, jid) -> JsonObject:
         """Set the first explicit default without replacing an existing one."""
-        jid = _clean_chat_jid(jid)
+        jid = _clean_chat_jid(jid, channel=None)
 
         def set_default(document):
             contact = document["contacts"].get(jid)
@@ -389,7 +417,7 @@ class ContactStore:
 
     def choose_default_recipient(self, jid) -> JsonObject:
         """Choose any configured contact as the current default recipient."""
-        jid = _clean_chat_jid(jid)
+        jid = _clean_chat_jid(jid, channel=None)
 
         def choose_default(document):
             contact = document["contacts"].get(jid)
@@ -403,7 +431,7 @@ class ContactStore:
         return self._mutate(choose_default)
 
     def assign_card(self, jid, uid) -> JsonObject:
-        jid = _clean_chat_jid(jid)
+        jid = _clean_chat_jid(jid, channel=None)
         uid = _normalize_uid(uid)
 
         def assign(document):
@@ -426,11 +454,12 @@ class ContactStore:
         uid,
         *,
         label,
+        channel="whatsapp",
         card_clip="",
         create_contact=True,
     ) -> JsonObject:
         """Assign a card, optionally creating its contact in the same revision."""
-        candidate = validate_contact(jid, label, card_clip=card_clip)
+        candidate = validate_contact(jid, label, channel=channel, card_clip=card_clip)
         jid = candidate["jid"]
         uid = _normalize_uid(uid)
         if not isinstance(create_contact, bool):
@@ -451,6 +480,7 @@ class ContactStore:
                 contacts[jid] = {
                     "label": candidate["label"],
                     "kind": candidate["kind"],
+                    "channel": candidate["channel"],
                     "receive_after": receive_after,
                     "card_uids": [],
                     "card_clip": candidate["card_clip"],
@@ -494,7 +524,7 @@ class ContactStore:
         return None
 
     def contact(self, jid) -> JsonObject | None:
-        jid = _clean_chat_jid(jid)
+        jid = _clean_chat_jid(jid, channel=None)
         contact = self._read()["contacts"].get(jid)
         return _contact_result(jid, contact) if contact is not None else None
 
@@ -559,8 +589,9 @@ def _parser() -> argparse.ArgumentParser:
         prog="messagebox-contact",
         description="Manage Message Box contacts and NFC cards.",
         epilog=(
-            "CHAT_JID must be exact, for example: group 123456789@g.us; "
-            "direct chat 15551234567@s.whatsapp.net"
+            "CHAT_JID must be exact. WhatsApp: group 123456789@g.us; direct "
+            "chat 15551234567@s.whatsapp.net. Signal (--channel signal): "
+            "group group.<base64id>; direct chat +15551234567"
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -573,9 +604,16 @@ def _parser() -> argparse.ArgumentParser:
         "chat_jid",
         metavar="CHAT_JID",
         help=(
-            "exact group JID (123456789@g.us) or direct-chat JID "
-            "(15551234567@s.whatsapp.net)"
+            "WhatsApp: group JID (123456789@g.us) or direct-chat JID "
+            "(15551234567@s.whatsapp.net); Signal: group.<base64id> or "
+            "+15551234567"
         ),
+    )
+    add.add_argument(
+        "--channel",
+        choices=sorted(_CHANNELS),
+        default="whatsapp",
+        help="messaging channel this contact is reached on (default: whatsapp)",
     )
     add.add_argument(
         "--no-card",
@@ -675,6 +713,7 @@ def _stage_enrollment(contact, *, create_contact, enrollment_factory=None) -> No
         enrollment.begin(
             label=contact["label"],
             jid=contact["jid"],
+            channel=contact.get("channel", "whatsapp"),
             card_clip=contact["card_clip"],
             create_contact=create_contact,
             ttl_s=300,
@@ -727,7 +766,7 @@ def main(
             return 0
         if args.command == "add":
             candidate = validate_contact(
-                args.chat_jid, args.label, card_clip=args.card_clip
+                args.chat_jid, args.label, channel=args.channel, card_clip=args.card_clip
             )
             if contacts.contact(candidate["jid"]) is not None:
                 raise ContactError("contact already exists")
@@ -735,6 +774,7 @@ def main(
                 contacts.add_contact(
                     candidate["jid"],
                     candidate["label"],
+                    channel=candidate["channel"],
                     card_clip=candidate["card_clip"],
                 )
                 count = len(contacts.load()["contacts"])

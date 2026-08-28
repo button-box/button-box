@@ -40,10 +40,10 @@ from messagebox.guided_reply import (
     recover_inflight_files,
     release_inbox_file,
     should_ring_after_unsent_session,
-    voice_send_command,
 )
-from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
+from messagebox.listened_receipts import AnnouncementGate, ReceiptStore
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.providers import provider_for_channel
 from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
@@ -378,49 +378,56 @@ def ensure_nfc_confirmation(context):
 
 
 def legacy_job_recipient(path):
-    """Use only the recipient snapshot bound at recording time."""
+    """Use only the recipient/channel snapshot bound at recording time."""
     try:
         with open(path + ".json", encoding="utf-8") as handle:
-            recipient = json.load(handle).get("recipient")
+            data = json.load(handle)
+        recipient = data.get("recipient")
+        channel = data.get("channel", "whatsapp")
         if (
             isinstance(recipient, str)
             and recipient
             and recipient.strip() == recipient
-            and "@" in recipient
             and not any(character.isspace() for character in recipient)
+            and channel in ("whatsapp", "signal")
         ):
-            return recipient
+            return recipient, channel
     except (OSError, AttributeError, ValueError, json.JSONDecodeError):
         pass
-    return None
+    return None, None
 
 
-def bind_legacy_job_recipient(path, recipient):
+def bind_legacy_job_recipient(path, recipient, channel="whatsapp"):
     """Persist routing before the WAV becomes visible to the sender thread."""
     metadata_path = path + ".json"
     temporary_path = metadata_path + ".part"
     with open(temporary_path, "w", encoding="utf-8") as handle:
-        json.dump({"version": 1, "recipient": recipient}, handle, sort_keys=True)
+        json.dump(
+            {"version": 1, "recipient": recipient, "channel": channel},
+            handle,
+            sort_keys=True,
+        )
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary_path, metadata_path)
 
 
-def track_sent_for_receipts(sent, recipient, *, local_message_id, flow):
-    """Persist the WhatsApp ID after acceptance without risking a duplicate send."""
-    whatsapp_id = parse_wacli_send_id(sent.stdout)
-    if not whatsapp_id:
+def track_sent_for_receipts(sent, recipient, *, local_message_id, flow, channel="whatsapp"):
+    """Persist the provider message ID after acceptance, once, per send."""
+    message_id = sent.provider_message_id
+    if not message_id:
         log_event(
             "listen_tracking_unavailable",
             message_id=local_message_id,
             flow=flow,
-            reason="missing_wacli_id",
+            reason="missing_provider_id",
         )
         return None
     try:
         tracked = receipt_store.track_sent(
-            whatsapp_id,
+            message_id,
             recipient,
+            channel=channel,
             local_message_id=local_message_id,
             flow=flow,
         )
@@ -435,14 +442,14 @@ def track_sent_for_receipts(sent, recipient, *, local_message_id, flow):
             reason="persist_failed",
         )
         return None
-    return whatsapp_id
+    return message_id
 
 
 def send_legacy_outbox_file(fname):
     """Keep pre-feature durable WAV jobs working with the family-group target."""
     path = os.path.join(OUTBOX_DIR, fname)
     metadata_path = path + ".json"
-    recipient = legacy_job_recipient(path)
+    recipient, channel = legacy_job_recipient(path)
     if not recipient:
         log(f"legacy send blocked for {fname}: no bound recipient")
         log_event("send_blocked", flow="legacy", reason="missing_recipient")
@@ -487,32 +494,18 @@ def send_legacy_outbox_file(fname):
         log(f"ffmpeg failed on legacy {fname} - moved to .bad")
         log_event("send_failed", flow="legacy", reason="convert")
         return True
-    sent = subprocess.run(
-        [
-            WACLI_BIN,
-            "send",
-            "voice",
-            "--file",
-            ogg,
-            "--to",
-            recipient,
-            "--lock-wait",
-            LOCK_WAIT,
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    sent = get_provider(channel).send_voice(recipient, ogg, lock_wait=LOCK_WAIT)
     try:
         os.remove(ogg)
     except OSError:
         pass
-    if sent.returncode == 0:
-        whatsapp_id = track_sent_for_receipts(
+    if sent.ok:
+        message_id = track_sent_for_receipts(
             sent,
             recipient,
             local_message_id=fname,
             flow="legacy",
+            channel=channel,
         )
         os.remove(path)
         try:
@@ -523,13 +516,14 @@ def send_legacy_outbox_file(fname):
         log_event(
             "sent",
             flow="legacy",
+            channel=channel,
             target=recipient,
             dur=duration,
             queue_wait_s=wait_s,
-            whatsapp_id=whatsapp_id,
+            whatsapp_id=message_id,
         )
         return True
-    log(f"legacy send failed for {fname}: {(sent.stderr or sent.stdout).strip()[:200]}")
+    log(f"legacy send failed for {fname}: {(sent.raw_stderr or sent.raw_stdout).strip()[:200]}")
     return False
 
 
@@ -569,36 +563,34 @@ def send_guided_job(job):
     # crash from here until completion becomes uncertain on restart, never an
     # automatic duplicate resend.
     job = outbox_store.set_state(job, "sending", increment_attempts=True)
-    sent = subprocess.run(
-        voice_send_command(WACLI_BIN, ogg, job.recipient, LOCK_WAIT),
-        capture_output=True,
-        text=True,
-    )
+    sent = get_provider(job.channel).send_voice(job.recipient, ogg, lock_wait=LOCK_WAIT)
     try:
         os.remove(ogg)
     except OSError:
         pass
-    if sent.returncode == 0:
-        whatsapp_id = track_sent_for_receipts(
+    if sent.ok:
+        message_id = track_sent_for_receipts(
             sent,
             job.recipient,
             local_message_id=job.message_id,
             flow=job.flow_kind,
+            channel=job.channel,
         )
         outbox_store.complete(job)
         log_event(
             "sent",
             flow=job.flow_kind,
+            channel=job.channel,
             message_id=job.message_id,
             target=job.recipient,
             dur=job.duration,
-            whatsapp_id=whatsapp_id,
+            whatsapp_id=message_id,
         )
         log(f"SENT guided {job.message_id}")
         return True
     outbox_store.set_state(job, "pending")
     log_event("outbox_retry", message_id=job.message_id, flow=job.flow_kind)
-    log(f"guided send retry {job.message_id}: {(sent.stderr or sent.stdout).strip()[:200]}")
+    log(f"guided send retry {job.message_id}: {(sent.raw_stderr or sent.raw_stdout).strip()[:200]}")
     return False
 
 
@@ -779,22 +771,13 @@ def react_played(meta):
     if not meta or not meta.get("msgid") or not meta.get("chat"):
         return
     try:
-        command = [
-            WACLI_BIN,
-            "send",
-            "react",
-            "--to",
+        get_provider(meta.get("channel", "whatsapp")).react(
             meta["chat"],
-            "--id",
             meta["msgid"],
-            "--reaction",
             "🎧",
-            "--lock-wait",
-            LOCK_WAIT,
-        ]
-        if meta.get("sender_jid"):
-            command += ["--sender", meta["sender_jid"]]
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            sender=meta.get("sender_jid"),
+            lock_wait=LOCK_WAIT,
+        )
     except Exception as exc:
         log(f"react error: {exc}")
 
@@ -921,13 +904,23 @@ def play_warning_for_approval(path, session_id=None):
     return approved
 
 
-def presence(kind, recipient):
-    subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
-    subprocess.Popen(
-        [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", LOCK_WAIT],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+_provider_cache = {}
+
+
+def get_provider(channel):
+    provider = _provider_cache.get(channel)
+    if provider is None:
+        kwargs = {"wacli_bin": WACLI_BIN} if channel == "whatsapp" else {}
+        provider = provider_for_channel(channel, **kwargs)
+        _provider_cache[channel] = provider
+    return provider
+
+
+def presence(kind, recipient, channel="whatsapp"):
+    try:
+        get_provider(channel).set_presence(kind, recipient, lock_wait=LOCK_WAIT)
+    except Exception as exc:
+        log(f"presence error: {exc}")
 
 
 def cleanup_temp_recordings():
@@ -937,7 +930,7 @@ def cleanup_temp_recordings():
             path.unlink()
 
 
-def capture_guided_recording(recipient, session_id=None):
+def capture_guided_recording(recipient, session_id=None, channel="whatsapp"):
     global _recording
     _recording = True
     led.on()
@@ -965,7 +958,7 @@ def capture_guided_recording(recipient, session_id=None):
     )
     started = time.monotonic()
     vad.start(started)
-    presence("recording", recipient)
+    presence("recording", recipient, channel)
     presence_last = started
     closed_since = None
     stopped_by_press = False
@@ -989,7 +982,7 @@ def capture_guided_recording(recipient, session_id=None):
                 if vad.silence_expired(now):
                     break
                 if now - presence_last >= 8:
-                    presence("recording", recipient)
+                    presence("recording", recipient, channel)
                     presence_last = now
                 if process.poll() is not None:
                     raise RuntimeError("arecord exited unexpectedly")
@@ -1015,7 +1008,7 @@ def capture_guided_recording(recipient, session_id=None):
                 pass
         raise
     finally:
-        presence("paused", recipient)
+        presence("paused", recipient, channel)
         led.off()
         _recording = False
         if stopped_by_press:
@@ -1032,15 +1025,16 @@ def capture_guided_recording(recipient, session_id=None):
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id):
+    def __init__(self, recipient, session_id, channel="whatsapp"):
         self.recipient = recipient
         self.session_id = session_id
+        self.channel = channel
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
 
     def record(self):
-        return capture_guided_recording(self.recipient, self.session_id)
+        return capture_guided_recording(self.recipient, self.session_id, self.channel)
 
     def wait_for_approval(self, timeout):
         return wait_for_approval(timeout, self.session_id)
@@ -1092,6 +1086,7 @@ def record_and_send_legacy():
         block_unavailable_recipient()
         return
     recipient = context["contact"]["jid"]
+    channel = context["contact"].get("channel", "whatsapp")
     if context["via_card"] and not ensure_nfc_confirmation(context):
         log_event("nfc_confirmation_failed")
         return
@@ -1130,7 +1125,7 @@ def record_and_send_legacy():
             if now - started >= MIN_HOLD_S and (
                 presence_last is None or now - presence_last >= 8
             ):
-                presence("recording", recipient)
+                presence("recording", recipient, channel)
                 presence_last = now
             if not button.is_pressed:
                 open_since = open_since or now
@@ -1145,7 +1140,7 @@ def record_and_send_legacy():
                 os.remove(part)
                 beep("fail")
                 if presence_last:
-                    presence("paused", recipient)
+                    presence("paused", recipient, channel)
                 wait_for_stable_open()
                 return
         held = time.monotonic() - started
@@ -1153,13 +1148,13 @@ def record_and_send_legacy():
         recorder.send_signal(signal.SIGINT)
         recorder.wait()
         if presence_last:
-            presence("paused", recipient)
+            presence("paused", recipient, channel)
         if held >= MAX_SECONDS:
             os.remove(part)
             beep("fail")
             return
         final_path = part[:-5] + f"-{held:.1f}.wav"
-        bind_legacy_job_recipient(final_path, recipient)
+        bind_legacy_job_recipient(final_path, recipient, channel)
         os.replace(part, final_path)
         beep("sent")
     finally:
@@ -1175,6 +1170,9 @@ def run_guided_once():
     context = current_recipient_context(claim=True) if not claim else None
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
+    )
+    channel = metadata.get("channel", "whatsapp") if metadata else (
+        context["contact"].get("channel", "whatsapp") if context else "whatsapp"
     )
     if not claim:
         if context is None:
@@ -1195,7 +1193,7 @@ def run_guided_once():
         return
 
     led.off()
-    io = PiGuidedIO(recipient, session_id)
+    io = PiGuidedIO(recipient, session_id, channel)
 
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
@@ -1221,6 +1219,7 @@ def run_guided_once():
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
             auto_record_after_incoming=AUTO_RECORD_AFTER_INCOMING,
+            channel=channel,
         )
         if claim:
             finish_claim(claim)

@@ -289,6 +289,7 @@ class OutboxJob:
     path: Path
     audio_path: Path
     recipient: str
+    channel: str
     flow_kind: str
     duration: float
     state: str
@@ -308,6 +309,7 @@ class OutboxStore:
         flow_kind: str,
         duration: float,
         message_id: str | None = None,
+        channel: str = "whatsapp",
     ) -> OutboxJob:
         if not recipient:
             raise ValueError("recipient is required")
@@ -328,6 +330,7 @@ class OutboxStore:
             "version": 1,
             "message_id": mid,
             "recipient": recipient,
+            "channel": channel,
             "flow_kind": flow_kind,
             "duration": round(float(duration), 3),
             "state": "pending",
@@ -348,6 +351,7 @@ class OutboxStore:
             path=job_dir,
             audio_path=job_dir / "audio.wav",
             recipient=data["recipient"],
+            channel=data.get("channel", "whatsapp"),
             flow_kind=data["flow_kind"],
             duration=float(data.get("duration") or 0),
             state=data.get("state", "pending"),
@@ -424,6 +428,7 @@ class GuidedSession:
         incoming_path: str | None = None,
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
+        channel: str = "whatsapp",
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
@@ -452,6 +457,7 @@ class GuidedSession:
                 recipient,
                 flow_kind,
                 recording.duration,
+                channel=channel,
             )
             self.event(
                 "guided_approved",
