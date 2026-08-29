@@ -118,6 +118,23 @@ esac
         )
         self.assertIn("Device: message-box-beta", result.stdout)
 
+    def test_button_box_hostname_is_accepted_and_used_by_default(self):
+        result = self._run(
+            "admin@button-box-a7.local",
+            REMOTE_HOSTNAME="button-box-a7",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(
+            any(
+                "sudo -n tailscale up --hostname=button-box-a7" in call
+                for call in calls
+            ),
+            calls,
+        )
+        self.assertIn("Device: button-box-a7", result.stdout)
+
     def test_rejects_unsafe_target_before_running_ssh(self):
         result = self._run("-oProxyCommand=bad")
 

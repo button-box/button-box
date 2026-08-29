@@ -28,7 +28,7 @@ sharing on. Reconnect the cable or reboot the Pi to request a DHCP lease.
 Provision from the repository root on the development computer:
 
 ```sh
-./scripts/provision.sh admin@message-box-001.local
+./scripts/provision.sh admin@button-box-001.local
 ```
 
 Provisioning refuses to connect to the Pi if any required prompt is absent.
@@ -43,7 +43,7 @@ Internet Sharing off before testing consumer Wi-Fi onboarding.
 On a disposable test box reachable over SSH, run:
 
 ```sh
-./scripts/dev/reprovision.sh admin@message-box-001.local
+./scripts/dev/reprovision.sh admin@button-box-001.local
 ```
 
 The helper requires confirmation. It preserves the operating system, packages,
@@ -77,7 +77,7 @@ messagebox-dev-onboard
 Or run it remotely:
 
 ```sh
-ssh -t admin@message-box-001.local messagebox-dev-onboard
+ssh -t admin@button-box-001.local messagebox-dev-onboard
 ```
 
 The flow stops Button Box services before configuration and testing. If it

@@ -49,7 +49,9 @@ STATIC_DIR = Path(__file__).with_name("static")
 RINGTONE_PREVIEW_LOCK = threading.Lock()
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9-]{1,32}\Z")
-_CANONICAL_HOST = re.compile(r"message-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE)
+_CANONICAL_HOST = re.compile(
+    r"(?:button|message)-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE
+)
 _HEX_PSK = re.compile(r"[0-9a-fA-F]{64}\Z")
 _PERCENT_ESCAPE = re.compile(br"%(?![0-9A-Fa-f]{2})")
 _PHONE_HINT = re.compile(r"WhatsApp number ending in [0-9]{4}\Z")

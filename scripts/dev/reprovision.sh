@@ -14,7 +14,7 @@ usage() {
   printf '%s\n' \
     "Usage: $0 user@host" \
     "Examples:" \
-    "  $0 admin@message-box-001.local" >&2
+    "  $0 admin@button-box-001.local" >&2
 }
 
 die() {
@@ -40,15 +40,15 @@ REPO_DIR=$(dirname "$(dirname "$SCRIPT_DIR")")
 
 BOX_HOSTNAME=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" hostname)
 MACHINE_ID=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" cat /etc/machine-id)
-box_id=${BOX_HOSTNAME#message-box-}
 case "$BOX_HOSTNAME" in
-  message-box-*) ;;
-  *) die "remote hostname is not a valid message-box hostname" ;;
+  button-box-*) box_id=${BOX_HOSTNAME#button-box-} ;;
+  message-box-*) box_id=${BOX_HOSTNAME#message-box-} ;;
+  *) die "remote hostname is not a valid Button Box hostname" ;;
 esac
 case "$box_id" in
-  ''|*[!a-z0-9-]*) die "remote hostname is not a valid message-box hostname" ;;
+  ''|*[!a-z0-9-]*) die "remote hostname is not a valid Button Box hostname" ;;
 esac
-[ "${#box_id}" -le 32 ] || die "remote hostname is not a valid message-box hostname"
+[ "${#box_id}" -le 32 ] || die "remote hostname is not a valid Button Box hostname"
 case "$MACHINE_ID" in
   *[!a-f0-9]*) die "remote machine identity is invalid" ;;
 esac

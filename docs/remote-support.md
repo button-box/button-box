@@ -24,12 +24,13 @@ From a clean, reviewed repository checkout on a computer that can currently
 reach the Pi over LAN or Ethernet, run:
 
 ```sh
-./scripts/provision-tailscale.sh admin@message-box-001.local
+./scripts/provision-tailscale.sh admin@button-box-001.local
 ```
 
 The helper:
 
-1. Refuses root, malformed targets, and non-`message-box-*` devices.
+1. Refuses root, malformed targets, and devices outside the supported
+   `button-box-*` and legacy `message-box-*` hostname patterns.
 2. Installs Tailscale from its signed official Debian 13 repository.
 3. Opens Tailscale's interactive browser authorization when the device is not
    already enrolled.

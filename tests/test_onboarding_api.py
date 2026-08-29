@@ -340,6 +340,29 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
 
+    def test_button_box_canonical_hostname_is_supported_and_enforced(self):
+        canonical_host = "button-box-a7.local"
+        application = create_app(
+            mode="HOTSPOT",
+            config={"device_id": "a7", "canonical_host": canonical_host},
+            state_store=StateStore(
+                Path(self.directory.name) / "button-box-state.json", clock=self.clock
+            ),
+            adapter=self.adapter,
+            connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
+            clock=self.clock,
+        )
+        client = WSGIHarness(application)
+
+        accepted = client.request("GET", "/", host=canonical_host)
+        redirected = client.request("GET", "/", host="message-box-a7.local")
+
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(f"http://{canonical_host}/".encode(), accepted["body"])
+        self.assertEqual(redirected["status"], "302 Found")
+        self.assertEqual(header(redirected, "Location"), "http://10.41.0.1/")
+
     def test_settings_are_revision_checked_and_cross_site_writes_are_rejected(self):
         loaded = self.client.request("GET", "/api/settings", host="10.41.0.1")
         self.assertEqual(loaded["status"], "200 OK")

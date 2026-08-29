@@ -6,7 +6,7 @@ set -eu
 usage() {
   printf '%s\n' \
     "Usage: $0 [--hostname NAME] user@host" \
-    "Example: $0 admin@message-box-001.local" >&2
+    "Example: $0 admin@button-box-001.local" >&2
 }
 
 die() {
@@ -45,16 +45,16 @@ INSTALLER=$SCRIPT_DIR/install/tailscale.sh
 
 REMOTE_HOSTNAME=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" hostname)
 case "$REMOTE_HOSTNAME" in
-  message-box-*) ;;
-  *) die "remote hostname is not a valid message-box hostname" ;;
+  button-box-*|message-box-*) ;;
+  *) die "remote hostname is not a valid Button Box hostname" ;;
 esac
 case "$REMOTE_HOSTNAME" in
   *[!A-Za-z0-9-]*|*-)
-    die "remote hostname is not a valid message-box hostname"
+    die "remote hostname is not a valid Button Box hostname"
     ;;
 esac
 [ "${#REMOTE_HOSTNAME}" -le 63 ] ||
-  die "remote hostname is not a valid message-box hostname"
+  die "remote hostname is not a valid Button Box hostname"
 
 if [ -z "$TAILSCALE_HOSTNAME" ]; then
   TAILSCALE_HOSTNAME=$REMOTE_HOSTNAME
