@@ -108,7 +108,10 @@ esac
         self.assertFalse(any("tailscale up" in call for call in calls), calls)
         self.assertTrue(
             any(
-                "sudo -n tailscale set --hostname=message-box-beta" in call
+                "sudo -n tailscale set --hostname=message-box-beta "
+                "--auto-update=false --ssh=false --accept-routes=false "
+                "--advertise-routes= --advertise-exit-node=false "
+                "--exit-node= --webclient=false" in call
                 for call in calls
             ),
             calls,

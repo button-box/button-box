@@ -100,13 +100,13 @@ if [ -z "$TAILSCALE_IP" ]; then
   echo "Authorize $REMOTE_HOSTNAME in the browser when prompted."
   ssh -t "$TARGET" \
     "sudo -n tailscale up --hostname=$TAILSCALE_HOSTNAME"
-  TAILSCALE_IP=$(read_tailscale_ip)
-else
-  # `tailscale set` changes only the requested preference and therefore does
-  # not accidentally enable Tailscale SSH or alter existing route settings.
-  ssh -o BatchMode=yes "$TARGET" \
-    "sudo -n tailscale set --hostname=$TAILSCALE_HOSTNAME"
 fi
+
+# `tailscale set` changes only named preferences. Reassert the intentionally
+# narrow support profile on reruns without resetting the node identity.
+ssh -o BatchMode=yes "$TARGET" \
+  "sudo -n tailscale set --hostname=$TAILSCALE_HOSTNAME --auto-update=false --ssh=false --accept-routes=false --advertise-routes= --advertise-exit-node=false --exit-node= --webclient=false"
+TAILSCALE_IP=$(read_tailscale_ip)
 
 case "$TAILSCALE_IP" in
   ""|*[!0-9.]*) die "Tailscale did not report a valid IPv4 address" ;;
