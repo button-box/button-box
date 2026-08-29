@@ -34,6 +34,10 @@ not overwrite a working device without a tested backup.
 
    The Pi needs internet access during setup. See
    [Internet access for a fresh card](developer-onboarding.md#internet-access-for-a-fresh-card).
+   For an optionally shipped box that needs private, consented remote
+   maintenance, complete the [Tailscale remote-support procedure](remote-support.md)
+   while LAN access is still available. Tailscale is independent of the Button
+   Box application install and does not replace ordinary OpenSSH keys.
 4. Configure protected Wi-Fi onboarding with
    `sudo messagebox-init-wifi-onboarding`.
 5. Print the displayed box number, hotspot name, password, and setup URL for the
