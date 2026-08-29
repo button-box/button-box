@@ -11,6 +11,7 @@ from messagebox.onboarding.whatsapp import (
     MAX_ELIGIBLE_CONVERSATIONS,
     PairingEngine,
     PairingError,
+    WhatsAppPairingClient,
     eligible_conversations,
     normalize_phone,
     pairing_command,
@@ -134,6 +135,14 @@ class WhatsAppPairingTests(unittest.TestCase):
     def prepare_pair(self, engine):
         engine.stage.mkdir(mode=0o700)
         engine._set_state("starting")
+
+    def test_relink_client_requests_account_scoped_cleanup(self):
+        client = WhatsAppPairingClient()
+        with mock.patch.object(
+            client, "_request", return_value={"status": "idle"}
+        ) as request:
+            self.assertEqual(client.relink(), {"status": "idle"})
+        request.assert_called_once_with({"action": "relink"}, timeout=25)
 
     def test_phone_normalization_and_exact_auth_command(self):
         self.assertEqual(normalize_phone(" +1 415-555-0123 "), "+14155550123")
@@ -465,6 +474,9 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             'whatsapp.status === "ready"',
         ):
             self.assertIn(status, script)
+        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
+        self.assertIn('if (routeName === "whatsapp")', script)
+        self.assertIn('applyWhatsAppState(currentState, { manage: true })', script)
         self.assertIn(".focus(", script)
         self.assertIn("retry-pairing", script)
         self.assertIn('formRequest("/recipients/refresh")', script)
@@ -484,6 +496,9 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("Skip NFC setup", html)
         self.assertIn("Reassign", html)
         self.assertIn("Pair another tag", html)
+        self.assertIn(
+            "recipients, NFC mappings, listener profiles, and voice-test state", html
+        )
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
         self.assertNotIn("@s.whatsapp.net", html + script)

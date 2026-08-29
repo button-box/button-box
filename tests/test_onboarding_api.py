@@ -114,6 +114,25 @@ class FakeWhatsApp:
             self.state["safe_error"] = "UNLINK_FAILED"
         return dict(self.state)
 
+    def relink(self):
+        self.calls.append(("relink",))
+        if self.logout_succeeds:
+            self.state.update(
+                status="idle",
+                phone_hint=None,
+                eligible_count=0,
+                safe_error=None,
+            )
+            self.recipient = {
+                "status": "choose",
+                "default": None,
+                "proof": {"received": False, "played": False, "replied": False},
+                "recipients": [],
+            }
+        else:
+            self.state["safe_error"] = "UNLINK_FAILED"
+        return dict(self.state)
+
     def recipient_state(self):
         self.calls.append(("recipient_state",))
         return json.loads(json.dumps(self.recipient))
@@ -710,6 +729,7 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(accepted["status"], "200 OK")
         self.assertEqual(store.load()["phase"], "WHATSAPP_PENDING")
+        self.assertIn(("relink",), worker.calls)
 
     def test_logout_failure_preserves_ready_state(self):
         worker = FakeWhatsApp({
@@ -731,6 +751,35 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(response["status"], "409 Conflict")
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_completed_recipient_setup_can_relink_and_resets_account_state(self):
+        worker = FakeWhatsApp({
+            "status": "ready",
+            "pairing_code": None,
+            "phone_hint": "Linked account",
+            "eligible_count": 1,
+            "safe_error": None,
+            "attempt": 1,
+        })
+        worker.recipient.update(
+            status="complete",
+            default={"token": "opaque-recipient", "label": "Default", "kind": "person"},
+            proof={"received": True, "played": True, "replied": True},
+        )
+        client, store, _ = self.home_pairing_client(worker)
+        client.request("GET", "/api/state")
+
+        response = client.form(
+            "POST",
+            "/whatsapp/unlink",
+            {"confirm": "unlink"},
+        )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertEqual(store.load()["phase"], "WHATSAPP_PENDING")
+        self.assertEqual(worker.recipient["status"], "choose")
+        self.assertIsNone(worker.recipient["default"])
+        self.assertIn(("relink",), worker.calls)
 
     def test_recipient_api_uses_opaque_tokens_and_same_origin_mutations(self):
         token = "recipient-token-0001"

@@ -158,7 +158,7 @@ async function loadRuntimeWhatsApp() {
       state.recipient_setup = await request("/api/recipients");
       state.nfc_setup = { status: "idle", mapped_count: 0 };
     }
-    applyWhatsAppState(state);
+    applyWhatsAppState(state, { manage: true });
   } catch (error) {
     showError(error.message);
   }
@@ -215,7 +215,7 @@ function applyRecipientState(recipient, nfcSummary = null) {
   showView("ready");
 }
 
-function applyWhatsAppState(state) {
+function applyWhatsAppState(state, { manage = false } = {}) {
   const whatsapp = state.whatsapp || {
     status: "failed",
     pairing_code: null,
@@ -232,7 +232,11 @@ function applyWhatsAppState(state) {
     document.getElementById("eligible-count").textContent = count === 1
       ? "1 recent group or chat is ready for the next setup step."
       : `${count} recent groups or chats are ready for the next setup step.`;
-    applyRecipientState(state.recipient_setup, state.nfc_setup);
+    if (manage) {
+      showView("ready");
+    } else {
+      applyRecipientState(state.recipient_setup, state.nfc_setup);
+    }
     return;
   }
   switch (whatsapp.status) {
@@ -670,7 +674,7 @@ function renderSetup(state) {
   const activeSetup = state.mode !== "RUNTIME";
   document.getElementById("required-tasks").replaceChildren(
     taskStatus("Connect Wi-Fi", progress.wifi, activeSetup ? "#continue" : "#advanced"),
-    taskStatus("Link WhatsApp", progress.whatsapp, activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp"),
     taskStatus("Choose a default recipient", progress.recipient, activeSetup ? "#continue" : "#advanced"),
     taskStatus("Receive, play, record, and send a test message", progress.first_message, activeSetup ? "#continue" : "#activity"),
   );
@@ -956,6 +960,14 @@ async function route() {
   });
   window.clearTimeout(pollTimer);
   window.clearTimeout(nfcPollTimer);
+  if (routeName === "whatsapp") {
+    if (currentState.mode === "RUNTIME") {
+      await loadRuntimeWhatsApp();
+    } else {
+      applyWhatsAppState(currentState, { manage: true });
+    }
+    return;
+  }
   if (routeName === "continue") {
     applyState(currentState);
     return;

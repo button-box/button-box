@@ -921,7 +921,7 @@ def create_app(
                 if store.load()["phase"] != WHATSAPP_READY:
                     raise RequestError("409 Conflict", "WhatsApp is not ready")
                 try:
-                    state = whatsapp.unlink()
+                    state = whatsapp.relink()
                 except (OSError, PairingError) as exc:
                     raise RequestError(
                         "503 Service Unavailable", "WhatsApp unlink is unavailable"

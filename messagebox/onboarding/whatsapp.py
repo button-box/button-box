@@ -948,6 +948,9 @@ class WhatsAppPairingClient:
     def unlink(self):
         return self._request({"action": "unlink"}, timeout=25)
 
+    def relink(self):
+        return self._request({"action": "relink"}, timeout=25)
+
     def recipient_state(self):
         return self._request({"action": "recipient_state"})
 
@@ -1001,6 +1004,8 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 state = self.server.engine.cancel()
             elif action == "unlink" and set(request) == {"action"}:
                 state = self.server.engine.unlink()
+            elif action == "relink" and set(request) == {"action"}:
+                state = self.server.engine.relink()
             elif action == "recipient_state" and set(request) == {"action"}:
                 state = self.server.engine.recipient_state()
             elif action == "recipient_list" and set(request) == {"action", "refresh"}:
