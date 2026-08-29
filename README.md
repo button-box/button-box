@@ -56,7 +56,7 @@ affiliated with these retailers.
 - **Pi Zero 2 W power supply:** [official Raspberry Pi 12.5 W Micro USB Power Supply](https://www.raspberrypi.com/products/micro-usb-power-supply/)
 - **Or Pi 4B power supply:** [iUniker 5 V / 4 A USB-C supply](https://www.amazon.com/dp/B097P2NLVH)
 - **100 mm illuminated arcade button:** [Amazon](https://www.amazon.com/dp/B072JLSH34)
-- **HiLetgo PN532 NFC/RFID module kit:** [Amazon](https://www.amazon.com/dp/B01I1J17LC)
+- **NFC reader:** The original NFC build uses the [HiLetgo PN532 NFC/RFID module kit](https://www.amazon.com/dp/B01I1J17LC) and needs soldering. If you do not want to solder, use a Waveshare PN532 NFC HAT instead.
 - **Optional M2.5 screws, nuts, and washers:** [Amazon](https://www.amazon.com/dp/B0FJ1XN2XP) — useful for mounting the Pi or NFC board inside a custom enclosure; not required for a shoebox prototype
 
 You will also need:
@@ -73,10 +73,7 @@ The current reference-parts list is approximately **$150 before the enclosure,
 Zero 2 W adapters, NFC tokens, shipping, and taxes**. Retailer prices and
 availability change.
 
-This is our current reference build, not the only hardware that can work. Other
-USB speakers and microphones, and other GPIO-connected buttons, may work too.
-We encourage experimentation: treat substitutions as unvalidated, check their
-electrical and software compatibility, and share what you learn.
+This is our current reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
 
 ### What the build takes
 
@@ -126,9 +123,7 @@ or Meta.
 
 ## Step 2 — Assemble the hardware
 
-A shoebox or another sturdy, non-conductive container is enough for a first
-build. Secure the electronics, provide ventilation, and protect the cables from
-strain and loose metal.
+A shoebox or another sturdy, non-conductive box is an alternative to 3D printing the enclosure. Whichever enclosure you use, secure the electronics, provide ventilation, and protect the cables from strain and loose metal.
 
 The default public GPIO configuration is:
 
