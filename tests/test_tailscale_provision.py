@@ -36,7 +36,7 @@ case "$*" in
     cat >"$INSTALL_INPUT"
     [ "${INSTALL_FAIL:-0}" -eq 0 ] || exit 1
     ;;
-  *"sudo -n tailscale ip -4"*)
+  *"tailscale status --self=true --peers=false"*)
     count=0
     [ ! -f "$IP_CALLS" ] || count=$(cat "$IP_CALLS")
     count=$((count + 1))

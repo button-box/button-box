@@ -90,18 +90,17 @@ esac
 echo "Installing Tailscale on $REMOTE_HOSTNAME..."
 ssh -o BatchMode=yes "$TARGET" sudo -n /bin/sh -s <"$INSTALLER"
 
-TAILSCALE_IP=$(
-  ssh -o BatchMode=yes "$TARGET" \
-    'sudo -n tailscale ip -4 2>/dev/null || true'
-)
+TAILSCALE_IP_COMMAND="sudo -n tailscale status --self=true --peers=false 2>/dev/null | awk 'NR == 1 && \$1 ~ /^100\\./ { print \$1 }'"
+read_tailscale_ip() {
+  ssh -o BatchMode=yes "$TARGET" "$TAILSCALE_IP_COMMAND"
+}
+
+TAILSCALE_IP=$(read_tailscale_ip)
 if [ -z "$TAILSCALE_IP" ]; then
   echo "Authorize $REMOTE_HOSTNAME in the browser when prompted."
   ssh -t "$TARGET" \
     "sudo -n tailscale up --hostname=$TAILSCALE_HOSTNAME"
-  TAILSCALE_IP=$(
-    ssh -o BatchMode=yes "$TARGET" \
-      'sudo -n tailscale ip -4 2>/dev/null || true'
-  )
+  TAILSCALE_IP=$(read_tailscale_ip)
 else
   # `tailscale set` changes only the requested preference and therefore does
   # not accidentally enable Tailscale SSH or alter existing route settings.
