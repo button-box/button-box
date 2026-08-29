@@ -741,7 +741,7 @@ def create_app(
                 remote_addr=environ.get("REMOTE_ADDR", ""),
                 forwarded_proto=environ.get("HTTP_X_FORWARDED_PROTO"),
                 http_hosts=http_hosts,
-                tailscale_host=tailscale_host if selected_mode == "HOME" else None,
+                tailscale_host=tailscale_host,
             )
             if expected_origin is None:
                 if method == "GET":

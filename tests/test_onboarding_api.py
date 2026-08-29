@@ -440,6 +440,41 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(spoofed["status"], "302 Found")
         self.assertEqual(header(spoofed, "Location"), f"http://{HOST}/api/state")
 
+    def test_hotspot_dashboard_accepts_exact_tailnet_https_origin(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        application = create_app(
+            mode="HOTSPOT",
+            config={"device_id": "A7K2"},
+            state_store=StateStore(
+                Path(self.directory.name) / "hotspot-tailnet.json", clock=self.clock
+            ),
+            adapter=self.adapter,
+            connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
+            tailscale_host=tailnet,
+        )
+        client = WSGIHarness(application)
+
+        accepted = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        spoofed = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="10.41.0.20",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(f"https://{tailnet}/".encode(), accepted["body"])
+        self.assertEqual(spoofed["status"], "302 Found")
+        self.assertEqual(header(spoofed, "Location"), "http://10.41.0.1/")
+
     def test_invalid_tailnet_configuration_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "Tailscale dashboard hostname"):
             create_app(
