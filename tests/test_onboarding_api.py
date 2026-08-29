@@ -318,7 +318,9 @@ class OnboardingAPITests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def home_pairing_client(self, whatsapp=None, nfc=None, completion_request=None):
+    def home_pairing_client(
+        self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
+    ):
         path = Path(self.directory.name) / "whatsapp-home.json"
         store = StateStore(path, clock=self.clock)
         store.initialize()
@@ -329,6 +331,8 @@ class OnboardingAPITests(unittest.TestCase):
         options = {}
         if completion_request is not None:
             options["completion_request"] = completion_request
+        if tailscale_host is not None:
+            options["tailscale_host"] = tailscale_host
         application = create_app(
             mode="HOME",
             config={"device_id": "A7K2"},
@@ -381,6 +385,74 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertIn(f"http://{canonical_host}/".encode(), accepted["body"])
         self.assertEqual(redirected["status"], "302 Found")
         self.assertEqual(header(redirected, "Location"), "http://10.41.0.1/")
+
+    def test_home_dashboard_accepts_exact_tailnet_https_origin(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        client, _store, _worker = self.home_pairing_client(tailscale_host=tailnet)
+
+        loaded = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        self.assertEqual(loaded["status"], "200 OK")
+        self.assertIn(f"https://{tailnet}/".encode(), loaded["body"])
+
+        settings = client.request(
+            "GET",
+            "/api/settings",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        document = json.loads(settings["body"])["settings"]
+        candidate = {
+            key: value
+            for key, value in document.items()
+            if key not in {"version", "revision"}
+        }
+        saved = client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": document["revision"], "settings": candidate},
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={
+                "Origin": f"https://{tailnet}",
+                "X-Forwarded-Proto": "https",
+            },
+        )
+        self.assertEqual(saved["status"], "200 OK")
+
+    def test_home_dashboard_rejects_tailnet_header_spoofing(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        client, _store, _worker = self.home_pairing_client(tailscale_host=tailnet)
+
+        spoofed = client.request(
+            "GET",
+            "/api/state",
+            host=tailnet,
+            remote_addr="192.168.1.20",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        self.assertEqual(spoofed["status"], "302 Found")
+        self.assertEqual(header(spoofed, "Location"), f"http://{HOST}/api/state")
+
+    def test_invalid_tailnet_configuration_fails_closed(self):
+        with self.assertRaisesRegex(RuntimeError, "Tailscale dashboard hostname"):
+            create_app(
+                mode="HOME",
+                config={"device_id": "A7K2"},
+                state_store=StateStore(
+                    Path(self.directory.name) / "invalid-tailnet.json", clock=self.clock
+                ),
+                adapter=self.adapter,
+                connectivity_checker=self.checker,
+                caregiver_settings=self.settings,
+                tailscale_host="attacker.example",
+            )
 
     def test_settings_are_revision_checked_and_cross_site_writes_are_rejected(self):
         loaded = self.client.request("GET", "/api/settings", host="10.41.0.1")

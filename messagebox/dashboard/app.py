@@ -58,6 +58,11 @@ from messagebox.settings import (
     SettingsStore,
     ringtone_path,
 )
+from messagebox.tailnet import (
+    normalize_device_name,
+    normalize_tailscale_host,
+    request_origin,
+)
 from messagebox.wifi_change import WifiChangeError, load_status as wifi_change_status
 from messagebox.wifi_change import request_change as request_wifi_change
 
@@ -75,6 +80,7 @@ LISTENED_FALLBACK_WAV = os.environ.get(
     str(APP_DIR / "sounds" / "listen-receipts" / "someone-listened.wav"),
 )
 WACLI_WEBHOOK_SECRET = os.environ.get("MSGBOX_WACLI_WEBHOOK_SECRET", "")
+TAILSCALE_HOST_SETTING = os.environ.get("MSGBOX_TAILSCALE_HOST", "")
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 QUEUE_ACTION_LOCK = threading.Lock()
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parents[1] / "onboarding" / "static"
@@ -952,6 +958,9 @@ def safe_name(raw):
 
 
 class Handler(BaseHTTPRequestHandler):
+    local_host = None
+    tailscale_host = None
+
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else body.encode()
         self.send_response(code)
@@ -978,13 +987,37 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _trusted_origin(self):
+        headers = getattr(self, "headers", {})
+        host = headers.get("Host", "")
+        local_host = self.local_host
+        http_hosts = (local_host,) if local_host else ()
+        client = getattr(self, "client_address", ("", 0))
+        return request_origin(
+            host,
+            remote_addr=client[0],
+            forwarded_proto=headers.get("X-Forwarded-Proto"),
+            http_hosts=http_hosts,
+            tailscale_host=self.tailscale_host,
+        )
+
+    def _require_trusted_host(self):
+        if self._trusted_origin() is None:
+            self._send(400, json.dumps({"ok": False, "error": "invalid dashboard address"}))
+            return False
+        return True
+
     def _require_same_origin(self):
         headers = getattr(self, "headers", {})
         if headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
             self._send(403, json.dumps({"ok": False, "error": "cross-site request rejected"}))
             return False
+        expected_origin = self._trusted_origin()
+        if expected_origin is None:
+            self._send(400, json.dumps({"ok": False, "error": "invalid dashboard address"}))
+            return False
         origin = headers.get("Origin")
-        if origin and origin.rstrip("/").casefold() != f"http://{headers.get('Host', '')}".casefold():
+        if origin and origin.rstrip("/").casefold() != expected_origin.casefold():
             self._send(403, json.dumps({"ok": False, "error": "cross-site request rejected"}))
             return False
         return True
@@ -1029,6 +1062,8 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self):
+        if not self._require_trusted_host():
+            return
         url = urllib.parse.urlparse(self.path)
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
@@ -1440,9 +1475,38 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-if __name__ == "__main__":
-    bind_address = resolve_bind(BIND)
+def dashboard_bind_addresses(bind, tailscale_host):
+    """Return the narrow LAN listener plus loopback for Tailscale Serve."""
+    primary = resolve_bind(bind)
+    addresses = [primary]
+    if tailscale_host and primary not in {"127.0.0.1", "0.0.0.0"}:
+        addresses.append("127.0.0.1")
+    return addresses
+
+
+def serve_dashboard(server_factory=ThreadingHTTPServer):
+    device_name = normalize_device_name(socket.gethostname())
+    local_host = f"{device_name}.local"
+    tailscale_host = normalize_tailscale_host(
+        TAILSCALE_HOST_SETTING, device_host=device_name
+    )
+    handler = type(
+        "ConfiguredHandler",
+        (Handler,),
+        {"local_host": local_host, "tailscale_host": tailscale_host},
+    )
+    addresses = dashboard_bind_addresses(BIND, tailscale_host)
     os.makedirs(HOLD_DIR, exist_ok=True)
     os.makedirs(TRASH_DIR, exist_ok=True)
-    print(f"dashboard on http://{bind_address}:{PORT}", flush=True)
-    ThreadingHTTPServer((bind_address, PORT), Handler).serve_forever()
+    servers = [server_factory((address, PORT), handler) for address in addresses]
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(
+        "dashboard on " + ", ".join(f"http://{address}:{PORT}" for address in addresses),
+        flush=True,
+    )
+    servers[0].serve_forever()
+
+
+if __name__ == "__main__":
+    serve_dashboard()

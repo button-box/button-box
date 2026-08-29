@@ -81,6 +81,8 @@ The bundle uses Home, Setup, Settings, Activity, and Advanced routes. Setup is a
 resumable task list; successful task boundaries remain in the existing atomic
 setup, recipient, voice-proof, and NFC stores. Runtime enables the same
 dashboard at port 80, bound specifically to `wlan0`'s current IPv4 address.
+When optional remote support is provisioned, runtime also opens the same port
+on loopback for private Tailscale Serve HTTPS proxying.
 
 Caregiver behavior is stored in `/var/lib/messagebox-settings/settings.json`.
 The document is versioned, validated, revision checked, locked, and replaced
@@ -92,11 +94,14 @@ at a confirmed interaction boundary, so a browser save never interrupts active
 playback, recording, or sending.
 
 The dashboard deliberately has no login or physical confirmation. Anyone on
-the household Wi-Fi, or on the protected setup hotspot while setup is active,
-can change caregiver settings and play queued audio. The runtime listener binds
-to the Wi-Fi interface rather than every interface. This is an accepted
-household-device risk; do not publish port 80 through a router, tunnel, or
-Tailscale Serve. Browser queue operations use process-local opaque handles, so
+the household Wi-Fi, on the protected setup hotspot while setup is active, or
+authorized to reach an optionally configured private tailnet origin can change
+caregiver settings and play queued audio. The runtime listener binds to Wi-Fi
+and, only when configured, loopback rather than every interface. The tailnet
+path accepts one device-local MagicDNS hostname through the loopback proxy and
+requires HTTPS same-origin mutations; Tailscale Funnel remains disabled. This
+is an accepted household-device risk; do not publish port 80 through a router
+or public tunnel. Browser queue operations use process-local opaque handles, so
 queue filenames, raw NFC identifiers, and internal message identifiers do not
 cross the browser boundary.
 

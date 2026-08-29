@@ -50,6 +50,9 @@ class DashboardQueueHoldTests(unittest.TestCase):
     def post(self, path):
         handler = dashboard.Handler.__new__(dashboard.Handler)
         handler.path = path
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         response = {}
 
         def send(code, body, ctype="application/json"):
@@ -143,6 +146,9 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(self.post(f"/api/hold?f={self.token()}")["code"], 200)
         handler = dashboard.Handler.__new__(dashboard.Handler)
         handler.path = f"/audio/{self.token('hold')}?hold=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         response = {}
 
         def send(code, body, ctype="application/json"):
@@ -163,6 +169,9 @@ class DashboardQueueHoldTests(unittest.TestCase):
             with self.subTest(path=path):
                 handler = dashboard.Handler.__new__(dashboard.Handler)
                 handler.path = path
+                handler.headers = {"Host": "button-box.local"}
+                handler.client_address = ("192.168.1.20", 12345)
+                handler.local_host = "button-box.local"
                 response = {}
                 handler._send = lambda code, body, ctype: response.update(
                     code=code, body=body, ctype=ctype

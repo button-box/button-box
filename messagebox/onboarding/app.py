@@ -37,6 +37,7 @@ from messagebox.onboarding.whatsapp import (
     normalize_phone,
 )
 from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path
+from messagebox.tailnet import normalize_tailscale_host, request_origin
 
 
 CONFIG_PATH = str(ONBOARDING_CONFIG_PATH)
@@ -47,6 +48,7 @@ HOTSPOT_HOST = "10.41.0.1"
 HOTSPOT_URL = f"http://{HOTSPOT_HOST}/"
 STATIC_DIR = Path(__file__).with_name("static")
 RINGTONE_PREVIEW_LOCK = threading.Lock()
+_UNSET = object()
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9-]{1,32}\Z")
 _CANONICAL_HOST = re.compile(
@@ -305,28 +307,12 @@ def _credentials(document):
     return ssid, password
 
 
-def _canonical_request_host(environ, canonical_host):
-    supplied = environ.get("HTTP_HOST", "")
-    if not isinstance(supplied, str) or not supplied or any(
-        character in supplied for character in "\r\n,/@"
-    ):
-        return False
-    host, separator, port = supplied.rpartition(":")
-    if not separator:
-        host, port = supplied, ""
-    if separator and (not port.isdigit() or int(port) != 80):
-        return False
-    return host.rstrip(".").casefold() == canonical_host.casefold()
-
-
-def _require_same_origin(environ, canonical_host):
+def _require_same_origin(environ, expected_origin):
     """Reject browser-driven cross-site mutations without using ambient cookies."""
     if environ.get("HTTP_SEC_FETCH_SITE", "").lower() == "cross-site":
         raise RequestError("403 Forbidden", "Cross-site request rejected")
     origin = environ.get("HTTP_ORIGIN")
-    if origin is not None and origin.rstrip("/").casefold() != (
-        f"http://{canonical_host}".casefold()
-    ):
+    if origin is not None and origin.rstrip("/").casefold() != expected_origin.casefold():
         raise RequestError("403 Forbidden", "Cross-site request rejected")
 
 
@@ -347,6 +333,7 @@ def create_app(
     sleep=time.sleep,
     handoff_delay=HANDOFF_DELAY,
     body_limit=BODY_LIMIT,
+    tailscale_host=_UNSET,
 ):
     """Build an isolated WSGI application with injectable hardware boundaries."""
     selected_mode = (mode or os.environ.get("MSGBOX_ONBOARDING_MODE", "HOTSPOT")).upper()
@@ -362,6 +349,14 @@ def create_app(
     canonical_host = config.get("canonical_host", f"message-box-{device_id}.local")
     if not isinstance(canonical_host, str) or not _CANONICAL_HOST.fullmatch(canonical_host):
         raise RuntimeError("onboarding canonical hostname is invalid")
+    if tailscale_host is _UNSET:
+        tailscale_host = os.environ.get("MSGBOX_TAILSCALE_HOST", "")
+    try:
+        tailscale_host = normalize_tailscale_host(
+            tailscale_host, device_host=canonical_host
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     canonical_url = f"http://{canonical_host}/"
     portal_url = HOTSPOT_URL if selected_mode == "HOTSPOT" else canonical_url
     store = state_store or StateStore(state_path, clock=clock)
@@ -736,11 +731,19 @@ def create_app(
                 body = "Microsoft NCSI" if path == "/ncsi.txt" else "Microsoft Connect Test"
                 return Response(body, headers=[("Content-Type", "text/plain; charset=utf-8")])(start_response)
 
-            canonical = _canonical_request_host(environ, canonical_host) or (
-                selected_mode == "HOTSPOT"
-                and _canonical_request_host(environ, HOTSPOT_HOST)
+            http_hosts = (
+                (HOTSPOT_HOST, canonical_host)
+                if selected_mode == "HOTSPOT"
+                else (canonical_host,)
             )
-            if not canonical:
+            expected_origin = request_origin(
+                environ.get("HTTP_HOST", ""),
+                remote_addr=environ.get("REMOTE_ADDR", ""),
+                forwarded_proto=environ.get("HTTP_X_FORWARDED_PROTO"),
+                http_hosts=http_hosts,
+                tailscale_host=tailscale_host if selected_mode == "HOME" else None,
+            )
+            if expected_origin is None:
                 if method == "GET":
                     location = portal_url.rstrip("/") + (path if path.startswith("/") else "/")
                     query = environ.get("QUERY_STRING", "")
@@ -755,8 +758,14 @@ def create_app(
 
             if method == "GET" and path == "/":
                 body, content_type = static_files["index.html"]
+                displayed_url = (
+                    expected_origin + "/"
+                    if tailscale_host
+                    and expected_origin == f"https://{tailscale_host}"
+                    else canonical_url
+                )
                 body = body.replace(
-                    b"__MESSAGEBOX_URL__", canonical_url.encode("ascii")
+                    b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
             if method == "GET" and path in {"/static/app.js", "/static/styles.css"}:
@@ -773,9 +782,7 @@ def create_app(
                 return _json_response({"settings": document, "attention": warning})(start_response)
 
             if method == "PUT" and path == "/api/settings":
-                _require_same_origin(
-                    environ, HOTSPOT_HOST if selected_mode == "HOTSPOT" else canonical_host
-                )
+                _require_same_origin(environ, expected_origin)
                 request = _json_body(environ, body_limit)
                 if set(request) != {"revision", "settings"}:
                     raise RequestError("400 Bad Request", "Invalid settings request")
@@ -788,9 +795,7 @@ def create_app(
                 return _json_response({"settings": document, "attention": False})(start_response)
 
             if method == "POST" and path == "/api/ringtone-preview":
-                _require_same_origin(
-                    environ, HOTSPOT_HOST if selected_mode == "HOTSPOT" else canonical_host
-                )
+                _require_same_origin(environ, expected_origin)
                 request = _json_body(environ, body_limit)
                 if set(request) != {"ringtone_id"}:
                     raise RequestError("400 Bad Request", "Invalid ringtone preview request")
@@ -844,7 +849,7 @@ def create_app(
                 )
 
             if method == "POST" and path == "/wifi/change":
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME":
                     raise RequestError("409 Conflict", "The active network can be changed on home Wi-Fi")
                 document = _form(environ, body_limit)
@@ -866,7 +871,7 @@ def create_app(
                 return handoff(start_response, delete_after_response, _CHANGE_HTML)
 
             if method == "POST" and path == "/whatsapp/pair/start":
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME":
                     raise RequestError("409 Conflict", "WhatsApp pairing requires home Wi-Fi")
                 document = _form(environ, body_limit)
@@ -895,7 +900,7 @@ def create_app(
                 )(start_response)
 
             if method == "POST" and path == "/whatsapp/pair/cancel":
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME":
                     raise RequestError("409 Conflict", "WhatsApp pairing requires home Wi-Fi")
                 document = _form(environ, body_limit)
@@ -912,7 +917,7 @@ def create_app(
                 return _json_response(safe_state(store.load()))(start_response)
 
             if method == "POST" and path == "/whatsapp/unlink":
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME":
                     raise RequestError("409 Conflict", "WhatsApp unlink requires home Wi-Fi")
                 document = _form(environ, body_limit)
@@ -943,7 +948,7 @@ def create_app(
                 "/recipients/default",
                 "/recipients/defer",
             }:
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
                     raise RequestError("409 Conflict", "Recipient setup requires linked WhatsApp")
                 document = _form(environ, body_limit)
@@ -1002,7 +1007,7 @@ def create_app(
                 "/nfc/cancel",
                 "/onboarding/complete",
             }:
-                _require_same_origin(environ, canonical_host)
+                _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
                     raise RequestError("409 Conflict", "NFC setup requires linked WhatsApp")
                 recipient_state = safe_recipient_state(whatsapp.recipient_state())
