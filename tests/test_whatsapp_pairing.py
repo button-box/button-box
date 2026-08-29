@@ -423,12 +423,55 @@ class WhatsAppPairingTests(unittest.TestCase):
         failed = engine.unlink()
         self.assertEqual(failed["safe_error"], "UNLINK_FAILED")
         self.assertTrue((self.live_store / "store.db").exists())
+        arguments, options = runner.calls[-1]
+        self.assertEqual(
+            arguments[1:],
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                "15s",
+                "auth",
+                "logout",
+            ],
+        )
+        self.assertEqual(options["timeout"], 35)
 
         runner.logout_ok = True
         unlinked = engine.unlink()
         self.assertEqual(unlinked["status"], "idle")
         self.assertTrue(self.live_store.is_dir())
         self.assertEqual(list(self.live_store.iterdir()), [])
+
+    def test_relink_waits_for_a_transient_sync_lock(self):
+        runner = WacliRunner(logout_ok=False)
+        engine = self.engine(runner=runner)
+        self.live_store.mkdir()
+        (self.live_store / "store.db").write_text("keep", encoding="ascii")
+        engine._set_state(
+            "ready",
+            phone_hint="Linked account",
+            eligible_count=1,
+        )
+
+        failed = engine.relink()
+
+        self.assertEqual(failed["safe_error"], "UNLINK_FAILED")
+        arguments, options = runner.calls[-1]
+        self.assertEqual(
+            arguments[1:],
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                "15s",
+                "auth",
+                "logout",
+            ],
+        )
+        self.assertEqual(options["timeout"], 35)
 
 
 class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):

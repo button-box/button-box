@@ -44,6 +44,8 @@ MAX_BOOTSTRAP_MESSAGES = 100
 MAX_DISCOVERY_MESSAGES = 1000
 MAX_ELIGIBLE_CONVERSATIONS = 10
 MAX_REQUEST_BYTES = 4096
+LOGOUT_LOCK_WAIT = "15s"
+LOGOUT_PROCESS_TIMEOUT = 35
 
 ACTIVE_STATUSES = frozenset({"starting", "code_pending", "bootstrapping", "verifying"})
 PUBLIC_STATUSES = frozenset(
@@ -451,11 +453,7 @@ class PairingEngine:
                     raise PairingError("recipient_setup_started")
             except RecipientError as exc:
                 raise PairingError("recipient_state_failed") from exc
-            result = self._run_wacli(
-                self.live_store,
-                ["--json", "--timeout", "15s", "auth", "logout"],
-                timeout=20,
-            )
+            result = self._logout_live_store()
             if result.returncode != 0:
                 return self._set_state(
                     "ready",
@@ -474,11 +472,7 @@ class PairingEngine:
             state = self._load_state()
             if state["status"] != "ready":
                 raise PairingError("whatsapp_not_ready")
-            result = self._run_wacli(
-                self.live_store,
-                ["--json", "--timeout", "15s", "auth", "logout"],
-                timeout=20,
-            )
+            result = self._logout_live_store()
             if result.returncode != 0:
                 return self._set_state(
                     "ready",
@@ -774,6 +768,21 @@ class PairingEngine:
             errors="replace",
             timeout=timeout,
             check=False,
+        )
+
+    def _logout_live_store(self):
+        return self._run_wacli(
+            self.live_store,
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                LOGOUT_LOCK_WAIT,
+                "auth",
+                "logout",
+            ],
+            timeout=LOGOUT_PROCESS_TIMEOUT,
         )
 
     def _stage_authenticated(self):
