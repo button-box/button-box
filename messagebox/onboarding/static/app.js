@@ -272,6 +272,9 @@ function applyWhatsAppState(state, { manage = false } = {}) {
         whatsapp.safe_error,
         whatsapp.status,
       );
+      document.getElementById("retry-pairing").textContent = whatsapp.safe_error === "CLEANUP_FAILED"
+        ? "Finish account cleanup"
+        : "Try again";
   }
 }
 
@@ -1111,9 +1114,24 @@ document.getElementById("copy-setup-url").addEventListener("click", copySetupUrl
 document.getElementById("copy-pairing-code").addEventListener("click", copyPairingCode);
 document.getElementById("cancel-pairing").addEventListener("click", cancelPairing);
 document.getElementById("cancel-progress").addEventListener("click", cancelPairing);
-document.getElementById("retry-pairing").addEventListener("click", () => {
-  showView("whatsapp");
-  document.getElementById("whatsapp-phone").focus();
+document.getElementById("retry-pairing").addEventListener("click", async (event) => {
+  if (currentState?.whatsapp?.safe_error !== "CLEANUP_FAILED") {
+    showView("whatsapp");
+    document.getElementById("whatsapp-phone").focus();
+    return;
+  }
+  const button = event.currentTarget;
+  button.disabled = true;
+  showError("");
+  try {
+    applyState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }));
+    document.getElementById("whatsapp-phone").value = "+";
+    document.getElementById("whatsapp-phone").focus();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 document.getElementById("show-unlink").addEventListener("click", () => {
   const form = document.getElementById("unlink-form");
