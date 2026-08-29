@@ -631,6 +631,7 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("User=messagebox\n", worker)
         self.assertIn("RuntimeDirectory=messagebox-whatsapp-pairing", worker)
         self.assertIn("ReadWritePaths=/var/lib/messagebox", worker)
+        self.assertIn("/run/messagebox /run/messagebox-whatsapp-pairing", worker)
         self.assertIn("/var/lib/messagebox/whatsapp-pairing/sync-paused", syncloop)
         self.assertIn('while [[ -e "$SYNC_PAUSE_FILE" ]]', syncloop)
         self.assertNotIn("/var/lib/messagebox/wacli", web)
