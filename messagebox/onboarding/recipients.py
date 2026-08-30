@@ -453,24 +453,33 @@ class RecipientSetup:
             return state
         candidate = self._candidate(state, state["default_token"], require_available=False)
         proof = state["proof"]
+        received_files = set()
         for event in self._events(state["started_at"]):
             event_type = event.get("type")
             if (
-                not proof["received"]
-                and event_type == "received"
+                event_type == "received"
                 and event.get("chat") == candidate["jid"]
                 and isinstance(event.get("file"), str)
             ):
-                proof["received"] = True
-                proof["received_file"] = event["file"]
+                received_files.add(event["file"])
+                if not proof["received"]:
+                    proof["received"] = True
+                    proof["received_file"] = event["file"]
             elif (
-                proof["received_file"]
-                and event_type == "guided_session_started"
+                event_type == "guided_session_started"
                 and event.get("flow") == "reply"
-                and event.get("source_file") == proof["received_file"]
+                and event.get("source_file") in received_files
                 and isinstance(event.get("session_id"), str)
             ):
-                proof["session_id"] = event["session_id"]
+                if not proof["replied"] and proof["session_id"] != event["session_id"]:
+                    proof.update(
+                        received=True,
+                        played=False,
+                        replied=False,
+                        received_file=event["source_file"],
+                        session_id=event["session_id"],
+                        message_id=None,
+                    )
             elif (
                 proof["session_id"]
                 and event.get("session_id") == proof["session_id"]
@@ -481,6 +490,7 @@ class RecipientSetup:
                 proof["session_id"]
                 and event.get("session_id") == proof["session_id"]
                 and event_type == "guided_approved"
+                and event.get("flow") == "reply"
                 and isinstance(event.get("message_id"), str)
             ):
                 proof["message_id"] = event["message_id"]

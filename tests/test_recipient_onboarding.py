@@ -121,6 +121,7 @@ class RecipientSetupTests(unittest.TestCase):
             {
                 "type": "guided_approved",
                 "ts": started + 5,
+                "flow": "reply",
                 "session_id": "session-1",
                 "message_id": "message-1",
             },
@@ -143,6 +144,114 @@ class RecipientSetupTests(unittest.TestCase):
             complete["proof"], {"received": True, "played": True, "replied": True}
         )
         self.assertNotIn(PERSON, json.dumps(complete))
+
+    def test_later_complete_reply_replaces_incomplete_proof_anchor(self):
+        listed = self.candidates()
+        token = next(
+            item["token"]
+            for item in listed["recipients"]
+            if item["label"] == "+15551234567"
+        )
+        self.setup.select_default(token)
+        started = self.clock.value
+        events = [
+            {"type": "received", "ts": started + 1, "chat": PERSON, "file": "first.wav"},
+            {
+                "type": "guided_session_started",
+                "ts": started + 2,
+                "flow": "reply",
+                "source_file": "first.wav",
+                "session_id": "session-1",
+            },
+            {"type": "guided_inbound_played", "ts": started + 3, "session_id": "session-1"},
+            {"type": "guided_playback_only", "ts": started + 4, "session_id": "session-1"},
+            {"type": "received", "ts": started + 5, "chat": PERSON, "file": "retry.wav"},
+            {
+                "type": "guided_session_started",
+                "ts": started + 6,
+                "flow": "reply",
+                "source_file": "retry.wav",
+                "session_id": "session-2",
+            },
+            {"type": "guided_inbound_played", "ts": started + 7, "session_id": "session-2"},
+            {
+                "type": "guided_approved",
+                "ts": started + 8,
+                "flow": "reply",
+                "session_id": "session-2",
+                "message_id": "message-2",
+            },
+            {
+                "type": "sent",
+                "ts": started + 9,
+                "flow": "reply",
+                "message_id": "message-2",
+                "target": PERSON,
+            },
+        ]
+        self.events_path.write_text(
+            "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
+        )
+
+        complete = self.setup.public_state()
+
+        self.assertEqual(complete["status"], "complete")
+        self.assertEqual(
+            complete["proof"], {"received": True, "played": True, "replied": True}
+        )
+        persisted = json.loads(self.setup.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["proof"]["received_file"], "retry.wav")
+        self.assertEqual(persisted["proof"]["session_id"], "session-2")
+        self.assertEqual(persisted["proof"]["message_id"], "message-2")
+
+    def test_standalone_send_after_playback_does_not_complete_reply_proof(self):
+        listed = self.candidates()
+        token = next(
+            item["token"]
+            for item in listed["recipients"]
+            if item["label"] == "+15551234567"
+        )
+        self.setup.select_default(token)
+        started = self.clock.value
+        events = [
+            {"type": "received", "ts": started + 1, "chat": PERSON, "file": "voice.wav"},
+            {
+                "type": "guided_session_started",
+                "ts": started + 2,
+                "flow": "reply",
+                "source_file": "voice.wav",
+                "session_id": "reply-session",
+            },
+            {
+                "type": "guided_inbound_played",
+                "ts": started + 3,
+                "session_id": "reply-session",
+            },
+            {
+                "type": "guided_approved",
+                "ts": started + 4,
+                "flow": "standalone",
+                "session_id": "standalone-session",
+                "message_id": "standalone-message",
+            },
+            {
+                "type": "sent",
+                "ts": started + 5,
+                "flow": "standalone",
+                "message_id": "standalone-message",
+                "target": PERSON,
+            },
+        ]
+        self.events_path.write_text(
+            "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
+        )
+
+        incomplete = self.setup.public_state()
+
+        self.assertEqual(incomplete["status"], "testing")
+        self.assertEqual(
+            incomplete["proof"], {"received": True, "played": True, "replied": False}
+        )
 
     def test_manager_changes_default_and_removes_only_non_default_recipients(self):
         listed = self.candidates()
