@@ -4,19 +4,32 @@ import unittest
 from pathlib import Path
 
 
-ENCLOSURE = Path(__file__).resolve().parents[1] / "hardware" / "enclosure"
-TOP = ENCLOSURE / "button-box-enclosure-top.stl"
-BOTTOM = ENCLOSURE / "button-box-enclosure-bottom.stl"
+ROOT = Path(__file__).resolve().parents[1]
+MODELS = ROOT / "hardware" / "models"
+ENCLOSURE_POINTER = ROOT / "hardware" / "enclosure"
+REQUIRED_MODEL_FILES = (
+    "README.md",
+    "bom.md",
+    "enclosure/top.stl",
+    "enclosure/bottom.stl",
+)
+REQUIRED_BOM_COLUMNS = ("Part", "Vendor-agnostic name", "Example SKU", "Notes")
+KNOWN_MODELS = ("us", "eu-el001")
+DEFAULT_MODEL_ID = "us"
 
 EL001_WIDTH_MM = 187.0
-MIN_POCKET_WIDTH_MM = 188.0
-MAX_POCKET_WIDTH_MM = 190.0
+US_FOOTPRINT = (192.0, 120.0)
+EU_FOOTPRINT = (197.0, 120.0)
 EXPECTED_DEPTH_MM = 41.69
-EXPECTED_FOOTPRINT = (197.0, 120.0)
+US_INNER_WIDTH_MM = 183.22
+EU_MIN_POCKET_WIDTH_MM = 188.0
+EU_MAX_POCKET_WIDTH_MM = 190.0
 
 
 def load_stl(path):
     data = path.read_bytes()
+    if data[:5] != b"solid" and len(data) < 84:
+        raise ValueError(f"{path} is not a binary STL")
     count = struct.unpack_from("<I", data, 80)[0]
     faces = []
     normals = []
@@ -73,55 +86,117 @@ def widest_inward_pair(areas, *, min_area):
     negatives = [x for x, area in areas.items() if x < 0 and area >= min_area]
     if not positives or not negatives:
         return None
-    # Speaker pocket inner walls are the inward-facing pair nearest the origin
-    # among large X-facing planes in the bay.
     inner_positive = min(positives)
     inner_negative = max(negatives)
     return inner_negative, inner_positive, inner_positive - inner_negative
 
 
-class EnclosureSpeakerPocketTests(unittest.TestCase):
-    def test_top_speaker_pocket_clears_el001_width(self):
-        faces, normals = load_stl(TOP)
-        low, high = bounds(faces)
-        self.assertAlmostEqual(high[0] - low[0], EXPECTED_FOOTPRINT[0], places=1)
-        self.assertAlmostEqual(high[1] - low[1], EXPECTED_FOOTPRINT[1], places=1)
-
-        inner_areas = clustered_planes(
-            faces, normals, axis=0, y_min=-56.3, y_max=-16.0
+def model_ids():
+    return tuple(
+        sorted(
+            path.name
+            for path in MODELS.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
         )
-        inner = widest_inward_pair(inner_areas, min_area=200)
+    )
+
+
+def pocket_width(path, *, y_min, y_max, min_area):
+    faces, normals = load_stl(path)
+    return widest_inward_pair(
+        clustered_planes(faces, normals, axis=0, y_min=y_min, y_max=y_max),
+        min_area=min_area,
+    )
+
+
+def pocket_depth(path):
+    faces, normals = load_stl(path)
+    y_areas = clustered_planes(faces, normals, axis=1, y_min=-60.0, y_max=-14.0)
+    front = max((y for y, area in y_areas.items() if y < -50 and area >= 200), default=None)
+    back = min((y for y, area in y_areas.items() if -20 < y < -14 and area >= 20), default=None)
+    if front is None or back is None:
+        return None
+    return back - front
+
+
+class HardwareModelCatalogTests(unittest.TestCase):
+    def test_required_models_and_files_exist(self):
+        ids = model_ids()
+        self.assertEqual(set(ids), set(KNOWN_MODELS))
+        for model_id in ids:
+            root = MODELS / model_id
+            for relative in REQUIRED_MODEL_FILES:
+                path = root / relative
+                self.assertTrue(path.is_file(), f"missing {path}")
+                self.assertGreater(path.stat().st_size, 0, f"empty {path}")
+            bom = (root / "bom.md").read_text(encoding="utf-8")
+            for column in REQUIRED_BOM_COLUMNS:
+                self.assertIn(column, bom)
+            self.assertIn("Speaker", bom)
+            self.assertIn("Microphone", bom)
+
+    def test_unnamed_enclosure_stls_were_retired(self):
+        leftovers = list(ENCLOSURE_POINTER.glob("*.stl"))
+        self.assertEqual(leftovers, [])
+        pointer = (ENCLOSURE_POINTER / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"](../models/{DEFAULT_MODEL_ID}/", pointer)
+        self.assertIn("models/eu-el001/", pointer)
+
+
+class UsEnclosureTests(unittest.TestCase):
+    def test_us_pocket_matches_original_width(self):
+        top = MODELS / "us" / "enclosure" / "top.stl"
+        bottom = MODELS / "us" / "enclosure" / "bottom.stl"
+        faces, _normals = load_stl(top)
+        low, high = bounds(faces)
+        self.assertAlmostEqual(high[0] - low[0], US_FOOTPRINT[0], places=1)
+        self.assertAlmostEqual(high[1] - low[1], US_FOOTPRINT[1], places=1)
+
+        inner = pocket_width(top, y_min=-56.3, y_max=-16.0, min_area=200)
         self.assertIsNotNone(inner)
-        _left, _right, width = inner
-        self.assertGreaterEqual(width, MIN_POCKET_WIDTH_MM)
-        self.assertLessEqual(width, MAX_POCKET_WIDTH_MM)
-        self.assertGreater(width, EL001_WIDTH_MM)
+        self.assertAlmostEqual(inner[2], US_INNER_WIDTH_MM, places=1)
+        self.assertLess(inner[2], EL001_WIDTH_MM)
 
-        window_areas = clustered_planes(
-            faces, normals, axis=0, y_min=-59.3, y_max=-57.7
-        )
-        window = widest_inward_pair(window_areas, min_area=20)
+        window = pocket_width(top, y_min=-59.3, y_max=-57.7, min_area=20)
         self.assertIsNotNone(window)
-        self.assertGreaterEqual(window[2], MIN_POCKET_WIDTH_MM)
+        self.assertAlmostEqual(window[2], 183.10, places=1)
 
-        y_areas = clustered_planes(
-            faces, normals, axis=1, y_min=-60.0, y_max=-14.0
-        )
-        front = max((y for y, area in y_areas.items() if y < -50 and area >= 200), default=None)
-        back = min((y for y, area in y_areas.items() if -20 < y < -14 and area >= 20), default=None)
-        self.assertIsNotNone(front)
-        self.assertIsNotNone(back)
-        self.assertAlmostEqual(back - front, EXPECTED_DEPTH_MM, places=1)
+        self.assertAlmostEqual(pocket_depth(top), EXPECTED_DEPTH_MM, places=1)
 
-    def test_bottom_speaker_bay_is_at_least_as_wide_as_the_top(self):
-        faces, normals = load_stl(BOTTOM)
-        low, high = bounds(faces)
-        self.assertAlmostEqual(high[0] - low[0], EXPECTED_FOOTPRINT[0], places=1)
-        self.assertAlmostEqual(high[1] - low[1], EXPECTED_FOOTPRINT[1], places=1)
-        areas = clustered_planes(faces, normals, axis=0, y_min=-54.0, y_max=-8.0)
-        bay = widest_inward_pair(areas, min_area=200)
+        bottom_faces, _ = load_stl(bottom)
+        blow, bhigh = bounds(bottom_faces)
+        self.assertAlmostEqual(bhigh[0] - blow[0], US_FOOTPRINT[0], places=1)
+        bay = pocket_width(bottom, y_min=-54.0, y_max=-8.0, min_area=200)
         self.assertIsNotNone(bay)
-        self.assertGreaterEqual(bay[2], MIN_POCKET_WIDTH_MM)
+        self.assertAlmostEqual(bay[2], 187.0, places=1)
+
+
+class EuEl001EnclosureTests(unittest.TestCase):
+    def test_eu_pocket_clears_el001_width(self):
+        top = MODELS / "eu-el001" / "enclosure" / "top.stl"
+        bottom = MODELS / "eu-el001" / "enclosure" / "bottom.stl"
+        faces, _normals = load_stl(top)
+        low, high = bounds(faces)
+        self.assertAlmostEqual(high[0] - low[0], EU_FOOTPRINT[0], places=1)
+        self.assertAlmostEqual(high[1] - low[1], EU_FOOTPRINT[1], places=1)
+
+        inner = pocket_width(top, y_min=-56.3, y_max=-16.0, min_area=200)
+        self.assertIsNotNone(inner)
+        self.assertGreaterEqual(inner[2], EU_MIN_POCKET_WIDTH_MM)
+        self.assertLessEqual(inner[2], EU_MAX_POCKET_WIDTH_MM)
+        self.assertGreater(inner[2], EL001_WIDTH_MM)
+
+        window = pocket_width(top, y_min=-59.3, y_max=-57.7, min_area=20)
+        self.assertIsNotNone(window)
+        self.assertGreaterEqual(window[2], EU_MIN_POCKET_WIDTH_MM)
+        self.assertAlmostEqual(pocket_depth(top), EXPECTED_DEPTH_MM, places=1)
+
+        bottom_faces, _ = load_stl(bottom)
+        blow, bhigh = bounds(bottom_faces)
+        self.assertAlmostEqual(bhigh[0] - blow[0], EU_FOOTPRINT[0], places=1)
+        bay = pocket_width(bottom, y_min=-54.0, y_max=-8.0, min_area=200)
+        self.assertIsNotNone(bay)
+        self.assertGreaterEqual(bay[2], EU_MIN_POCKET_WIDTH_MM)
 
 
 if __name__ == "__main__":

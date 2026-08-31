@@ -48,7 +48,7 @@ config/env
 *.m4a
 *.ogg
 *.stl
-!hardware/enclosure/*.stl
+!hardware/models/*/enclosure/*.stl
 *.img
 *.iso
 *.tar

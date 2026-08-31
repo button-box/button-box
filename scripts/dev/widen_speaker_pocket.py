@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Widen the Button Box speaker pocket for the EU EL-001 speaker.
+"""Widen the US Button Box speaker pocket into the eu-el001 model.
 
-The committed STLs already include this change. The script is the
+Read hardware/models/us/enclosure/{top,bottom}.stl and write
+hardware/models/eu-el001/enclosure/{top,bottom}.stl.
+
+The committed eu-el001 STLs already include this change. The script is the
 reproducible mesh operation: split each enclosure half at x=±88 mm
 (the front-corner centers) and spread the end caps by 2.5 mm so the
 front window and inner pocket clear a 187 mm speaker.
@@ -21,11 +24,10 @@ import trimesh
 
 HINGE_MM = 88.0
 DELTA_MM = 2.5
-ENCLOSURE_DIR = Path(__file__).resolve().parents[2] / "hardware" / "enclosure"
-PARTS = (
-    "button-box-enclosure-bottom.stl",
-    "button-box-enclosure-top.stl",
-)
+MODELS_DIR = Path(__file__).resolve().parents[2] / "hardware" / "models"
+SOURCE_DIR = MODELS_DIR / "us" / "enclosure"
+OUTPUT_DIR = MODELS_DIR / "eu-el001" / "enclosure"
+PARTS = ("bottom.stl", "top.stl")
 
 
 def _directed_boundary_edges(faces: np.ndarray) -> np.ndarray:
@@ -108,14 +110,14 @@ def main() -> None:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=ENCLOSURE_DIR,
-        help="Directory containing the original top and bottom STLs",
+        default=SOURCE_DIR,
+        help="Directory containing the US top and bottom STLs",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ENCLOSURE_DIR,
-        help="Directory to write the widened STLs",
+        default=OUTPUT_DIR,
+        help="Directory to write the eu-el001 STLs",
     )
     args = parser.parse_args()
 
