@@ -21,4 +21,6 @@ The prototype Button Box enclosure has two printable parts:
 - [Top](enclosure/button-box-enclosure-top.stl)
 - [Bottom](enclosure/button-box-enclosure-bottom.stl)
 
-See the [enclosure notes](enclosure/README.md) for dimensions.
+The printable files are sized for the EU EL-001 USB speaker (187 x 55 x 40 mm),
+not the US LIELONGREN SKU in the BOM above. See the
+[enclosure notes](enclosure/README.md) for old vs new pocket dimensions.
