@@ -9,7 +9,7 @@ approved person or group. Incoming replies wait on the box until the child
 presses the button to listen.
 
 [Visit button.box](https://button.box/) ·
-[Join the WhatsApp community](https://chat.whatsapp.com/KkVOY76T0go1J6lGElwQJg?mode=gi_t) ·
+[Join the WhatsApp community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t) ·
 [Report an issue](https://github.com/button-box/button-box/issues)
 
 
@@ -487,7 +487,7 @@ Before updating a working physical box:
 
 Use [GitHub Issues](https://github.com/button-box/button-box/issues) for
 reproducible bugs and documentation problems, or
-[join the community](https://chat.whatsapp.com/KkVOY76T0go1J6lGElwQJg?mode=gi_t)
+[join the community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t)
 for builder discussion.
 
 A useful issue includes:
