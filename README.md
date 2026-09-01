@@ -65,7 +65,7 @@ You will also need:
 - **Hook-up wire and insulated connectors:** [0.25-inch arcade-button wire pairs](https://www.adafruit.com/product/3838) and an [assorted 2.8/4.8/6.3 mm spade-connector kit](https://www.adafruit.com/product/4748) are examples; confirm the terminal sizes on your button before ordering
 - **A microSD-card reader that fits your computer:** [USB-C example](https://www.adafruit.com/product/5212) or [USB-A example](https://www.adafruit.com/product/939)
 - **For Pi Zero 2 W, a suitable OTG USB hub**, powered if your selected audio devices require it. This [micro-USB OTG mini hub](https://www.adafruit.com/product/2991) is an example only; it has not yet been physically validated with the reference microphone and speaker.
-- **An enclosure:** use the [printable prototype enclosure](hardware/enclosure/README.md), a shoebox, or another sturdy, non-conductive container.
+- **An enclosure:** use a [printable model](hardware/models/README.md) (default [`us`](hardware/models/us/)), a shoebox, or another sturdy, non-conductive container.
 - **A computer with internet access** for preparing and provisioning the Pi
 - **A new, dedicated phone number for the Button Box WhatsApp account.** Add a line or eSIM through your mobile provider, activate it in the WhatsApp mobile app on a phone, and then link Button Box as a companion device.
 
@@ -147,8 +147,11 @@ The default public GPIO configuration is:
 > pin numbering, and PN532 I²C mode before applying power. Never connect or
 > disconnect GPIO wiring while the Pi is powered.
 
-For the printable prototype, download the [top](hardware/enclosure/button-box-enclosure-top.stl)
-and [bottom](hardware/enclosure/button-box-enclosure-bottom.stl) enclosure files.
+For the printable prototype, pick a [model](hardware/models/README.md). The
+default is [`us`](hardware/models/us/)
+([top](hardware/models/us/enclosure/top.stl),
+[bottom](hardware/models/us/enclosure/bottom.stl)). Europe's EL-001 speaker
+uses [`eu-el001`](hardware/models/eu-el001/).
 
 **Done when:** the unpowered assembly is mechanically secure, every connection
 has been independently checked, and there are no loose conductors or shorts.
@@ -386,7 +389,7 @@ on the physical device.
 | Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
 | Recipient and NFC browser onboarding | **Experimental** | Repository coverage is included; fresh-Pi NFC and final activation acceptance are still required. |
-| Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
+| Enclosure | **Prototype** | Printable models live under [`hardware/models/`](hardware/models/README.md). Default is [`us`](hardware/models/us/). |
 | Complete first-message journey from public instructions | **In progress** | Physical proof is still needed for recipient setup, NFC where used, runtime startup, send, reply, playback, and reboot using only this README. |
 
 Automated tests and repository review do not prove a physical Pi, phone, Wi-Fi,
@@ -510,7 +513,7 @@ Community contributions are welcome, especially:
 - beginner-tested installation instructions
 - Pi Zero 2 W and Pi 4B build photographs
 - wiring and assembly diagrams
-- enclosure designs
+- enclosure designs (add a folder under [`hardware/models/`](hardware/models/README.md))
 - accessibility improvements
 - recovery and troubleshooting guides
 - hardware compatibility reports
@@ -534,7 +537,7 @@ GPIO, NFC, Wi-Fi, or WhatsApp behaviors were physically tested.
 - `scripts/dev/`: experimental developer onboarding and hardware checks
 - `systemd/`: device services and runtime target
 - `config/`: public configuration and pinned dependencies
-- `hardware/`: [hardware list and printable enclosure files](hardware/README.md)
+- `hardware/`: [hardware list](hardware/README.md) and [printable models](hardware/models/README.md)
 - `sounds/`: audio licensing requirements and future assets
 - `tests/`: synthetic unit and contract tests
 - `docs/`: architecture, installation, testing, and developer documentation

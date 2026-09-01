@@ -2,6 +2,11 @@
 
 Describe the user-visible or maintainer-visible change.
 
+For a new printable enclosure or regional BOM, add a folder under
+`hardware/models/` instead of overwriting another model's STLs. Use the
+[hardware-model template](PULL_REQUEST_TEMPLATE/hardware-model.md) and see
+[hardware/models/README.md](../hardware/models/README.md).
+
 ## Verification
 
 - [ ] `make check` passes.
