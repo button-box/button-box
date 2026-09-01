@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from messagebox.contacts import ContactStore
+from messagebox.contacts import ContactError, ContactStore
 from messagebox.onboarding.recipients import RecipientSetup
-from messagebox.onboarding.whatsapp import PairingEngine
+from messagebox.onboarding.whatsapp import PairingEngine, PairingError
 
 
 class WhatsAppRelinkTests(unittest.TestCase):
@@ -47,7 +47,10 @@ class WhatsAppRelinkTests(unittest.TestCase):
         self.directory.cleanup()
 
     def engine(self, returncode=0):
+        calls = []
+
         def run(*args, **kwargs):
+            calls.append(list(args[0]))
             return subprocess.CompletedProcess(args[0], returncode, "{}", "")
 
         engine = PairingEngine(
@@ -61,6 +64,7 @@ class WhatsAppRelinkTests(unittest.TestCase):
         engine._set_state(
             "ready", phone_hint="WhatsApp number ending in 4567", eligible_count=1
         )
+        engine.run_calls = calls
         return engine
 
     def test_success_erases_account_store_routing_cards_and_proof(self):
@@ -82,6 +86,31 @@ class WhatsAppRelinkTests(unittest.TestCase):
         self.assertTrue((self.live / "store.db").exists())
         self.assertTrue(ContactStore(self.contacts_path).load()["contacts"])
         self.assertTrue(self.recipient_path.exists())
+
+    def test_contact_store_failure_enters_resumable_cleanup_without_second_logout(self):
+        clear = self.recipients.contacts.clear_for_whatsapp_relink
+        clear_calls = 0
+
+        def fail_once():
+            nonlocal clear_calls
+            clear_calls += 1
+            if clear_calls == 1:
+                raise ContactError("contact store could not be saved")
+            return clear()
+
+        self.recipients.contacts.clear_for_whatsapp_relink = fail_once
+        engine = self.engine()
+
+        with self.assertRaisesRegex(PairingError, "cleanup_required"):
+            engine.relink()
+
+        failed = engine.public_state()
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["safe_error"], "CLEANUP_FAILED")
+
+        self.assertEqual(engine.relink()["status"], "idle")
+        logout_calls = [call for call in engine.run_calls if call[-2:] == ["auth", "logout"]]
+        self.assertEqual(len(logout_calls), 1)
 
 
 if __name__ == "__main__":

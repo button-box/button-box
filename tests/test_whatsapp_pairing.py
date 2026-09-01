@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from messagebox.onboarding.whatsapp import (
+    ACCOUNT_CLEANUP_CLIENT_TIMEOUT,
+    LOGOUT_PROCESS_TIMEOUT,
     MAX_BOOTSTRAP_MESSAGES,
     MAX_ELIGIBLE_CONVERSATIONS,
     PairingEngine,
@@ -158,13 +161,17 @@ class WhatsAppPairingTests(unittest.TestCase):
         engine.stage.mkdir(mode=0o700)
         engine._set_state("starting")
 
-    def test_relink_client_requests_account_scoped_cleanup(self):
+    def test_account_cleanup_client_outlasts_worker(self):
         client = WhatsAppPairingClient()
-        with mock.patch.object(
-            client, "_request", return_value={"status": "idle"}
-        ) as request:
-            self.assertEqual(client.relink(), {"status": "idle"})
-        request.assert_called_once_with({"action": "relink"}, timeout=25)
+        self.assertGreater(ACCOUNT_CLEANUP_CLIENT_TIMEOUT, LOGOUT_PROCESS_TIMEOUT)
+        for action in ("unlink", "relink"):
+            with self.subTest(action=action), mock.patch.object(
+                client, "_request", return_value={"status": "idle"}
+            ) as request:
+                self.assertEqual(getattr(client, action)(), {"status": "idle"})
+                request.assert_called_once_with(
+                    {"action": action}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+                )
 
     def test_phone_normalization_and_exact_auth_command(self):
         self.assertEqual(normalize_phone(" +1 415-555-0123 "), "+14155550123")
@@ -579,6 +586,19 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("retry-pairing", script)
         self.assertIn("Finish account cleanup", script)
         self.assertIn('formRequest("/whatsapp/unlink", { confirm: "unlink" })', script)
+        retry = script.split(
+            'document.getElementById("retry-pairing").addEventListener', 1
+        )[1].split(
+            'document.getElementById("show-unlink").addEventListener', 1
+        )[0]
+        self.assertIn(
+            'rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }))',
+            retry,
+        )
+        runtime_load = script.split("async function loadRuntimeWhatsApp()", 1)[1].split(
+            "function setProof", 1
+        )[0]
+        self.assertIn("const state = rememberState({", runtime_load)
         self.assertIn('formRequest("/recipients/refresh")', script)
         self.assertIn("formRequest(`/recipients/${action}`", script)
         self.assertIn("formRequest(`/recipients/${action}-number`", script)
@@ -651,6 +671,21 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             self.assertIn("RuntimeDirectory=messagebox-button", unit)
             self.assertIn("WorkingDirectory=/run/messagebox-button", unit)
             self.assertIn("Environment=PYTHONPATH=/opt/messagebox", unit)
+
+    def test_gunicorn_outlasts_account_cleanup_client(self):
+        root = Path(__file__).parents[1]
+        units = (
+            root / "systemd/onboarding/comitup-web.service.d/messagebox.conf",
+            root / "systemd/onboarding/messagebox-onboarding-home.service",
+        )
+        for path in units:
+            with self.subTest(unit=path.name):
+                unit = path.read_text(encoding="utf-8")
+                timeout = re.search(r"ExecStart=.*--timeout (\d+)", unit)
+                self.assertIsNotNone(timeout)
+                self.assertGreater(
+                    int(timeout.group(1)), ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+                )
 
 
 if __name__ == "__main__":

@@ -105,6 +105,16 @@ class WifiChangeTests(unittest.TestCase):
         self.assertEqual(fallback_calls, [{"runner": runner, "enable_units": False}])
         self.assertEqual(load_status(self.status)["status"], "hotspot")
 
+    def test_service_restarts_only_an_active_dashboard_after_wifi_processing(self):
+        unit = (
+            Path(__file__).parents[1] / "systemd/messagebox-wifi-change.service"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "ExecStartPost=/usr/bin/systemctl try-restart messagebox-dash.service\n",
+            unit,
+        )
+        self.assertNotIn("ExecStartPost=/usr/bin/systemctl restart ", unit)
+
 
 if __name__ == "__main__":
     unittest.main()

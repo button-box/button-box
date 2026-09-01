@@ -10,6 +10,7 @@ Group=root
 WorkingDirectory=/opt/messagebox
 Environment=PYTHONPATH=/opt/messagebox
 ExecStart=/usr/bin/python3 -m messagebox.wifi_change
+ExecStartPost=/usr/bin/systemctl try-restart messagebox-dash.service
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

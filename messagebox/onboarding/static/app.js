@@ -55,6 +55,11 @@ function showError(message) {
   element.hidden = !message;
 }
 
+function rememberState(state) {
+  currentState = currentState ? { ...currentState, ...state } : state;
+  return currentState;
+}
+
 async function request(url, options = {}) {
   const response = await fetch(url, {
     cache: "no-store",
@@ -149,11 +154,11 @@ function schedulePoll(status, recipientStatus = null) {
 async function loadRuntimeWhatsApp() {
   try {
     const whatsapp = await request("/api/whatsapp");
-    const state = {
+    const state = rememberState({
       mode: "RUNTIME",
       phase: whatsapp.status === "ready" ? "WHATSAPP_READY" : "WHATSAPP_PENDING",
       whatsapp,
-    };
+    });
     if (whatsapp.status === "ready") {
       state.recipient_setup = await request("/api/recipients");
       state.nfc_setup = { status: "idle", mapped_count: 0 };
@@ -1007,7 +1012,7 @@ async function pairWhatsApp(event) {
   showError("");
   try {
     const phone = document.getElementById("whatsapp-phone").value;
-    applyState(await formRequest("/whatsapp/pair/start", { phone }));
+    applyState(rememberState(await formRequest("/whatsapp/pair/start", { phone })));
   } catch (error) {
     showError(error.message);
     document.getElementById("whatsapp-phone").focus();
@@ -1019,7 +1024,7 @@ async function pairWhatsApp(event) {
 async function cancelPairing() {
   showError("");
   try {
-    applyState(await formRequest("/whatsapp/pair/cancel"));
+    applyState(rememberState(await formRequest("/whatsapp/pair/cancel")));
   } catch (error) {
     showError(error.message);
   }
@@ -1075,7 +1080,7 @@ async function unlinkWhatsApp(event) {
   button.disabled = true;
   showError("");
   try {
-    applyState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }));
+    applyState(rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" })));
     document.getElementById("unlink-form").hidden = true;
     document.getElementById("whatsapp-phone").value = "+";
     document.getElementById("whatsapp-phone").focus();
@@ -1124,7 +1129,7 @@ document.getElementById("retry-pairing").addEventListener("click", async (event)
   button.disabled = true;
   showError("");
   try {
-    applyState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }));
+    applyState(rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" })));
     document.getElementById("whatsapp-phone").value = "+";
     document.getElementById("whatsapp-phone").focus();
   } catch (error) {

@@ -218,7 +218,10 @@ class RecipientSetup:
     @synchronized
     def reset_for_whatsapp_relink(self):
         """Erase all state that could route to the previously linked account."""
-        self.contacts.clear_for_whatsapp_relink()
+        try:
+            self.contacts.clear_for_whatsapp_relink()
+        except ContactError as exc:
+            raise RecipientError("recipient state is unavailable") from exc
         for path in (
             self.state_path,
             self.voice_request_path,

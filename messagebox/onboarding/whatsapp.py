@@ -46,6 +46,7 @@ MAX_ELIGIBLE_CONVERSATIONS = 10
 MAX_REQUEST_BYTES = 4096
 LOGOUT_LOCK_WAIT = "15s"
 LOGOUT_PROCESS_TIMEOUT = 35
+ACCOUNT_CLEANUP_CLIENT_TIMEOUT = 45
 
 ACTIVE_STATUSES = frozenset({"starting", "code_pending", "bootstrapping", "verifying"})
 PUBLIC_STATUSES = frozenset(
@@ -993,10 +994,14 @@ class WhatsAppPairingClient:
         return self._request({"action": "cancel"}, timeout=25)
 
     def unlink(self):
-        return self._request({"action": "unlink"}, timeout=25)
+        return self._request(
+            {"action": "unlink"}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+        )
 
     def relink(self):
-        return self._request({"action": "relink"}, timeout=25)
+        return self._request(
+            {"action": "relink"}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+        )
 
     def recipient_state(self):
         return self._request({"action": "recipient_state"})
