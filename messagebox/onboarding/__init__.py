@@ -1,1 +1,1 @@
-"""Message Box Wi-Fi onboarding."""
+"""Button Box setup."""

@@ -1,5 +1,5 @@
 [Unit]
-Description=Validate and complete Message Box onboarding
+Description=Validate and complete Button Box setup
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 After=messagebox-onboarding-home.service
 

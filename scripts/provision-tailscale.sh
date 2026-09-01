@@ -6,7 +6,7 @@ set -eu
 usage() {
   printf '%s\n' \
     "Usage: $0 [--hostname NAME] user@host" \
-    "Example: $0 admin@message-box-001.local" >&2
+    "Example: $0 admin@button-box-001.local" >&2
 }
 
 die() {
@@ -41,20 +41,22 @@ command -v ssh >/dev/null 2>&1 || die "ssh is required"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INSTALLER=$SCRIPT_DIR/install/tailscale.sh
+DASHBOARD_HELPER=$SCRIPT_DIR/install/tailscale_dashboard.py
 [ -r "$INSTALLER" ] || die "missing installer: $INSTALLER"
+[ -r "$DASHBOARD_HELPER" ] || die "missing dashboard helper: $DASHBOARD_HELPER"
 
 REMOTE_HOSTNAME=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" hostname)
 case "$REMOTE_HOSTNAME" in
-  message-box-*) ;;
-  *) die "remote hostname is not a valid message-box hostname" ;;
+  button-box-*|message-box-*) ;;
+  *) die "remote hostname is not a valid Button Box hostname" ;;
 esac
 case "$REMOTE_HOSTNAME" in
   *[!A-Za-z0-9-]*|*-)
-    die "remote hostname is not a valid message-box hostname"
+    die "remote hostname is not a valid Button Box hostname"
     ;;
 esac
 [ "${#REMOTE_HOSTNAME}" -le 63 ] ||
-  die "remote hostname is not a valid message-box hostname"
+  die "remote hostname is not a valid Button Box hostname"
 
 if [ -z "$TAILSCALE_HOSTNAME" ]; then
   TAILSCALE_HOSTNAME=$REMOTE_HOSTNAME
@@ -63,6 +65,8 @@ case "$TAILSCALE_HOSTNAME" in
   *[!A-Za-z0-9-]*|-*|*-|"") die "invalid Tailscale hostname" ;;
 esac
 [ "${#TAILSCALE_HOSTNAME}" -le 63 ] || die "invalid Tailscale hostname"
+[ "$TAILSCALE_HOSTNAME" = "$REMOTE_HOSTNAME" ] ||
+  die "Tailscale hostname must match the Button Box hostname"
 
 ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" sudo -n true ||
   die "passwordless sudo is required for remote provisioning"
@@ -76,8 +80,9 @@ Remote hostname:    $REMOTE_HOSTNAME
 Tailscale hostname: $TAILSCALE_HOSTNAME
 
 This installs Tailscale from its signed official repository and may open an
-interactive authorization URL for the existing tailnet. It does not enable
-Tailscale SSH, expose the dashboard, advertise routes, or store an auth key.
+interactive authorization URL for the existing tailnet. It enables the private
+tailnet dashboard over HTTPS. It does not enable Tailscale SSH or Funnel,
+advertise routes, or store an auth key.
 
 Continue? [y/N]
 EOF
@@ -112,6 +117,15 @@ case "$TAILSCALE_IP" in
   ""|*[!0-9.]*) die "Tailscale did not report a valid IPv4 address" ;;
 esac
 
+echo "Configuring the private tailnet dashboard..."
+TAILSCALE_DASHBOARD_URL=$(ssh -o BatchMode=yes "$TARGET" \
+  "sudo -n env PYTHONPATH=/opt/messagebox /usr/bin/python3 - --expected-name=$REMOTE_HOSTNAME" \
+  <"$DASHBOARD_HELPER") || die "private dashboard provisioning failed"
+case "$TAILSCALE_DASHBOARD_URL" in
+  https://"$REMOTE_HOSTNAME".*.ts.net/) ;;
+  *) die "private dashboard provisioning returned an invalid URL" ;;
+esac
+
 SSH_USER=${TARGET%%@*}
 cat <<EOF
 
@@ -119,9 +133,13 @@ TAILSCALE REMOTE SUPPORT READY
 
 Device: $TAILSCALE_HOSTNAME
 Address: $TAILSCALE_IP
+Dashboard: $TAILSCALE_DASHBOARD_URL
 
 Verify from a different network:
   ssh $SSH_USER@$TAILSCALE_IP
+
+On a phone or computer signed in to the same tailnet, open:
+  $TAILSCALE_DASHBOARD_URL
 
 Tailscale carries the connection; ordinary OpenSSH keys still control shell
 access. Keep the LAN connection available until that independent test passes.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Button Box Wi-Fi change requests
+
+[Path]
+PathExists=/var/lib/messagebox-settings/wifi-change.json
+Unit=messagebox-wifi-change.service
+
+[Install]
+WantedBy=multi-user.target

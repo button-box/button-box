@@ -38,6 +38,8 @@ class DashboardQueueHoldTests(unittest.TestCase):
         dashboard.CONTACTS_FILE = self.root / "contacts.json"
         dashboard.LISTENED_DIR = str(self.root / "listened")
         dashboard.OUTBOX_DIR = str(self.root / "outbox")
+        dashboard.PUBLIC_MESSAGES.clear()
+        dashboard.PUBLIC_MESSAGE_REVERSE.clear()
         dashboard.contacts_store().add_contact(self.family, "Family")
 
     def tearDown(self):
@@ -48,6 +50,9 @@ class DashboardQueueHoldTests(unittest.TestCase):
     def post(self, path):
         handler = dashboard.Handler.__new__(dashboard.Handler)
         handler.path = path
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         response = {}
 
         def send(code, body, ctype="application/json"):
@@ -77,11 +82,14 @@ class DashboardQueueHoldTests(unittest.TestCase):
         )
         return wav
 
+    def token(self, kind="queue", name="1000-message.wav"):
+        return dashboard.public_message_token(kind, name)
+
     def test_hold_removes_message_from_player_queue_and_resume_restores_it(self):
         wav = self.make_message()
         sidecar = Path(str(wav) + ".json")
 
-        self.assertEqual(self.post("/api/hold?f=1000-message.wav")["code"], 200)
+        self.assertEqual(self.post(f"/api/hold?f={self.token()}")["code"], 200)
         self.assertFalse(wav.exists())
         self.assertFalse(sidecar.exists())
         self.assertTrue((self.hold / wav.name).exists())
@@ -93,7 +101,8 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(data["hold"][0]["sender"], "Mommy")
         self.assertEqual(data["hold"][0]["chat"], "Family")
 
-        self.assertEqual(self.post("/api/resume?f=1000-message.wav")["code"], 200)
+        hold_token = data["hold"][0]["token"]
+        self.assertEqual(self.post(f"/api/resume?f={hold_token}")["code"], 200)
         self.assertTrue(wav.exists())
         self.assertTrue(sidecar.exists())
         self.assertFalse((self.hold / wav.name).exists())
@@ -104,7 +113,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
         destination = self.hold / wav.name
         destination.write_bytes(b"existing")
 
-        response = self.post("/api/hold?f=1000-message.wav")
+        response = self.post(f"/api/hold?f={self.token()}")
 
         self.assertEqual(response["code"], 409)
         self.assertTrue(wav.exists())
@@ -112,7 +121,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
 
     def test_resume_rolls_sidecar_back_if_wav_move_fails(self):
         wav = self.make_message()
-        self.assertEqual(self.post("/api/hold?f=1000-message.wav")["code"], 200)
+        self.assertEqual(self.post(f"/api/hold?f={self.token()}")["code"], 200)
         held_wav = self.hold / wav.name
         held_meta = self.hold / (wav.name + ".json")
         real_replace = dashboard.os.replace
@@ -123,7 +132,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
             return real_replace(source, destination)
 
         with mock.patch.object(dashboard.os, "replace", side_effect=replace):
-            response = self.post("/api/resume?f=1000-message.wav")
+            response = self.post(f"/api/resume?f={self.token('hold')}")
 
         self.assertEqual(response["code"], 500)
         self.assertTrue(held_wav.exists())
@@ -134,9 +143,12 @@ class DashboardQueueHoldTests(unittest.TestCase):
     def test_held_audio_remains_streamable_from_dashboard(self):
         wav = self.make_message()
         expected = wav.read_bytes()
-        self.assertEqual(self.post("/api/hold?f=1000-message.wav")["code"], 200)
+        self.assertEqual(self.post(f"/api/hold?f={self.token()}")["code"], 200)
         handler = dashboard.Handler.__new__(dashboard.Handler)
-        handler.path = "/audio/1000-message.wav?hold=1"
+        handler.path = f"/audio/{self.token('hold')}?hold=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         response = {}
 
         def send(code, body, ctype="application/json"):
@@ -157,6 +169,9 @@ class DashboardQueueHoldTests(unittest.TestCase):
             with self.subTest(path=path):
                 handler = dashboard.Handler.__new__(dashboard.Handler)
                 handler.path = path
+                handler.headers = {"Host": "button-box.local"}
+                handler.client_address = ("192.168.1.20", 12345)
+                handler.local_host = "button-box.local"
                 response = {}
                 handler._send = lambda code, body, ctype: response.update(
                     code=code, body=body, ctype=ctype

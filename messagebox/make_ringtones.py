@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthesize ringtones for the Message Box new-message alert.
+"""Synthesize ringtones for the Button Box new-message alert.
 
 Pure-python WAV synth: sine + a couple of harmonics with a percussive decay
 envelope — music-box / chiptune character. Each tone is ~9-10s so it carries

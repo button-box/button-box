@@ -36,7 +36,7 @@ class CompletionTests(unittest.TestCase):
         return subprocess.CompletedProcess(command, 0)
 
     @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
-    def test_zero_cards_enables_runtime_without_nfc_or_dashboard(self, _geteuid):
+    def test_zero_cards_enables_runtime_dashboard_without_nfc(self, _geteuid):
         result = complete(
             request_path=self.request,
             enabled_path=self.enabled,
@@ -47,8 +47,19 @@ class CompletionTests(unittest.TestCase):
         )
         self.assertEqual(result, {"has_cards": False})
         commands = [call[0] for call in self.calls]
-        self.assertIn(["systemctl", "disable", "messagebox-nfc.service"], commands)
-        self.assertIn(["systemctl", "disable", "messagebox-dash.service"], commands)
+        self.assertIn(["systemctl", "enable", "messagebox-nfc.service"], commands)
+        self.assertIn(
+            [
+                "systemctl",
+                "enable",
+                "messagebox-button.service",
+                "messagebox-sync.service",
+                "messagebox-poller.service",
+                "messagebox-dash.service",
+                "messagebox.target",
+            ],
+            commands,
+        )
         self.assertIn(["systemctl", "start", "messagebox.target"], commands)
         self.assertFalse(self.enabled.exists())
         self.assertFalse(self.request.exists())

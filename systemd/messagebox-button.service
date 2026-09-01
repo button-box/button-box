@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box record button (hold to record, release to send)
+Description=Button Box physical button interaction
 After=network-online.target sound.target
 Wants=network-online.target
 PartOf=messagebox.target
@@ -21,7 +21,7 @@ Environment=HOME=/var/lib/messagebox
 Environment=PYTHONPATH=/opt/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 Environment=GPIOZERO_PIN_FACTORY=lgpio
-SupplementaryGroups=gpio audio
+SupplementaryGroups=gpio audio messagebox-settings
 UMask=0077
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_MIC_CARD} sset ${MSGBOX_MIC_CONTROL} ${MSGBOX_MIC_GAIN} cap
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_SPEAKER_CARD} sset ${MSGBOX_SPEAKER_CONTROL} ${MSGBOX_SPEAKER_VOLUME} unmute

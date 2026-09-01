@@ -12,6 +12,9 @@ table inet messagebox_onboarding {
         iifname "wlan0" ip daddr 10.41.0.1 ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem, echo-request } accept
         iifname "wlan0" ip saddr 10.41.0.0/24 drop
         iifname "wlan0" ip6 saddr fe80::/10 ip6 daddr fe80::/10 drop
+        # Tailscale Serve proxies the private HTTPS dashboard to loopback.
+        # The application still requires its exact device-local tailnet host.
+        iifname "lo" tcp dport 80 accept
         tcp dport 80 drop
     }
 

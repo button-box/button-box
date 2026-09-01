@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Message Box physical-button service.
-
-With MSGBOX_GUIDED_REPLY=1, one press starts exactly one session. The oldest
-incoming message (if any) is played; MSGBOX_AUTO_RECORD_AFTER_INCOMING controls
-whether playback continues into a reply recording. With no incoming message, a
-standalone family message is recorded. Recordings use silence-aware stop,
-private playback, and explicit send approval. Approved audio is atomically
-bound to its exact recipient in the durable outbox before the child flow
-returns.
-
-With the flag off (the default), the established hold-to-record / short-to-play
-behavior remains available as the immediate rollback.
-"""
+"""Button Box physical-button service with caregiver-selectable interaction."""
 
 import json
 import os
@@ -22,7 +10,9 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
@@ -33,7 +23,6 @@ from messagebox.guided_reply import (
     RecordingResult,
     claim_inbox_file,
     discard_held_playback_press,
-    env_flag,
     finish_inbox_file,
     invalid_prompt_files,
     raw_pcm_to_trimmed_wav,
@@ -55,13 +44,15 @@ from messagebox.runtime_paths import (
     RUNTIME_DIR,
     STATE_DIR as DEFAULT_STATE_DIR,
 )
+from messagebox.settings import SettingsReader, ringtone_path
 
 
 MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
 SPK_DEV = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device_1,DEV=0")
+SPEAKER_CARD = os.environ.get("MSGBOX_SPEAKER_CARD", "Device")
+SPEAKER_CONTROL = os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM")
 BUTTON_PIN = int(os.environ.get("MSGBOX_BUTTON_PIN", "17"))
 LED_PIN = int(os.environ.get("MSGBOX_LED_PIN", "26"))
-MAX_SECONDS = int(os.environ.get("MSGBOX_MAX_SECONDS", "60"))  # rollback flow only
 LOCK_WAIT = os.environ.get("MSGBOX_LOCK_WAIT", "60s")
 WACLI_BIN = "/usr/local/bin/wacli"
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
@@ -76,23 +67,15 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 )
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
-RING_WAV = os.environ.get(
-    "MSGBOX_RING_WAV", str(APP_DIR / "ringtones" / "ring3.wav")
-)
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 NFC_SELECTION_TTL_S = float(os.environ.get("MSGBOX_NFC_SELECTION_TTL_S", "30"))
 NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
 )
-NFC_DETECTION_BEEP = env_flag("MSGBOX_NFC_DETECTION_BEEP", default=False)
 NFC_HEALTH_MAX_AGE_S = float(os.environ.get("MSGBOX_NFC_HEALTH_MAX_AGE_S", "5"))
 PLACE_TOKEN_WAV = os.environ.get(
     "MSGBOX_PLACE_TOKEN_WAV",
     str(APP_DIR / "sounds" / "nfc" / "place-token.wav"),
-)
-GUIDED_REPLY = env_flag("MSGBOX_GUIDED_REPLY", default=False)
-AUTO_RECORD_AFTER_INCOMING = env_flag(
-    "MSGBOX_AUTO_RECORD_AFTER_INCOMING", default=False
 )
 GUIDED_SILENCE_SECONDS = float(os.environ.get("MSGBOX_GUIDED_SILENCE_SECONDS", "20"))
 PROMPT_DIR = Path(
@@ -111,8 +94,6 @@ PROMPTS = {
 
 # Quiet hours: lamp dark, no ringtone (messages still queue; a deliberate press
 # still plays). Overnight arrivals do not ring when quiet hours end.
-QUIET_START_H = int(os.environ.get("MSGBOX_QUIET_START_H", "22"))
-QUIET_END_H = int(os.environ.get("MSGBOX_QUIET_END_H", "7"))
 RING_PHRASE = [
     (True, 1.2),
     (True, 1.6),
@@ -153,11 +134,49 @@ def log_event(event_type, **fields):
         log(f"event log error: {exc}")
 
 
-def quiet_hours():
-    hour = time.localtime().tm_hour
-    if QUIET_START_H <= QUIET_END_H:
-        return QUIET_START_H <= hour < QUIET_END_H
-    return hour >= QUIET_START_H or hour < QUIET_END_H
+def quiet_hours(settings=None, now=None):
+    settings = settings or caregiver_settings()
+    quiet = settings["quiet_hours"]
+    if not quiet["enabled"]:
+        return False
+    current = now or datetime.now(ZoneInfo(settings["timezone"]))
+    minute = current.hour * 60 + current.minute
+    start_hour, start_minute = (int(value) for value in quiet["start"].split(":"))
+    end_hour, end_minute = (int(value) for value in quiet["end"].split(":"))
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+    if start == end:
+        return True
+    if start < end:
+        return start <= minute < end
+    return minute >= start or minute < end
+
+
+_applied_volume_revision = None
+
+
+def apply_master_volume(settings=None):
+    global _applied_volume_revision
+    settings = settings or caregiver_settings()
+    if settings["revision"] == _applied_volume_revision:
+        return True
+    result = subprocess.run(
+        [
+            "amixer",
+            "-q",
+            "-c",
+            SPEAKER_CARD,
+            "sset",
+            SPEAKER_CONTROL,
+            f'{settings["master_volume_percent"]}%',
+            "unmute",
+        ],
+        check=False,
+    )
+    if result.returncode == 0:
+        _applied_volume_revision = settings["revision"]
+        return True
+    return False
 
 
 def make_beeps():
@@ -213,6 +232,11 @@ receipt_store = None
 announcement_gate = AnnouncementGate(LISTENED_POLL_S, LISTENED_RETRY_S)
 nfc_announcement_store = AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
 _last_nfc_announcement_poll = 0.0
+settings_reader = SettingsReader()
+
+
+def caregiver_settings():
+    return settings_reader.snapshot()
 
 
 def current_recipient_context(*, claim=False):
@@ -324,7 +348,7 @@ def block_unavailable_recipient():
 
 def _play_nfc_prompt(uid, action, card_clip):
     beeped = False
-    if NFC_DETECTION_BEEP:
+    if caregiver_settings()["nfc_confirmation_beep"]:
         beep("nfc")
         beeped = True
     card_clip = os.path.expanduser(card_clip)
@@ -632,13 +656,15 @@ def sender_loop():
 _led_last = 0.0
 
 
-def refresh_led(force=False):
+def refresh_led(force=False, settings=None):
     global _led_last
     now = time.monotonic()
     if not force and now - _led_last < LED_REFRESH_S:
         return
     _led_last = now
-    (led.on if queued() and not quiet_hours() else led.off)()
+    settings = settings or caregiver_settings()
+    lamp_enabled = settings["arrival_signal"] in {"ring_and_lamp", "lamp_only"}
+    (led.on if queued() and lamp_enabled and not quiet_hours(settings) else led.off)()
 
 
 def ring_windows():
@@ -651,11 +677,8 @@ def ring_windows():
 
 
 RING_WINS = ring_windows()
-RING_CUSTOM = os.path.basename(RING_WAV) != "ring3.wav"
-
-
-def ring_lamp_on(elapsed):
-    if RING_CUSTOM:
+def ring_lamp_on(elapsed, ringtone_id):
+    if ringtone_id != "ding_dong":
         return (elapsed % 0.9) < 0.45
     return any(start <= elapsed < end for start, end in RING_WINS)
 
@@ -687,8 +710,9 @@ def maybe_ring():
     fresh = (snapshot - _known) - _seen_ever
     _known = snapshot
     _seen_ever.update(snapshot)
-    if fresh and not quiet_hours():
-        ring_alert()
+    settings = caregiver_settings()
+    if fresh and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
+        ring_alert(settings=settings)
 
 
 def maybe_manual_ring():
@@ -702,25 +726,34 @@ def maybe_manual_ring():
     ring_alert(source="dashboard")
 
 
-def ring_alert(source="new_message"):
-    if not os.path.exists(RING_WAV):
-        log(f"ring skipped ({source}): missing {RING_WAV}")
+def ring_alert(source="new_message", settings=None):
+    settings = settings or caregiver_settings()
+    path = os.fspath(ringtone_path(settings))
+    manual = source == "dashboard"
+    signal = "ring_and_lamp" if manual else settings["arrival_signal"]
+    play_ring = signal in {"ring_and_lamp", "ring_only"}
+    flash_lamp = signal in {"ring_and_lamp", "lamp_only"}
+    if play_ring and not os.path.exists(path):
+        log(f"ring skipped ({source}): ringtone unavailable")
         return
     log(f"ringing: {source}")
     log_event("ring", source=source)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, RING_WAV])
+    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
     started = time.monotonic()
     try:
-        while process.poll() is None:
+        while (process is not None and process.poll() is None) or (
+            process is None and time.monotonic() - started < 9
+        ):
             elapsed = time.monotonic() - started
-            (led.on if ring_lamp_on(elapsed) else led.off)()
+            (led.on if flash_lamp and ring_lamp_on(elapsed, settings["ringtone_id"]) else led.off)()
             if button.is_pressed:
-                process.terminate()
+                if process is not None:
+                    process.terminate()
                 log("ring cut by press")
                 break
             time.sleep(0.02)
     finally:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             process.wait()
         refresh_led(force=True)
 
@@ -937,7 +970,7 @@ def cleanup_temp_recordings():
             path.unlink()
 
 
-def capture_guided_recording(recipient, session_id=None):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60):
     global _recording
     _recording = True
     led.on()
@@ -988,6 +1021,8 @@ def capture_guided_recording(recipient, session_id=None):
                     closed_since = None
                 if vad.silence_expired(now):
                     break
+                if now - started >= max_seconds:
+                    break
                 if now - presence_last >= 8:
                     presence("recording", recipient)
                     presence_last = now
@@ -1032,15 +1067,18 @@ def capture_guided_recording(recipient, session_id=None):
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id):
+    def __init__(self, recipient, session_id, max_seconds):
         self.recipient = recipient
         self.session_id = session_id
+        self.max_seconds = max_seconds
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
 
     def record(self):
-        return capture_guided_recording(self.recipient, self.session_id)
+        return capture_guided_recording(
+            self.recipient, self.session_id, self.max_seconds
+        )
 
     def wait_for_approval(self, timeout):
         return wait_for_approval(timeout, self.session_id)
@@ -1080,8 +1118,10 @@ def play_next_legacy():
     refresh_led(force=True)
 
 
-def record_and_send_legacy():
+def record_and_send_legacy(settings=None):
     global _recording
+    settings = settings or caregiver_settings()
+    max_seconds = settings["max_recording_seconds"]
     intent = wait_for_hold_intent(lambda: button.is_pressed, MIN_HOLD_S, POLL_S)
     if intent == "play":
         wait_for_stable_open()
@@ -1116,7 +1156,7 @@ def record_and_send_legacy():
             "-c",
             "1",
             "-d",
-            str(MAX_SECONDS + 2),
+            str(max_seconds + 2),
             part,
         ]
     )
@@ -1138,26 +1178,14 @@ def record_and_send_legacy():
                     break
             else:
                 open_since = None
-            if now - started > MAX_SECONDS + 4:
-                led.off()
-                recorder.send_signal(signal.SIGINT)
-                recorder.wait()
-                os.remove(part)
-                beep("fail")
-                if presence_last:
-                    presence("paused", recipient)
-                wait_for_stable_open()
-                return
-        held = time.monotonic() - started
+            if now - started >= max_seconds:
+                break
+        held = min(time.monotonic() - started, max_seconds)
         led.off()
         recorder.send_signal(signal.SIGINT)
         recorder.wait()
         if presence_last:
             presence("paused", recipient)
-        if held >= MAX_SECONDS:
-            os.remove(part)
-            beep("fail")
-            return
         final_path = part[:-5] + f"-{held:.1f}.wav"
         bind_legacy_job_recipient(final_path, recipient)
         os.replace(part, final_path)
@@ -1166,8 +1194,9 @@ def record_and_send_legacy():
         _recording = False
 
 
-def run_guided_once():
+def run_guided_once(settings=None):
     global _guided_active
+    settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
     claim = claim_oldest()
     flow_kind = "reply" if claim else "standalone"
@@ -1183,7 +1212,13 @@ def run_guided_once():
         if context["via_card"] and not ensure_nfc_confirmation(context):
             log_event("nfc_confirmation_failed")
             return
-    if claim and not recipient:
+    claim_recipient_allowed = False
+    if claim and recipient:
+        try:
+            claim_recipient_allowed = recipient in ContactStore(CONTACTS_FILE).allowed_jids()
+        except (ContactError, OSError):
+            claim_recipient_allowed = False
+    if claim and (not recipient or not claim_recipient_allowed):
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
             play_audio_ordinary(claim["path"])
@@ -1195,7 +1230,7 @@ def run_guided_once():
         return
 
     led.off()
-    io = PiGuidedIO(recipient, session_id)
+    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"])
 
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
@@ -1220,7 +1255,7 @@ def run_guided_once():
             not_sent_path=str(PROMPTS["not_sent"]),
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
-            auto_record_after_incoming=AUTO_RECORD_AFTER_INCOMING,
+            auto_record_after_incoming=settings["after_listening"] == "invite_reply",
         )
         if claim:
             finish_claim(claim)
@@ -1235,7 +1270,7 @@ def run_guided_once():
     finally:
         _guided_active = False
         ring_waiting = should_ring_after_unsent_session(
-            outcome, bool(queued()), quiet_hours()
+            outcome, bool(queued()), quiet_hours(settings)
         )
         mark_queue_known()
         refresh_led(force=True)
@@ -1276,23 +1311,24 @@ def main():
             ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1
 
-    if GUIDED_REPLY:
-        try:
-            validate_prompts()
-        except RuntimeError as exc:
-            log(str(exc))
-            return 2
+    try:
+        validate_prompts()
+    except RuntimeError as exc:
+        log(str(exc))
+        return 2
 
     threading.Thread(target=sender_loop, daemon=True).start()
     button = Button(BUTTON_PIN)
     led = LED(LED_PIN)
+    apply_master_volume()
     if button.is_pressed:
         log("switch CLOSED at startup - waiting for it to open")
     wait_for_stable_open()
     refresh_led(force=True)
+    startup_settings = caregiver_settings()
     log(
-        f"armed: guided_reply={int(GUIDED_REPLY)} "
-        f"auto_record_after_incoming={int(AUTO_RECORD_AFTER_INCOMING)} "
+        f'armed: recording_mode={startup_settings["recording_mode"]} '
+        f'after_listening={startup_settings["after_listening"]} '
         f"routing_mode={routing_mode()} "
         f"({len(queued())} queued, "
         f"{len(outbox_store.jobs()) + len(legacy_outbox_files())} unsent)"
@@ -1302,6 +1338,7 @@ def main():
         wait_for_stable_open()
         while not button.is_pressed:
             time.sleep(POLL_S)
+            apply_master_volume()
             play_pending_nfc_announcement()
             maybe_play_pending_listened()
             refresh_led()
@@ -1316,19 +1353,22 @@ def main():
                 break
         if not solid:
             continue
+        interaction_settings = caregiver_settings()
         try:
-            if GUIDED_REPLY:
+            if interaction_settings["recording_mode"] == "tap_review":
                 # The session starts from this press only after its release; it can
                 # never be carried into incoming audio, countdown, or recording.
                 acknowledge_guided_press("start_session")
                 wait_for_stable_open()
-                run_guided_once()
+                run_guided_once(interaction_settings)
             else:
-                record_and_send_legacy()
+                record_and_send_legacy(interaction_settings)
         except Exception as exc:
             log(f"button flow error: {exc}")
             log_event(
-                "button_flow_error", guided=GUIDED_REPLY, error=type(exc).__name__
+                "button_flow_error",
+                recording_mode=interaction_settings["recording_mode"],
+                error=type(exc).__name__,
             )
             if not _guided_active:
                 beep("fail")

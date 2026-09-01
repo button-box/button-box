@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Message Box into fixed system paths under the messagebox service user.
+# Install Button Box into fixed system paths under the messagebox service user.
 # Usage on the Pi: ./scripts/setup.sh
 set -eu
 
@@ -9,22 +9,23 @@ SERVICE_USER=messagebox
 SERVICE_GROUP=messagebox
 ONBOARDING_USER=messagebox-onboarding
 ONBOARDING_GROUP=messagebox-onboarding
+SETTINGS_GROUP=messagebox-settings
 APP_DIR=/opt/messagebox
 PACKAGE_DIR=$APP_DIR/messagebox
 CONFIG_DIR=/etc/messagebox
 DATA_DIR=/var/lib/messagebox
 ONBOARDING_CONFIG_DIR=/etc/messagebox-onboarding
 ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
+SETTINGS_DIR=/var/lib/messagebox-settings
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
 PACKAGE_PYTHON="__init__.py button_send.py contacts.py guided_reply.py listened_receipts.py
-make_ringtones.py nfc.py nfc_state.py runtime_paths.py voicepoll.py"
+make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
 onboarding/completion.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
-STATIC_ASSETS="dashboard/static/app.js dashboard/static/index.html dashboard/static/styles.css
-onboarding/static/app.js onboarding/static/index.html onboarding/static/styles.css"
+STATIC_ASSETS="onboarding/static/app.js onboarding/static/index.html onboarding/static/styles.css"
 GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
 
 case "$SSH_TARGET" in
@@ -67,6 +68,8 @@ for path in \
   systemd/messagebox-sync.service \
   systemd/messagebox-poller.service \
   systemd/messagebox-dash.service \
+  systemd/messagebox-wifi-change.service \
+  systemd/messagebox-wifi-change.path \
   systemd/messagebox-nfc.service \
   systemd/onboarding/comitup.service.d/messagebox.conf \
   systemd/onboarding/comitup-web.service.d/messagebox.conf \
@@ -162,7 +165,7 @@ for unit in \
   messagebox-onboarding-voice.target \
   messagebox-whatsapp-pairing.service; do
   if systemctl is-active --quiet "$unit" 2>/dev/null; then
-    echo "Stop Message Box before updating: sudo messageboxctl stop" >&2
+    echo "Stop Button Box before updating: sudo messageboxctl stop" >&2
     exit 1
   fi
 done
@@ -226,14 +229,18 @@ else
     "$ONBOARDING_USER"
 fi
 
-echo "Installing Message Box in $APP_DIR as $SERVICE_USER"
+echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   alsa-utils ca-certificates curl ffmpeg gunicorn=23.0.0-1 i2c-tools nftables \
   liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv swig
 
-sudo usermod -a -G audio,gpio,i2c "$SERVICE_USER"
+if ! getent group "$SETTINGS_GROUP" >/dev/null; then
+  sudo groupadd --system "$SETTINGS_GROUP"
+fi
+sudo usermod -a -G audio,gpio,i2c,"$SETTINGS_GROUP" "$SERVICE_USER"
+sudo usermod -a -G audio,"$SETTINGS_GROUP" "$ONBOARDING_USER"
 
 sudo rm -rf \
   "$PACKAGE_DIR" \
@@ -245,7 +252,6 @@ sudo install -d -o root -g root -m 0755 \
   "$APP_DIR/dev" \
   "$PACKAGE_DIR" \
   "$PACKAGE_DIR/dashboard" \
-  "$PACKAGE_DIR/dashboard/static" \
   "$PACKAGE_DIR/onboarding" \
   "$PACKAGE_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
@@ -255,6 +261,7 @@ sudo install -d -o root -g root -m 0755 \
 sudo install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
 sudo install -d -o root -g "$ONBOARDING_GROUP" -m 0750 "$ONBOARDING_CONFIG_DIR"
 sudo install -d -o "$ONBOARDING_USER" -g "$ONBOARDING_GROUP" -m 0700 "$ONBOARDING_DATA_DIR"
+sudo install -d -o root -g "$SETTINGS_GROUP" -m 2770 "$SETTINGS_DIR"
 sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
   "$DATA_DIR" \
   "$DATA_DIR/assets" \
@@ -322,6 +329,20 @@ if [ -n "$GENERATED_ENV" ]; then
   GENERATED_ENV=
 fi
 
+# Existing devices keep their private environment file across upgrades. Move
+# only the dashboard listener to the canonical household URL; all unrelated
+# settings and credentials remain untouched.
+if sudo grep -q '^MSGBOX_DASH_BIND=' "$CONFIG_DIR/env"; then
+  sudo sed -i 's/^MSGBOX_DASH_BIND=.*/MSGBOX_DASH_BIND=wlan0/' "$CONFIG_DIR/env"
+else
+  printf '%s\n' 'MSGBOX_DASH_BIND=wlan0' | sudo tee -a "$CONFIG_DIR/env" >/dev/null
+fi
+if sudo grep -q '^MSGBOX_DASH_PORT=' "$CONFIG_DIR/env"; then
+  sudo sed -i 's/^MSGBOX_DASH_PORT=.*/MSGBOX_DASH_PORT=80/' "$CONFIG_DIR/env"
+else
+  printf '%s\n' 'MSGBOX_DASH_PORT=80' | sudo tee -a "$CONFIG_DIR/env" >/dev/null
+fi
+
 (cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
 sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
 "$SCRIPT_DIR/install/wacli.sh"
@@ -331,6 +352,12 @@ for name in messagebox-button messagebox-sync messagebox-poller messagebox-dash;
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/$name.service" "/etc/systemd/system/$name.service"
 done
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/systemd/messagebox-wifi-change.service" \
+  /etc/systemd/system/messagebox-wifi-change.service
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/systemd/messagebox-wifi-change.path" \
+  /etc/systemd/system/messagebox-wifi-change.path
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/messagebox.target" /etc/systemd/system/messagebox.target
 sudo install -o root -g root -m 0644 \
@@ -376,12 +403,15 @@ done
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
 sudo systemctl enable messagebox-onboarding-voice.path messagebox-onboarding-complete.path
+sudo systemctl enable --now messagebox-wifi-change.path
 sudo systemd-analyze verify \
   /etc/systemd/system/messagebox.target \
   /etc/systemd/system/messagebox-button.service \
   /etc/systemd/system/messagebox-sync.service \
   /etc/systemd/system/messagebox-poller.service \
   /etc/systemd/system/messagebox-dash.service \
+  /etc/systemd/system/messagebox-wifi-change.service \
+  /etc/systemd/system/messagebox-wifi-change.path \
   /etc/systemd/system/messagebox-nfc.service \
   /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \
@@ -415,9 +445,9 @@ fi
 printf '%s\n' \
   '' \
   '============================================================' \
-  '             ✅ MESSAGE BOX SETUP COMPLETE ✅' \
+  '             ✅ BUTTON BOX SETUP COMPLETE ✅' \
   '============================================================' \
-  'No Message Box runtime or Comitup services were started.' \
+  'No Button Box runtime or Comitup services were started.' \
   '' \
   'DEV FLOW' \
   '  Run the standalone shell setup and hardware checks:' \

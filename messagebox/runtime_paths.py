@@ -1,4 +1,4 @@
-"""Fixed filesystem layout shared by Message Box services."""
+"""Fixed filesystem layout shared by Button Box services."""
 
 from pathlib import Path
 
@@ -12,6 +12,8 @@ ASSET_DIR = DATA_DIR / "assets"
 QUEUE_DIR = DATA_DIR / "queue"
 OUTBOX_DIR = DATA_DIR / "outbox"
 STATE_DIR = DATA_DIR / "state"
+SETTINGS_DIR = Path("/var/lib/messagebox-settings")
+SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 CONTACTS_FILE = STATE_DIR / "contacts.json"
 NFC_SELECTION_FILE = RUNTIME_DIR / "nfc-selection.json"

@@ -13,7 +13,13 @@ from functools import wraps
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
-from messagebox.runtime_paths import CONTACTS_FILE, STATE_DIR
+from messagebox.runtime_paths import (
+    CONTACTS_FILE,
+    NFC_ANNOUNCEMENT_FILE,
+    NFC_ENROLLMENT_FILE,
+    NFC_SELECTION_FILE,
+    STATE_DIR,
+)
 
 
 STATE_VERSION = 1
@@ -85,6 +91,7 @@ class RecipientSetup:
         contacts_path=CONTACTS_FILE,
         events_path=EVENTS_FILE,
         voice_request_path=VOICE_REQUEST_FILE,
+        account_reset_paths=None,
         clock=time.time,
         token_factory=None,
     ):
@@ -92,6 +99,19 @@ class RecipientSetup:
         self.contacts = ContactStore(contacts_path, clock=clock)
         self.events_path = Path(events_path)
         self.voice_request_path = Path(voice_request_path)
+        self.account_reset_paths = tuple(
+            Path(path)
+            for path in (
+                account_reset_paths
+                if account_reset_paths is not None
+                else (
+                    STATE_DIR / "nfc-onboarding.json",
+                    NFC_SELECTION_FILE,
+                    NFC_ENROLLMENT_FILE,
+                    NFC_ANNOUNCEMENT_FILE,
+                )
+            )
+        )
         self.clock = clock
         self.token_factory = token_factory or (lambda: secrets.token_urlsafe(TOKEN_BYTES))
         self._lock = threading.RLock()
@@ -194,6 +214,20 @@ class RecipientSetup:
 
     def _write(self, state):
         _atomic_json(self.state_path, state)
+
+    @synchronized
+    def reset_for_whatsapp_relink(self):
+        """Erase all state that could route to the previously linked account."""
+        try:
+            self.contacts.clear_for_whatsapp_relink()
+        except ContactError as exc:
+            raise RecipientError("recipient state is unavailable") from exc
+        for path in (
+            self.state_path,
+            self.voice_request_path,
+            *self.account_reset_paths,
+        ):
+            Path(path).unlink(missing_ok=True)
 
     def _candidate(self, state, token, *, require_available=True):
         if not isinstance(token, str):
@@ -422,24 +456,33 @@ class RecipientSetup:
             return state
         candidate = self._candidate(state, state["default_token"], require_available=False)
         proof = state["proof"]
+        received_files = set()
         for event in self._events(state["started_at"]):
             event_type = event.get("type")
             if (
-                not proof["received"]
-                and event_type == "received"
+                event_type == "received"
                 and event.get("chat") == candidate["jid"]
                 and isinstance(event.get("file"), str)
             ):
-                proof["received"] = True
-                proof["received_file"] = event["file"]
+                received_files.add(event["file"])
+                if not proof["received"]:
+                    proof["received"] = True
+                    proof["received_file"] = event["file"]
             elif (
-                proof["received_file"]
-                and event_type == "guided_session_started"
+                event_type == "guided_session_started"
                 and event.get("flow") == "reply"
-                and event.get("source_file") == proof["received_file"]
+                and event.get("source_file") in received_files
                 and isinstance(event.get("session_id"), str)
             ):
-                proof["session_id"] = event["session_id"]
+                if not proof["replied"] and proof["session_id"] != event["session_id"]:
+                    proof.update(
+                        received=True,
+                        played=False,
+                        replied=False,
+                        received_file=event["source_file"],
+                        session_id=event["session_id"],
+                        message_id=None,
+                    )
             elif (
                 proof["session_id"]
                 and event.get("session_id") == proof["session_id"]
@@ -450,6 +493,7 @@ class RecipientSetup:
                 proof["session_id"]
                 and event.get("session_id") == proof["session_id"]
                 and event_type == "guided_approved"
+                and event.get("flow") == "reply"
                 and isinstance(event.get("message_id"), str)
             ):
                 proof["message_id"] = event["message_id"]

@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
+from messagebox.settings import SettingsStore
 
 
 HOST = "message-box-A7K2.local"
@@ -109,6 +110,25 @@ class FakeWhatsApp:
                 eligible_count=0,
                 safe_error=None,
             )
+        else:
+            self.state["safe_error"] = "UNLINK_FAILED"
+        return dict(self.state)
+
+    def relink(self):
+        self.calls.append(("relink",))
+        if self.logout_succeeds:
+            self.state.update(
+                status="idle",
+                phone_hint=None,
+                eligible_count=0,
+                safe_error=None,
+            )
+            self.recipient = {
+                "status": "choose",
+                "default": None,
+                "proof": {"received": False, "played": False, "replied": False},
+                "recipients": [],
+            }
         else:
             self.state["safe_error"] = "UNLINK_FAILED"
         return dict(self.state)
@@ -279,12 +299,16 @@ class OnboardingAPITests(unittest.TestCase):
         self.adapter = FakeAdapter()
         self.checker = FakeChecker()
         self.sleeps = []
+        self.settings = SettingsStore(
+            Path(self.directory.name) / "settings.json", environ={"TZ": "UTC"}
+        )
         self.app = create_app(
             mode="HOTSPOT",
             config={"device_id": "A7K2"},
             state_store=self.store,
             adapter=self.adapter,
             connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
             clock=self.clock,
             sleep=self.sleeps.append,
             handoff_delay=0.25,
@@ -294,7 +318,9 @@ class OnboardingAPITests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def home_pairing_client(self, whatsapp=None, nfc=None, completion_request=None):
+    def home_pairing_client(
+        self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
+    ):
         path = Path(self.directory.name) / "whatsapp-home.json"
         store = StateStore(path, clock=self.clock)
         store.initialize()
@@ -305,6 +331,8 @@ class OnboardingAPITests(unittest.TestCase):
         options = {}
         if completion_request is not None:
             options["completion_request"] = completion_request
+        if tailscale_host is not None:
+            options["tailscale_host"] = tailscale_host
         application = create_app(
             mode="HOME",
             config={"device_id": "A7K2"},
@@ -313,6 +341,7 @@ class OnboardingAPITests(unittest.TestCase):
             connectivity_checker=self.checker,
             whatsapp_client=worker,
             nfc_client=nfc or FakeNfc(),
+            caregiver_settings=self.settings,
             clock=self.clock,
             **options,
         )
@@ -333,6 +362,167 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
+
+    def test_button_box_canonical_hostname_is_supported_and_enforced(self):
+        canonical_host = "button-box-a7.local"
+        application = create_app(
+            mode="HOTSPOT",
+            config={"device_id": "a7", "canonical_host": canonical_host},
+            state_store=StateStore(
+                Path(self.directory.name) / "button-box-state.json", clock=self.clock
+            ),
+            adapter=self.adapter,
+            connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
+            clock=self.clock,
+        )
+        client = WSGIHarness(application)
+
+        accepted = client.request("GET", "/", host=canonical_host)
+        redirected = client.request("GET", "/", host="message-box-a7.local")
+
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(f"http://{canonical_host}/".encode(), accepted["body"])
+        self.assertEqual(redirected["status"], "302 Found")
+        self.assertEqual(header(redirected, "Location"), "http://10.41.0.1/")
+
+    def test_home_dashboard_accepts_exact_tailnet_https_origin(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        client, _store, _worker = self.home_pairing_client(tailscale_host=tailnet)
+
+        loaded = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        self.assertEqual(loaded["status"], "200 OK")
+        self.assertIn(f"https://{tailnet}/".encode(), loaded["body"])
+
+        settings = client.request(
+            "GET",
+            "/api/settings",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        document = json.loads(settings["body"])["settings"]
+        candidate = {
+            key: value
+            for key, value in document.items()
+            if key not in {"version", "revision"}
+        }
+        saved = client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": document["revision"], "settings": candidate},
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={
+                "Origin": f"https://{tailnet}",
+                "X-Forwarded-Proto": "https",
+            },
+        )
+        self.assertEqual(saved["status"], "200 OK")
+
+    def test_home_dashboard_rejects_tailnet_header_spoofing(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        client, _store, _worker = self.home_pairing_client(tailscale_host=tailnet)
+
+        spoofed = client.request(
+            "GET",
+            "/api/state",
+            host=tailnet,
+            remote_addr="192.168.1.20",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        self.assertEqual(spoofed["status"], "302 Found")
+        self.assertEqual(header(spoofed, "Location"), f"http://{HOST}/api/state")
+
+    def test_hotspot_dashboard_accepts_exact_tailnet_https_origin(self):
+        tailnet = "message-box-a7k2.example-tailnet.ts.net"
+        application = create_app(
+            mode="HOTSPOT",
+            config={"device_id": "A7K2"},
+            state_store=StateStore(
+                Path(self.directory.name) / "hotspot-tailnet.json", clock=self.clock
+            ),
+            adapter=self.adapter,
+            connectivity_checker=self.checker,
+            caregiver_settings=self.settings,
+            tailscale_host=tailnet,
+        )
+        client = WSGIHarness(application)
+
+        accepted = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="127.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        spoofed = client.request(
+            "GET",
+            "/",
+            host=tailnet,
+            remote_addr="10.41.0.20",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+
+        self.assertEqual(accepted["status"], "200 OK")
+        self.assertIn(f"https://{tailnet}/".encode(), accepted["body"])
+        self.assertEqual(spoofed["status"], "302 Found")
+        self.assertEqual(header(spoofed, "Location"), "http://10.41.0.1/")
+
+    def test_invalid_tailnet_configuration_fails_closed(self):
+        with self.assertRaisesRegex(RuntimeError, "Tailscale dashboard hostname"):
+            create_app(
+                mode="HOME",
+                config={"device_id": "A7K2"},
+                state_store=StateStore(
+                    Path(self.directory.name) / "invalid-tailnet.json", clock=self.clock
+                ),
+                adapter=self.adapter,
+                connectivity_checker=self.checker,
+                caregiver_settings=self.settings,
+                tailscale_host="attacker.example",
+            )
+
+    def test_settings_are_revision_checked_and_cross_site_writes_are_rejected(self):
+        loaded = self.client.request("GET", "/api/settings", host="10.41.0.1")
+        self.assertEqual(loaded["status"], "200 OK")
+        document = json.loads(loaded["body"])["settings"]
+        candidate = {
+            key: value
+            for key, value in document.items()
+            if key not in {"version", "revision"}
+        }
+        candidate["max_recording_seconds"] = 120
+        saved = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 0, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://10.41.0.1"},
+        )
+        self.assertEqual(saved["status"], "200 OK")
+        conflict = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 0, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://10.41.0.1"},
+        )
+        self.assertEqual(conflict["status"], "409 Conflict")
+        rejected = self.client.json(
+            "PUT",
+            "/api/settings",
+            {"revision": 1, "settings": candidate},
+            host="10.41.0.1",
+            headers={"Origin": "http://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(rejected["status"], "403 Forbidden")
 
     def test_hotspot_ip_is_allowed_and_other_hosts_redirect_to_it(self):
         response = self.client.request("GET", "/api/state", host="10.41.0.1")
@@ -646,6 +836,7 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(accepted["status"], "200 OK")
         self.assertEqual(store.load()["phase"], "WHATSAPP_PENDING")
+        self.assertIn(("relink",), worker.calls)
 
     def test_logout_failure_preserves_ready_state(self):
         worker = FakeWhatsApp({
@@ -667,6 +858,35 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(response["status"], "409 Conflict")
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_completed_recipient_setup_can_relink_and_resets_account_state(self):
+        worker = FakeWhatsApp({
+            "status": "ready",
+            "pairing_code": None,
+            "phone_hint": "Linked account",
+            "eligible_count": 1,
+            "safe_error": None,
+            "attempt": 1,
+        })
+        worker.recipient.update(
+            status="complete",
+            default={"token": "opaque-recipient", "label": "Default", "kind": "person"},
+            proof={"received": True, "played": True, "replied": True},
+        )
+        client, store, _ = self.home_pairing_client(worker)
+        client.request("GET", "/api/state")
+
+        response = client.form(
+            "POST",
+            "/whatsapp/unlink",
+            {"confirm": "unlink"},
+        )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertEqual(store.load()["phase"], "WHATSAPP_PENDING")
+        self.assertEqual(worker.recipient["status"], "choose")
+        self.assertIsNone(worker.recipient["default"])
+        self.assertIn(("relink",), worker.calls)
 
     def test_recipient_api_uses_opaque_tokens_and_same_origin_mutations(self):
         token = "recipient-token-0001"

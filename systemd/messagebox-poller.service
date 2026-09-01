@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box incoming voice note poller
+Description=Button Box incoming voice note poller
 After=network-online.target
 Wants=network-online.target
 PartOf=messagebox.target messagebox-onboarding-voice.target

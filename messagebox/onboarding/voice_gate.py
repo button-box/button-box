@@ -35,7 +35,11 @@ def main(*, run=subprocess.run):
     if not Path(ONBOARDING_ENABLED_PATH).is_file():
         run(["systemctl", "stop", VOICE_TARGET], check=True)
         return 0
-    if not requested():
+    request_path = Path(VOICE_REQUEST_FILE)
+    if not request_path.exists():
+        run(["systemctl", "stop", VOICE_TARGET], check=True)
+        return 0
+    if not requested(request_path):
         return 0
     document = ContactStore(CONTACTS_FILE).load()
     default = document["default_recipient"]

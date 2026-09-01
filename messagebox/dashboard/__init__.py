@@ -1,1 +1,1 @@
-"""Message Box dashboard package."""
+"""Button Box dashboard package."""
