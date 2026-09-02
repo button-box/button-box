@@ -170,6 +170,24 @@ def _atomic_json(path, document):
             temporary.unlink(missing_ok=True)
 
 
+def _open_shared_lock(path):
+    """Set the shared mode only while we own a newly created lock."""
+    while True:
+        try:
+            lock = open(path, "x+b")
+        except FileExistsError:
+            try:
+                return open(path, "r+b")
+            except FileNotFoundError:
+                continue
+        try:
+            os.fchmod(lock.fileno(), 0o660)
+        except OSError:
+            lock.close()
+            raise
+        return lock
+
+
 class SettingsStore:
     def __init__(self, path=SETTINGS_FILE, *, environ=None):
         self.path = Path(path)
@@ -208,8 +226,7 @@ class SettingsStore:
         if set(candidate) != value_keys:
             raise SettingsError("settings request has an invalid schema")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.lock_path, "a+b") as lock:
-            os.fchmod(lock.fileno(), 0o660)
+        with _open_shared_lock(self.lock_path) as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 current, _warning = self.load()
