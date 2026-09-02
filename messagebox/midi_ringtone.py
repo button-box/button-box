@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a MIDI file into a Message Box ringtone WAV (music-box timbre).
+"""Render a MIDI file into a Button Box ringtone WAV (music-box timbre).
 
 Polyphonic: every note is synthesized at its onset with a percussive decay
 envelope and mixed additively. Output is trimmed to --seconds, given a gentle

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Message Box incoming-voice-note poller (v0 production rig).
+"""Button Box incoming-voice-note poller (v0 production rig).
 
 Polls the wacli DB for fresh voice notes in allowed chats, downloads their
 media between sync bursts, and queues them as WAVs for the button service

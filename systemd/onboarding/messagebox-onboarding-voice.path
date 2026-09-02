@@ -1,5 +1,5 @@
 [Unit]
-Description=Watch for Message Box onboarding voice activation
+Description=Watch for Button Box setup voice activation
 
 [Path]
 PathChanged=/var/lib/messagebox/state/onboarding-voice-request.json

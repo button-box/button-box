@@ -53,7 +53,10 @@ class DashboardContactTests(unittest.TestCase):
         handler.headers = {
             "Content-Length": str(len(body)),
             "Content-Type": content_type,
+            "Host": "button-box.local",
         }
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         handler.rfile = io.BytesIO(body)
         responses = []
         handler._send = lambda code, data, ctype="application/json": responses.append(
@@ -65,6 +68,9 @@ class DashboardContactTests(unittest.TestCase):
     def get(self, path):
         handler = dashboard.Handler.__new__(dashboard.Handler)
         handler.path = path
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
         responses = []
         handler._send = lambda code, data, ctype="application/json": responses.append(
             (code, json.loads(data))

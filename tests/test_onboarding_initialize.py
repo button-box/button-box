@@ -57,7 +57,7 @@ class InitializeTests(unittest.TestCase):
         self.paths.run_dir.mkdir(parents=True)
         self.paths.lock.parent.mkdir(parents=True)
         self.paths.template.write_text(
-            "ap_name: Message Box\nap_password: @HOTSPOT_PASSWORD@\n",
+            "ap_name: Button Box\nap_password: @HOTSPOT_PASSWORD@\n",
             encoding="ascii",
         )
 
@@ -348,6 +348,10 @@ class InitializeTests(unittest.TestCase):
             "message-box-",
             "message-box-under_score",
             "message-box-" + "a" * 33,
+            "buttonbox-a7",
+            "button-box-",
+            "button-box-under_score",
+            "button-box-" + "a" * 33,
         ):
             with self.subTest(hostname=hostname):
                 dependencies = replace(
@@ -360,12 +364,12 @@ class InitializeTests(unittest.TestCase):
                 self.assert_temporary_material_removed()
 
         dependencies = replace(
-            self.dependencies, gethostname=lambda: "MESSAGE-BOX-A7"
+            self.dependencies, gethostname=lambda: "BUTTON-BOX-A7"
         )
         code, output, error = self.call_main(dependencies=dependencies)
         self.assertEqual((code, error), (initialize.EXIT_OK, ""))
         self.assertIn("Device ID:        a7", output)
-        self.assertIn("Hotspot:          message-box-a7", output)
+        self.assertIn("Hotspot:          button-box-a7", output)
 
     def test_confirmation_declined_installs_nothing(self):
         self.paths.comitup_config.write_bytes(b"old config\n")

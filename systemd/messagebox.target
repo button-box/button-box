@@ -1,5 +1,5 @@
 [Unit]
-Description=Message Box runtime
+Description=Button Box runtime
 ConditionPathExists=!/etc/messagebox-onboarding/enabled
 
 [Install]

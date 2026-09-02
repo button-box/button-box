@@ -336,6 +336,19 @@ class ContactStore:
         """Return a validated snapshot without creating a missing store."""
         return copy.deepcopy(self._read())
 
+    def clear_for_whatsapp_relink(self) -> JsonObject:
+        """Erase account-scoped contacts, listeners, defaults, and card mappings."""
+
+        def clear(document):
+            if not document["contacts"] and not document["listeners"]:
+                return False, copy.deepcopy(document)
+            document["default_recipient"] = None
+            document["contacts"] = {}
+            document["listeners"] = {}
+            return True, copy.deepcopy(document)
+
+        return self._mutate(clear)
+
     def add_contact(
         self,
         jid,
@@ -515,6 +528,21 @@ class ContactStore:
 
         return self._mutate(remove)
 
+    def clear_cards(self, jid) -> int:
+        jid = _clean_chat_jid(jid)
+
+        def clear(document):
+            contact = document["contacts"].get(jid)
+            if contact is None:
+                raise ContactError("contact does not exist")
+            count = len(contact["card_uids"])
+            if not count:
+                return False, 0
+            contact["card_uids"] = []
+            return True, count
+
+        return self._mutate(clear)
+
     def resolve_card(self, uid) -> JsonObject | None:
         uid = _normalize_uid(uid)
         document = self._read()
@@ -587,7 +615,7 @@ class ContactStore:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="messagebox-contact",
-        description="Manage Message Box contacts and NFC cards.",
+        description="Manage Button Box contacts and NFC cards.",
         epilog=(
             "CHAT_JID must be exact. WhatsApp: group 123456789@g.us; direct "
             "chat 15551234567@s.whatsapp.net. Signal (--channel signal): "
@@ -693,7 +721,7 @@ def _verify_enrollment_services() -> None:
                 ["systemctl", "is-active", "--quiet", unit], check=False
             )
         except OSError as exc:
-            raise ContactError("could not query Message Box services") from exc
+            raise ContactError("could not query Button Box services") from exc
         if result.returncode != 0:
             raise ContactError(f"{unit} must be active before enrolling a card")
     if not _detection_beep_enabled():

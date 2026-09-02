@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,10 +8,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 from messagebox.onboarding.whatsapp import (
+    ACCOUNT_CLEANUP_CLIENT_TIMEOUT,
+    LOGOUT_PROCESS_TIMEOUT,
     MAX_BOOTSTRAP_MESSAGES,
     MAX_ELIGIBLE_CONVERSATIONS,
     PairingEngine,
     PairingError,
+    WhatsAppPairingClient,
     eligible_conversations,
     normalize_phone,
     pairing_command,
@@ -99,6 +103,19 @@ class WacliRunner:
         raise AssertionError(f"unexpected wacli command: {arguments}")
 
 
+class FlakyRecipientReset:
+    def __init__(self):
+        self.reset_calls = 0
+
+    def ensure_voice_request(self):
+        return None
+
+    def reset_for_whatsapp_relink(self):
+        self.reset_calls += 1
+        if self.reset_calls == 1:
+            raise OSError("transient cleanup failure")
+
+
 class RecordingEngine(PairingEngine):
     def __init__(self, *args, **kwargs):
         self.history = []
@@ -121,19 +138,40 @@ class WhatsAppPairingTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def engine(self, *, popen=None, runner=None, recover=False, cls=PairingEngine):
+    def engine(
+        self,
+        *,
+        popen=None,
+        runner=None,
+        recipient_setup=None,
+        recover=False,
+        cls=PairingEngine,
+    ):
         return cls(
             pairing_root=self.pairing_root,
             live_store=self.live_store,
             candidates_path=self.candidates,
             popen=popen or RecordingPopen([]),
             run=runner or WacliRunner(authenticated=False),
+            recipient_setup=recipient_setup,
             recover=recover,
         )
 
     def prepare_pair(self, engine):
         engine.stage.mkdir(mode=0o700)
         engine._set_state("starting")
+
+    def test_account_cleanup_client_outlasts_worker(self):
+        client = WhatsAppPairingClient()
+        self.assertGreater(ACCOUNT_CLEANUP_CLIENT_TIMEOUT, LOGOUT_PROCESS_TIMEOUT)
+        for action in ("unlink", "relink"):
+            with self.subTest(action=action), mock.patch.object(
+                client, "_request", return_value={"status": "idle"}
+            ) as request:
+                self.assertEqual(getattr(client, action)(), {"status": "idle"})
+                request.assert_called_once_with(
+                    {"action": action}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+                )
 
     def test_phone_normalization_and_exact_auth_command(self):
         self.assertEqual(normalize_phone(" +1 415-555-0123 "), "+14155550123")
@@ -279,6 +317,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(engine.public_state()["status"], "ready")
         self.assertEqual(engine.public_state()["phone_hint"], "WhatsApp number ending in 0123")
         self.assertEqual(engine.public_state()["eligible_count"], 10)
+        self.assertFalse(engine.sync_pause_path.exists())
         self.assertFalse(engine.stage.exists())
         self.assertEqual((self.live_store / "store.db").read_text(encoding="ascii"), "private store")
         candidates = json.loads(self.candidates.read_text(encoding="utf-8"))
@@ -414,12 +453,87 @@ class WhatsAppPairingTests(unittest.TestCase):
         failed = engine.unlink()
         self.assertEqual(failed["safe_error"], "UNLINK_FAILED")
         self.assertTrue((self.live_store / "store.db").exists())
+        arguments, options = runner.calls[-1]
+        self.assertEqual(
+            arguments[1:],
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                "15s",
+                "auth",
+                "logout",
+            ],
+        )
+        self.assertEqual(options["timeout"], 35)
 
         runner.logout_ok = True
         unlinked = engine.unlink()
         self.assertEqual(unlinked["status"], "idle")
         self.assertTrue(self.live_store.is_dir())
         self.assertEqual(list(self.live_store.iterdir()), [])
+
+    def test_relink_waits_for_a_transient_sync_lock(self):
+        runner = WacliRunner(logout_ok=False)
+        engine = self.engine(runner=runner)
+        self.live_store.mkdir()
+        (self.live_store / "store.db").write_text("keep", encoding="ascii")
+        engine._set_state(
+            "ready",
+            phone_hint="Linked account",
+            eligible_count=1,
+        )
+
+        failed = engine.relink()
+
+        self.assertEqual(failed["safe_error"], "UNLINK_FAILED")
+        arguments, options = runner.calls[-1]
+        self.assertEqual(
+            arguments[1:],
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                "15s",
+                "auth",
+                "logout",
+            ],
+        )
+        self.assertEqual(options["timeout"], 35)
+        self.assertFalse(engine.sync_pause_path.exists())
+
+    def test_relink_cleanup_failure_is_paused_and_resumable(self):
+        runner = WacliRunner()
+        recipients = FlakyRecipientReset()
+        engine = self.engine(runner=runner, recipient_setup=recipients)
+        self.live_store.mkdir()
+        (self.live_store / "store.db").write_text("private", encoding="ascii")
+        engine._set_state(
+            "ready",
+            phone_hint="Linked account",
+            eligible_count=1,
+        )
+
+        with self.assertRaisesRegex(PairingError, "cleanup_required"):
+            engine.relink()
+
+        self.assertEqual(engine.public_state()["status"], "failed")
+        self.assertEqual(engine.public_state()["safe_error"], "CLEANUP_FAILED")
+        self.assertTrue(engine.sync_pause_path.exists())
+        with self.assertRaisesRegex(PairingError, "cleanup_required"):
+            engine.start("+14155550123")
+
+        recovered = engine.relink()
+
+        self.assertEqual(recovered["status"], "idle")
+        self.assertEqual(recipients.reset_calls, 2)
+        self.assertTrue(engine.sync_pause_path.exists())
+        logout_calls = [
+            call for call in runner.calls if call[0][-2:] == ["auth", "logout"]
+        ]
+        self.assertEqual(len(logout_calls), 1)
 
 
 class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
@@ -465,8 +579,26 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             'whatsapp.status === "ready"',
         ):
             self.assertIn(status, script)
+        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
+        self.assertIn('if (routeName === "whatsapp")', script)
+        self.assertIn('applyWhatsAppState(currentState, { manage: true })', script)
         self.assertIn(".focus(", script)
         self.assertIn("retry-pairing", script)
+        self.assertIn("Finish account cleanup", script)
+        self.assertIn('formRequest("/whatsapp/unlink", { confirm: "unlink" })', script)
+        retry = script.split(
+            'document.getElementById("retry-pairing").addEventListener', 1
+        )[1].split(
+            'document.getElementById("show-unlink").addEventListener', 1
+        )[0]
+        self.assertIn(
+            'rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }))',
+            retry,
+        )
+        runtime_load = script.split("async function loadRuntimeWhatsApp()", 1)[1].split(
+            "function setProof", 1
+        )[0]
+        self.assertIn("const state = rememberState({", runtime_load)
         self.assertIn('formRequest("/recipients/refresh")', script)
         self.assertIn("formRequest(`/recipients/${action}`", script)
         self.assertIn("formRequest(`/recipients/${action}-number`", script)
@@ -484,6 +616,9 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("Skip NFC setup", html)
         self.assertIn("Reassign", html)
         self.assertIn("Pair another tag", html)
+        self.assertIn(
+            "recipients, NFC mappings, listener profiles, and voice-test state", html
+        )
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
         self.assertNotIn("@s.whatsapp.net", html + script)
@@ -512,9 +647,13 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         completion = (
             root / "systemd/onboarding/messagebox-onboarding-complete.service"
         ).read_text(encoding="utf-8")
+        syncloop = (root / "messagebox/syncloop.sh").read_text(encoding="utf-8")
         self.assertIn("User=messagebox\n", worker)
         self.assertIn("RuntimeDirectory=messagebox-whatsapp-pairing", worker)
         self.assertIn("ReadWritePaths=/var/lib/messagebox", worker)
+        self.assertIn("/run/messagebox /run/messagebox-whatsapp-pairing", worker)
+        self.assertIn("/var/lib/messagebox/whatsapp-pairing/sync-paused", syncloop)
+        self.assertIn('while [[ -e "$SYNC_PAUSE_FILE" ]]', syncloop)
         self.assertNotIn("/var/lib/messagebox/wacli", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", nfc_worker)
@@ -532,6 +671,21 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             self.assertIn("RuntimeDirectory=messagebox-button", unit)
             self.assertIn("WorkingDirectory=/run/messagebox-button", unit)
             self.assertIn("Environment=PYTHONPATH=/opt/messagebox", unit)
+
+    def test_gunicorn_outlasts_account_cleanup_client(self):
+        root = Path(__file__).parents[1]
+        units = (
+            root / "systemd/onboarding/comitup-web.service.d/messagebox.conf",
+            root / "systemd/onboarding/messagebox-onboarding-home.service",
+        )
+        for path in units:
+            with self.subTest(unit=path.name):
+                unit = path.read_text(encoding="utf-8")
+                timeout = re.search(r"ExecStart=.*--timeout (\d+)", unit)
+                self.assertIsNotNone(timeout)
+                self.assertGreater(
+                    int(timeout.group(1)), ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+                )
 
 
 if __name__ == "__main__":

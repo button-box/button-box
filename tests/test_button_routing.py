@@ -151,6 +151,7 @@ class ButtonRoutingTests(unittest.TestCase):
         )
 
     def test_exact_guided_reply_never_resolves_or_claims_a_card(self):
+        self.contacts.add_contact(FAMILY, "Family")
         incoming = Path(self.directory.name) / "incoming.wav"
         claim = {"path": incoming, "meta": {"chat": FAMILY}}
         captured = {}

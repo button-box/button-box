@@ -9,7 +9,7 @@ approved person or group. Incoming replies wait on the box until the child
 presses the button to listen.
 
 [Visit button.box](https://button.box/) ·
-[Join the WhatsApp community](https://chat.whatsapp.com/KkVOY76T0go1J6lGElwQJg?mode=gi_t) ·
+[Join the WhatsApp community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t) ·
 [Report an issue](https://github.com/button-box/button-box/issues)
 
 
@@ -163,7 +163,7 @@ In Imager:
 1. Select your exact Raspberry Pi model.
 2. Select **Raspberry Pi OS Lite (64-bit)** based on Debian 13.
 3. Choose the correct microSD card.
-4. Set a hostname such as `message-box-001`.
+4. Set a hostname such as `button-box-001`. Existing `message-box-*` hostnames remain supported.
 5. Create a non-root administrator such as `admin`.
 6. Enable SSH, preferably with a dedicated public key.
 7. Give the Pi temporary internet access through Imager Wi-Fi settings,
@@ -212,7 +212,7 @@ available.
 Replace `admin` and the hostname below if you chose different values:
 
 ```sh
-ssh admin@message-box-001.local
+ssh admin@button-box-001.local
 ```
 
 On the Pi, verify the model, architecture, and operating-system release:
@@ -247,19 +247,19 @@ exit
 From the repository root on your computer:
 
 ```sh
-./scripts/provision.sh admin@message-box-001.local
+./scripts/provision.sh admin@button-box-001.local
 ```
 
 On macOS with Homebrew rsync:
 
 ```sh
-PATH="/opt/homebrew/bin:$PATH" ./scripts/provision.sh admin@message-box-001.local
+PATH="/opt/homebrew/bin:$PATH" ./scripts/provision.sh admin@button-box-001.local
 ```
 
 The script transfers an explicit set of installation files, installs Button Box
 in fixed system paths, and leaves runtime and onboarding services stopped.
 
-**Done when:** setup prints `MESSAGE BOX SETUP COMPLETE` without an error.
+**Done when:** setup prints `BUTTON BOX SETUP COMPLETE` without an error.
 
 ## Step 7 — Choose an onboarding path
 
@@ -271,7 +271,7 @@ Pi's temporary network connection and does not use the consumer Wi-Fi portal.
 Run from your computer:
 
 ```sh
-ssh -t admin@message-box-001.local messagebox-dev-onboard
+ssh -t admin@button-box-001.local messagebox-dev-onboard
 ```
 
 The guided workflow will:
@@ -298,14 +298,14 @@ runtime activation.
 Initialize the protected onboarding identity:
 
 ```sh
-ssh -t admin@message-box-001.local sudo messagebox-init-wifi-onboarding
+ssh -t admin@button-box-001.local sudo messagebox-init-wifi-onboarding
 ```
 
 Record the displayed hotspot name, hotspot password, and setup URL privately.
 Then arm onboarding:
 
 ```sh
-ssh -t admin@message-box-001.local sudo messageboxctl reset-wifi
+ssh -t admin@button-box-001.local sudo messageboxctl reset-wifi
 ```
 
 On a phone:
@@ -314,7 +314,7 @@ On a phone:
 2. Open the supplied setup URL.
 3. Select home Wi-Fi and enter its password.
 4. Rejoin home Wi-Fi when the setup hotspot disappears.
-5. Open the same `http://message-box-001.local/` address.
+5. Open the same `http://button-box-001.local/` address.
 6. Link WhatsApp with the displayed phone code.
 7. Choose a default recipient and complete the guided two-way voice test.
 8. Allow any additional recipients and optionally pair NFC tags.
@@ -326,7 +326,7 @@ health or unknown tag state blocks rather than silently choosing the default.
 Path A remains the terminal-assisted developer workflow; the two paths are not
 continuations of one another.
 
-**Done when:** the browser reports that Message Box is ready and the intended
+**Done when:** the browser reports that Button Box is ready and the intended
 default and optional tag mappings pass the physical scenarios below.
 
 ## Step 8 — Test the hardware
@@ -335,7 +335,7 @@ The terminal-assisted onboarding offers this test automatically. To run it
 separately, connect to the Pi and run it as the `messagebox` service user:
 
 ```sh
-ssh -t admin@message-box-001.local
+ssh -t admin@button-box-001.local
 sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh
 ```
 
@@ -406,7 +406,7 @@ guessing a fixed IP address.
 Confirm which SSH identity is being offered:
 
 ```sh
-ssh -v admin@message-box-001.local
+ssh -v admin@button-box-001.local
 ```
 
 If you created a dedicated key, select it explicitly in your SSH configuration
@@ -487,7 +487,7 @@ Before updating a working physical box:
 
 Use [GitHub Issues](https://github.com/button-box/button-box/issues) for
 reproducible bugs and documentation problems, or
-[join the community](https://chat.whatsapp.com/KkVOY76T0go1J6lGElwQJg?mode=gi_t)
+[join the community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t)
 for builder discussion.
 
 A useful issue includes:

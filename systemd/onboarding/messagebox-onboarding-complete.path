@@ -1,5 +1,5 @@
 [Unit]
-Description=Watch for Message Box onboarding completion
+Description=Watch for Button Box setup completion
 
 [Path]
 PathChanged=/var/lib/messagebox-onboarding/completion-request.json

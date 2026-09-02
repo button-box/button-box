@@ -44,6 +44,9 @@ MAX_BOOTSTRAP_MESSAGES = 100
 MAX_DISCOVERY_MESSAGES = 1000
 MAX_ELIGIBLE_CONVERSATIONS = 10
 MAX_REQUEST_BYTES = 4096
+LOGOUT_LOCK_WAIT = "15s"
+LOGOUT_PROCESS_TIMEOUT = 35
+ACCOUNT_CLEANUP_CLIENT_TIMEOUT = 45
 
 ACTIVE_STATUSES = frozenset({"starting", "code_pending", "bootstrapping", "verifying"})
 PUBLIC_STATUSES = frozenset(
@@ -245,6 +248,7 @@ class PairingEngine:
         self.root = Path(pairing_root)
         self.stage = self.root / "staging"
         self.state_path = self.root / "state.json"
+        self.sync_pause_path = self.root / "sync-paused"
         self.backup = self.root / "live-empty-backup"
         self.live_store = Path(live_store)
         self.candidates_path = Path(candidates_path)
@@ -268,6 +272,10 @@ class PairingEngine:
                 self.recipients.ensure_voice_request()
             except RecipientError:
                 pass
+        if self._load_state()["status"] == "ready":
+            self._resume_sync()
+        else:
+            self._pause_sync()
 
     def _default_state(self):
         return {
@@ -408,8 +416,9 @@ class PairingEngine:
                 raise PairingError("pairing_already_in_progress")
             if state["status"] == "ready":
                 raise PairingError("unlink_current_account_first")
-            if state["safe_error"] == "CLEANUP_FAILED" and self.stage.exists():
+            if state["safe_error"] == "CLEANUP_FAILED":
                 raise PairingError("cleanup_required")
+            self._pause_sync()
             self._remove_stage()
             self.stage.mkdir(mode=0o700)
             state.update(
@@ -451,12 +460,10 @@ class PairingEngine:
                     raise PairingError("recipient_setup_started")
             except RecipientError as exc:
                 raise PairingError("recipient_state_failed") from exc
-            result = self._run_wacli(
-                self.live_store,
-                ["--json", "--timeout", "15s", "auth", "logout"],
-                timeout=20,
-            )
+            self._pause_sync()
+            result = self._logout_live_store()
             if result.returncode != 0:
+                self._resume_sync()
                 return self._set_state(
                     "ready",
                     phone_hint=state["phone_hint"],
@@ -466,6 +473,37 @@ class PairingEngine:
             self._remove_directory(self.live_store)
             self.live_store.mkdir(parents=True, mode=0o700)
             self.candidates_path.unlink(missing_ok=True)
+            return self._set_state("idle")
+
+    def relink(self):
+        """Log out and erase every account-scoped routing and setup proof."""
+        with self._lock:
+            state = self._load_state()
+            retry_cleanup = (
+                state["status"] == "failed"
+                and state["safe_error"] == "CLEANUP_FAILED"
+            )
+            if state["status"] != "ready" and not retry_cleanup:
+                raise PairingError("whatsapp_not_ready")
+            self._pause_sync()
+            if not retry_cleanup:
+                result = self._logout_live_store()
+                if result.returncode != 0:
+                    self._resume_sync()
+                    return self._set_state(
+                        "ready",
+                        phone_hint=state["phone_hint"],
+                        eligible_count=state["eligible_count"],
+                        error="UNLINK_FAILED",
+                    )
+            self._remove_directory(self.live_store)
+            self.live_store.mkdir(parents=True, mode=0o700)
+            self.candidates_path.unlink(missing_ok=True)
+            try:
+                self.recipients.reset_for_whatsapp_relink()
+            except (OSError, RecipientError) as exc:
+                self._set_state("failed", error="CLEANUP_FAILED")
+                raise PairingError("cleanup_required") from exc
             return self._set_state("idle")
 
     def _require_ready(self):
@@ -691,6 +729,7 @@ class PairingEngine:
                 phone_hint=phone_hint,
                 eligible_count=len(candidates),
             )
+            self._resume_sync()
 
     def _raise_if_cancelled(self):
         if self._cancel_requested:
@@ -747,6 +786,43 @@ class PairingEngine:
             timeout=timeout,
             check=False,
         )
+
+    def _logout_live_store(self):
+        return self._run_wacli(
+            self.live_store,
+            [
+                "--json",
+                "--timeout",
+                "15s",
+                "--lock-wait",
+                LOGOUT_LOCK_WAIT,
+                "auth",
+                "logout",
+            ],
+            timeout=LOGOUT_PROCESS_TIMEOUT,
+        )
+
+    def _pause_sync(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                self.sync_pause_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError:
+            if self.sync_pause_path.is_symlink() or not self.sync_pause_path.is_file():
+                raise PairingError("sync_pause_path_unsafe")
+        else:
+            os.close(descriptor)
+            self._sync_directory(self.root)
+
+    def _resume_sync(self):
+        if self.sync_pause_path.is_symlink():
+            raise PairingError("sync_pause_path_unsafe")
+        if self.sync_pause_path.exists():
+            self.sync_pause_path.unlink()
+            self._sync_directory(self.root)
 
     def _stage_authenticated(self):
         if not self.stage.exists():
@@ -918,7 +994,14 @@ class WhatsAppPairingClient:
         return self._request({"action": "cancel"}, timeout=25)
 
     def unlink(self):
-        return self._request({"action": "unlink"}, timeout=25)
+        return self._request(
+            {"action": "unlink"}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+        )
+
+    def relink(self):
+        return self._request(
+            {"action": "relink"}, timeout=ACCOUNT_CLEANUP_CLIENT_TIMEOUT
+        )
 
     def recipient_state(self):
         return self._request({"action": "recipient_state"})
@@ -973,6 +1056,8 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 state = self.server.engine.cancel()
             elif action == "unlink" and set(request) == {"action"}:
                 state = self.server.engine.unlink()
+            elif action == "relink" and set(request) == {"action"}:
+                state = self.server.engine.relink()
             elif action == "recipient_state" and set(request) == {"action"}:
                 state = self.server.engine.recipient_state()
             elif action == "recipient_list" and set(request) == {"action", "refresh"}:
@@ -1042,7 +1127,7 @@ def serve(socket_path=SOCKET_PATH):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Message Box WhatsApp pairing worker")
+    parser = argparse.ArgumentParser(description="Button Box WhatsApp pairing worker")
     parser.add_argument("--serve", action="store_true")
     arguments = parser.parse_args(argv)
     if not arguments.serve:

@@ -1,5 +1,5 @@
 [Unit]
-Description=Validate and activate Message Box onboarding voice flow
+Description=Validate and activate Button Box setup voice flow
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 After=messagebox-whatsapp-pairing.service
 

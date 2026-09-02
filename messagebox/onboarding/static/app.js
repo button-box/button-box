@@ -1,6 +1,11 @@
 "use strict";
 
 const views = [
+  "home",
+  "setup",
+  "settings",
+  "activity",
+  "advanced",
   "wifi",
   "checking",
   "whatsapp",
@@ -29,6 +34,8 @@ let recipientsData = null;
 let managerOpen = false;
 let nfcData = null;
 let nfcPollTimer = null;
+let currentState = null;
+let currentSettings = null;
 
 function showView(name) {
   for (const view of views) {
@@ -48,6 +55,11 @@ function showError(message) {
   element.hidden = !message;
 }
 
+function rememberState(state) {
+  currentState = currentState ? { ...currentState, ...state } : state;
+  return currentState;
+}
+
 async function request(url, options = {}) {
   const response = await fetch(url, {
     cache: "no-store",
@@ -56,7 +68,7 @@ async function request(url, options = {}) {
   const type = response.headers.get("content-type") || "";
   const data = type.includes("application/json") ? await response.json() : null;
   if (!response.ok) {
-    const error = new Error(data?.error || "The Message Box did not respond.");
+    const error = new Error(data?.error || "Button Box did not respond.");
     error.status = response.status;
     throw error;
   }
@@ -135,8 +147,26 @@ function pairingErrorCopy(error, status) {
 function schedulePoll(status, recipientStatus = null) {
   window.clearTimeout(pollTimer);
   pollTimer = activePairingStates.has(status) || recipientStatus === "testing"
-    ? window.setTimeout(loadState, 1500)
+    ? window.setTimeout(currentState?.mode === "RUNTIME" ? loadRuntimeWhatsApp : loadState, 1500)
     : null;
+}
+
+async function loadRuntimeWhatsApp() {
+  try {
+    const whatsapp = await request("/api/whatsapp");
+    const state = rememberState({
+      mode: "RUNTIME",
+      phase: whatsapp.status === "ready" ? "WHATSAPP_READY" : "WHATSAPP_PENDING",
+      whatsapp,
+    });
+    if (whatsapp.status === "ready") {
+      state.recipient_setup = await request("/api/recipients");
+      state.nfc_setup = { status: "idle", mapped_count: 0 };
+    }
+    applyWhatsAppState(state, { manage: true });
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 function setProof(id, complete) {
@@ -190,7 +220,7 @@ function applyRecipientState(recipient, nfcSummary = null) {
   showView("ready");
 }
 
-function applyWhatsAppState(state) {
+function applyWhatsAppState(state, { manage = false } = {}) {
   const whatsapp = state.whatsapp || {
     status: "failed",
     pairing_code: null,
@@ -207,7 +237,11 @@ function applyWhatsAppState(state) {
     document.getElementById("eligible-count").textContent = count === 1
       ? "1 recent group or chat is ready for the next setup step."
       : `${count} recent groups or chats are ready for the next setup step.`;
-    applyRecipientState(state.recipient_setup, state.nfc_setup);
+    if (manage) {
+      showView("ready");
+    } else {
+      applyRecipientState(state.recipient_setup, state.nfc_setup);
+    }
     return;
   }
   switch (whatsapp.status) {
@@ -243,6 +277,9 @@ function applyWhatsAppState(state) {
         whatsapp.safe_error,
         whatsapp.status,
       );
+      document.getElementById("retry-pairing").textContent = whatsapp.safe_error === "CLEANUP_FAILED"
+        ? "Finish account cleanup"
+        : "Try again";
   }
 }
 
@@ -269,7 +306,10 @@ function recipientRow(recipient, actions = []) {
     button.type = "button";
     button.className = action === "remove" ? "danger-button compact" : "compact";
     button.textContent = label;
-    button.addEventListener("click", () => mutateRecipient(action, recipient.token, button));
+    button.addEventListener("click", () => {
+      if (action === "pair-card") beginRuntimeNfc(recipient.token, recipient.label, button);
+      else mutateRecipient(action, recipient.token, button);
+    });
       controls.append(button);
     });
     row.append(controls);
@@ -290,14 +330,22 @@ function renderRecipientPicker(data) {
 
 function renderRecipientManager(data) {
   recipientsData = data;
+  document.getElementById("unpair-presented-nfc").hidden = currentState?.mode !== "RUNTIME";
+  document.getElementById("continue-nfc").textContent = currentState?.mode === "RUNTIME"
+    ? "Pair an NFC card"
+    : "Continue to NFC setup";
   const configured = data.recipients.filter((recipient) => recipient.configured);
   const available = data.recipients.filter((recipient) => recipient.available && !recipient.configured);
-  document.getElementById("configured-recipient-list").replaceChildren(
-    ...configured.map((recipient) => recipientRow(recipient, recipient.is_default ? [] : [
+  document.getElementById("configured-recipient-list").replaceChildren(...configured.map((recipient) => {
+    const actions = currentState?.mode === "RUNTIME"
+      ? [{ action: "pair-card", label: "Pair card" }]
+      : [];
+    if (!recipient.is_default) actions.push(
       { action: "default", label: "Make default" },
       { action: "remove", label: "Remove" },
-    ])),
-  );
+    );
+    return recipientRow(recipient, actions);
+  }));
   document.getElementById("available-recipient-list").replaceChildren(
     ...available.map((recipient) => recipientRow(
       recipient,
@@ -378,6 +426,53 @@ async function deferRecipients() {
     applyRecipientState(await formRequest("/recipients/defer"));
   } catch (error) {
     showError(error.message);
+  }
+}
+
+async function beginRuntimeNfc(token, label, button) {
+  button.disabled = true;
+  const status = document.getElementById("manager-status");
+  status.textContent = `Starting card pairing for ${label}…`;
+  try {
+    await formRequest("/nfc/enroll", { token });
+    document.getElementById("cancel-runtime-nfc").hidden = false;
+    status.textContent = `Hold a card over Button Box for ${label}. You have two minutes.`;
+    pollRuntimeNfc(true);
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+async function pollRuntimeNfc(wasWaiting = false) {
+  window.clearTimeout(nfcPollTimer);
+  try {
+    const state = await request("/api/nfc-runtime");
+    if (state.status === "waiting") {
+      document.getElementById("manager-status").textContent = state.healthy
+        ? `Waiting for a card for ${state.recipient}…`
+        : "Waiting for the NFC reader. Check its connection if this continues.";
+      nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(true), 800);
+    } else if (wasWaiting) {
+      document.getElementById("cancel-runtime-nfc").hidden = true;
+      await loadRecipients({ manager: true });
+      document.getElementById("manager-status").textContent = "Card paired or reassigned.";
+    }
+  } catch (error) {
+    document.getElementById("manager-status").textContent = error.message;
+  }
+}
+
+async function runtimeNfcAction(path) {
+  const status = document.getElementById("manager-status");
+  try {
+    await formRequest(path);
+    window.clearTimeout(nfcPollTimer);
+    document.getElementById("cancel-runtime-nfc").hidden = true;
+    await loadRecipients({ manager: true });
+    status.textContent = path.includes("unpair") ? "Presented card unpaired." : "Card pairing cancelled.";
+  } catch (error) {
+    status.textContent = error.message;
   }
 }
 
@@ -542,7 +637,7 @@ function applyState(state) {
     case "WIFI_FAILED":
       showView("failed");
       document.getElementById("failure-copy").textContent = state.safe_error === "ASSOCIATION_FAILED"
-        ? "The box could not join that Wi-Fi network. Check its name and password."
+        ? "Button Box could not join that Wi-Fi network. Check its name and password."
         : "Wi-Fi connected, but internet is unavailable. Check again or choose another network.";
       break;
     case "WHATSAPP_PENDING":
@@ -554,11 +649,353 @@ function applyState(state) {
   }
 }
 
+function taskStatus(label, status, route = "#continue") {
+  const item = document.createElement("li");
+  item.className = "task-row";
+  const link = document.createElement("a");
+  link.href = route;
+  link.textContent = label;
+  const badge = document.createElement("span");
+  badge.className = `task-status ${status}`;
+  badge.textContent = status === "complete" ? "Complete" : status === "optional" ? "Optional" : "To do";
+  item.append(link, badge);
+  return item;
+}
+
+function setupProgress(state) {
+  if (state.mode === "RUNTIME") return state.setup;
+  const wifiComplete = ["WHATSAPP_PENDING", "WHATSAPP_READY"].includes(state.phase);
+  const whatsappComplete = state.phase === "WHATSAPP_READY" || state.whatsapp?.status === "ready";
+  const recipient = state.recipient_setup || {};
+  const proof = recipient.proof || {};
+  return {
+    wifi: wifiComplete ? "complete" : "attention",
+    whatsapp: whatsappComplete ? "complete" : "attention",
+    recipient: recipient.default ? "complete" : "attention",
+    first_message: proof.received && proof.played && proof.replied ? "complete" : "attention",
+    nfc: (state.nfc_setup?.mapped_count || 0) > 0 ? "complete" : "optional",
+  };
+}
+
+function renderSetup(state) {
+  const progress = setupProgress(state);
+  const activeSetup = state.mode !== "RUNTIME";
+  document.getElementById("required-tasks").replaceChildren(
+    taskStatus("Connect Wi-Fi", progress.wifi, activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp"),
+    taskStatus("Choose a default recipient", progress.recipient, activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Receive, play, record, and send a test message", progress.first_message, activeSetup ? "#continue" : "#activity"),
+  );
+  document.getElementById("optional-tasks").replaceChildren(
+    taskStatus("Pair NFC cards", progress.nfc, activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Personalize button, sounds, and quiet hours", "optional", "#settings"),
+  );
+}
+
+function renderHome(state) {
+  const progress = setupProgress(state);
+  const ready = [progress.wifi, progress.whatsapp, progress.recipient, progress.first_message]
+    .every((status) => status === "complete");
+  document.getElementById("home-attention").hidden = ready;
+  document.getElementById("home-wifi").textContent = progress.wifi === "complete"
+    ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
+    : "Needs attention";
+  document.getElementById("home-whatsapp").textContent = progress.whatsapp === "complete" ? "Linked" : "Needs attention";
+  document.getElementById("home-runtime").textContent = state.mode === "RUNTIME" && ready ? "Ready" : "Setup in progress";
+}
+
+function populateSettings(payload) {
+  currentSettings = payload.settings;
+  const value = currentSettings;
+  document.querySelector(`[name="recording_mode"][value="${value.recording_mode}"]`).checked = true;
+  document.querySelector(`[name="after_listening"][value="${value.after_listening}"]`).checked = true;
+  document.getElementById("max-recording").value = String(value.max_recording_seconds);
+  document.getElementById("ringtone").value = value.ringtone_id;
+  document.getElementById("master-volume").value = String(value.master_volume_percent);
+  document.getElementById("volume-output").value = `${value.master_volume_percent}%`;
+  document.getElementById("arrival-signal").value = value.arrival_signal;
+  document.getElementById("quiet-enabled").checked = value.quiet_hours.enabled;
+  document.getElementById("quiet-start").value = value.quiet_hours.start;
+  document.getElementById("quiet-end").value = value.quiet_hours.end;
+  document.getElementById("timezone").value = value.timezone;
+  document.getElementById("nfc-beep").checked = value.nfc_confirmation_beep;
+  document.getElementById("settings-attention").hidden = !payload.attention;
+  const suggested = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  document.getElementById("timezone-help").textContent = suggested && suggested !== value.timezone
+    ? `This phone suggests ${suggested}. Confirm the time zone before saving.`
+    : "Confirm this time zone so quiet hours follow local time.";
+}
+
+async function loadSettings() {
+  const status = document.getElementById("settings-status");
+  status.textContent = "Loading settings…";
+  try {
+    populateSettings(await request("/api/settings"));
+    status.textContent = "";
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function settingsCandidate() {
+  return {
+    timezone: document.getElementById("timezone").value.trim(),
+    recording_mode: document.querySelector('[name="recording_mode"]:checked').value,
+    after_listening: document.querySelector('[name="after_listening"]:checked').value,
+    max_recording_seconds: Number(document.getElementById("max-recording").value),
+    ringtone_id: document.getElementById("ringtone").value,
+    master_volume_percent: Number(document.getElementById("master-volume").value),
+    arrival_signal: document.getElementById("arrival-signal").value,
+    quiet_hours: {
+      enabled: document.getElementById("quiet-enabled").checked,
+      start: document.getElementById("quiet-start").value,
+      end: document.getElementById("quiet-end").value,
+    },
+    nfc_confirmation_beep: document.getElementById("nfc-beep").checked,
+  };
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const status = document.getElementById("settings-status");
+  const candidate = settingsCandidate();
+  if (candidate.recording_mode === "hold_release" && currentSettings?.recording_mode !== "hold_release") {
+    const accepted = window.confirm("Press and hold sends immediately when the button is released. There is no playback review. Save this mode?");
+    if (!accepted) return;
+  }
+  status.textContent = "Saving…";
+  try {
+    const payload = await request("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision: currentSettings.revision, settings: candidate }),
+    });
+    populateSettings(payload);
+    status.textContent = "Settings saved. Changes apply at the next idle interaction.";
+  } catch (error) {
+    status.textContent = error.status === 409 ? `${error.message} Your unsaved choices were not overwritten.` : error.message;
+  }
+}
+
+function formatDuration(seconds) {
+  if (seconds == null) return "—";
+  return seconds < 60 ? `${Math.round(seconds)}s` : `${(seconds / 60).toFixed(1)}m`;
+}
+
+function activityMessageList(items, kind) {
+  const container = document.createElement("div");
+  container.className = "activity-list";
+  if (!items.length) {
+    container.textContent = kind === "queue" ? "Nothing waiting." : "Empty.";
+    return container;
+  }
+  for (const item of items) {
+    const row = document.createElement("article");
+    row.className = "activity-row";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${item.sender} · ${item.chat}`;
+    const meta = document.createElement("span");
+    meta.textContent = `${new Date(item.ts * 1000).toLocaleString()} · ${formatDuration(item.dur)}`;
+    copy.append(title, meta);
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "none";
+    const query = kind === "hold" ? "?hold=1" : kind === "trash" ? "?trash=1" : "";
+    audio.src = `/audio/${encodeURIComponent(item.token)}${query}`;
+    const actions = document.createElement("div");
+    actions.className = "button-row";
+    const operations = kind === "queue" ? [["hold", "Hold"], ["delete", "Trash"]]
+      : kind === "hold" ? [["resume", "Reinstate"]] : [["reinstate", "Reinstate"]];
+    for (const [operation, label] of operations) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary compact";
+      button.textContent = label;
+      button.addEventListener("click", () => moveMessage(operation, item.token));
+      actions.append(button);
+    }
+    row.append(copy, audio, actions);
+    container.append(row);
+  }
+  return container;
+}
+
+async function moveMessage(operation, token) {
+  try {
+    await request(`/api/${operation}?f=${encodeURIComponent(token)}`, { method: "POST" });
+    await loadActivity();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function loadActivity() {
+  if (currentState?.mode !== "RUNTIME") {
+    document.getElementById("activity-timeline").textContent = "Activity becomes available after setup is complete.";
+    return;
+  }
+  try {
+    const data = await request("/api/data");
+    const cards = [["Sent", data.cards.sent_total], ["Received", data.cards.recv_total], ["Played", data.cards.plays], ["Rings", data.cards.rings]];
+    document.getElementById("activity-summary").replaceChildren(...cards.map(([label, value]) => {
+      const card = document.createElement("div");
+      card.className = "status-card";
+      const name = document.createElement("span"); name.textContent = label;
+      const count = document.createElement("strong"); count.textContent = String(value);
+      card.append(name, count); return card;
+    }));
+    const timeline = document.getElementById("activity-timeline");
+    timeline.replaceChildren(...data.interactions.map((item) => {
+      const row = document.createElement("article"); row.className = "activity-row";
+      const title = document.createElement("strong"); title.textContent = item.outcome_label;
+      const meta = document.createElement("span"); meta.textContent = `${item.flow === "standalone" ? "New message" : "Reply"} · ${new Date(item.ts * 1000).toLocaleString()}`;
+      row.append(title, meta); return row;
+    }));
+    document.getElementById("activity-queue").replaceChildren(activityMessageList(data.queue, "queue"));
+    document.getElementById("activity-hold").replaceChildren(activityMessageList(data.hold, "hold"));
+    document.getElementById("activity-trash").replaceChildren(activityMessageList(data.trash, "trash"));
+  } catch (error) {
+    document.getElementById("activity-timeline").textContent = error.message;
+  }
+}
+
+async function loadAdvanced() {
+  const health = document.getElementById("advanced-health");
+  health.replaceChildren();
+  const runtime = document.createElement("div"); runtime.className = "status-card";
+  runtime.innerHTML = `<span>Runtime</span><strong>${currentState?.mode === "RUNTIME" ? "Running" : "Setup mode"}</strong>`;
+  const version = document.createElement("div"); version.className = "status-card";
+  const versionLabel = document.createElement("span"); versionLabel.textContent = "Software";
+  const versionValue = document.createElement("strong"); versionValue.textContent = currentState?.health?.software_version || "Installed";
+  version.append(versionLabel, versionValue);
+  health.append(runtime, version);
+  if (currentState?.mode !== "RUNTIME") {
+    document.getElementById("listener-profiles").textContent = "Listener profiles become available after setup.";
+    return;
+  }
+  try {
+    const contacts = await request("/api/contacts");
+    const profiles = Object.entries(contacts.listeners || {});
+    document.getElementById("listener-profiles").replaceChildren(...(profiles.length ? profiles.map(([jid, profile]) => {
+      const row = document.createElement("article"); row.className = "activity-row";
+      const name = document.createElement("strong"); name.textContent = profile.name;
+      const meta = document.createElement("span"); meta.textContent = profile.listened_clip ? "Custom listened sound" : "Default listened sound";
+      const actions = document.createElement("div"); actions.className = "button-row";
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "secondary compact"; edit.textContent = "Edit";
+      edit.addEventListener("click", () => {
+        document.getElementById("listener-jid").value = jid;
+        document.getElementById("listener-name").value = profile.name;
+        document.getElementById("listener-clip").value = profile.listened_clip || "";
+        document.getElementById("listener-name").focus();
+      });
+      const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger-button compact"; remove.textContent = "Remove";
+      remove.addEventListener("click", () => mutateListener({ action: "remove", jid }));
+      actions.append(edit, remove);
+      row.append(name, meta, actions); return row;
+    }) : [document.createTextNode("No listener profiles.")]));
+  } catch (error) {
+    document.getElementById("listener-profiles").textContent = error.message;
+  }
+}
+
+async function mutateListener(payload) {
+  const status = document.getElementById("listener-status");
+  status.textContent = "Saving…";
+  try {
+    await request("/api/listeners", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    status.textContent = "Saved.";
+    await loadAdvanced();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function saveListener(event) {
+  event.preventDefault();
+  await mutateListener({
+    action: "upsert",
+    jid: document.getElementById("listener-jid").value.trim(),
+    name: document.getElementById("listener-name").value.trim(),
+    listened_clip: document.getElementById("listener-clip").value.trim(),
+  });
+}
+
+async function changeWifi(event) {
+  event.preventDefault();
+  const status = document.getElementById("wifi-change-status");
+  const security = document.querySelector('[name="new_wifi_security"]:checked').value;
+  const payload = {
+    ssid: document.getElementById("new-wifi-name").value,
+    password: security === "open" ? "" : document.getElementById("new-wifi-password").value,
+    security,
+  };
+  status.textContent = "Starting the network checks…";
+  try {
+    const result = await request("/api/wifi-change", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    status.textContent = result.message;
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function ringNow() {
+  const status = document.getElementById("ring-now-status");
+  if (currentState?.mode !== "RUNTIME") {
+    status.textContent = "Ring is available after setup is complete.";
+    return;
+  }
+  try {
+    await request("/api/ring", { method: "POST" });
+    status.textContent = "Ring requested.";
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function route() {
+  const routeName = location.hash.slice(1) || "home";
+  document.querySelectorAll("[data-route]").forEach((link) => {
+    link.setAttribute("aria-current", link.dataset.route === routeName ? "page" : "false");
+  });
+  window.clearTimeout(pollTimer);
+  window.clearTimeout(nfcPollTimer);
+  if (routeName === "whatsapp") {
+    if (currentState.mode === "RUNTIME") {
+      await loadRuntimeWhatsApp();
+    } else {
+      applyWhatsAppState(currentState, { manage: true });
+    }
+    return;
+  }
+  if (routeName === "continue") {
+    applyState(currentState);
+    return;
+  }
+  const canonical = new Set(["home", "setup", "settings", "activity", "advanced"]);
+  const selected = canonical.has(routeName) ? routeName : "home";
+  showView(selected);
+  if (selected === "home") renderHome(currentState);
+  if (selected === "setup") renderSetup(currentState);
+  if (selected === "settings") await loadSettings();
+  if (selected === "activity") await loadActivity();
+  if (selected === "advanced") await loadAdvanced();
+}
+
 async function loadState() {
   if (loadingState) return;
   loadingState = true;
   try {
-    applyState(await request("/api/state"));
+    currentState = await request("/api/state");
+    await route();
   } catch (error) {
     showError(error.message);
     window.clearTimeout(pollTimer);
@@ -575,7 +1012,7 @@ async function pairWhatsApp(event) {
   showError("");
   try {
     const phone = document.getElementById("whatsapp-phone").value;
-    applyState(await formRequest("/whatsapp/pair/start", { phone }));
+    applyState(rememberState(await formRequest("/whatsapp/pair/start", { phone })));
   } catch (error) {
     showError(error.message);
     document.getElementById("whatsapp-phone").focus();
@@ -587,7 +1024,7 @@ async function pairWhatsApp(event) {
 async function cancelPairing() {
   showError("");
   try {
-    applyState(await formRequest("/whatsapp/pair/cancel"));
+    applyState(rememberState(await formRequest("/whatsapp/pair/cancel")));
   } catch (error) {
     showError(error.message);
   }
@@ -643,7 +1080,7 @@ async function unlinkWhatsApp(event) {
   button.disabled = true;
   showError("");
   try {
-    applyState(await formRequest("/whatsapp/unlink", { confirm: "unlink" }));
+    applyState(rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" })));
     document.getElementById("unlink-form").hidden = true;
     document.getElementById("whatsapp-phone").value = "+";
     document.getElementById("whatsapp-phone").focus();
@@ -682,9 +1119,24 @@ document.getElementById("copy-setup-url").addEventListener("click", copySetupUrl
 document.getElementById("copy-pairing-code").addEventListener("click", copyPairingCode);
 document.getElementById("cancel-pairing").addEventListener("click", cancelPairing);
 document.getElementById("cancel-progress").addEventListener("click", cancelPairing);
-document.getElementById("retry-pairing").addEventListener("click", () => {
-  showView("whatsapp");
-  document.getElementById("whatsapp-phone").focus();
+document.getElementById("retry-pairing").addEventListener("click", async (event) => {
+  if (currentState?.whatsapp?.safe_error !== "CLEANUP_FAILED") {
+    showView("whatsapp");
+    document.getElementById("whatsapp-phone").focus();
+    return;
+  }
+  const button = event.currentTarget;
+  button.disabled = true;
+  showError("");
+  try {
+    applyState(rememberState(await formRequest("/whatsapp/unlink", { confirm: "unlink" })));
+    document.getElementById("whatsapp-phone").value = "+";
+    document.getElementById("whatsapp-phone").focus();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 document.getElementById("show-unlink").addEventListener("click", () => {
   const form = document.getElementById("unlink-form");
@@ -730,7 +1182,15 @@ document.getElementById("manager-refresh").addEventListener("click", () => loadR
 document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
   mutateRecipientNumber(event, "add");
 });
-document.getElementById("continue-nfc").addEventListener("click", openNfc);
+document.getElementById("continue-nfc").addEventListener("click", () => {
+  if (currentState?.mode === "RUNTIME") {
+    document.getElementById("manager-status").textContent = "Choose Pair card beside a recipient.";
+  } else {
+    openNfc();
+  }
+});
+document.getElementById("unpair-presented-nfc").addEventListener("click", () => runtimeNfcAction("/nfc/unpair-presented"));
+document.getElementById("cancel-runtime-nfc").addEventListener("click", () => runtimeNfcAction("/nfc/cancel-runtime"));
 document.getElementById("back-from-nfc").addEventListener("click", backToRecipients);
 document.getElementById("back-from-unavailable").addEventListener("click", backToRecipients);
 document.getElementById("cancel-nfc-tag").addEventListener("click", backToRecipients);
@@ -746,4 +1206,47 @@ document.getElementById("skip-unavailable-nfc").addEventListener("click", (event
   completeOnboarding(event.currentTarget.dataset.intent || "skip");
 });
 document.getElementById("done-nfc").addEventListener("click", () => completeOnboarding("done"));
+document.getElementById("settings-form").addEventListener("submit", saveSettings);
+document.getElementById("master-volume").addEventListener("input", (event) => {
+  document.getElementById("volume-output").value = `${event.currentTarget.value}%`;
+});
+document.getElementById("preview-ringtone").addEventListener("click", async () => {
+  const status = document.getElementById("settings-status");
+  status.textContent = "Playing preview…";
+  try {
+    await request("/api/ringtone-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ringtone_id: document.getElementById("ringtone").value }),
+    });
+    status.textContent = "Preview playing.";
+  } catch (error) {
+    status.textContent = error.status === 404 ? "Ringtone preview is available after setup." : error.message;
+  }
+});
+document.getElementById("ring-now").addEventListener("click", ringNow);
+document.getElementById("listener-form").addEventListener("submit", saveListener);
+document.getElementById("wifi-change-form").addEventListener("submit", changeWifi);
+document.querySelectorAll('[name="new_wifi_security"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    const protectedNetwork = document.querySelector('[name="new_wifi_security"]:checked').value === "protected";
+    const password = document.getElementById("new-wifi-password");
+    password.required = protectedNetwork;
+    password.disabled = !protectedNetwork;
+    if (!protectedNetwork) password.value = "";
+  });
+});
+document.getElementById("manage-whatsapp").addEventListener("click", loadRuntimeWhatsApp);
+document.getElementById("manage-recipients").addEventListener("click", async () => {
+  managerOpen = true;
+  try {
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
+  } catch (error) {
+    showError(error.message);
+  }
+});
+window.addEventListener("hashchange", () => {
+  if (currentState) route();
+});
 loadState();

@@ -24,6 +24,7 @@ RUNTIME_UNITS = (
     "messagebox-button.service",
     "messagebox-sync.service",
     "messagebox-poller.service",
+    "messagebox-dash.service",
 )
 
 
@@ -100,11 +101,9 @@ def complete(
     removed_gate = False
     try:
         run(["systemctl", "enable", *RUNTIME_UNITS, RUNTIME_TARGET], check=True)
-        if has_cards:
-            run(["systemctl", "enable", "messagebox-nfc.service"], check=True)
-        else:
-            run(["systemctl", "disable", "messagebox-nfc.service"], check=True)
-        run(["systemctl", "disable", "messagebox-dash.service"], check=True)
+        # The reader remains available so caregivers can pair cards later.
+        # With zero mappings it cannot affect the default-recipient route.
+        run(["systemctl", "enable", "messagebox-nfc.service"], check=True)
         run(
             [
                 "systemctl",

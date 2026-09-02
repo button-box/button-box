@@ -87,13 +87,13 @@ rsync -azR \
   "$REPO_DIR/./messagebox/nfc.py" \
   "$REPO_DIR/./messagebox/nfc_state.py" \
   "$REPO_DIR/./messagebox/runtime_paths.py" \
+  "$REPO_DIR/./messagebox/settings.py" \
+  "$REPO_DIR/./messagebox/tailnet.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
+  "$REPO_DIR/./messagebox/wifi_change.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \
-  "$REPO_DIR/./messagebox/dashboard/static/app.js" \
-  "$REPO_DIR/./messagebox/dashboard/static/index.html" \
-  "$REPO_DIR/./messagebox/dashboard/static/styles.css" \
   "$REPO_DIR/./messagebox/onboarding/__init__.py" \
   "$REPO_DIR/./messagebox/onboarding/app.py" \
   "$REPO_DIR/./messagebox/onboarding/comitup_adapter.py" \

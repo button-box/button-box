@@ -45,6 +45,14 @@ case "$*" in
       printf '%s\\n' 100.100.100.100
     fi
     ;;
+  *"python3 - --expected-name=button-box-a7"*)
+    cat >/dev/null
+    printf '%s\\n' https://button-box-a7.test-tailnet.ts.net/
+    ;;
+  *"python3 - --expected-name=message-box-001"*)
+    cat >/dev/null
+    printf '%s\\n' https://message-box-001.test-tailnet.ts.net/
+    ;;
 esac
 """,
         )
@@ -94,11 +102,12 @@ esac
         self.assertNotIn("auth-key", installer.lower())
         self.assertNotIn("--ssh", installer)
         self.assertIn("ssh admin@100.100.100.100", result.stdout)
+        self.assertIn(
+            "https://message-box-001.test-tailnet.ts.net/", result.stdout
+        )
 
     def test_existing_enrollment_does_not_run_tailscale_up(self):
         result = self._run(
-            "--hostname",
-            "message-box-beta",
             "admin@message-box-001.local",
             ALREADY_CONNECTED="1",
         )
@@ -108,7 +117,7 @@ esac
         self.assertFalse(any("tailscale up" in call for call in calls), calls)
         self.assertTrue(
             any(
-                "sudo -n tailscale set --hostname=message-box-beta "
+                "sudo -n tailscale set --hostname=message-box-001 "
                 "--auto-update=false --ssh=false --accept-routes=false "
                 "--advertise-routes= --advertise-exit-node=false "
                 "--exit-node= --webclient=false" in call
@@ -116,7 +125,36 @@ esac
             ),
             calls,
         )
-        self.assertIn("Device: message-box-beta", result.stdout)
+        self.assertIn("Device: message-box-001", result.stdout)
+
+    def test_rejects_tailscale_hostname_that_differs_from_device(self):
+        result = self._run(
+            "--hostname",
+            "message-box-beta",
+            "admin@message-box-001.local",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must match", result.stderr)
+        calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(calls), 1, calls)
+
+    def test_button_box_hostname_is_accepted_and_used_by_default(self):
+        result = self._run(
+            "admin@button-box-a7.local",
+            REMOTE_HOSTNAME="button-box-a7",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(
+            any(
+                "sudo -n tailscale up --hostname=button-box-a7" in call
+                for call in calls
+            ),
+            calls,
+        )
+        self.assertIn("Device: button-box-a7", result.stdout)
 
     def test_rejects_unsafe_target_before_running_ssh(self):
         result = self._run("-oProxyCommand=bad")

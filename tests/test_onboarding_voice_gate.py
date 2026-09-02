@@ -61,6 +61,22 @@ class VoiceGateTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(calls[0][0], ["systemctl", "stop", "messagebox-onboarding-voice.target"])
 
+    def test_missing_voice_request_stops_preview(self):
+        self.enabled.write_text("enabled\n", encoding="ascii")
+
+        result, calls = self.run_gate()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    ["systemctl", "stop", "messagebox-onboarding-voice.target"],
+                    {"check": True},
+                )
+            ],
+        )
+
     def test_invalid_request_or_missing_default_fails_closed(self):
         self.enabled.write_text("enabled\n", encoding="ascii")
         self.request.write_text("{}", encoding="ascii")

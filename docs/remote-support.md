@@ -24,22 +24,26 @@ From a clean, reviewed repository checkout on a computer that can currently
 reach the Pi over LAN or Ethernet, run:
 
 ```sh
-./scripts/provision-tailscale.sh admin@message-box-001.local
+./scripts/provision-tailscale.sh admin@button-box-001.local
 ```
 
 The helper:
 
-1. Refuses root, malformed targets, and non-`message-box-*` devices.
+1. Refuses root, malformed targets, and devices outside the supported
+   `button-box-*` and legacy `message-box-*` hostname patterns.
 2. Installs Tailscale from its signed official Debian 13 repository.
 3. Opens Tailscale's interactive browser authorization when the device is not
    already enrolled.
-4. Leaves Tailscale SSH, Serve, Funnel, subnet routing, and exit-node features
-   disabled.
-5. Holds the package so upgrades happen during an attended support session.
+4. Discovers the device's exact MagicDNS name, stores it only in the device's
+   private runtime configuration, and enables Tailscale Serve on HTTPS 443 to
+   the dashboard's loopback listener.
+5. Leaves Tailscale SSH, Funnel, subnet routing, and exit-node features
+   disabled. An existing conflicting Serve mapping on HTTPS 443 is preserved
+   and causes provisioning to stop.
+6. Holds the package so upgrades happen during an attended support session.
 
-No reusable Tailscale auth key is accepted or stored. The device joins with the
-same hostname by default. Use `--hostname NAME` only when the tailnet needs a
-different, non-sensitive device name.
+No reusable Tailscale auth key is accepted or stored. The device and Tailscale
+hostnames must match so the dashboard can validate one exact private origin.
 
 Keep the LAN session open. Move the operator computer to a genuinely different
 network, such as a phone hotspot, then use the address printed by the helper:
@@ -51,6 +55,18 @@ ssh admin@100.x.y.z
 That is ordinary OpenSSH carried over Tailscale. `tailscale ssh` is deliberately
 not used, so every support computer still needs an authorized OpenSSH key.
 Confirm both the remote path and the original LAN fallback before shipping.
+
+The helper also prints a stable private dashboard URL such as:
+
+```text
+https://button-box-001.example-tailnet.ts.net/
+```
+
+On a phone or computer signed in to the authorized tailnet, open that URL in a
+browser. Tailscale provisions its certificate and keeps the Serve mapping over
+reboots. The dashboard is not made public: Funnel is never enabled. Bare
+Tailscale IP addresses and unrecognized `.ts.net` names are not accepted as
+dashboard browser origins.
 
 By default, Tailscale device keys can expire and an expired remote box stops
 accepting tailnet connections. For this trusted, unattended device, open its
@@ -68,8 +84,9 @@ devices and members promptly. Do not paste node addresses, authorization URLs,
 account names, or access-rule details into public issues or logs.
 
 Before shipping, confirm the machine is online, key expiry has the intended
-setting, Tailscale SSH is off, it advertises no routes or exit-node capability,
-and client auto-update is off. Recheck those controls after any membership or
+setting, Tailscale SSH and Funnel are off, it advertises no routes or exit-node
+capability, client auto-update is off, and the private HTTPS dashboard works
+from a second tailnet device. Recheck those controls after any membership or
 policy change.
 
 This repository does not install Tailscale access rules because the public code
@@ -136,6 +153,7 @@ Do not reset application data merely to repair the network.
 To remove remote support while connected locally:
 
 ```sh
+sudo tailscale serve --https=443 off
 sudo tailscale logout
 sudo systemctl disable --now tailscaled
 sudo apt-mark unhold tailscale
@@ -143,6 +161,11 @@ sudo apt-get purge tailscale
 sudo rm -f /etc/apt/sources.list.d/tailscale.list
 sudo rm -f /usr/share/keyrings/tailscale-archive-keyring.gpg
 ```
+
+Remove `MSGBOX_TAILSCALE_HOST` from `/etc/messagebox/env` and restart the active
+dashboard service if the application remains installed. Do not use
+`tailscale serve reset` for this rollback because it can erase unrelated Serve
+mappings.
 
 Also delete or expire the device in the Tailscale admin console. Removing
 Tailscale does not remove OpenSSH keys; review `~/.ssh/authorized_keys`

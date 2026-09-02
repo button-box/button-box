@@ -1,12 +1,13 @@
 [Unit]
-Description=Message Box dashboard (stats + queue manager, Tailscale-only)
-After=network-online.target tailscaled.service
+Description=Button Box household dashboard
+After=network-online.target
 Wants=network-online.target
 PartOf=messagebox.target
 
 [Service]
 User=messagebox
 Group=messagebox
+SupplementaryGroups=messagebox-settings
 WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
 Environment=HOME=/var/lib/messagebox
@@ -15,6 +16,9 @@ UMask=0077
 ExecStart=/usr/bin/python3 -m messagebox.dashboard.app
 Restart=always
 RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=messagebox.target

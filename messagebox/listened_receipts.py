@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable WhatsApp voice-note played receipts for Message Box.
+"""Durable WhatsApp voice-note played receipts for Button Box.
 
 The wacli process posts signed receipt events to the dashboard.  This module
 correlates those events with voice notes sent by the box and creates a separate
