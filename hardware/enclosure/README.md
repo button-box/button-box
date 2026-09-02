@@ -8,3 +8,5 @@ These STL files form the two-part prototype Button Box enclosure:
 The meshes share a 192 mm by 120 mm footprint when interpreted in millimeters.
 The top is approximately 74.5 mm tall and the bottom is approximately 20.5 mm
 tall.
+
+A shoebox or another sturdy, non-conductive box is an alternative to 3D printing these parts. Secure the electronics, provide ventilation, and protect the cables from strain and loose metal.
