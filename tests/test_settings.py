@@ -1,6 +1,9 @@
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from messagebox.settings import RevisionConflict, SettingsError, SettingsStore, defaults
 
@@ -56,6 +59,39 @@ class SettingsStoreTests(unittest.TestCase):
         current, _warning = store.load()
         self.assertEqual(current, saved)
         self.assertEqual(current["max_recording_seconds"], 30)
+
+    def test_existing_shared_lock_does_not_require_file_ownership(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        initial, _warning = store.load()
+        store.lock_path.write_bytes(b"")
+        store.lock_path.chmod(0o660)
+        lock_inode = store.lock_path.stat().st_ino
+        real_fchmod = os.fchmod
+
+        def reject_owner_only_lock_change(descriptor, mode):
+            if os.fstat(descriptor).st_ino == lock_inode:
+                raise PermissionError(1, "Operation not permitted")
+            return real_fchmod(descriptor, mode)
+
+        with mock.patch(
+            "messagebox.settings.os.fchmod",
+            side_effect=reject_owner_only_lock_change,
+        ):
+            saved = store.update(self.candidate(initial, master_volume_percent=70), 0)
+
+        self.assertEqual(saved["revision"], 1)
+        self.assertEqual(saved["master_volume_percent"], 70)
+
+    def test_new_lock_is_group_writable_under_restrictive_umask(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        initial, _warning = store.load()
+        previous_umask = os.umask(0o077)
+        try:
+            store.update(self.candidate(initial, master_volume_percent=70), 0)
+        finally:
+            os.umask(previous_umask)
+
+        self.assertEqual(stat.S_IMODE(store.lock_path.stat().st_mode), 0o660)
 
     def test_corrupt_primary_uses_last_valid_snapshot_and_attention(self):
         store = SettingsStore(self.path, environ={"TZ": "UTC"})
