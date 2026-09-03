@@ -1,0 +1,22 @@
+[Unit]
+Description=signal-cli-rest-api container (Signal channel backend)
+After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+PartOf=messagebox.target
+
+[Service]
+Environment=MSGBOX_SIGNAL_REST_PORT=8080
+EnvironmentFile=-/etc/messagebox/env
+ExecStartPre=-/usr/bin/docker rm -f messagebox-signal-rest
+ExecStart=/usr/bin/docker run --rm --name messagebox-signal-rest \
+    -p 127.0.0.1:${MSGBOX_SIGNAL_REST_PORT}:8080 \
+    -v /var/lib/messagebox/signal-rest:/home/.local/share/signal-cli \
+    -e MODE=json-rpc \
+    bbernhard/signal-cli-rest-api:latest
+ExecStop=/usr/bin/docker stop messagebox-signal-rest
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=messagebox.target

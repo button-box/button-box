@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Button Box physical-button service with caregiver-selectable interaction."""
+"""Message Box physical-button service.
+
+With MSGBOX_GUIDED_REPLY=1, one press starts exactly one session. The oldest
+incoming message (if any) is played; MSGBOX_AUTO_RECORD_AFTER_INCOMING controls
+whether playback continues into a reply recording. With no incoming message, a
+standalone family message is recorded. Recordings use silence-aware stop,
+private playback, and explicit send approval. Approved audio is atomically
+bound to its exact recipient in the durable outbox before the child flow
+returns.
+
+With the flag off (the default), the established hold-to-record / short-to-play
+behavior remains available as the immediate rollback.
+"""
 
 import json
 import os
@@ -10,9 +22,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
@@ -23,16 +33,17 @@ from messagebox.guided_reply import (
     RecordingResult,
     claim_inbox_file,
     discard_held_playback_press,
+    env_flag,
     finish_inbox_file,
     invalid_prompt_files,
     raw_pcm_to_trimmed_wav,
     recover_inflight_files,
     release_inbox_file,
     should_ring_after_unsent_session,
-    voice_send_command,
 )
-from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
+from messagebox.listened_receipts import AnnouncementGate, ReceiptStore
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.providers import provider_for_channel
 from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
@@ -44,15 +55,13 @@ from messagebox.runtime_paths import (
     RUNTIME_DIR,
     STATE_DIR as DEFAULT_STATE_DIR,
 )
-from messagebox.settings import SettingsReader, ringtone_path
 
 
 MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
 SPK_DEV = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device_1,DEV=0")
-SPEAKER_CARD = os.environ.get("MSGBOX_SPEAKER_CARD", "Device")
-SPEAKER_CONTROL = os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM")
 BUTTON_PIN = int(os.environ.get("MSGBOX_BUTTON_PIN", "17"))
 LED_PIN = int(os.environ.get("MSGBOX_LED_PIN", "26"))
+MAX_SECONDS = int(os.environ.get("MSGBOX_MAX_SECONDS", "60"))  # rollback flow only
 LOCK_WAIT = os.environ.get("MSGBOX_LOCK_WAIT", "60s")
 WACLI_BIN = "/usr/local/bin/wacli"
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
@@ -67,15 +76,23 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 )
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
+RING_WAV = os.environ.get(
+    "MSGBOX_RING_WAV", str(APP_DIR / "ringtones" / "ring3.wav")
+)
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 NFC_SELECTION_TTL_S = float(os.environ.get("MSGBOX_NFC_SELECTION_TTL_S", "30"))
 NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
 )
+NFC_DETECTION_BEEP = env_flag("MSGBOX_NFC_DETECTION_BEEP", default=False)
 NFC_HEALTH_MAX_AGE_S = float(os.environ.get("MSGBOX_NFC_HEALTH_MAX_AGE_S", "5"))
 PLACE_TOKEN_WAV = os.environ.get(
     "MSGBOX_PLACE_TOKEN_WAV",
     str(APP_DIR / "sounds" / "nfc" / "place-token.wav"),
+)
+GUIDED_REPLY = env_flag("MSGBOX_GUIDED_REPLY", default=False)
+AUTO_RECORD_AFTER_INCOMING = env_flag(
+    "MSGBOX_AUTO_RECORD_AFTER_INCOMING", default=False
 )
 GUIDED_SILENCE_SECONDS = float(os.environ.get("MSGBOX_GUIDED_SILENCE_SECONDS", "20"))
 PROMPT_DIR = Path(
@@ -94,6 +111,8 @@ PROMPTS = {
 
 # Quiet hours: lamp dark, no ringtone (messages still queue; a deliberate press
 # still plays). Overnight arrivals do not ring when quiet hours end.
+QUIET_START_H = int(os.environ.get("MSGBOX_QUIET_START_H", "22"))
+QUIET_END_H = int(os.environ.get("MSGBOX_QUIET_END_H", "7"))
 RING_PHRASE = [
     (True, 1.2),
     (True, 1.6),
@@ -134,49 +153,11 @@ def log_event(event_type, **fields):
         log(f"event log error: {exc}")
 
 
-def quiet_hours(settings=None, now=None):
-    settings = settings or caregiver_settings()
-    quiet = settings["quiet_hours"]
-    if not quiet["enabled"]:
-        return False
-    current = now or datetime.now(ZoneInfo(settings["timezone"]))
-    minute = current.hour * 60 + current.minute
-    start_hour, start_minute = (int(value) for value in quiet["start"].split(":"))
-    end_hour, end_minute = (int(value) for value in quiet["end"].split(":"))
-    start = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-    if start == end:
-        return True
-    if start < end:
-        return start <= minute < end
-    return minute >= start or minute < end
-
-
-_applied_volume_revision = None
-
-
-def apply_master_volume(settings=None):
-    global _applied_volume_revision
-    settings = settings or caregiver_settings()
-    if settings["revision"] == _applied_volume_revision:
-        return True
-    result = subprocess.run(
-        [
-            "amixer",
-            "-q",
-            "-c",
-            SPEAKER_CARD,
-            "sset",
-            SPEAKER_CONTROL,
-            f'{settings["master_volume_percent"]}%',
-            "unmute",
-        ],
-        check=False,
-    )
-    if result.returncode == 0:
-        _applied_volume_revision = settings["revision"]
-        return True
-    return False
+def quiet_hours():
+    hour = time.localtime().tm_hour
+    if QUIET_START_H <= QUIET_END_H:
+        return QUIET_START_H <= hour < QUIET_END_H
+    return hour >= QUIET_START_H or hour < QUIET_END_H
 
 
 def make_beeps():
@@ -232,11 +213,6 @@ receipt_store = None
 announcement_gate = AnnouncementGate(LISTENED_POLL_S, LISTENED_RETRY_S)
 nfc_announcement_store = AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
 _last_nfc_announcement_poll = 0.0
-settings_reader = SettingsReader()
-
-
-def caregiver_settings():
-    return settings_reader.snapshot()
 
 
 def current_recipient_context(*, claim=False):
@@ -348,7 +324,7 @@ def block_unavailable_recipient():
 
 def _play_nfc_prompt(uid, action, card_clip):
     beeped = False
-    if caregiver_settings()["nfc_confirmation_beep"]:
+    if NFC_DETECTION_BEEP:
         beep("nfc")
         beeped = True
     card_clip = os.path.expanduser(card_clip)
@@ -402,49 +378,56 @@ def ensure_nfc_confirmation(context):
 
 
 def legacy_job_recipient(path):
-    """Use only the recipient snapshot bound at recording time."""
+    """Use only the recipient/channel snapshot bound at recording time."""
     try:
         with open(path + ".json", encoding="utf-8") as handle:
-            recipient = json.load(handle).get("recipient")
+            data = json.load(handle)
+        recipient = data.get("recipient")
+        channel = data.get("channel", "whatsapp")
         if (
             isinstance(recipient, str)
             and recipient
             and recipient.strip() == recipient
-            and "@" in recipient
             and not any(character.isspace() for character in recipient)
+            and channel in ("whatsapp", "signal")
         ):
-            return recipient
+            return recipient, channel
     except (OSError, AttributeError, ValueError, json.JSONDecodeError):
         pass
-    return None
+    return None, None
 
 
-def bind_legacy_job_recipient(path, recipient):
+def bind_legacy_job_recipient(path, recipient, channel="whatsapp"):
     """Persist routing before the WAV becomes visible to the sender thread."""
     metadata_path = path + ".json"
     temporary_path = metadata_path + ".part"
     with open(temporary_path, "w", encoding="utf-8") as handle:
-        json.dump({"version": 1, "recipient": recipient}, handle, sort_keys=True)
+        json.dump(
+            {"version": 1, "recipient": recipient, "channel": channel},
+            handle,
+            sort_keys=True,
+        )
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary_path, metadata_path)
 
 
-def track_sent_for_receipts(sent, recipient, *, local_message_id, flow):
-    """Persist the WhatsApp ID after acceptance without risking a duplicate send."""
-    whatsapp_id = parse_wacli_send_id(sent.stdout)
-    if not whatsapp_id:
+def track_sent_for_receipts(sent, recipient, *, local_message_id, flow, channel="whatsapp"):
+    """Persist the provider message ID after acceptance, once, per send."""
+    message_id = sent.provider_message_id
+    if not message_id:
         log_event(
             "listen_tracking_unavailable",
             message_id=local_message_id,
             flow=flow,
-            reason="missing_wacli_id",
+            reason="missing_provider_id",
         )
         return None
     try:
         tracked = receipt_store.track_sent(
-            whatsapp_id,
+            message_id,
             recipient,
+            channel=channel,
             local_message_id=local_message_id,
             flow=flow,
         )
@@ -459,14 +442,14 @@ def track_sent_for_receipts(sent, recipient, *, local_message_id, flow):
             reason="persist_failed",
         )
         return None
-    return whatsapp_id
+    return message_id
 
 
 def send_legacy_outbox_file(fname):
     """Keep pre-feature durable WAV jobs working with the family-group target."""
     path = os.path.join(OUTBOX_DIR, fname)
     metadata_path = path + ".json"
-    recipient = legacy_job_recipient(path)
+    recipient, channel = legacy_job_recipient(path)
     if not recipient:
         log(f"legacy send blocked for {fname}: no bound recipient")
         log_event("send_blocked", flow="legacy", reason="missing_recipient")
@@ -511,32 +494,18 @@ def send_legacy_outbox_file(fname):
         log(f"ffmpeg failed on legacy {fname} - moved to .bad")
         log_event("send_failed", flow="legacy", reason="convert")
         return True
-    sent = subprocess.run(
-        [
-            WACLI_BIN,
-            "send",
-            "voice",
-            "--file",
-            ogg,
-            "--to",
-            recipient,
-            "--lock-wait",
-            LOCK_WAIT,
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    sent = get_provider(channel).send_voice(recipient, ogg, lock_wait=LOCK_WAIT)
     try:
         os.remove(ogg)
     except OSError:
         pass
-    if sent.returncode == 0:
-        whatsapp_id = track_sent_for_receipts(
+    if sent.ok:
+        message_id = track_sent_for_receipts(
             sent,
             recipient,
             local_message_id=fname,
             flow="legacy",
+            channel=channel,
         )
         os.remove(path)
         try:
@@ -547,13 +516,14 @@ def send_legacy_outbox_file(fname):
         log_event(
             "sent",
             flow="legacy",
+            channel=channel,
             target=recipient,
             dur=duration,
             queue_wait_s=wait_s,
-            whatsapp_id=whatsapp_id,
+            whatsapp_id=message_id,
         )
         return True
-    log(f"legacy send failed for {fname}: {(sent.stderr or sent.stdout).strip()[:200]}")
+    log(f"legacy send failed for {fname}: {(sent.raw_stderr or sent.raw_stdout).strip()[:200]}")
     return False
 
 
@@ -593,36 +563,34 @@ def send_guided_job(job):
     # crash from here until completion becomes uncertain on restart, never an
     # automatic duplicate resend.
     job = outbox_store.set_state(job, "sending", increment_attempts=True)
-    sent = subprocess.run(
-        voice_send_command(WACLI_BIN, ogg, job.recipient, LOCK_WAIT),
-        capture_output=True,
-        text=True,
-    )
+    sent = get_provider(job.channel).send_voice(job.recipient, ogg, lock_wait=LOCK_WAIT)
     try:
         os.remove(ogg)
     except OSError:
         pass
-    if sent.returncode == 0:
-        whatsapp_id = track_sent_for_receipts(
+    if sent.ok:
+        message_id = track_sent_for_receipts(
             sent,
             job.recipient,
             local_message_id=job.message_id,
             flow=job.flow_kind,
+            channel=job.channel,
         )
         outbox_store.complete(job)
         log_event(
             "sent",
             flow=job.flow_kind,
+            channel=job.channel,
             message_id=job.message_id,
             target=job.recipient,
             dur=job.duration,
-            whatsapp_id=whatsapp_id,
+            whatsapp_id=message_id,
         )
         log(f"SENT guided {job.message_id}")
         return True
     outbox_store.set_state(job, "pending")
     log_event("outbox_retry", message_id=job.message_id, flow=job.flow_kind)
-    log(f"guided send retry {job.message_id}: {(sent.stderr or sent.stdout).strip()[:200]}")
+    log(f"guided send retry {job.message_id}: {(sent.raw_stderr or sent.raw_stdout).strip()[:200]}")
     return False
 
 
@@ -656,15 +624,13 @@ def sender_loop():
 _led_last = 0.0
 
 
-def refresh_led(force=False, settings=None):
+def refresh_led(force=False):
     global _led_last
     now = time.monotonic()
     if not force and now - _led_last < LED_REFRESH_S:
         return
     _led_last = now
-    settings = settings or caregiver_settings()
-    lamp_enabled = settings["arrival_signal"] in {"ring_and_lamp", "lamp_only"}
-    (led.on if queued() and lamp_enabled and not quiet_hours(settings) else led.off)()
+    (led.on if queued() and not quiet_hours() else led.off)()
 
 
 def ring_windows():
@@ -677,8 +643,11 @@ def ring_windows():
 
 
 RING_WINS = ring_windows()
-def ring_lamp_on(elapsed, ringtone_id):
-    if ringtone_id != "ding_dong":
+RING_CUSTOM = os.path.basename(RING_WAV) != "ring3.wav"
+
+
+def ring_lamp_on(elapsed):
+    if RING_CUSTOM:
         return (elapsed % 0.9) < 0.45
     return any(start <= elapsed < end for start, end in RING_WINS)
 
@@ -710,9 +679,8 @@ def maybe_ring():
     fresh = (snapshot - _known) - _seen_ever
     _known = snapshot
     _seen_ever.update(snapshot)
-    settings = caregiver_settings()
-    if fresh and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
-        ring_alert(settings=settings)
+    if fresh and not quiet_hours():
+        ring_alert()
 
 
 def maybe_manual_ring():
@@ -726,34 +694,25 @@ def maybe_manual_ring():
     ring_alert(source="dashboard")
 
 
-def ring_alert(source="new_message", settings=None):
-    settings = settings or caregiver_settings()
-    path = os.fspath(ringtone_path(settings))
-    manual = source == "dashboard"
-    signal = "ring_and_lamp" if manual else settings["arrival_signal"]
-    play_ring = signal in {"ring_and_lamp", "ring_only"}
-    flash_lamp = signal in {"ring_and_lamp", "lamp_only"}
-    if play_ring and not os.path.exists(path):
-        log(f"ring skipped ({source}): ringtone unavailable")
+def ring_alert(source="new_message"):
+    if not os.path.exists(RING_WAV):
+        log(f"ring skipped ({source}): missing {RING_WAV}")
         return
     log(f"ringing: {source}")
     log_event("ring", source=source)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
+    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, RING_WAV])
     started = time.monotonic()
     try:
-        while (process is not None and process.poll() is None) or (
-            process is None and time.monotonic() - started < 9
-        ):
+        while process.poll() is None:
             elapsed = time.monotonic() - started
-            (led.on if flash_lamp and ring_lamp_on(elapsed, settings["ringtone_id"]) else led.off)()
+            (led.on if ring_lamp_on(elapsed) else led.off)()
             if button.is_pressed:
-                if process is not None:
-                    process.terminate()
+                process.terminate()
                 log("ring cut by press")
                 break
             time.sleep(0.02)
     finally:
-        if process is not None and process.poll() is None:
+        if process.poll() is None:
             process.wait()
         refresh_led(force=True)
 
@@ -812,22 +771,13 @@ def react_played(meta):
     if not meta or not meta.get("msgid") or not meta.get("chat"):
         return
     try:
-        command = [
-            WACLI_BIN,
-            "send",
-            "react",
-            "--to",
+        get_provider(meta.get("channel", "whatsapp")).react(
             meta["chat"],
-            "--id",
             meta["msgid"],
-            "--reaction",
             "🎧",
-            "--lock-wait",
-            LOCK_WAIT,
-        ]
-        if meta.get("sender_jid"):
-            command += ["--sender", meta["sender_jid"]]
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            sender=meta.get("sender_jid"),
+            lock_wait=LOCK_WAIT,
+        )
     except Exception as exc:
         log(f"react error: {exc}")
 
@@ -954,13 +904,23 @@ def play_warning_for_approval(path, session_id=None):
     return approved
 
 
-def presence(kind, recipient):
-    subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
-    subprocess.Popen(
-        [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", LOCK_WAIT],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+_provider_cache = {}
+
+
+def get_provider(channel):
+    provider = _provider_cache.get(channel)
+    if provider is None:
+        kwargs = {"wacli_bin": WACLI_BIN} if channel == "whatsapp" else {}
+        provider = provider_for_channel(channel, **kwargs)
+        _provider_cache[channel] = provider
+    return provider
+
+
+def presence(kind, recipient, channel="whatsapp"):
+    try:
+        get_provider(channel).set_presence(kind, recipient, lock_wait=LOCK_WAIT)
+    except Exception as exc:
+        log(f"presence error: {exc}")
 
 
 def cleanup_temp_recordings():
@@ -970,7 +930,7 @@ def cleanup_temp_recordings():
             path.unlink()
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60):
+def capture_guided_recording(recipient, session_id=None, channel="whatsapp"):
     global _recording
     _recording = True
     led.on()
@@ -998,7 +958,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
     )
     started = time.monotonic()
     vad.start(started)
-    presence("recording", recipient)
+    presence("recording", recipient, channel)
     presence_last = started
     closed_since = None
     stopped_by_press = False
@@ -1021,10 +981,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
                     closed_since = None
                 if vad.silence_expired(now):
                     break
-                if now - started >= max_seconds:
-                    break
                 if now - presence_last >= 8:
-                    presence("recording", recipient)
+                    presence("recording", recipient, channel)
                     presence_last = now
                 if process.poll() is not None:
                     raise RuntimeError("arecord exited unexpectedly")
@@ -1050,7 +1008,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
                 pass
         raise
     finally:
-        presence("paused", recipient)
+        presence("paused", recipient, channel)
         led.off()
         _recording = False
         if stopped_by_press:
@@ -1067,18 +1025,16 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id, max_seconds):
+    def __init__(self, recipient, session_id, channel="whatsapp"):
         self.recipient = recipient
         self.session_id = session_id
-        self.max_seconds = max_seconds
+        self.channel = channel
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
 
     def record(self):
-        return capture_guided_recording(
-            self.recipient, self.session_id, self.max_seconds
-        )
+        return capture_guided_recording(self.recipient, self.session_id, self.channel)
 
     def wait_for_approval(self, timeout):
         return wait_for_approval(timeout, self.session_id)
@@ -1118,10 +1074,8 @@ def play_next_legacy():
     refresh_led(force=True)
 
 
-def record_and_send_legacy(settings=None):
+def record_and_send_legacy():
     global _recording
-    settings = settings or caregiver_settings()
-    max_seconds = settings["max_recording_seconds"]
     intent = wait_for_hold_intent(lambda: button.is_pressed, MIN_HOLD_S, POLL_S)
     if intent == "play":
         wait_for_stable_open()
@@ -1132,6 +1086,7 @@ def record_and_send_legacy(settings=None):
         block_unavailable_recipient()
         return
     recipient = context["contact"]["jid"]
+    channel = context["contact"].get("channel", "whatsapp")
     if context["via_card"] and not ensure_nfc_confirmation(context):
         log_event("nfc_confirmation_failed")
         return
@@ -1156,7 +1111,7 @@ def record_and_send_legacy(settings=None):
             "-c",
             "1",
             "-d",
-            str(max_seconds + 2),
+            str(MAX_SECONDS + 2),
             part,
         ]
     )
@@ -1170,7 +1125,7 @@ def record_and_send_legacy(settings=None):
             if now - started >= MIN_HOLD_S and (
                 presence_last is None or now - presence_last >= 8
             ):
-                presence("recording", recipient)
+                presence("recording", recipient, channel)
                 presence_last = now
             if not button.is_pressed:
                 open_since = open_since or now
@@ -1178,25 +1133,36 @@ def record_and_send_legacy(settings=None):
                     break
             else:
                 open_since = None
-            if now - started >= max_seconds:
-                break
-        held = min(time.monotonic() - started, max_seconds)
+            if now - started > MAX_SECONDS + 4:
+                led.off()
+                recorder.send_signal(signal.SIGINT)
+                recorder.wait()
+                os.remove(part)
+                beep("fail")
+                if presence_last:
+                    presence("paused", recipient, channel)
+                wait_for_stable_open()
+                return
+        held = time.monotonic() - started
         led.off()
         recorder.send_signal(signal.SIGINT)
         recorder.wait()
         if presence_last:
-            presence("paused", recipient)
+            presence("paused", recipient, channel)
+        if held >= MAX_SECONDS:
+            os.remove(part)
+            beep("fail")
+            return
         final_path = part[:-5] + f"-{held:.1f}.wav"
-        bind_legacy_job_recipient(final_path, recipient)
+        bind_legacy_job_recipient(final_path, recipient, channel)
         os.replace(part, final_path)
         beep("sent")
     finally:
         _recording = False
 
 
-def run_guided_once(settings=None):
+def run_guided_once():
     global _guided_active
-    settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
     claim = claim_oldest()
     flow_kind = "reply" if claim else "standalone"
@@ -1205,6 +1171,9 @@ def run_guided_once(settings=None):
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )
+    channel = metadata.get("channel", "whatsapp") if metadata else (
+        context["contact"].get("channel", "whatsapp") if context else "whatsapp"
+    )
     if not claim:
         if context is None:
             block_unavailable_recipient()
@@ -1212,13 +1181,7 @@ def run_guided_once(settings=None):
         if context["via_card"] and not ensure_nfc_confirmation(context):
             log_event("nfc_confirmation_failed")
             return
-    claim_recipient_allowed = False
-    if claim and recipient:
-        try:
-            claim_recipient_allowed = recipient in ContactStore(CONTACTS_FILE).allowed_jids()
-        except (ContactError, OSError):
-            claim_recipient_allowed = False
-    if claim and (not recipient or not claim_recipient_allowed):
+    if claim and not recipient:
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
             play_audio_ordinary(claim["path"])
@@ -1230,7 +1193,7 @@ def run_guided_once(settings=None):
         return
 
     led.off()
-    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"])
+    io = PiGuidedIO(recipient, session_id, channel)
 
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
@@ -1255,7 +1218,8 @@ def run_guided_once(settings=None):
             not_sent_path=str(PROMPTS["not_sent"]),
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
-            auto_record_after_incoming=settings["after_listening"] == "invite_reply",
+            auto_record_after_incoming=AUTO_RECORD_AFTER_INCOMING,
+            channel=channel,
         )
         if claim:
             finish_claim(claim)
@@ -1270,7 +1234,7 @@ def run_guided_once(settings=None):
     finally:
         _guided_active = False
         ring_waiting = should_ring_after_unsent_session(
-            outcome, bool(queued()), quiet_hours(settings)
+            outcome, bool(queued()), quiet_hours()
         )
         mark_queue_known()
         refresh_led(force=True)
@@ -1311,24 +1275,23 @@ def main():
             ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1
 
-    try:
-        validate_prompts()
-    except RuntimeError as exc:
-        log(str(exc))
-        return 2
+    if GUIDED_REPLY:
+        try:
+            validate_prompts()
+        except RuntimeError as exc:
+            log(str(exc))
+            return 2
 
     threading.Thread(target=sender_loop, daemon=True).start()
     button = Button(BUTTON_PIN)
     led = LED(LED_PIN)
-    apply_master_volume()
     if button.is_pressed:
         log("switch CLOSED at startup - waiting for it to open")
     wait_for_stable_open()
     refresh_led(force=True)
-    startup_settings = caregiver_settings()
     log(
-        f'armed: recording_mode={startup_settings["recording_mode"]} '
-        f'after_listening={startup_settings["after_listening"]} '
+        f"armed: guided_reply={int(GUIDED_REPLY)} "
+        f"auto_record_after_incoming={int(AUTO_RECORD_AFTER_INCOMING)} "
         f"routing_mode={routing_mode()} "
         f"({len(queued())} queued, "
         f"{len(outbox_store.jobs()) + len(legacy_outbox_files())} unsent)"
@@ -1338,7 +1301,6 @@ def main():
         wait_for_stable_open()
         while not button.is_pressed:
             time.sleep(POLL_S)
-            apply_master_volume()
             play_pending_nfc_announcement()
             maybe_play_pending_listened()
             refresh_led()
@@ -1353,22 +1315,19 @@ def main():
                 break
         if not solid:
             continue
-        interaction_settings = caregiver_settings()
         try:
-            if interaction_settings["recording_mode"] == "tap_review":
+            if GUIDED_REPLY:
                 # The session starts from this press only after its release; it can
                 # never be carried into incoming audio, countdown, or recording.
                 acknowledge_guided_press("start_session")
                 wait_for_stable_open()
-                run_guided_once(interaction_settings)
+                run_guided_once()
             else:
-                record_and_send_legacy(interaction_settings)
+                record_and_send_legacy()
         except Exception as exc:
             log(f"button flow error: {exc}")
             log_event(
-                "button_flow_error",
-                recording_mode=interaction_settings["recording_mode"],
-                error=type(exc).__name__,
+                "button_flow_error", guided=GUIDED_REPLY, error=type(exc).__name__
             )
             if not _guided_active:
                 beep("fail")
