@@ -14,6 +14,8 @@
 | HiLetgo PN532 NFC/RFID V3 module kit | $9 | [Amazon](https://www.amazon.com/dp/B01I1J17LC) |
 | **Approx. total** | **$150** | |
 
+The parts above are the reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
+
 ## Enclosure
 
 The prototype Button Box enclosure has two printable parts:
