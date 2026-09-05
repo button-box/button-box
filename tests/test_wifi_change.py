@@ -2,21 +2,16 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from messagebox.wifi_change import PROOFS, execute_change, load_status, request_change
-
-
-class Checker:
-    def __init__(self, *results):
-        self.results = iter(results)
-
-    def check(self):
-        return next(self.results)
+from messagebox.onboarding.connectivity import ConnectivityChecker
+from messagebox.wifi_change import execute_change, load_status, request_change
 
 
 class Runner:
-    def __init__(self, uuids):
+    def __init__(self, uuids, https_codes=("204",)):
         self.uuids = iter(uuids)
+        self.https_codes = iter(https_codes)
         self.calls = []
 
     def __call__(self, command, **kwargs):
@@ -24,6 +19,18 @@ class Runner:
         stdout = ""
         if "GENERAL.CON-UUID" in command:
             stdout = next(self.uuids) + "\n"
+        elif "GENERAL.STATE,GENERAL.TYPE" in command:
+            stdout = "GENERAL.STATE:100 (connected)\nGENERAL.TYPE:wifi\n"
+        elif command[0] == "iw":
+            stdout = "Interface wlan0\n\ttype managed\n"
+        elif command[:3] == ["ip", "-4", "-o"]:
+            stdout = "2: wlan0 inet 192.0.2.8/24 scope global wlan0\n"
+        elif command[0] == "ip":
+            stdout = "default via 192.0.2.1 dev wlan0\n"
+        elif command[0] == "getent":
+            stdout = "192.0.2.10 STREAM connectivitycheck.gstatic.com\n"
+        elif command[0] == "curl":
+            stdout = next(self.https_codes)
         return subprocess.CompletedProcess(command, 0, stdout, "")
 
 
@@ -46,34 +53,35 @@ class WifiChangeTests(unittest.TestCase):
     def test_success_keeps_password_out_of_arguments_and_deletes_old_only_after_proof(self):
         self.submit()
         runner = Runner(["1111-aaaa", "2222-bbbb"])
+        fallback = mock.Mock()
         outcome = execute_change(
             request_path=self.request,
             status_path=self.status,
             runner=runner,
-            checker=Checker({"ok": True, "proof": sorted(PROOFS)}),
+            checker=ConnectivityChecker(command_runner=runner, attempts=1),
+            fallback=fallback,
             clock=lambda: 1000,
         )
         self.assertEqual(outcome, "connected")
+        fallback.assert_not_called()
         commands = [command for command, _kwargs in runner.calls]
         self.assertNotIn("private-password", " ".join(" ".join(command) for command in commands))
         connect = next(call for call in runner.calls if "connect" in call[0])
         self.assertEqual(connect[1]["input"], "private-password\n")
         self.assertEqual(commands[-1], ["nmcli", "connection", "delete", "uuid", "1111-aaaa"])
+        self.assertEqual(commands[-2][0], "curl")
         self.assertEqual(load_status(self.status)["status"], "connected")
         self.assertFalse(self.request.exists())
 
     def test_failed_candidate_rolls_back_old_profile_without_hotspot(self):
         self.submit()
-        runner = Runner(["1111-aaaa", "2222-bbbb"])
+        runner = Runner(["1111-aaaa", "2222-bbbb"], https_codes=("200", "204"))
         fallback_calls = []
         outcome = execute_change(
             request_path=self.request,
             status_path=self.status,
             runner=runner,
-            checker=Checker(
-                {"ok": False, "proof": []},
-                {"ok": True, "proof": sorted(PROOFS)},
-            ),
+            checker=ConnectivityChecker(command_runner=runner, attempts=1),
             fallback=lambda **kwargs: fallback_calls.append(kwargs),
             clock=lambda: 1000,
         )
@@ -85,19 +93,19 @@ class WifiChangeTests(unittest.TestCase):
             commands,
         )
         self.assertEqual(load_status(self.status)["status"], "rolled_back")
+        self.assertNotIn(["nmcli", "connection", "delete", "uuid", "1111-aaaa"], commands)
+        self.assertEqual(commands[-1], ["nmcli", "connection", "delete", "uuid", "2222-bbbb"])
+        self.assertEqual(commands[-2][0], "curl")
 
     def test_failed_candidate_and_rollback_reopen_hotspot_without_enabling_units(self):
         self.submit()
-        runner = Runner(["1111-aaaa", "2222-bbbb"])
+        runner = Runner(["1111-aaaa", "2222-bbbb"], https_codes=("200", "200"))
         fallback_calls = []
         outcome = execute_change(
             request_path=self.request,
             status_path=self.status,
             runner=runner,
-            checker=Checker(
-                {"ok": False, "proof": []},
-                {"ok": False, "proof": []},
-            ),
+            checker=ConnectivityChecker(command_runner=runner, attempts=1),
             fallback=lambda **kwargs: fallback_calls.append(kwargs),
             clock=lambda: 1000,
         )
