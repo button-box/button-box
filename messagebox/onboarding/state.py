@@ -12,6 +12,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from messagebox.onboarding.connectivity import PROOFS
+
 
 VERSION = 1
 
@@ -43,16 +45,6 @@ SAFE_ERRORS = frozenset(
         "DNS_FAILED",
         "HTTPS_204_FAILED",
         "CHECK_COMMAND_FAILED",
-    }
-)
-PROOFS = frozenset(
-    {
-        "wlan0_nm_active",
-        "wlan0_non_ap",
-        "wlan0_ipv4",
-        "wlan0_default_route",
-        "approved_dns",
-        "wlan0_https_204",
     }
 )
 WHATSAPP_PROOFS = frozenset(

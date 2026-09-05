@@ -10,21 +10,13 @@ import time
 import unicodedata
 from pathlib import Path
 
-from messagebox.onboarding.connectivity import ConnectivityChecker
+from messagebox.onboarding.connectivity import PROOFS, ConnectivityChecker
 from messagebox.onboarding.reset import perform_reset
 from messagebox.runtime_paths import SETTINGS_DIR
 
 
 REQUEST_FILE = SETTINGS_DIR / "wifi-change.json"
 STATUS_FILE = SETTINGS_DIR / "wifi-change-status.json"
-PROOFS = {
-    "wlan0_nm_active",
-    "wlan0_non_ap",
-    "wlan0_ipv4",
-    "wlan0_default_route",
-    "wlan0_dns",
-    "wlan0_https",
-}
 
 
 class WifiChangeError(ValueError):

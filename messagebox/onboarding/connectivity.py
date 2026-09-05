@@ -18,6 +18,9 @@ PROOF_ADDRESS = "wlan0_ipv4"
 PROOF_ROUTE = "wlan0_default_route"
 PROOF_DNS = "approved_dns"
 PROOF_HTTPS = "wlan0_https_204"
+PROOFS = frozenset(
+    {PROOF_NM, PROOF_MODE, PROOF_ADDRESS, PROOF_ROUTE, PROOF_DNS, PROOF_HTTPS}
+)
 
 
 class ConnectivityChecker:
