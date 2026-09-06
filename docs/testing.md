@@ -39,6 +39,11 @@ For installation and consumer onboarding, test:
   is unavailable, and the distinct read/success tones
 - Reload within and after the two-minute pending-tag window, completion with and
   without mappings, and the onboarding-to-runtime service handoff
+- After both Skip and Done, verify from another device on the same Wi-Fi that
+  the printed `.local` hostname resolves to the box's current Wi-Fi IPv4 address
+  and that the dashboard opens. Repeat after the advertised mDNS records expire
+  from client caches and after a cold reboot. A listening port or a successful
+  request made on the box itself is insufficient for this check.
 - Reboot and power loss during onboarding transitions
 
 For the standalone developer flow and runtime, test:

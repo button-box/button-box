@@ -116,6 +116,9 @@ def complete(
         enabled_path.unlink()
         removed_gate = True
         run(["systemctl", "stop", "comitup.service"], check=True)
+        # Comitup's mDNS records disappear on exit. Let Avahi republish the
+        # hostname before the dashboard takes over, including its IPv4 record.
+        run(["systemctl", "restart", "avahi-daemon.service"], check=True)
         run(["systemctl", "start", RUNTIME_TARGET], check=True)
         Path(request_path).unlink(missing_ok=True)
     except (OSError, subprocess.SubprocessError):

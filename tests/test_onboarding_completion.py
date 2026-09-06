@@ -65,6 +65,80 @@ class CompletionTests(unittest.TestCase):
         self.assertFalse(self.request.exists())
 
     @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
+    def test_handoff_restores_hostname_after_setup_publisher_exits(self, _geteuid):
+        hostname_available = True
+        setup_running = True
+
+        def discovery_runner(command, check=False):
+            nonlocal hostname_available, setup_running
+            self.calls.append((command, check))
+            if command == ["systemctl", "stop", "comitup.service"]:
+                setup_running = False
+                hostname_available = False
+            elif command == ["systemctl", "restart", "avahi-daemon.service"]:
+                self.assertFalse(setup_running)
+                self.assertTrue(check)
+                hostname_available = True
+            elif command == ["systemctl", "start", "messagebox.target"]:
+                self.assertTrue(hostname_available, "dashboard would lose its local URL")
+            return subprocess.CompletedProcess(command, 0)
+
+        complete(
+            request_path=self.request,
+            enabled_path=self.enabled,
+            contacts_path=self.contacts_path,
+            recipients=self.recipients,
+            run=discovery_runner,
+            sleep=lambda _seconds: None,
+        )
+        self.assertFalse(self.enabled.exists())
+        self.assertFalse(self.request.exists())
+
+    @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
+    def test_failed_hostname_restart_preserves_setup_for_retry(self, _geteuid):
+        self.contacts.assign_card(PERSON, CARD_A)
+        original_contacts = self.contacts_path.read_bytes()
+
+        def failing_run(command, check=False):
+            self.calls.append((command, check))
+            if command == ["systemctl", "restart", "avahi-daemon.service"]:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0)
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            complete(
+                request_path=self.request,
+                enabled_path=self.enabled,
+                contacts_path=self.contacts_path,
+                recipients=self.recipients,
+                run=failing_run,
+                sleep=lambda _seconds: None,
+            )
+        self.assertEqual(self.enabled.read_text(encoding="ascii"), "enabled\n")
+        self.assertEqual(self.enabled.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(self.request.exists())
+        self.assertEqual(self.contacts_path.read_bytes(), original_contacts)
+        commands = [call[0] for call in self.calls]
+        self.assertNotIn(["systemctl", "start", "messagebox.target"], commands)
+        self.assertEqual(commands[-2:], [
+            ["systemctl", "stop", "messagebox.target"],
+            ["systemctl", "start", "comitup.service"],
+        ])
+
+        result = complete(
+            request_path=self.request,
+            enabled_path=self.enabled,
+            contacts_path=self.contacts_path,
+            recipients=self.recipients,
+            run=self.command_runner,
+            sleep=lambda _seconds: None,
+        )
+        self.assertEqual(result, {"has_cards": True})
+        self.assertEqual(self.contacts_path.read_bytes(), original_contacts)
+        self.assertFalse(self.enabled.exists())
+        self.assertFalse(self.request.exists())
+
+    @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
     def test_any_mapping_enables_fail_closed_nfc_runtime(self, _geteuid):
         self.contacts.assign_card(PERSON, CARD_A)
         complete(
