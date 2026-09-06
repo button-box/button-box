@@ -51,9 +51,13 @@ one-tag/one-recipient transaction; tags are never written.
 
 Skip or Done creates a fixed, content-free completion request. The root gate
 validates the completed recipient state and default, enables the button, sync,
-poller, canonical dashboard, and NFC reader, removes
-the setup gate, and starts `messagebox.target`. A failed handoff restores setup
-instead of leaving both modes partially active.
+poller, canonical dashboard, and NFC reader, removes the setup gate, stops
+Comitup, restarts Avahi, and starts `messagebox.target`. Comitup publishes mDNS
+records during setup; stopping it can remove the hostname's IPv4 record after
+a collision with Avahi's own registration. Restarting Avahi after Comitup exits
+republishes the local hostname for runtime. The restart must succeed before
+runtime starts. A failed handoff restores the setup gate and requests Comitup
+restart, preserving the completion request for retry.
 
 `messagebox-wifi-reset.service` is a one-shot boot check for the physical Wi-Fi
 reset gesture. The setup portal accesses Comitup through a restricted
