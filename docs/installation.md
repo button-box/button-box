@@ -99,3 +99,28 @@ guesses the default while mapped-card state is unsafe. Do not continue with
 
 Before deployment, run the [physical test scenarios](testing.md#physical-test-scenarios)
 on a spare device.
+
+## WhatsApp store conflicts during setup
+
+`STORE_CONFLICT` means the worker cannot safely install a newly paired store.
+It checks this before starting phone-code pairing and checks again when saving
+the result. Even unauthenticated database files count as a conflict: a failed
+authentication check alone does not prove that a store has no private data.
+
+For operator recovery, first stop the pairing worker and verify that the runtime
+services and all wacli processes are inactive. Preserve the private pairing state
+and existing store before changing either. Check authentication with wacli's
+read-only status command, then inspect both SQLite databases in read-only mode.
+Only a known initialization-only store with no device, session, contact, chat,
+message, or other account data may be moved aside into a private recovery backup.
+Unknown files, nonempty account tables, corrupt databases, symlinks, or active
+writers require investigation; do not delete or overwrite them to bypass the check.
+
+After archiving a verified initialization-only store, recreate the live directory
+with its original ownership and mode, reset only the failed pairing state, and
+restart the pairing worker and the previously active setup portal. Stopping the
+worker also stops its dependent portal; starting the worker alone does not
+restore that portal. Keep the backup until a new pairing and the physical
+send/reply/playback proof succeed. The caregiver must perform the new pairing;
+an active entry in the phone's Linked devices list does not establish that the
+box saved that session successfully.

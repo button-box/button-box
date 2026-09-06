@@ -427,6 +427,32 @@ class WhatsAppPairingTests(unittest.TestCase):
         with self.assertRaisesRegex(PairingError, "pairing_state_unavailable"):
             engine.public_state()
 
+    def test_store_conflict_is_rejected_before_linking_and_retry_preserves_store(self):
+        self.live_store.mkdir()
+        existing = self.live_store / "session.db"
+        existing.write_bytes(b"preserve even unauthenticated database files")
+        engine = self.engine()
+        with mock.patch("messagebox.onboarding.whatsapp.threading.Thread") as worker:
+            for _ in range(2):
+                state = engine.start("+14155550123")
+                self.assertEqual(state["safe_error"], "STORE_CONFLICT")
+                self.assertEqual(state["status"], "failed")
+            worker.assert_not_called()
+        self.assertEqual(engine._load_state()["attempt"], 0)
+        self.assertFalse(engine.stage.exists())
+        self.assertEqual(existing.read_bytes(), b"preserve even unauthenticated database files")
+
+    def test_start_rejects_interrupted_promotion_and_symlinked_destination(self):
+        engine = self.engine()
+        engine.backup.mkdir()
+        with mock.patch("messagebox.onboarding.whatsapp.threading.Thread") as worker:
+            self.assertEqual(engine.start("+14155550123")["safe_error"], "STORE_CONFLICT")
+            engine.backup.rmdir()
+            self.live_store.symlink_to(self.root / "missing")
+            self.assertEqual(engine.start("+14155550123")["safe_error"], "STORE_CONFLICT")
+            worker.assert_not_called()
+        self.assertTrue(self.live_store.is_symlink())
+
     def test_store_conflict_fails_closed_and_removes_candidates_and_stage(self):
         self.live_store.mkdir()
         (self.live_store / "existing.db").write_text("preserve", encoding="ascii")
