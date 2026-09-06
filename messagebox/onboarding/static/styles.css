@@ -213,7 +213,7 @@ h1:focus-visible { outline: none; }
 .recipient-list { display: grid; gap: 0.65rem; margin: 1.25rem 0; padding: 0; list-style: none; }
 .recipient-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: center;
   border: 1px solid var(--line);
@@ -223,7 +223,7 @@ h1:focus-visible { outline: none; }
 }
 .recipient-row strong { display: block; overflow-wrap: anywhere; }
 .recipient-row span { display: block; margin-top: 0.2rem; color: var(--muted); font-size: 0.8rem; text-transform: capitalize; }
-.recipient-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; }
+.recipient-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.5rem; }
 button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 .section-title { margin: 1.5rem 0 -0.5rem; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .manual-recipient { margin: 1.5rem 0; border-top: 1px solid var(--line); padding-top: 0.25rem; }
