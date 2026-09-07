@@ -257,7 +257,8 @@ sudo install -d -o root -g root -m 0755 \
   "$APP_DIR/ringtones" \
   "$APP_DIR/sounds/guided-reply" \
   "$APP_DIR/sounds/listen-receipts" \
-  "$APP_DIR/sounds/nfc"
+  "$APP_DIR/sounds/nfc" \
+  "$APP_DIR/sounds/feedback"
 sudo install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
 sudo install -d -o root -g "$ONBOARDING_GROUP" -m 0750 "$ONBOARDING_CONFIG_DIR"
 sudo install -d -o "$ONBOARDING_USER" -g "$ONBOARDING_GROUP" -m 0700 "$ONBOARDING_DATA_DIR"
@@ -305,7 +306,7 @@ sudo rm -f "$ONBOARDING_DATA_DIR/session.key"
 
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/config/requirements-nfc.txt" "$APP_DIR/config/requirements-nfc.txt"
-for directory in guided-reply listen-receipts nfc; do
+for directory in guided-reply listen-receipts nfc feedback; do
   for source in "$REPO_DIR/sounds/$directory"/*; do
     if [ -f "$source" ]; then
       sudo install -o root -g root -m 0644 "$source" "$APP_DIR/sounds/$directory/$(basename "$source")"
