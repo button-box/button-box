@@ -3,6 +3,7 @@
 
 import json
 import os
+import queue
 import select
 import signal
 import subprocess
@@ -65,6 +66,9 @@ LISTENED_FALLBACK_WAV = os.environ.get(
     "MSGBOX_LISTENED_FALLBACK_WAV",
     str(APP_DIR / "sounds" / "listen-receipts" / "someone-listened.wav"),
 )
+SEND_SUCCESS_WAV = str(APP_DIR / "sounds" / "feedback" / "sent-swoosh.wav")
+send_success_notices = queue.SimpleQueue()
+
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
@@ -116,7 +120,6 @@ BEEPS = {
     "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
     "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.08", "0"),
     "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12", "0"),
-    "sent": (str(RUNTIME_DIR / "beep-sent.wav"), "1320", "0.12", "0"),
     "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
 }
 
@@ -550,6 +553,7 @@ def send_legacy_outbox_file(fname):
             os.remove(metadata_path)
         except FileNotFoundError:
             pass
+        send_success_notices.put(time.monotonic())
         log(f"SENT legacy {fname} (queued {wait_s}s)")
         log_event(
             "sent",
@@ -617,6 +621,7 @@ def send_guided_job(job):
             flow=job.flow_kind,
         )
         outbox_store.complete(job)
+        send_success_notices.put(time.monotonic())
         log_event(
             "sent",
             flow=job.flow_kind,
@@ -915,6 +920,26 @@ def play_pending_listened(limit=4):
     return played
 
 
+def maybe_play_send_success():
+    """The main audio owner plays accepted-send cues only while idle."""
+    if _recording or _guided_active or button.is_pressed:
+        return False
+    try:
+        accepted_at = send_success_notices.get_nowait()
+    except queue.Empty:
+        return False
+    # A late cue could be mistaken for confirmation of a newer recording.
+    if time.monotonic() - accepted_at > 30:
+        return False
+    try:
+        play_audio_ordinary(SEND_SUCCESS_WAV)
+    except (OSError, subprocess.SubprocessError):
+        # Audio failure must never turn an accepted message into a retry.
+        log_event("send_cue_unavailable")
+        return False
+    return True
+
+
 def maybe_play_pending_listened():
     """Announce new played receipts promptly whenever the speaker is idle."""
     busy = _recording or _guided_active or button.is_pressed
@@ -1196,7 +1221,6 @@ def record_and_send_legacy(settings=None):
         final_path = part[:-5] + f"-{held:.1f}.wav"
         bind_legacy_job_recipient(final_path, recipient)
         os.replace(part, final_path)
-        beep("sent")
     finally:
         _recording = False
 
@@ -1346,6 +1370,7 @@ def main():
         while not button.is_pressed:
             time.sleep(POLL_S)
             apply_master_volume()
+            maybe_play_send_success()
             play_pending_nfc_announcement()
             maybe_play_pending_listened()
             refresh_led()
