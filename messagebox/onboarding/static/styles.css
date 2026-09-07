@@ -334,3 +334,9 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+.card-pairing-status {
+  grid-column: 1 / -1;
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+}

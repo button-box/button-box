@@ -233,6 +233,34 @@ class NfcTests(unittest.TestCase):
         )
         self.assertIsNone(self.router.active_contact())
 
+    def test_pairing_receipt_requires_committed_matching_attempt(self):
+        self.add_grandma()
+        request = self.router.begin_enrollment(label="Grandma", jid=GRANDMA)
+        attempt = request["request_id"]
+        self.assertIsNone(self.enrollment.outcome(attempt))
+        self.router.card_seen(CARD_ONE, new_presentation=True)
+        self.assertEqual(self.enrollment.outcome(attempt), {"status": "success"})
+        self.assertIsNone(self.enrollment.outcome("other-attempt"))
+        restarted = EnrollmentStore(self.enrollment_path, clock=self.clock)
+        self.assertEqual(restarted.outcome(attempt), {"status": "success"})
+        self.clock.advance(301)
+        self.assertIsNone(restarted.outcome(attempt))
+
+    def test_cancelled_expired_and_failed_pairing_have_no_success_receipt(self):
+        self.add_grandma()
+        cancelled = self.router.begin_enrollment(label="Grandma", jid=GRANDMA)
+        self.router.cancel_enrollment(cancelled["request_id"])
+        self.assertIsNone(self.enrollment.outcome(cancelled["request_id"]))
+        expired = self.router.begin_enrollment(label="Grandma", jid=GRANDMA, ttl_s=1)
+        self.clock.advance(2)
+        self.assertIsNone(self.enrollment.active())
+        self.assertIsNone(self.enrollment.outcome(expired["request_id"]))
+        failed = self.router.begin_enrollment(label="Grandma", jid=GRANDMA)
+        with mock.patch.object(self.contacts, "enroll_card", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.router.card_seen(CARD_ONE, new_presentation=True)
+        self.assertIsNone(self.enrollment.outcome(failed["request_id"]))
+
     def test_enrollment_is_locked_expires_and_cancels_conditionally(self):
         request = self.router.begin_enrollment(
             label="Grandma", jid=GRANDMA, ttl_s=10

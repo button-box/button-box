@@ -336,6 +336,25 @@ class EnrollmentStore:
             _atomic_json(self.path, request)
             return copy.deepcopy(request)
 
+    def outcome(self, request_id):
+        """Return only a matching, recently committed pairing receipt."""
+        with self.locked():
+            result = _load_json(self.path.with_suffix(".result.json"))
+            if (
+                result is not None
+                and result.get("request_id") == request_id
+                and type(result.get("completed_at")) in (int, float)
+                and 0 <= self.clock() - result.get("completed_at", 0) <= 300
+            ):
+                return {"status": "success"}
+            return None
+
+    def _record_success_locked(self, request):
+        _atomic_json(self.path.with_suffix(".result.json"), {
+            "request_id": request["request_id"],
+            "completed_at": self.clock(),
+        })
+
     def complete(self, request_id):
         with self.locked():
             request = self._active_locked()
@@ -592,6 +611,7 @@ class NfcRouter:
                 uid=uid,
                 prompt=contact.get("card_clip", ""),
             )
+            self.enrollment._record_success_locked(request)
             self.enrollment._remove_locked()
             return result
 

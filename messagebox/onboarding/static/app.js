@@ -34,6 +34,8 @@ let recipientsData = null;
 let managerOpen = false;
 let nfcData = null;
 let nfcPollTimer = null;
+let runtimePairing = null;
+let runtimePairingGeneration = 0;
 let currentState = null;
 let currentSettings = null;
 
@@ -306,6 +308,7 @@ function recipientRow(recipient, actions = []) {
     button.type = "button";
     button.className = action === "remove" ? "danger-button compact" : "compact";
     button.textContent = label;
+    if (action === "pair-card") button.disabled = Boolean(runtimePairing?.pending);
     button.addEventListener("click", () => {
       if (action === "pair-card") beginRuntimeNfc(recipient.token, recipient.label, button);
       else mutateRecipient(action, recipient.token, button);
@@ -313,6 +316,14 @@ function recipientRow(recipient, actions = []) {
       controls.append(button);
     });
     row.append(controls);
+    if (runtimePairing?.token === recipient.token) {
+      const status = document.createElement("p");
+      status.className = "card-pairing-status";
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      status.textContent = runtimePairing.message;
+      row.append(status);
+    }
   }
   return row;
 }
@@ -429,50 +440,81 @@ async function deferRecipients() {
   }
 }
 
+function setRuntimePairingMessage(message) {
+  if (!runtimePairing) return;
+  runtimePairing.message = message;
+  const list = document.getElementById("configured-recipient-list");
+  const status = list.querySelector(".card-pairing-status");
+  if (status) status.textContent = message;
+  document.getElementById("manager-status").textContent = message;
+}
+
 async function beginRuntimeNfc(token, label, button) {
+  const generation = ++runtimePairingGeneration;
+  window.clearTimeout(nfcPollTimer);
+  runtimePairing = { token, label, pending: true, message: `Starting card pairing for ${label}…` };
+  renderRecipientManager(recipientsData);
   button.disabled = true;
-  const status = document.getElementById("manager-status");
-  status.textContent = `Starting card pairing for ${label}…`;
   try {
-    await formRequest("/nfc/enroll", { token });
+    const result = await formRequest("/nfc/enroll", { token });
+    if (generation !== runtimePairingGeneration) return;
+    runtimePairing.attempt = result.attempt;
     document.getElementById("cancel-runtime-nfc").hidden = false;
-    status.textContent = `Hold a card over Button Box for ${label}. You have two minutes.`;
-    pollRuntimeNfc(true);
+    setRuntimePairingMessage(`Hold a card over Button Box for ${label}. You have two minutes.`);
+    pollRuntimeNfc(generation);
   } catch (error) {
-    status.textContent = error.message;
-    button.disabled = false;
+    if (generation === runtimePairingGeneration) {
+      runtimePairing.pending = false;
+      setRuntimePairingMessage(error.message);
+      renderRecipientManager(recipientsData);
+    }
   }
 }
 
-async function pollRuntimeNfc(wasWaiting = false) {
+async function pollRuntimeNfc(generation = runtimePairingGeneration) {
   window.clearTimeout(nfcPollTimer);
+  if (!runtimePairing?.attempt) return;
   try {
-    const state = await request("/api/nfc-runtime");
+    const state = await request(`/api/nfc-runtime?attempt=${encodeURIComponent(runtimePairing.attempt)}`);
+    if (generation !== runtimePairingGeneration) return;
     if (state.status === "waiting") {
-      document.getElementById("manager-status").textContent = state.healthy
-        ? `Waiting for a card for ${state.recipient}…`
-        : "Waiting for the NFC reader. Check its connection if this continues.";
-      nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(true), 800);
-    } else if (wasWaiting) {
+      setRuntimePairingMessage(state.healthy
+        ? `Waiting for a card for ${runtimePairing.label}…`
+        : "Waiting for the NFC reader. Check its connection if this continues.");
+      nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(generation), 800);
+    } else {
+      runtimePairing.pending = false;
       document.getElementById("cancel-runtime-nfc").hidden = true;
-      await loadRecipients({ manager: true });
-      document.getElementById("manager-status").textContent = "Card paired or reassigned.";
+      setRuntimePairingMessage(state.status === "success"
+        ? `Card linked to ${runtimePairing.label} ✓`
+        : "Pairing ended without confirmation. Try pairing the card again.");
+      const data = await request("/api/recipients");
+      if (generation === runtimePairingGeneration) renderRecipientManager(data);
     }
-  } catch (error) {
-    document.getElementById("manager-status").textContent = error.message;
+  } catch (_error) {
+    if (generation !== runtimePairingGeneration) return;
+    setRuntimePairingMessage("Cannot check pairing. Reconnecting…");
+    nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(generation), 2000);
   }
 }
 
 async function runtimeNfcAction(path) {
+  ++runtimePairingGeneration;
+  window.clearTimeout(nfcPollTimer);
   const status = document.getElementById("manager-status");
   try {
     await formRequest(path);
+    if (runtimePairing) runtimePairing.pending = false;
     window.clearTimeout(nfcPollTimer);
     document.getElementById("cancel-runtime-nfc").hidden = true;
     await loadRecipients({ manager: true });
     status.textContent = path.includes("unpair") ? "Presented card unpaired." : "Card pairing cancelled.";
+    setRuntimePairingMessage(status.textContent);
   } catch (error) {
-    status.textContent = error.message;
+    setRuntimePairingMessage(error.message);
+    if (runtimePairing?.pending) {
+      nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(), 2000);
+    }
   }
 }
 
