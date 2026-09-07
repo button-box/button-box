@@ -84,20 +84,19 @@ _HANDOFF_HTML = b"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Connecting | Button Box</title>
   <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede,.status{color:#adb7b0}.pulse{width:34px;height:34px;border:4px solid #363b3d;border-top-color:#69c5a5;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.pulse{animation:none;border-color:#69c5a5}}.button{display:inline-block;color:#07120e;background:#69c5a5;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:700}</style>
-  <script nonce="messagebox-handoff">"use strict";let remaining=120;const status=()=>{const element=document.getElementById("handoff-status");if(remaining>0){const minutes=Math.floor(remaining/60);const seconds=String(remaining%60).padStart(2,"0");element.textContent=`Connecting to home Wi-Fi... ${minutes}:${seconds} remaining`;}else{element.textContent="Still waiting. Rejoin home Wi-Fi, then try the setup URL.";}remaining=Math.max(0,remaining-1);};window.addEventListener("DOMContentLoaded",status);window.setInterval(status,1000);</script>
 </head>
 <body>
   <main class="shell">
     <section class="card handoff" aria-labelledby="handoff-title">
       <p class="eyebrow">Wi-Fi setup</p>
       <div class="pulse" aria-hidden="true"></div>
-      <h1 id="handoff-title">Switching to home Wi-Fi</h1>
-      <p class="lede">The setup network will disappear. That is expected.</p>
+      <h1 id="handoff-title">Join the same Wi-Fi</h1>
+      <p class="lede">The box is trying to connect. Its setup hotspot will disappear and your phone may close this page.</p>
       <ol class="steps">
-        <li>Reconnect this phone to your home Wi-Fi.</li>
-        <li>Open <strong>__MESSAGEBOX_URL__</strong> to continue with WhatsApp.</li>
+        <li>In your phone's Wi-Fi settings, join the network you selected for the box, even if it is a separate IoT network.</li>
+        <li>Open <strong>__MESSAGEBOX_URL__</strong> in Safari or Chrome to continue setup.</li>
       </ol>
-      <p class="status" id="handoff-status" role="status" aria-live="polite">Connecting to home Wi-Fi... 2:00 remaining</p>
+      <p class="status" id="handoff-status">This page cannot confirm the connection. If the address does not open, check your phone's Wi-Fi and retry.</p>
       <a class="button secondary" href="__MESSAGEBOX_URL__">Try the setup URL now</a>
       <p class="status">If the setup hotspot returns, reopen it and check the Wi-Fi details.</p>
     </section>

@@ -354,7 +354,7 @@ class OnboardingAPITests(unittest.TestCase):
     def test_root_is_local_asset_page_with_security_headers(self):
         response = self.client.request("GET", "/")
         self.assertEqual(response["status"], "200 OK")
-        self.assertIn(b"Choose home Wi-Fi", response["body"])
+        self.assertIn(b"Choose Wi-Fi for your box", response["body"])
         self.assertIn(f"http://{HOST}/".encode(), response["body"])
         self.assertNotIn(b"__MESSAGEBOX_URL__", response["body"])
         self.assertIsNone(header(response, "Set-Cookie"))
