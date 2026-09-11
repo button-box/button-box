@@ -13,12 +13,12 @@ troubleshoot instead of pushing ahead.
 
 ## Parts and enclosure
 
-This is our current reference build. Other USB speakers and microphones, and
-other GPIO-connected buttons, may work electrically and with the software, but
-each substitution is unvalidated. The printable enclosure was designed for the
-parts in this list. If you change the speaker, microphone, or another part, the
-3D-print designs may need a revision; do not assume the substitute will fit the
-same case.
+This is our current [reference build](README.md#parts-with-purchase-links).
+Other USB speakers and microphones, and other GPIO-connected buttons, may work
+electrically and with the software, but each substitution is unvalidated. The
+printable enclosure was designed for the parts in this list. If you change the
+speaker, microphone, or another part, the 3D-print designs may need a revision;
+do not assume the substitute will fit the same case.
 
 A shoebox or another sturdy, non-conductive box is an alternative to 3D
 printing the enclosure. Whichever enclosure you use, secure the electronics,
@@ -79,5 +79,4 @@ The dashboard has no login. Leave it disabled unless you understand the network
 exposure. If enabled, bind it only to a private address you control.
 
 Never include credentials, phone numbers, WhatsApp identifiers, NFC
-identifiers, recordings, private addresses, or authentication files in a
-public issue.
+identifiers, recordings, private addresses, or authentication files.
