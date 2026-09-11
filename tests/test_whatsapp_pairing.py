@@ -586,6 +586,13 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("retry-pairing", script)
         self.assertIn("Finish account cleanup", script)
         self.assertIn('formRequest("/whatsapp/unlink", { confirm: "unlink" })', script)
+        pairing_submit = script.split("async function pairWhatsApp(event)", 1)[1].split(
+            "async function cancelPairing()", 1
+        )[0]
+        self.assertIn('button.setAttribute("aria-busy", "true")', pairing_submit)
+        self.assertIn('button.textContent = "Working…"', pairing_submit)
+        self.assertIn('button.removeAttribute("aria-busy")', pairing_submit)
+        self.assertIn("button.textContent = label", pairing_submit)
         retry = script.split(
             'document.getElementById("retry-pairing").addEventListener', 1
         )[1].split(

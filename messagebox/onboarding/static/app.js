@@ -1008,7 +1008,10 @@ async function loadState() {
 async function pairWhatsApp(event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector('button[type="submit"]');
+  const label = button.textContent;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "Working…";
   showError("");
   try {
     const phone = document.getElementById("whatsapp-phone").value;
@@ -1018,6 +1021,8 @@ async function pairWhatsApp(event) {
     document.getElementById("whatsapp-phone").focus();
   } finally {
     button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = label;
   }
 }
 
