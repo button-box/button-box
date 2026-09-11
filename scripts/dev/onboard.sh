@@ -191,7 +191,12 @@ case "$CONTACT_COUNT" in
   *[!0-9]*|"") die "contact count returned an invalid result" ;;
 esac
 if [ "$CONTACT_COUNT" -eq 0 ]; then
-  printf 'Label for the first contact (for example, Family): '
+  printf '%s\n' \
+    'Choose ONE person or family group for your first two-way voice test.' \
+    'The list above is a reference; you are not naming every chat.' \
+    'Choose a chat where someone can receive your voice message and reply.' \
+    'Skip newsletters and channels. You can add more recipients after setup.'
+  printf 'Name for this one recipient (for example, Family): '
   IFS= read -r CONTACT_LABEL || exit 1
   [ -n "$CONTACT_LABEL" ] || die "contact label cannot be blank"
   printf 'Exact CHAT_JID shown above (123456789@g.us or 15551234567@s.whatsapp.net): '
