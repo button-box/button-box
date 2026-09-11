@@ -109,11 +109,11 @@ def validate(document):
         raise SettingsError("settings revision is invalid")
     timezone = document["timezone"]
     if not isinstance(timezone, str) or not timezone or len(timezone) > 64:
-        raise SettingsError("time zone is invalid")
+        raise SettingsError("use a time zone such as Europe/Lisbon or UTC; offsets like UTC+2 are not supported")
     try:
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise SettingsError("time zone is invalid") from exc
+        raise SettingsError("use a time zone such as Europe/Lisbon or UTC; offsets like UTC+2 are not supported") from exc
     if document["recording_mode"] not in RECORDING_MODES:
         raise SettingsError("recording mode is invalid")
     if document["after_listening"] not in AFTER_LISTENING:

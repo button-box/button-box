@@ -722,8 +722,8 @@ function populateSettings(payload) {
   document.getElementById("settings-attention").hidden = !payload.attention;
   const suggested = Intl.DateTimeFormat().resolvedOptions().timeZone;
   document.getElementById("timezone-help").textContent = suggested && suggested !== value.timezone
-    ? `This phone suggests ${suggested}. Confirm the time zone before saving.`
-    : "Confirm this time zone so quiet hours follow local time.";
+    ? `Use a city time zone such as ${suggested}, or UTC. Offsets such as UTC+2 are not supported. Confirm the zone for quiet hours before saving.`
+    : "Use a city time zone such as Europe/Lisbon, or UTC. Offsets such as UTC+2 are not supported. Confirm the zone for quiet hours before saving.";
 }
 
 async function loadSettings() {
