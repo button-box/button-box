@@ -160,6 +160,7 @@ class PlayedNotice:
     listener_name: str
     clip: str
     received_at: float
+    channel: str = "whatsapp"
 
 
 class ReceiptStore:
@@ -179,29 +180,31 @@ class ReceiptStore:
         whatsapp_id: str,
         chat: str,
         *,
+        channel: str = "whatsapp",
         local_message_id: str | None = None,
         flow: str | None = None,
         sent_at: float | None = None,
     ) -> bool:
         whatsapp_id = (whatsapp_id or "").strip()
-        chat = canonical_jid(chat)
+        chat = canonical_jid(chat) if channel == "whatsapp" else (chat or "").strip()
         if not whatsapp_id or len(whatsapp_id) > 256 or not chat:
             return False
         payload = {
             "version": 1,
             "whatsapp_id": whatsapp_id,
+            "channel": channel,
             "chat": chat,
             "local_message_id": _safe_text(local_message_id, "", 128),
             "flow": _safe_text(flow, "", 32),
             "sent_at": time.time() if sent_at is None else float(sent_at),
         }
-        _write_json_atomic(self.sent / f"{_key(whatsapp_id)}.json", payload)
+        _write_json_atomic(self.sent / f"{_key(channel, whatsapp_id)}.json", payload)
         self.prune()
         return True
 
-    def _tracked(self, whatsapp_id: str) -> dict | None:
+    def _tracked(self, whatsapp_id: str, *, channel: str = "whatsapp") -> dict | None:
         try:
-            with open(self.sent / f"{_key(whatsapp_id)}.json", encoding="utf-8") as handle:
+            with open(self.sent / f"{_key(channel, whatsapp_id)}.json", encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
             return None
@@ -215,6 +218,7 @@ class ReceiptStore:
         profiles: dict[str, dict[str, str]],
         fallback_clip: str,
         *,
+        channel: str = "whatsapp",
         received_at: float | None = None,
     ) -> list[PlayedNotice]:
         """Validate and enqueue the tracked IDs in one wacli ``played`` event."""
@@ -222,8 +226,12 @@ class ReceiptStore:
             raise ValueError("receipt payload must be an object")
         if payload.get("EventType") != "receipt" or payload.get("Type") != "played":
             return []
-        chat = canonical_jid(payload.get("Chat"))
-        listener_jid = canonical_jid(payload.get("Sender")) or chat
+        if channel == "whatsapp":
+            chat = canonical_jid(payload.get("Chat"))
+            listener_jid = canonical_jid(payload.get("Sender")) or chat
+        else:
+            chat = (payload.get("Chat") or "").strip()
+            listener_jid = (payload.get("Sender") or "").strip() or chat
         raw_ids = payload.get("MessageIDs")
         if not chat or not listener_jid or not isinstance(raw_ids, list):
             raise ValueError("played receipt is missing chat, sender, or message IDs")
@@ -242,10 +250,12 @@ class ReceiptStore:
             whatsapp_id = raw_id.strip()
             if not whatsapp_id or len(whatsapp_id) > 256:
                 continue
-            tracked = self._tracked(whatsapp_id)
-            if not tracked or canonical_jid(tracked.get("chat")) != chat:
+            tracked = self._tracked(whatsapp_id, channel=channel)
+            tracked_chat = tracked.get("chat") if tracked else None
+            tracked_chat = canonical_jid(tracked_chat) if channel == "whatsapp" else tracked_chat
+            if not tracked or tracked_chat != chat:
                 continue
-            notice_id = _key(whatsapp_id, listener_jid, "played")
+            notice_id = _key(channel, whatsapp_id, listener_jid, "played")
             if (self.seen / f"{notice_id}.json").exists() or (
                 self.inflight / f"{notice_id}.json"
             ).exists():
@@ -254,6 +264,7 @@ class ReceiptStore:
                 "version": 1,
                 "notice_id": notice_id,
                 "whatsapp_id": whatsapp_id,
+                "channel": channel,
                 "listener_jid": listener_jid,
                 "listener_name": listener_name,
                 "clip": clip,
@@ -276,6 +287,7 @@ class ReceiptStore:
             listener_name=_safe_text(data.get("listener_name"), "Someone"),
             clip=str(data.get("clip") or ""),
             received_at=float(data.get("received_at") or 0),
+            channel=str(data.get("channel") or "whatsapp"),
         )
 
     def pending_count(self) -> int:

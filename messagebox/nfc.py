@@ -35,6 +35,10 @@ REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
 HEALTH_INTERVAL_S = 2.0
+# Reserved prefix for switch-position UIDs; a real PN532 card is vanishingly
+# unlikely to collide with it, and this transport never runs alongside i2c.
+SWITCH_UID_PREFIX = b"\xf0\x00\x00"
+PULL_UP_BIAS = 32  # lgpio line-request flag; matches hardware-test.sh's button check
 
 
 def mark_healthy(path=NFC_HEALTH_FILE):
@@ -76,8 +80,69 @@ class PN532I2CReader:
         return self.device.read_passive_target(timeout=self.timeout)
 
 
+class SwitchReader:
+    """A single-pole, N-position rotary/toggle switch as a card substitute.
+
+    Each position closes to a dedicated GPIO (pull-up, active-low), common
+    wired to GND. Exactly one active line reports a synthetic UID for that
+    position through the same NfcRuntime/NfcRouter pipeline PN532 cards use;
+    zero or more than one active line reports "no card" (mid-rotation or a
+    wiring fault), which NfcRuntime already debounces via the removal grace
+    period.
+    """
+
+    def __init__(self, pins, timeout=READ_TIMEOUT_S):
+        import _lgpio
+
+        if not pins:
+            raise RuntimeError("MSGBOX_SWITCH_PINS must list at least one GPIO pin")
+        self._lgpio = _lgpio
+        self.timeout = timeout
+        self.chip = _lgpio._gpiochip_open(0)
+        if self.chip < 0:
+            raise RuntimeError("could not open GPIO chip for the switch reader")
+        for pin in pins:
+            if _lgpio._gpio_claim_input(self.chip, PULL_UP_BIAS, pin) != 0:
+                raise RuntimeError(f"could not claim GPIO{pin} for the switch reader")
+        self.pins = pins
+
+    def read(self):
+        time.sleep(self.timeout)
+        active = [
+            position
+            for position, pin in enumerate(self.pins)
+            if self._lgpio._gpio_read(self.chip, pin) == 0
+        ]
+        if len(active) != 1:
+            return None
+        return SWITCH_UID_PREFIX + bytes([active[0]])
+
+
+def _switch_pins():
+    raw = os.environ.get("MSGBOX_SWITCH_PINS", "")
+    pins = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            pins.append(int(chunk))
+        except ValueError as exc:
+            raise RuntimeError(f"invalid GPIO pin in MSGBOX_SWITCH_PINS: {chunk!r}") from exc
+    return pins
+
+
+def transport():
+    return os.environ.get("MSGBOX_NFC_TRANSPORT", "i2c")
+
+
 def hardware_reader():
-    return PN532I2CReader()
+    selected = transport()
+    if selected == "switch":
+        return SwitchReader(_switch_pins())
+    if selected == "i2c":
+        return PN532I2CReader()
+    raise RuntimeError(f"unknown MSGBOX_NFC_TRANSPORT: {selected!r}")
 
 
 class Announcer:
@@ -166,7 +231,7 @@ def run_daemon():
     try:
         reader = hardware_reader()
         recovered = nfc_router.reconcile_enrollment()
-        print("NFC reader ready: transport=i2c", flush=True)
+        print(f"NFC reader ready: transport={transport()}", flush=True)
         if recovered is not None:
             print(f"NFC enrolled: {recovered.contact['label']}", flush=True)
         last_health = 0.0

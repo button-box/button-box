@@ -41,7 +41,7 @@ class ContactStoreTests(unittest.TestCase):
         self.assertEqual(
             self.store.load(),
             {
-                "version": 2,
+                "version": 3,
                 "revision": 0,
                 "default_recipient": None,
                 "contacts": {},
@@ -319,6 +319,129 @@ class ContactStoreTests(unittest.TestCase):
         )
 
 
+SIGNAL_PERSON = "+15551234567"
+SIGNAL_GROUP = "group.dGVzdC1ncm91cC1pZA=="
+
+
+class ContactChannelTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "private" / "contacts.json"
+        self.clock = Clock()
+        self.store = ContactStore(self.path, clock=self.clock)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_default_channel_is_whatsapp_and_signal_identifiers_are_recognized(self):
+        whatsapp_contact = self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        signal_contact = self.store.add_contact(
+            SIGNAL_PERSON, "Aunt", channel="signal", receive_after=0
+        )
+        signal_group = self.store.add_contact(
+            SIGNAL_GROUP, "Cousins", channel="signal", receive_after=0
+        )
+
+        self.assertEqual(whatsapp_contact["channel"], "whatsapp")
+        self.assertEqual(signal_contact["channel"], "signal")
+        self.assertEqual(signal_contact["kind"], "person")
+        self.assertEqual(signal_group["channel"], "signal")
+        self.assertEqual(signal_group["kind"], "group")
+
+    def test_signal_identifier_shapes_are_rejected_on_whatsapp_channel(self):
+        with self.assertRaises(ContactError):
+            self.store.add_contact(SIGNAL_PERSON, "Aunt", receive_after=0)
+        with self.assertRaises(ContactError):
+            self.store.add_contact(PERSON, "Grandma", channel="signal", receive_after=0)
+
+    def test_unknown_channel_is_rejected(self):
+        with self.assertRaises(ContactError):
+            self.store.add_contact(PERSON, "Grandma", channel="telegram", receive_after=0)
+
+    def test_membership_lookups_accept_either_channel_shape(self):
+        self.store.add_contact(
+            SIGNAL_PERSON, "Aunt", channel="signal", receive_after=0
+        )
+        self.assertIsNotNone(self.store.contact(SIGNAL_PERSON))
+        self.assertTrue(self.store.remove_contact(SIGNAL_PERSON))
+
+    def test_v1_document_upgrades_to_v3_with_whatsapp_channel_backfilled(self):
+        v1_document = {
+            "version": 1,
+            "revision": 0,
+            "contacts": {
+                PERSON: {
+                    "label": "Grandma",
+                    "kind": "person",
+                    "receive_after": 0,
+                    "card_uids": [],
+                    "card_clip": "",
+                }
+            },
+            "listeners": {},
+        }
+        self.path.parent.mkdir(exist_ok=True)
+        self.path.write_text(json.dumps(v1_document), encoding="utf-8")
+
+        loaded = self.store.load()
+        self.assertEqual(loaded["version"], 3)
+        self.assertEqual(loaded["default_recipient"], PERSON)
+        self.assertEqual(loaded["contacts"][PERSON]["channel"], "whatsapp")
+
+    def test_v2_document_upgrades_to_v3_with_whatsapp_channel_backfilled(self):
+        v2_document = {
+            "version": 2,
+            "revision": 3,
+            "default_recipient": PERSON,
+            "contacts": {
+                PERSON: {
+                    "label": "Grandma",
+                    "kind": "person",
+                    "receive_after": 0,
+                    "card_uids": [],
+                    "card_clip": "",
+                }
+            },
+            "listeners": {},
+        }
+        self.path.parent.mkdir(exist_ok=True)
+        self.path.write_text(json.dumps(v2_document), encoding="utf-8")
+
+        loaded = self.store.load()
+        self.assertEqual(loaded["version"], 3)
+        self.assertEqual(loaded["contacts"][PERSON]["channel"], "whatsapp")
+
+    def test_v3_document_requires_explicit_channel_per_contact(self):
+        v3_document = {
+            "version": 3,
+            "revision": 0,
+            "default_recipient": None,
+            "contacts": {
+                PERSON: {
+                    "label": "Grandma",
+                    "kind": "person",
+                    "receive_after": 0,
+                    "card_uids": [],
+                    "card_clip": "",
+                }
+            },
+            "listeners": {},
+        }
+        self.path.parent.mkdir(exist_ok=True)
+        self.path.write_text(json.dumps(v3_document), encoding="utf-8")
+        with self.assertRaises(ContactError):
+            self.store.load()
+
+    def test_enroll_card_threads_channel_into_new_contact(self):
+        result = self.store.enroll_card(
+            SIGNAL_PERSON,
+            CARD_ONE,
+            label="Aunt",
+            channel="signal",
+        )
+        self.assertEqual(result["contact"]["channel"], "signal")
+
+
 class FakeEnrollmentStore:
     def __init__(self, path):
         self.path = path
@@ -379,6 +502,7 @@ class ContactCliTests(unittest.TestCase):
                 {
                     "label": "Grandma",
                     "jid": PERSON,
+                    "channel": "whatsapp",
                     "card_clip": "/var/lib/messagebox/assets/grandma.wav",
                     "create_contact": True,
                     "ttl_s": 300,

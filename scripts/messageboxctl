@@ -1,9 +1,9 @@
 #!/bin/sh
-# Friendly systemd and journal commands for an installed Button Box.
+# Friendly systemd and journal commands for an installed Message Box.
 set -eu
 
 TARGET=messagebox.target
-SERVICES="button sync poller dashboard nfc"
+SERVICES="button sync poller dashboard nfc signal-poller signal-rest"
 
 usage() {
   cat <<'EOF'
@@ -14,19 +14,19 @@ Commands:
   services                  Show enabled and active state for every service
   logs [SERVICE]            Follow all logs or one service log
   reset-wifi               Delete saved Wi-Fi and restart onboarding
-  start|stop|restart        Operate the Button Box target
+  start|stop|restart        Operate the Message Box target
   enable SERVICE...         Select services; start them if the target is active
   disable SERVICE...        Stop and deselect services
 
-Services: button sync poller dashboard nfc; logs also accepts onboarding
+Services: button sync poller dashboard nfc signal-poller signal-rest; logs also accepts onboarding
 EOF
 }
 
 unit_for() {
   case "$1" in
     dashboard) printf 'messagebox-dash.service\n' ;;
-    button|sync|poller|nfc) printf 'messagebox-%s.service\n' "$1" ;;
-    *) echo "Unknown Button Box service: $1" >&2; exit 2 ;;
+    button|sync|poller|nfc|signal-poller|signal-rest) printf 'messagebox-%s.service\n' "$1" ;;
+    *) echo "Unknown Message Box service: $1" >&2; exit 2 ;;
   esac
 }
 

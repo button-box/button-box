@@ -163,6 +163,7 @@ def main():
                 with open(qmeta_tmp, "w") as f:
                     json.dump({
                         "version": 1,
+                        "channel": "whatsapp",
                         "chat": m["ChatJID"],
                         "msgid": m["MsgID"],
                         "sender_jid": m.get("SenderJID"),

@@ -114,6 +114,8 @@ esac
         self.assertIn("messagebox/onboarding/completion.py", staged_paths)
         self.assertIn("messagebox/settings.py", staged_paths)
         self.assertIn("messagebox/wifi_change.py", staged_paths)
+        self.assertIn("messagebox/providers.py", staged_paths)
+        self.assertIn("messagebox/signalpoll.py", staged_paths)
         self.assertNotIn("messagebox/dashboard/static/app.js", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
 

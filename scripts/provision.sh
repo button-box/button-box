@@ -86,8 +86,10 @@ rsync -azR \
   "$REPO_DIR/./messagebox/make_ringtones.py" \
   "$REPO_DIR/./messagebox/nfc.py" \
   "$REPO_DIR/./messagebox/nfc_state.py" \
+  "$REPO_DIR/./messagebox/providers.py" \
   "$REPO_DIR/./messagebox/runtime_paths.py" \
   "$REPO_DIR/./messagebox/settings.py" \
+  "$REPO_DIR/./messagebox/signalpoll.py" \
   "$REPO_DIR/./messagebox/tailnet.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
