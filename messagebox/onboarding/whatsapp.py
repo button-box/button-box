@@ -228,6 +228,22 @@ def _masked_phone(document):
     return f"WhatsApp number ending in {phone[-4:]}"
 
 
+def _linked_account_jid(document):
+    if isinstance(document, dict) and isinstance(document.get("data"), dict):
+        document = document["data"]
+    if not isinstance(document, dict) or document.get("authenticated") is not True:
+        return None
+    jid = document.get("linked_jid")
+    if isinstance(jid, str):
+        jid = jid.strip().lower()
+        if _JID.fullmatch(jid) and jid.endswith("@s.whatsapp.net"):
+            return jid
+    phone = document.get("phone")
+    if isinstance(phone, str) and phone.isdigit() and phone != "0":
+        return f"{phone}@s.whatsapp.net"
+    return None
+
+
 class PairingEngine:
     """Serialize phone-code pairing and store promotion for one device."""
 
@@ -510,6 +526,20 @@ class PairingEngine:
         if self._load_state()["status"] != "ready":
             raise PairingError("whatsapp_not_ready")
 
+    def _live_account_jid(self):
+        self._require_ready()
+        auth = self._run_wacli(
+            self.live_store,
+            ["--read-only", "--json", "auth", "status"],
+            timeout=15,
+        )
+        if auth.returncode != 0:
+            raise PairingError("auth_status_failed")
+        jid = _linked_account_jid(_json_document(auth.stdout))
+        if jid is None:
+            raise PairingError("not_authenticated")
+        return jid
+
     def _live_candidates(self, *, refresh=False):
         self._require_ready()
         if refresh:
@@ -551,7 +581,9 @@ class PairingEngine:
             if not isinstance(candidates, list) or eligible_conversations(candidates) != candidates:
                 raise PairingError("recipient_list_failed")
         try:
-            return self.recipients.reconcile(candidates)
+            return self.recipients.reconcile(
+                candidates, excluded_jid=self._live_account_jid()
+            )
         except RecipientError as exc:
             raise PairingError("recipient_state_failed") from exc
 
@@ -575,28 +607,34 @@ class PairingEngine:
     def recipient_select(self, token):
         self._require_ready()
         try:
-            return self.recipients.select_default(token)
+            return self.recipients.select_default(
+                token, excluded_jid=self._live_account_jid()
+            )
         except RecipientError as exc:
             raise PairingError(str(exc)) from exc
 
     def recipient_select_phone(self, phone):
         self._require_ready()
         try:
-            return self.recipients.select_phone(normalize_phone(phone))
+            return self.recipients.select_phone(
+                normalize_phone(phone), excluded_jid=self._live_account_jid()
+            )
         except RecipientError as exc:
             raise PairingError(str(exc)) from exc
 
     def recipient_add(self, token):
         self._require_ready()
         try:
-            return self.recipients.add(token)
+            return self.recipients.add(token, excluded_jid=self._live_account_jid())
         except RecipientError as exc:
             raise PairingError(str(exc)) from exc
 
     def recipient_add_phone(self, phone):
         self._require_ready()
         try:
-            return self.recipients.add_phone(normalize_phone(phone))
+            return self.recipients.add_phone(
+                normalize_phone(phone), excluded_jid=self._live_account_jid()
+            )
         except RecipientError as exc:
             raise PairingError(str(exc)) from exc
 
@@ -610,7 +648,9 @@ class PairingEngine:
     def recipient_default(self, token):
         self._require_ready()
         try:
-            return self.recipients.choose_default(token)
+            return self.recipients.choose_default(
+                token, excluded_jid=self._live_account_jid()
+            )
         except RecipientError as exc:
             raise PairingError(str(exc)) from exc
 
@@ -1089,6 +1129,7 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 "unlink_current_account_first",
                 "whatsapp_not_ready",
                 "recipient_setup_started",
+                "recipient_matches_linked_account",
             }:
                 error = "pairing_request_failed"
             return self._respond({"ok": False, "error": error})

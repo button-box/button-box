@@ -237,7 +237,7 @@ class RecipientSetup:
             raise RecipientError("recipient is no longer available; refresh and try again")
         return candidate
 
-    def _manual_candidate(self, state, phone):
+    def _manual_candidate(self, state, phone, *, excluded_jid=None):
         if (
             not isinstance(phone, str)
             or not phone.startswith("+")
@@ -248,6 +248,8 @@ class RecipientSetup:
         ):
             raise RecipientError("phone number is invalid")
         jid = f"{phone[1:]}@s.whatsapp.net"
+        if jid == excluded_jid:
+            raise RecipientError("recipient_matches_linked_account")
         for token, candidate in state["candidates"].items():
             if candidate["jid"] == jid:
                 candidate.update(label=phone, kind="person", available=True)
@@ -269,7 +271,7 @@ class RecipientSetup:
         return token
 
     @synchronized
-    def reconcile(self, rows):
+    def reconcile(self, rows, *, excluded_jid=None):
         state = self._load()
         by_jid = {candidate["jid"]: token for token, candidate in state["candidates"].items()}
         for candidate in state["candidates"].values():
@@ -278,6 +280,8 @@ class RecipientSetup:
             try:
                 candidate = validate_contact(row.get("jid"), row.get("label"))
             except (AttributeError, ContactError):
+                continue
+            if candidate["jid"] == excluded_jid:
                 continue
             token = by_jid.get(candidate["jid"])
             if token is None:
@@ -308,12 +312,16 @@ class RecipientSetup:
         return self.public_state(state)
 
     @synchronized
-    def select_default(self, token):
+    def select_default(self, token, *, excluded_jid=None):
         state = self._load()
+        candidate = self._candidate(
+            state, token, require_available=state["default_token"] is None
+        )
+        if candidate["jid"] == excluded_jid:
+            raise RecipientError("recipient_matches_linked_account")
         if state["default_token"] is not None:
             if state["default_token"] != token:
                 raise RecipientError("default recipient is fixed")
-            candidate = self._candidate(state, token, require_available=False)
             contacts = self.contacts.load()
             if (
                 contacts["default_recipient"] != candidate["jid"]
@@ -322,7 +330,6 @@ class RecipientSetup:
                 raise RecipientError("recipient state is unavailable")
             _atomic_json(self.voice_request_path, {"version": 1, "enabled": True})
             return self.public_state(state)
-        candidate = self._candidate(state, token)
         try:
             contacts = self.contacts.load()["contacts"]
             if candidate["jid"] in contacts:
@@ -342,13 +349,13 @@ class RecipientSetup:
         return self.public_state(state)
 
     @synchronized
-    def select_phone(self, phone):
+    def select_phone(self, phone, *, excluded_jid=None):
         state = self._load()
-        token = self._manual_candidate(state, phone)
+        token = self._manual_candidate(state, phone, excluded_jid=excluded_jid)
         if state["default_token"] is not None:
-            return self.select_default(token)
+            return self.select_default(token, excluded_jid=excluded_jid)
         self._write(state)
-        return self.select_default(token)
+        return self.select_default(token, excluded_jid=excluded_jid)
 
     @synchronized
     def ensure_voice_request(self):
@@ -359,11 +366,13 @@ class RecipientSetup:
         return True
 
     @synchronized
-    def add(self, token):
+    def add(self, token, *, excluded_jid=None):
         state = self._load()
         if state["status"] != "complete":
             raise RecipientError("complete the voice test before adding recipients")
         candidate = self._candidate(state, token)
+        if candidate["jid"] == excluded_jid:
+            raise RecipientError("recipient_matches_linked_account")
         try:
             self.contacts.add_contact(candidate["jid"], candidate["label"])
         except ContactError as exc:
@@ -371,16 +380,16 @@ class RecipientSetup:
         return self.public_state(state)
 
     @synchronized
-    def add_phone(self, phone):
+    def add_phone(self, phone, *, excluded_jid=None):
         state = self._load()
         if state["status"] != "complete":
             raise RecipientError("complete the voice test before adding recipients")
-        token = self._manual_candidate(state, phone)
+        token = self._manual_candidate(state, phone, excluded_jid=excluded_jid)
         candidate = self._candidate(state, token)
         if candidate["jid"] in self.contacts.load()["contacts"]:
             raise RecipientError("contact already exists")
         self._write(state)
-        return self.add(token)
+        return self.add(token, excluded_jid=excluded_jid)
 
     @synchronized
     def remove(self, token):
@@ -398,11 +407,13 @@ class RecipientSetup:
         return self.public_state(state)
 
     @synchronized
-    def choose_default(self, token):
+    def choose_default(self, token, *, excluded_jid=None):
         state = self._load()
         if state["status"] != "complete":
             raise RecipientError("complete the voice test before changing the default")
         candidate = self._candidate(state, token, require_available=False)
+        if candidate["jid"] == excluded_jid:
+            raise RecipientError("recipient_matches_linked_account")
         try:
             if candidate["jid"] not in self.contacts.load()["contacts"]:
                 raise RecipientError("recipient is not configured")

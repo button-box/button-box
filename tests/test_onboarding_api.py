@@ -4,10 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
+from unittest import mock
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
+from messagebox.onboarding.whatsapp import PairingError
 from messagebox.settings import SettingsStore
 
 
@@ -958,6 +960,30 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(added_phone["status"], "200 OK")
         self.assertIn(("recipient_add_phone", "+447700900123"), worker.calls)
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
+
+    def test_recipient_api_explains_that_the_box_cannot_select_itself(self):
+        worker = FakeWhatsApp(
+            {
+                "status": "ready",
+                "pairing_code": None,
+                "phone_hint": "WhatsApp number ending in 0123",
+                "eligible_count": 1,
+                "safe_error": None,
+                "attempt": 1,
+            }
+        )
+        worker.recipient_select_phone = mock.Mock(
+            side_effect=PairingError("recipient_matches_linked_account")
+        )
+        client, _, _ = self.home_pairing_client(worker)
+        client.request("GET", "/api/state")
+
+        response = client.form(
+            "POST", "/recipients/select-number", {"phone": "+1 415-555-0123"}
+        )
+
+        self.assertEqual(response["status"], "409 Conflict")
+        self.assertIn(b"cannot be its own recipient", response["body"])
 
     def test_nfc_api_is_opaque_same_origin_and_completes_asynchronously(self):
         token = "recipient-token-0001"

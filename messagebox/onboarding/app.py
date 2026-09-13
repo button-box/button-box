@@ -993,6 +993,11 @@ def create_app(
                             "400 Bad Request",
                             "Enter a valid international number beginning with +",
                         ) from exc
+                    if str(exc) == "recipient_matches_linked_account":
+                        raise RequestError(
+                            "409 Conflict",
+                            "Choose someone else—the linked WhatsApp account cannot be its own recipient",
+                        ) from exc
                     raise RequestError(
                         "409 Conflict", "Recipient setup could not be updated; refresh and try again"
                     ) from exc

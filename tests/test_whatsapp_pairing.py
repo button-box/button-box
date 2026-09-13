@@ -293,6 +293,41 @@ class WhatsAppPairingTests(unittest.TestCase):
             engine.recipient_list(refresh=True)
         self.assertEqual(self.candidates.read_bytes(), preserved)
 
+    def test_recipient_list_excludes_the_linked_whatsapp_account(self):
+        recipient_setup = RecipientSetup(
+            state_path=self.root / "recipient-state.json",
+            contacts_path=self.root / "contacts.json",
+            events_path=self.root / "events.jsonl",
+            voice_request_path=self.root / "voice-request.json",
+            token_factory=lambda: "recipient-token-0001",
+        )
+        runner = WacliRunner(
+            chats=[
+                {"jid": "14155550123@s.whatsapp.net", "name": "This box"},
+                {"jid": "15551234567@s.whatsapp.net", "name": "Grandma"},
+            ]
+        )
+        engine = self.engine(runner=runner, recipient_setup=recipient_setup)
+        self.live_store.mkdir()
+        self.candidates.write_text(
+            json.dumps(
+                {"version": 1, "conversations": eligible_conversations(runner.chats)}
+            ),
+            encoding="utf-8",
+        )
+        engine._set_state(
+            "ready", phone_hint="WhatsApp number ending in 0123", eligible_count=2
+        )
+
+        state = engine.recipient_list()
+
+        self.assertEqual(
+            [recipient["label"] for recipient in state["recipients"]],
+            ["+15551234567"],
+        )
+        with self.assertRaisesRegex(PairingError, "recipient_matches_linked_account"):
+            engine.recipient_select_phone("+14155550123")
+
     def test_refreshed_code_auth_doctor_bootstrap_and_atomic_promotion(self):
         chats = [
             {"jid": f"{index}@g.us", "name": f"Private group {index}"}

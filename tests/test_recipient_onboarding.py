@@ -140,6 +140,32 @@ class RecipientSetupTests(unittest.TestCase):
                 contacts_path=self.setup.state_path.parent / "other-contacts.json",
             ).select_phone("+0123")
 
+    def test_linked_account_is_hidden_and_rejected_as_a_recipient(self):
+        listed = self.setup.reconcile(
+            [
+                {"jid": PERSON, "label": "This box"},
+                {"jid": SECOND_PERSON, "label": "Grandma"},
+            ],
+            excluded_jid=PERSON,
+        )
+        self.assertEqual(
+            [recipient["label"] for recipient in listed["recipients"]],
+            ["+14155550199"],
+        )
+        with self.assertRaisesRegex(RecipientError, "recipient_matches_linked_account"):
+            self.setup.select_phone("+15551234567", excluded_jid=PERSON)
+
+        self.setup.reconcile([{"jid": PERSON, "label": "This box"}])
+        state = self.setup._load()
+        own_token = next(
+            token
+            for token, candidate in state["candidates"].items()
+            if candidate["jid"] == PERSON
+        )
+        with self.assertRaisesRegex(RecipientError, "recipient_matches_linked_account"):
+            self.setup.select_default(own_token, excluded_jid=PERSON)
+        self.assertIsNone(ContactStore(self.contacts_path).load()["default_recipient"])
+
     def test_receive_play_reply_proof_requires_one_exact_correlated_flow(self):
         listed = self.candidates()
         token = next(
