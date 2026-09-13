@@ -617,6 +617,8 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
         self.assertIn('if (routeName === "whatsapp")', script)
         self.assertIn('applyWhatsAppState(currentState, { manage: true })', script)
+        self.assertEqual(script.count('history.replaceState(null, "", "#continue")'), 2)
+        self.assertEqual(script.count("rememberState({ recipient_setup: data })"), 2)
         self.assertIn(".focus(", script)
         self.assertIn("retry-pairing", script)
         self.assertIn("Finish account cleanup", script)

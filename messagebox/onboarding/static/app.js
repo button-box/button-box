@@ -392,6 +392,8 @@ async function mutateRecipient(action, token, button = null) {
     const data = await formRequest(`/recipients/${action}`, { token });
     recipientsData = data;
     if (action === "select") {
+      rememberState({ recipient_setup: data });
+      history.replaceState(null, "", "#continue");
       applyRecipientState(data);
     } else {
       renderRecipientManager(data);
@@ -424,6 +426,8 @@ async function mutateRecipientNumber(event, action) {
       renderRecipientManager(data);
       status.textContent = "Number allowed.";
     } else {
+      rememberState({ recipient_setup: data });
+      history.replaceState(null, "", "#continue");
       applyRecipientState(data);
     }
   } catch (error) {
