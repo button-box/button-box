@@ -599,6 +599,8 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             "complete-view",
         ):
             self.assertIn(f'id="{view}"', html)
+        self.assertIn('id="change-test-recipient"', html)
+        self.assertIn('showView("recipients")', script)
         self.assertIn('aria-live="polite"', html)
         self.assertIn('tabindex="-1"', html)
         self.assertIn("whatsapp.pairing_code", script)

@@ -385,6 +385,16 @@ async function continueRecipientSetup() {
   }
 }
 
+async function changeTestRecipient() {
+  window.clearTimeout(pollTimer);
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
 async function mutateRecipient(action, token, button = null) {
   if (button) button.disabled = true;
   showError("");
@@ -1172,6 +1182,7 @@ document.getElementById("manual-default-form").addEventListener("submit", (event
   mutateRecipientNumber(event, "select");
 });
 document.getElementById("resume-recipients").addEventListener("click", continueRecipientSetup);
+document.getElementById("change-test-recipient").addEventListener("click", changeTestRecipient);
 document.getElementById("open-recipient-manager").addEventListener("click", async () => {
   managerOpen = true;
   try {

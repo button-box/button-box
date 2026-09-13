@@ -93,8 +93,11 @@ class RecipientSetupTests(unittest.TestCase):
         other_token = next(
             item["token"] for item in listed["recipients"] if item["label"] == "Family"
         )
-        with self.assertRaisesRegex(RecipientError, "fixed"):
-            self.setup.select_default(other_token)
+        changed = self.setup.select_default(other_token)
+        self.assertEqual(changed["status"], "testing")
+        self.assertEqual(changed["default"]["label"], "Family")
+        self.assertEqual(ContactStore(self.contacts_path).allowed_jids(), (GROUP,))
+        self.assertEqual(changed["proof"], {"received": False, "played": False, "replied": False})
 
     def test_voice_request_failure_keeps_selection_retryable(self):
         listed = self.candidates()

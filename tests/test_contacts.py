@@ -249,6 +249,18 @@ class ContactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ContactError, "does not exist"):
             self.store.choose_default_recipient("447700900123@s.whatsapp.net")
 
+    def test_unpaired_onboarding_default_can_be_replaced_atomically(self):
+        self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        revision = self.store.load()["revision"]
+
+        replacement = self.store.replace_default_contact(PERSON, GROUP, "Family")
+
+        document = self.store.load()
+        self.assertEqual(replacement["jid"], GROUP)
+        self.assertEqual(document["default_recipient"], GROUP)
+        self.assertEqual(set(document["contacts"]), {GROUP})
+        self.assertEqual(document["revision"], revision + 1)
+
     def test_contacts_and_listeners_are_isolated(self):
         self.store.add_contact(PERSON, "Grandma", receive_after=0)
         self.store.upsert_listener("15550001@s.whatsapp.net", "Mom")
