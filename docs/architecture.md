@@ -42,6 +42,11 @@ setup portal while the shared sync and poller services run. The normal
 `messagebox.target`, button, dashboard, and NFC services remain conflicted and
 inactive.
 
+Choosing the same default recipient is retry-safe. The private voice-proof
+request is persisted before recipient setup publishes the `testing` state, so
+an interrupted selection can be retried without choosing or routing to a
+different recipient.
+
 The NFC setup worker runs as `messagebox`, owns I2C and tone playback, and
 offers only a group-restricted Unix socket to the isolated web portal. A read
 tag UID is held privately for at most two minutes while the caregiver chooses

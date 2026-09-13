@@ -2,8 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from messagebox.contacts import ContactStore
+from messagebox.onboarding import recipients
 from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 
 
@@ -80,8 +82,45 @@ class RecipientSetupTests(unittest.TestCase):
             json.loads(self.request_path.read_text(encoding="utf-8")),
             {"version": 1, "enabled": True},
         )
+        self.request_path.unlink()
+        retried = self.setup.select_default(token)
+        self.assertEqual(retried["status"], "testing")
+        self.assertEqual(
+            json.loads(self.request_path.read_text(encoding="utf-8")),
+            {"version": 1, "enabled": True},
+        )
+
+        other_token = next(
+            item["token"] for item in listed["recipients"] if item["label"] == "Family"
+        )
         with self.assertRaisesRegex(RecipientError, "fixed"):
-            self.setup.select_default(token)
+            self.setup.select_default(other_token)
+
+    def test_voice_request_failure_keeps_selection_retryable(self):
+        listed = self.candidates()
+        token = next(
+            item["token"]
+            for item in listed["recipients"]
+            if item["label"] == "+15551234567"
+        )
+        original_atomic_json = recipients._atomic_json
+
+        def fail_voice_request(path, payload):
+            if Path(path) == self.request_path:
+                raise OSError("voice request unavailable")
+            return original_atomic_json(path, payload)
+
+        with mock.patch.object(recipients, "_atomic_json", side_effect=fail_voice_request):
+            with self.assertRaisesRegex(OSError, "voice request unavailable"):
+                self.setup.select_default(token)
+
+        self.assertEqual(self.setup._load()["status"], "choose")
+        retried = self.setup.select_default(token)
+        self.assertEqual(retried["status"], "testing")
+        self.assertEqual(
+            json.loads(self.request_path.read_text(encoding="utf-8")),
+            {"version": 1, "enabled": True},
+        )
 
     def test_manual_phone_can_be_selected_without_discovery(self):
         selected = self.setup.select_phone("+14155550199")
@@ -91,6 +130,10 @@ class RecipientSetupTests(unittest.TestCase):
         self.assertNotIn(SECOND_PERSON, json.dumps(selected))
         contacts = ContactStore(self.contacts_path).load()
         self.assertEqual(contacts["default_recipient"], SECOND_PERSON)
+        self.request_path.unlink()
+        retried = self.setup.select_phone("+14155550199")
+        self.assertEqual(retried["status"], "testing")
+        self.assertTrue(self.request_path.is_file())
         with self.assertRaisesRegex(RecipientError, "invalid"):
             RecipientSetup(
                 state_path=self.setup.state_path.parent / "other-state.json",

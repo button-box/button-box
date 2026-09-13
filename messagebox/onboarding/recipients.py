@@ -311,7 +311,17 @@ class RecipientSetup:
     def select_default(self, token):
         state = self._load()
         if state["default_token"] is not None:
-            raise RecipientError("default recipient is fixed")
+            if state["default_token"] != token:
+                raise RecipientError("default recipient is fixed")
+            candidate = self._candidate(state, token, require_available=False)
+            contacts = self.contacts.load()
+            if (
+                contacts["default_recipient"] != candidate["jid"]
+                or candidate["jid"] not in contacts["contacts"]
+            ):
+                raise RecipientError("recipient state is unavailable")
+            _atomic_json(self.voice_request_path, {"version": 1, "enabled": True})
+            return self.public_state(state)
         candidate = self._candidate(state, token)
         try:
             contacts = self.contacts.load()["contacts"]
@@ -327,16 +337,16 @@ class RecipientSetup:
         state["status"] = "testing"
         state["started_at"] = self.clock()
         state["proof"] = self._default_state()["proof"]
-        self._write(state)
         _atomic_json(self.voice_request_path, {"version": 1, "enabled": True})
+        self._write(state)
         return self.public_state(state)
 
     @synchronized
     def select_phone(self, phone):
         state = self._load()
-        if state["default_token"] is not None:
-            raise RecipientError("default recipient is fixed")
         token = self._manual_candidate(state, phone)
+        if state["default_token"] is not None:
+            return self.select_default(token)
         self._write(state)
         return self.select_default(token)
 
