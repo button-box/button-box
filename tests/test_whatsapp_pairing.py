@@ -603,6 +603,10 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("formRequest(`/recipients/${action}`", script)
         self.assertIn("formRequest(`/recipients/${action}-number`", script)
         self.assertIn('formRequest("/recipients/defer")', script)
+        self.assertIn('if (["testing", "complete"].includes(data.status))', script)
+        self.assertIn(
+            'addEventListener("click", continueRecipientSetup)', script
+        )
         self.assertIn('id="manual-default-form"', html)
         self.assertIn('id="manual-allow-form"', html)
         self.assertIn('type="tel"', html)
