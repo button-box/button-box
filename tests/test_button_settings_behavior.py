@@ -85,6 +85,23 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
         finally:
             button_send.led = original_led
 
+    def test_press_acknowledgement_is_generated_audibly(self):
+        with patch.object(button_send.subprocess, "run") as run:
+            button_send.make_beeps()
+
+        press_command = run.call_args_list[0].args[0]
+        self.assertIn("sine=frequency=1175:duration=0.22", press_command)
+        self.assertIn("volume=9dB", press_command)
+
+    def test_press_acknowledgement_replaces_a_stale_generated_file(self):
+        with patch.object(button_send.os.path, "exists", return_value=True), patch.object(
+            button_send.subprocess, "run"
+        ) as run:
+            button_send.make_beeps()
+
+        self.assertEqual(run.call_count, len(button_send.BEEPS))
+        self.assertIn("-y", run.call_args_list[0].args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
