@@ -4,7 +4,7 @@ test:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
 syntax:
-	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/install/audio_config.py scripts/install/tailscale_dashboard.py
+	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/dev/validate_acceptance_run.py scripts/install/audio_config.py scripts/install/tailscale_dashboard.py
 	for file in scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh; do sh -n "$$file"; done
 	sh -n scripts/messageboxctl
 	bash -n messagebox/syncloop.sh

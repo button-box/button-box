@@ -30,6 +30,10 @@ The complete journey is:
 Each detailed step below ends with a **Done when** checkpoint. If the observed
 result differs, stop there and troubleshoot instead of pushing ahead.
 
+For repeatable release and per-unit verification, use the
+[canonical acceptance matrix](docs/box-acceptance.md) and its
+[per-unit run template](docs/box-acceptance-run-template.md).
+
 ## Step 1 — Buy your parts
 
 ### Choose a Raspberry Pi
