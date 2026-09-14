@@ -110,11 +110,14 @@ CONFIRM_RELEASE_S = 0.2
 LED_REFRESH_S = 0.5
 SEND_FAIL_BEEP_AT = 3
 BEEPS = {
-    "press": (str(RUNTIME_DIR / "beep-press.wav"), "1175", "0.07"),
-    "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.08"),
-    "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12"),
-    "sent": (str(RUNTIME_DIR / "beep-sent.wav"), "1320", "0.12"),
-    "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6"),
+    # The press acknowledgement must survive room noise and the start of the
+    # following prompt. The old 70 ms tone at ffmpeg's default level was not
+    # audible in a real-box acoustic test.
+    "press": (str(RUNTIME_DIR / "beep-press.wav"), "1175", "0.22", "9"),
+    "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.08", "0"),
+    "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12", "0"),
+    "sent": (str(RUNTIME_DIR / "beep-sent.wav"), "1320", "0.12", "0"),
+    "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
 }
 
 
@@ -180,22 +183,26 @@ def apply_master_volume(settings=None):
 
 
 def make_beeps():
-    for path, frequency, duration in BEEPS.values():
-        if not os.path.exists(path):
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    f"sine=frequency={frequency}:duration={duration}",
-                    path,
-                ],
-                check=True,
-            )
+    for path, frequency, duration, gain_db in BEEPS.values():
+        # These files are generated assets, so rewrite them at startup. Keeping
+        # an existing file would silently retain an older duration or gain after
+        # a software update.
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency={frequency}:duration={duration}",
+                "-filter:a",
+                f"volume={gain_db}dB",
+                path,
+            ],
+            check=True,
+        )
 
 
 def beep(name):
