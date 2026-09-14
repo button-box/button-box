@@ -1,4 +1,10 @@
+import math
+import os
+import shutil
+import struct
+import tempfile
 import unittest
+import wave
 import sys
 import types
 from datetime import datetime
@@ -90,8 +96,33 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
             button_send.make_beeps()
 
         press_command = run.call_args_list[0].args[0]
-        self.assertIn("sine=frequency=1175:duration=0.22", press_command)
-        self.assertIn("volume=9dB", press_command)
+        self.assertIn("sine=frequency=880:duration=0.40", press_command)
+        self.assertIn("volume=12dB", press_command)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+    def test_press_acknowledgement_waveform_meets_signal_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "press.wav")
+            with patch.object(
+                button_send,
+                "BEEPS",
+                {"press": (path, "880", "0.40", "12")},
+            ):
+                button_send.make_beeps()
+
+            with wave.open(path, "rb") as cue:
+                self.assertEqual(cue.getsampwidth(), 2)
+                sample_rate = cue.getframerate()
+                samples = struct.unpack(
+                    f"<{cue.getnframes()}h", cue.readframes(cue.getnframes())
+                )
+
+            duration_s = len(samples) / sample_rate
+            peak = max(abs(sample) for sample in samples)
+            rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+            self.assertGreaterEqual(duration_s, 0.39)
+            self.assertGreaterEqual(peak, 14000)
+            self.assertGreaterEqual(rms, 9000)
 
     def test_press_acknowledgement_replaces_a_stale_generated_file(self):
         with patch.object(button_send.os.path, "exists", return_value=True), patch.object(

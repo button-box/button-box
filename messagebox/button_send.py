@@ -113,7 +113,7 @@ BEEPS = {
     # The press acknowledgement must survive room noise and the start of the
     # following prompt. The old 70 ms tone at ffmpeg's default level was not
     # audible in a real-box acoustic test.
-    "press": (str(RUNTIME_DIR / "beep-press.wav"), "1175", "0.22", "9"),
+    "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
     "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.08", "0"),
     "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12", "0"),
     "sent": (str(RUNTIME_DIR / "beep-sent.wav"), "1320", "0.12", "0"),
