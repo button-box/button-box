@@ -428,6 +428,21 @@
       </form>
     </section>
 
+    <section class="card test-report" id="test-report-panel" __MESSAGEBOX_TEST_RIG_HIDDEN__>
+      <p class="eyebrow">Development test rig</p>
+      <h2>Report a problem</h2>
+      <p class="lede">Create a sanitized snapshot you can paste into Codex. Do not enter names, phone numbers, Wi-Fi details, or message content.</p>
+      <label for="test-report-note">What were you doing? (optional)</label>
+      <textarea id="test-report-note" maxlength="400" rows="3"></textarea>
+      <button type="button" id="create-test-report">Create report</button>
+      <p class="field-help" id="test-report-status" role="status" aria-live="polite"></p>
+      <textarea id="test-report-output" class="report-output" rows="12" readonly hidden></textarea>
+      <div class="button-row" id="test-report-actions" hidden>
+        <button type="button" id="copy-test-report" class="secondary">Copy for Codex</button>
+        <button type="button" id="download-test-report" class="secondary">Download JSON</button>
+      </div>
+    </section>
+
     <p id="page-error" class="page-error" role="alert" hidden></p>
   </main>
 </body>

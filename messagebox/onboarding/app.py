@@ -38,6 +38,13 @@ from messagebox.onboarding.whatsapp import (
 )
 from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path
 from messagebox.tailnet import normalize_tailscale_host, request_origin
+from messagebox.test_report import (
+    TEST_RIG_CONFIG_PATH,
+    TestRigError,
+    build_report,
+    report_to_markdown,
+    test_rig_available,
+)
 
 
 CONFIG_PATH = str(ONBOARDING_CONFIG_PATH)
@@ -334,6 +341,8 @@ def create_app(
     handoff_delay=HANDOFF_DELAY,
     body_limit=BODY_LIMIT,
     tailscale_host=_UNSET,
+    test_rig_config_path=TEST_RIG_CONFIG_PATH,
+    report_builder=build_report,
 ):
     """Build an isolated WSGI application with injectable hardware boundaries."""
     selected_mode = (mode or os.environ.get("MSGBOX_ONBOARDING_MODE", "HOTSPOT")).upper()
@@ -767,6 +776,10 @@ def create_app(
                 body = body.replace(
                     b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
+                body = body.replace(
+                    b"__MESSAGEBOX_TEST_RIG_HIDDEN__",
+                    b"" if test_rig_available(test_rig_config_path) else b"hidden",
+                )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
             if method == "GET" and path in {"/static/app.js", "/static/styles.css"}:
                 name = path.rsplit("/", 1)[-1]
@@ -801,6 +814,27 @@ def create_app(
                     raise RequestError("400 Bad Request", "Invalid ringtone preview request")
                 preview_ringtone(request["ringtone_id"])
                 return _json_response({"ok": True}, "202 Accepted")(start_response)
+
+            if method == "POST" and path == "/api/test-report":
+                if not test_rig_available(test_rig_config_path):
+                    raise RequestError("404 Not Found", "Not found")
+                _require_same_origin(environ, expected_origin)
+                document = _json_body(environ, body_limit)
+                if set(document) - {"note"} or not isinstance(document.get("note", ""), str):
+                    raise RequestError("400 Bad Request", "Invalid test report request")
+                state = reconcile_home() if selected_mode == "HOME" else store.load()
+                try:
+                    report = report_builder(
+                        "onboarding",
+                        note=document.get("note", ""),
+                        surface_state=safe_state(state),
+                        config_path=test_rig_config_path,
+                    )
+                except TestRigError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+                return _json_response(
+                    {"report": report, "markdown": report_to_markdown(report)}
+                )(start_response)
 
             if method == "GET" and path == "/api/networks":
                 if selected_mode != "HOTSPOT":
@@ -1060,6 +1094,7 @@ def create_app(
                 "/api/networks",
                 "/api/recipients",
                 "/api/nfc",
+                "/api/test-report",
                 "/wifi/connect",
                 "/wifi/change",
                 "/whatsapp/pair/start",
@@ -1105,6 +1140,7 @@ def _allowed_methods(path):
         "/api/networks": "GET",
         "/api/recipients": "GET",
         "/api/nfc": "GET",
+        "/api/test-report": "POST",
         "/wifi/connect": "POST",
         "/wifi/change": "POST",
         "/whatsapp/pair/start": "POST",

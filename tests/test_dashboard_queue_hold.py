@@ -1,4 +1,6 @@
 import json
+import io
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -182,6 +184,77 @@ class DashboardQueueHoldTests(unittest.TestCase):
                 self.assertEqual(response["code"], 200)
                 self.assertTrue(response["body"])
                 self.assertEqual(response["ctype"], expected_type)
+
+    def test_test_report_requires_explicit_matching_marker(self):
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = "/api/test-report"
+        handler.headers = {
+            "Host": "button-box.local",
+            "Content-Type": "application/json",
+            "Content-Length": "2",
+        }
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        handler.rfile = io.BytesIO(b"{}")
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=json.loads(body), ctype=ctype
+        )
+
+        with mock.patch.object(dashboard, "TEST_RIG_CONFIG_PATH", self.root / "missing"):
+            handler.do_POST()
+        self.assertEqual(response["code"], 404)
+
+    def test_test_rig_report_contains_counts_not_message_metadata(self):
+        marker = self.root / "test-rig.json"
+        marker.write_text(
+            json.dumps({"version": 1, "device": socket.gethostname().split(".", 1)[0].lower()}),
+            encoding="utf-8",
+        )
+        self.make_message()
+        captured = {}
+
+        def build_report(surface, **kwargs):
+            captured.update(surface=surface, kwargs=kwargs)
+            return {
+                "schema_version": 1,
+                "report_id": "report-1",
+                "generated_at": "2026-09-14T10:00:00Z",
+                "device": {"name": "button-box-003", "boot_id": "boot-1"},
+                "software": {"revision": "a" * 40},
+                "surface": surface,
+                "state": kwargs["surface_state"],
+                "test_run": None,
+                "services": {},
+                "hardware": {"gpio": True, "i2c": True, "audio": True},
+                "note": kwargs["note"],
+                "privacy": "automatic fields only",
+            }
+
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = "/api/test-report"
+        handler.headers = {
+            "Host": "button-box.local",
+            "Content-Type": "application/json",
+            "Content-Length": "2",
+        }
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        handler.rfile = io.BytesIO(b"{}")
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=json.loads(body), ctype=ctype
+        )
+        with (
+            mock.patch.object(dashboard, "TEST_RIG_CONFIG_PATH", marker),
+            mock.patch.object(dashboard, "build_report", side_effect=build_report),
+        ):
+            handler.do_POST()
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(captured["surface"], "dashboard")
+        self.assertEqual(captured["kwargs"]["surface_state"]["queue_count"], 1)
+        self.assertNotIn(self.family, json.dumps(response["body"]))
 
 if __name__ == "__main__":
     unittest.main()
