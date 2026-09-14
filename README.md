@@ -207,6 +207,28 @@ available.
 Replace `admin` and the hostname below if you chose different values:
 
 ```sh
+./scripts/dev/authorize-controller-key.sh admin@button-box-001.local
+```
+
+This one-time bootstrap may ask for the account password. It installs only the
+selected controller's public key, then separately verifies noninteractive SSH
+and `sudo -n`. A successful key login is not enough for unattended deployment
+when sudo still prompts. Keep private keys out of the Pi, repository, and run
+evidence. Record the target, administrator, public-key fingerprint, and a
+second-controller or local-console recovery path in the private Unit record.
+
+Verify the established key-only path:
+
+```sh
+ssh -o BatchMode=yes -o PasswordAuthentication=no admin@button-box-001.local true
+ssh -o BatchMode=yes -o PasswordAuthentication=no admin@button-box-001.local sudo -n true
+```
+
+Repeat both checks after a restart or reprovision.
+
+Then connect to inspect the Pi:
+
+```sh
 ssh admin@button-box-001.local
 ```
 

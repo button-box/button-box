@@ -44,6 +44,22 @@ for name in $GUIDED_PROMPT_NAMES; do
   fi
 done
 
+ssh_batch() {
+  ssh -o BatchMode=yes -o PasswordAuthentication=no -o ConnectTimeout=5 "$@"
+}
+
+ssh_batch "$TARGET" true || {
+  echo "Public-key SSH is required for provisioning." >&2
+  echo "Run scripts/dev/authorize-controller-key.sh $TARGET first." >&2
+  exit 1
+}
+# Verify deployment privilege independently from SSH authentication.
+ssh_batch "$TARGET" sudo -n true || {
+  echo "Public-key SSH works, but noninteractive sudo is not configured." >&2
+  echo "Provisioning needs both; repair sudo access through the local recovery path." >&2
+  exit 1
+}
+
 REMOTE_SOURCE=$(ssh "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
 case "$REMOTE_SOURCE" in
   /tmp/messagebox-provision.*) ;;

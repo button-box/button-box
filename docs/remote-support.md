@@ -20,6 +20,21 @@ passwordless `sudo` for this unattended support model. Protect the operator's
 private key with a passphrase and keep a second authorized computer or recovery
 key available.
 
+Bootstrap and verify those two requirements separately:
+
+```sh
+./scripts/dev/authorize-controller-key.sh admin@button-box-001.local
+```
+
+The helper may request the existing account password once, installs only the
+chosen public key, verifies key-only `BatchMode` login, and reports
+noninteractive sudo as a distinct deployment gate. Store the host, user,
+public-key fingerprint, and recovery controller or local-console path only in
+private operational records. Never store a private key there or in this
+repository. Repeat the helper after a reimage; after an ordinary restart or
+reprovision, repeat its printed key-login and sudo checks without reinstalling
+the key.
+
 From a clean, reviewed repository checkout on a computer that can currently
 reach the Pi over LAN or Ethernet, run:
 
