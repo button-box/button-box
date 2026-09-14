@@ -135,24 +135,34 @@ esac
         )
 
         ssh_calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(ssh_calls), 4)
+        self.assertEqual(len(ssh_calls), 6)
         self.assertEqual(
             ssh_calls[0],
-            "CALL\tadmin@message-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
+            "CALL\t-o\tBatchMode=yes\t-o\tPasswordAuthentication=no\t-o\t"
+            "ConnectTimeout=5\tadmin@message-box.local\ttrue",
         )
         self.assertEqual(
             ssh_calls[1],
+            "CALL\t-o\tBatchMode=yes\t-o\tPasswordAuthentication=no\t-o\t"
+            "ConnectTimeout=5\tadmin@message-box.local\tsudo\t-n\ttrue",
+        )
+        self.assertEqual(
+            ssh_calls[2],
+            "CALL\tadmin@message-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
+        )
+        self.assertEqual(
+            ssh_calls[3],
             "CALL\tadmin@message-box.local\t"
             "mkdir -p '/tmp/messagebox-provision.test/sounds/guided-reply'",
         )
         self.assertEqual(
-            ssh_calls[2],
+            ssh_calls[4],
             "CALL\t-t\tadmin@message-box.local\t"
             "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
         self.assertEqual(
-            ssh_calls[3],
+            ssh_calls[5],
             "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
         )
 
