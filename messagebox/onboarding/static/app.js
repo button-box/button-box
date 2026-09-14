@@ -372,6 +372,17 @@ async function loadRecipients({ refresh = false, manager = false } = {}) {
   }
 }
 
+async function continueRecipientSetup() {
+  window.clearTimeout(pollTimer);
+  pollTimer = null;
+  try {
+    await loadRecipients();
+    showView("recipients");
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
 async function mutateRecipient(action, token, button = null) {
   if (button) button.disabled = true;
   showError("");
@@ -1195,27 +1206,13 @@ document.getElementById("keep-account").addEventListener("click", () => {
   document.getElementById("show-unlink").focus();
 });
 document.getElementById("unlink-form").addEventListener("submit", unlinkWhatsApp);
-document.getElementById("continue-recipients").addEventListener("click", async () => {
-  try {
-    await loadRecipients();
-    showView("recipients");
-  } catch (error) {
-    showError(error.message);
-  }
-});
+document.getElementById("continue-recipients").addEventListener("click", continueRecipientSetup);
 document.getElementById("refresh-recipients").addEventListener("click", () => loadRecipients({ refresh: true }));
 document.getElementById("defer-recipients").addEventListener("click", deferRecipients);
 document.getElementById("manual-default-form").addEventListener("submit", (event) => {
   mutateRecipientNumber(event, "select");
 });
-document.getElementById("resume-recipients").addEventListener("click", async () => {
-  try {
-    await loadRecipients();
-    showView("recipients");
-  } catch (error) {
-    showError(error.message);
-  }
-});
+document.getElementById("resume-recipients").addEventListener("click", continueRecipientSetup);
 document.getElementById("open-recipient-manager").addEventListener("click", async () => {
   managerOpen = true;
   try {
