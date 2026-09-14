@@ -995,12 +995,27 @@ async function route() {
   });
   window.clearTimeout(pollTimer);
   window.clearTimeout(nfcPollTimer);
+  if (currentState.mode === "RUNTIME" && routeName === "continue") {
+    location.replace("#home");
+    return;
+  }
   if (routeName === "whatsapp") {
     if (currentState.mode === "RUNTIME") {
       await loadRuntimeWhatsApp();
     } else {
       applyWhatsAppState(currentState, { manage: true });
     }
+    return;
+  }
+  if (routeName === "recipient-picker") {
+    await loadRecipients();
+    showView("recipients");
+    return;
+  }
+  if (routeName === "recipients") {
+    managerOpen = true;
+    await loadRecipients({ manager: true });
+    showView("recipient-manager");
     return;
   }
   if (routeName === "continue") {
@@ -1022,6 +1037,7 @@ async function loadState() {
   loadingState = true;
   try {
     currentState = await request("/api/state");
+    showError("");
     await route();
   } catch (error) {
     showError(error.message);
@@ -1059,20 +1075,11 @@ async function cancelPairing() {
 
 async function copyText(text, button, status, successMessage) {
   try {
-    if (window.isSecureContext && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const field = document.createElement("textarea");
-      field.value = text;
-      field.readOnly = true;
-      field.style.position = "fixed";
-      field.style.opacity = "0";
-      document.body.append(field);
-      field.select();
-      const copied = document.execCommand("copy");
-      field.remove();
-      if (!copied) throw new Error("copy unavailable");
-    }
+    await window.ButtonBoxClipboard.copyText(text, {
+      secure: window.isSecureContext,
+      clipboard: navigator.clipboard,
+      document,
+    });
     button.textContent = "Copied";
     status.textContent = successMessage;
   } catch (error) {
@@ -1175,7 +1182,9 @@ document.getElementById("keep-account").addEventListener("click", () => {
   document.getElementById("show-unlink").focus();
 });
 document.getElementById("unlink-form").addEventListener("submit", unlinkWhatsApp);
-document.getElementById("continue-recipients").addEventListener("click", continueRecipientSetup);
+document.getElementById("continue-recipients").addEventListener("click", () => {
+  location.hash = "recipient-picker";
+});
 document.getElementById("refresh-recipients").addEventListener("click", () => loadRecipients({ refresh: true }));
 document.getElementById("defer-recipients").addEventListener("click", deferRecipients);
 document.getElementById("manual-default-form").addEventListener("submit", (event) => {
@@ -1184,13 +1193,7 @@ document.getElementById("manual-default-form").addEventListener("submit", (event
 document.getElementById("resume-recipients").addEventListener("click", continueRecipientSetup);
 document.getElementById("change-test-recipient").addEventListener("click", changeTestRecipient);
 document.getElementById("open-recipient-manager").addEventListener("click", async () => {
-  managerOpen = true;
-  try {
-    await loadRecipients({ manager: true });
-    showView("recipient-manager");
-  } catch (error) {
-    showError(error.message);
-  }
+  location.hash = "recipients";
 });
 document.getElementById("manager-refresh").addEventListener("click", () => loadRecipients({ refresh: true, manager: true }));
 document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
@@ -1250,15 +1253,11 @@ document.querySelectorAll('[name="new_wifi_security"]').forEach((radio) => {
     if (!protectedNetwork) password.value = "";
   });
 });
-document.getElementById("manage-whatsapp").addEventListener("click", loadRuntimeWhatsApp);
+document.getElementById("manage-whatsapp").addEventListener("click", () => {
+  location.hash = "whatsapp";
+});
 document.getElementById("manage-recipients").addEventListener("click", async () => {
-  managerOpen = true;
-  try {
-    await loadRecipients({ manager: true });
-    showView("recipient-manager");
-  } catch (error) {
-    showError(error.message);
-  }
+  location.hash = "recipients";
 });
 window.addEventListener("hashchange", () => {
   if (currentState) route();

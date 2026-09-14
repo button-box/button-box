@@ -321,21 +321,29 @@ class RecipientSetup:
             raise RecipientError("recipient_matches_linked_account")
         if state["default_token"] is not None:
             if state["default_token"] != token:
-                if state["status"] != "testing":
+                if state["status"] not in {"testing", "complete"}:
                     raise RecipientError("default recipient is fixed")
-                current = self._candidate(
-                    state, state["default_token"], require_available=False
-                )
                 try:
-                    self.contacts.replace_default_contact(
-                        current["jid"], candidate["jid"], candidate["label"]
-                    )
+                    if state["status"] == "testing":
+                        current = self._candidate(
+                            state, state["default_token"], require_available=False
+                        )
+                        self.contacts.replace_default_contact(
+                            current["jid"], candidate["jid"], candidate["label"]
+                        )
+                    else:
+                        self.contacts.add_contact_and_choose_default(
+                            candidate["jid"], candidate["label"]
+                        )
                 except ContactError as exc:
                     raise RecipientError(str(exc)) from exc
                 state["default_token"] = token
-                state["started_at"] = self.clock()
-                state["proof"] = self._default_state()["proof"]
-                _atomic_json(self.voice_request_path, {"version": 1, "enabled": True})
+                if state["status"] == "testing":
+                    state["started_at"] = self.clock()
+                    state["proof"] = self._default_state()["proof"]
+                    _atomic_json(
+                        self.voice_request_path, {"version": 1, "enabled": True}
+                    )
                 self._write(state)
                 return self.public_state(state)
             contacts = self.contacts.load()
@@ -403,7 +411,8 @@ class RecipientSetup:
         token = self._manual_candidate(state, phone, excluded_jid=excluded_jid)
         candidate = self._candidate(state, token)
         if candidate["jid"] in self.contacts.load()["contacts"]:
-            raise RecipientError("contact already exists")
+            self._write(state)
+            return self.public_state(state)
         self._write(state)
         return self.add(token, excluded_jid=excluded_jid)
 

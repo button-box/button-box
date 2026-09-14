@@ -605,6 +605,10 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn('tabindex="-1"', html)
         self.assertIn("whatsapp.pairing_code", script)
         self.assertIn("setTimeout(loadState, 1500)", script)
+        self.assertIn(
+            'currentState = await request("/api/state");\n    showError("");\n    await route();',
+            script,
+        )
         for status in (
             'case "idle"',
             'case "code_pending"',
@@ -618,6 +622,12 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             self.assertIn(status, script)
         self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
         self.assertIn('if (routeName === "whatsapp")', script)
+        self.assertIn('routeName === "continue"', script)
+        self.assertIn('location.replace("#home")', script)
+        self.assertIn('if (routeName === "recipient-picker")', script)
+        self.assertIn('if (routeName === "recipients")', script)
+        self.assertIn('location.hash = "whatsapp"', script)
+        self.assertIn('location.hash = "recipients"', script)
         self.assertIn('applyWhatsAppState(currentState, { manage: true })', script)
         self.assertEqual(script.count('history.replaceState(null, "", "#continue")'), 2)
         self.assertEqual(script.count("rememberState({ recipient_setup: data })"), 2)
