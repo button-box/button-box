@@ -1,12 +1,13 @@
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import messagebox.dashboard.app as dashboard
-from messagebox.settings import SettingsStore
+from messagebox.settings import SettingsError, SettingsStore
 
 
 class DashboardSettingsTests(unittest.TestCase):
@@ -77,6 +78,40 @@ class DashboardSettingsTests(unittest.TestCase):
             {"Origin": "http://button-box.local"},
         )
         self.assertEqual(code, 409)
+
+    def test_ringtone_preview_reports_playback_failure(self):
+        with patch.object(dashboard, "preview_ringtone", side_effect=SettingsError("Button Box audio could not play")):
+            code, payload = self.request(
+                "POST",
+                "/api/ringtone-preview",
+                {"ringtone_id": "ding_dong"},
+                {"Origin": "http://button-box.local"},
+            )
+
+        self.assertEqual(code, 409)
+        self.assertEqual(payload["error"], "Button Box audio could not play")
+
+    def test_ringtone_preview_waits_for_successful_speaker_command(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        with patch.object(dashboard, "ringtone_path", return_value=ringtone), patch.object(
+            dashboard.subprocess, "run"
+        ) as run:
+            dashboard.preview_ringtone("ding_dong")
+
+        run.assert_called_once()
+        self.assertTrue(run.call_args.kwargs["check"])
+
+    def test_ringtone_preview_translates_speaker_command_failure(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        with patch.object(dashboard, "ringtone_path", return_value=ringtone), patch.object(
+            dashboard.subprocess,
+            "run",
+            side_effect=subprocess.CalledProcessError(1, ["aplay"]),
+        ):
+            with self.assertRaisesRegex(SettingsError, "audio could not play"):
+                dashboard.preview_ringtone("ding_dong")
 
     def test_cross_site_update_is_rejected_before_reading_body(self):
         code, payload = self.request(
