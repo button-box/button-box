@@ -65,6 +65,7 @@ class TestReportTests(unittest.TestCase):
                     "started_at": "2026-09-14T10:00:00Z",
                     "updated_at": "2026-09-14T10:01:00Z",
                     "steps": {
+                        "recipient-chooser-stable": "pass",
                         "message-received": "pass",
                         "message-played": "fail",
                         "private-phone": "+1 555 123 4567",
@@ -119,7 +120,11 @@ class TestReportTests(unittest.TestCase):
         )
         self.assertEqual(
             report["test_run"]["steps"],
-            {"message-received": "pass", "message-played": "fail"},
+            {
+                "recipient-chooser-stable": "pass",
+                "message-received": "pass",
+                "message-played": "fail",
+            },
         )
         self.assertEqual(report["software"]["revision"], "a" * 40)
         self.assertEqual(report["hardware"], {"gpio": True, "i2c": False, "audio": True})
@@ -128,6 +133,7 @@ class TestReportTests(unittest.TestCase):
             self.assertNotIn(private, serialized)
         markdown = report_to_markdown(report)
         self.assertIn("# Button Box test report", markdown)
+        self.assertIn("`recipient-chooser-stable`: `pass`", markdown)
         self.assertIn("`message-played`: `fail`", markdown)
 
     def test_snapshots_drop_unknown_fields_and_invalid_values(self):
