@@ -695,17 +695,18 @@ def create_app(
         if not RINGTONE_PREVIEW_LOCK.acquire(blocking=False):
             raise RequestError("409 Conflict", "Button Box audio is busy")
 
-        def play():
-            try:
-                subprocess.run(
-                    ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
-                    check=False,
-                    timeout=30,
-                )
-            finally:
-                RINGTONE_PREVIEW_LOCK.release()
-
-        threading.Thread(target=play, daemon=True).start()
+        try:
+            subprocess.run(
+                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                check=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RequestError(
+                "503 Service Unavailable", "Button Box audio could not play"
+            ) from exc
+        finally:
+            RINGTONE_PREVIEW_LOCK.release()
 
     def application(environ, start_response):
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -800,7 +801,7 @@ def create_app(
                 if set(request) != {"ringtone_id"}:
                     raise RequestError("400 Bad Request", "Invalid ringtone preview request")
                 preview_ringtone(request["ringtone_id"])
-                return _json_response({"ok": True}, "202 Accepted")(start_response)
+                return _json_response({"ok": True})(start_response)
 
             if method == "GET" and path == "/api/networks":
                 if selected_mode != "HOTSPOT":
