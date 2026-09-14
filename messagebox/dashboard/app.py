@@ -72,6 +72,14 @@ from messagebox.tailnet import (
 )
 from messagebox.wifi_change import WifiChangeError, load_status as wifi_change_status
 from messagebox.wifi_change import request_change as request_wifi_change
+from messagebox.test_report import (
+    TEST_RIG_CONFIG_PATH,
+    TestRigError,
+    build_report,
+    event_transition_snapshot,
+    report_to_markdown,
+    test_rig_available,
+)
 
 BIND = os.environ.get("MSGBOX_DASH_BIND", "wlan0").strip()
 PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))
@@ -1135,6 +1143,13 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
+            if url.path == "/":
+                body, ctype = static
+                body = body.replace(
+                    b"__MESSAGEBOX_TEST_RIG_HIDDEN__",
+                    b"" if test_rig_available(TEST_RIG_CONFIG_PATH) else b"hidden",
+                )
+                static = body, ctype
             return self._send(200, *static)
         if url.path == "/api/state":
             return self._send(200, json.dumps(runtime_state()))
@@ -1386,6 +1401,42 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": str(exc)}))
             except OSError:
                 return self._send(503, json.dumps({"error": "Wi-Fi change is unavailable"}))
+        if url.path == "/api/test-report":
+            if not test_rig_available(TEST_RIG_CONFIG_PATH):
+                return self._send(404, json.dumps({"ok": False, "error": "not found"}))
+            payload = self._json_body(2048)
+            if payload is None:
+                return
+            try:
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) - {"note"}
+                    or not isinstance(payload.get("note", ""), str)
+                ):
+                    raise ValueError("invalid test report request")
+                events = load_events()
+                state = {
+                    "queue_count": len(list_wavs(QUEUE_DIR)),
+                    "hold_count": len(list_wavs(HOLD_DIR)),
+                    "trash_count": len(list_wavs(TRASH_DIR)),
+                    "event_count": len(events),
+                    "transitions": event_transition_snapshot(events),
+                }
+                report = build_report(
+                    "dashboard",
+                    note=payload.get("note", ""),
+                    surface_state=state,
+                    config_path=TEST_RIG_CONFIG_PATH,
+                )
+            except TestRigError as exc:
+                return self._send(503, json.dumps({"ok": False, "error": str(exc)}))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                return self._send(
+                    503, json.dumps({"ok": False, "error": "report unavailable"})
+                )
+            return self._send(
+                200, json.dumps({"report": report, "markdown": report_to_markdown(report)})
+            )
         if url.path == "/api/wacli-receipt":
             if not WACLI_WEBHOOK_SECRET:
                 return self._send(

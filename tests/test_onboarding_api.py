@@ -1,6 +1,7 @@
 import io
 import json
 import subprocess
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -434,6 +435,57 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
+        self.assertIn(b'id="test-report-panel" hidden', response["body"])
+
+    def test_test_report_is_hidden_and_endpoint_absent_without_marker(self):
+        response = self.client.json("POST", "/api/test-report", {})
+        self.assertEqual(response["status"], "404 Not Found")
+
+    def test_test_rig_can_create_sanitized_report(self):
+        marker = Path(self.directory.name) / "test-rig.json"
+        marker.write_text(
+            json.dumps({"version": 1, "device": socket.gethostname().split(".", 1)[0].lower()}),
+            encoding="utf-8",
+        )
+        captured = {}
+
+        def report_builder(surface, **kwargs):
+            captured.update(surface=surface, kwargs=kwargs)
+            return {
+                "schema_version": 1,
+                "report_id": "report-1",
+                "generated_at": "2026-09-14T10:00:00Z",
+                "device": {"name": "button-box-003", "boot_id": "boot-1"},
+                "software": {"revision": "a" * 40},
+                "surface": surface,
+                "state": {},
+                "test_run": None,
+                "services": {},
+                "hardware": {"gpio": True, "i2c": True, "audio": True},
+                "note": kwargs["note"],
+                "privacy": "automatic fields only",
+            }
+
+        application = create_app(
+            mode="HOTSPOT",
+            config={"device_id": "A7K2"},
+            state_store=self.store,
+            adapter=self.adapter,
+            connectivity_checker=self.checker,
+            clock=self.clock,
+            test_rig_config_path=marker,
+            report_builder=report_builder,
+        )
+        client = WSGIHarness(application)
+        root = client.request("GET", "/")
+        self.assertIn(b'id="test-report-panel" >', root["body"])
+        response = client.json("POST", "/api/test-report", {"note": "button did not play"})
+        self.assertEqual(response["status"], "200 OK")
+        payload = json.loads(response["body"])
+        self.assertEqual(payload["report"]["surface"], "onboarding")
+        self.assertIn("# Button Box test report", payload["markdown"])
+        self.assertEqual(captured["surface"], "onboarding")
+        self.assertNotIn("phone_hint", json.dumps(payload))
 
     def test_clipboard_asset_is_served_by_setup_and_runtime(self):
         from messagebox.dashboard.app import DASHBOARD_STATIC

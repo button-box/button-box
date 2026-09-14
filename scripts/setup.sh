@@ -18,8 +18,10 @@ ONBOARDING_CONFIG_DIR=/etc/messagebox-onboarding
 ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
+SOURCE_REVISION=${MESSAGEBOX_SOURCE_REVISION:-}
 PACKAGE_PYTHON="__init__.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
-make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py"
+make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py
+test_report.py test_runner.py voicepoll.py wifi_change.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
@@ -33,6 +35,20 @@ case "$SSH_TARGET" in
   -*|*[!A-Za-z0-9._@-]*)
     echo "Invalid SSH target supplied for completion instructions." >&2
     exit 2
+    ;;
+esac
+
+if [ -z "$SOURCE_REVISION" ] && command -v git >/dev/null 2>&1; then
+  SOURCE_REVISION=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)
+fi
+if [ "${#SOURCE_REVISION}" -ne 40 ]; then
+  echo "Cannot determine the exact 40-character source revision." >&2
+  exit 1
+fi
+case "$SOURCE_REVISION" in
+  *[!0-9a-f]*)
+    echo "Cannot determine the exact 40-character source revision." >&2
+    exit 1
     ;;
 esac
 
@@ -61,6 +77,7 @@ for path in \
   scripts/commands/messagebox-comitup-state \
   scripts/commands/messagebox-contact \
   scripts/commands/messagebox-init-wifi-onboarding \
+  scripts/commands/messagebox-test \
   scripts/dev/onboard.sh \
   scripts/dev/hardware-test.sh \
   scripts/messageboxctl \
@@ -134,6 +151,7 @@ PY
 for destination in \
   /usr/local/bin/messagebox-contact \
   /usr/local/bin/messagebox-dev-onboard \
+  /usr/local/bin/messagebox-test \
   /usr/local/bin/messageboxctl \
   /usr/local/sbin/messagebox-comitup-state \
   /usr/local/sbin/messagebox-init-wifi-onboarding; do
@@ -282,6 +300,7 @@ sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
   "$DATA_DIR/queue" \
   "$DATA_DIR/state" \
   "$DATA_DIR/wacli"
+sudo install -d -o root -g root -m 0755 /var/lib/messagebox-test
 
 for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON; do
   sudo install -o root -g root -m 0644 \
@@ -408,11 +427,21 @@ sudo install -o root -g root -m 0755 \
   "$REPO_DIR/scripts/commands/messagebox-contact" \
   /usr/local/bin/messagebox-contact
 sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/scripts/commands/messagebox-test" \
+  /usr/local/bin/messagebox-test
+sudo install -o root -g root -m 0755 \
   "$REPO_DIR/scripts/commands/messagebox-comitup-state" \
   /usr/local/sbin/messagebox-comitup-state
 MSGBOX_SKIP_APT=1 "$SCRIPT_DIR/install/nfc.sh"
 sudo install -o root -g root -m 0755 \
   "$REPO_DIR/scripts/dev/onboard.sh" /usr/local/bin/messagebox-dev-onboard
+
+revision_source=$(mktemp)
+trap 'rm -f "$revision_source"' EXIT HUP INT TERM
+printf '%s\n' "$SOURCE_REVISION" >"$revision_source"
+sudo install -o root -g root -m 0644 "$revision_source" "$APP_DIR/REVISION"
+rm -f "$revision_source"
+trap - EXIT HUP INT TERM
 
 sudo install -d -o root -g root -m 0755 \
   /usr/share/messagebox/onboarding \

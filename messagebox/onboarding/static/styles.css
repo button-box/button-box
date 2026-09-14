@@ -337,6 +337,10 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
 }
 
 .page-error { margin-top: 1.5rem; font-weight: 700; }
+.test-report { margin-top: 2rem; }
+.test-report h2 { margin-top: 0; }
+.test-report textarea { width: 100%; margin: 0.5rem 0; }
+.report-output { min-height: 14rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
 
 @keyframes pulse {
   70% { box-shadow: 0 0 0 1rem rgba(105, 197, 165, 0); }

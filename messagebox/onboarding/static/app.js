@@ -1314,6 +1314,53 @@ function copyPairingCode() {
   );
 }
 
+let latestTestReport = null;
+
+async function createTestReport() {
+  const button = document.getElementById("create-test-report");
+  const status = document.getElementById("test-report-status");
+  button.disabled = true;
+  status.textContent = "Collecting sanitized metadata…";
+  try {
+    const response = await fetch("/api/test-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: document.getElementById("test-report-note").value }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not create report");
+    latestTestReport = payload;
+    const output = document.getElementById("test-report-output");
+    output.value = latestTestReport.markdown;
+    output.hidden = false;
+    document.getElementById("test-report-actions").hidden = false;
+    status.textContent = "Report ready. Copy it into Codex or download the JSON.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function copyTestReport() {
+  return copyText(
+    document.getElementById("test-report-output").value,
+    document.getElementById("copy-test-report"),
+    document.getElementById("test-report-status"),
+    "Sanitized report copied.",
+  );
+}
+
+function downloadTestReport() {
+  if (!latestTestReport) return;
+  const blob = new Blob([JSON.stringify(latestTestReport.report, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `button-box-report-${latestTestReport.report.report_id}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 async function unlinkWhatsApp(event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector('button[type="submit"]');
@@ -1481,4 +1528,7 @@ window.addEventListener("hashchange", () => {
   // must not keep navigation (including Activity) stuck in the old mode.
   loadState();
 });
+document.getElementById("create-test-report")?.addEventListener("click", createTestReport);
+document.getElementById("copy-test-report")?.addEventListener("click", copyTestReport);
+document.getElementById("download-test-report")?.addEventListener("click", downloadTestReport);
 loadState();
