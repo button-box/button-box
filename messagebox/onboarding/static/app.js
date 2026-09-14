@@ -471,6 +471,8 @@ async function loadRecipients({ refresh = false, manager = false } = {}) {
 }
 
 async function continueRecipientSetup() {
+  window.clearTimeout(pollTimer);
+  pollTimer = null;
   try {
     const data = await loadRecipients();
     if (["testing", "complete"].includes(data.status)) {

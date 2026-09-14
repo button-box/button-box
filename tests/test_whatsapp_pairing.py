@@ -784,10 +784,26 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("formRequest(`/recipients/${action}`", script)
         self.assertIn("formRequest(`/recipients/${action}-number`", script)
         self.assertIn('formRequest("/recipients/defer")', script)
-        self.assertIn('if (["testing", "complete"].includes(data.status))', script)
+        continue_recipient_setup = script.split(
+            "async function continueRecipientSetup()", 1
+        )[1].split(
+            "async function changeTestRecipient()", 1
+        )[0]
+        self.assertIn("window.clearTimeout(pollTimer)", continue_recipient_setup)
+        self.assertIn("pollTimer = null", continue_recipient_setup)
         self.assertIn(
-            'addEventListener("click", continueRecipientSetup)', script
+            'if (["testing", "complete"].includes(data.status))',
+            continue_recipient_setup,
         )
+        self.assertLess(
+            continue_recipient_setup.index("window.clearTimeout(pollTimer)"),
+            continue_recipient_setup.index("await loadRecipients()"),
+        )
+        self.assertLess(
+            continue_recipient_setup.index("await loadRecipients()"),
+            continue_recipient_setup.index('showView("recipients")'),
+        )
+        self.assertIn('addEventListener("click", continueRecipientSetup)', script)
         self.assertIn('id="manual-default-form"', html)
         self.assertIn('id="manual-allow-form"', html)
         self.assertIn('type="tel"', html)

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from messagebox.test_report import TestRigError
-from messagebox.test_runner import enable, finish_run, record_step, start_run
+from messagebox.test_runner import SCENARIOS, enable, finish_run, record_step, start_run
 
 
 class TestRunnerTests(unittest.TestCase):
@@ -85,6 +85,16 @@ class TestRunnerTests(unittest.TestCase):
             state_path=self.state, clock=lambda: 2, geteuid=self.root_user
         )
         self.assertEqual(finished["status"], "passed")
+
+    def test_onboarding_requires_recipient_chooser_poll_stability(self):
+        steps = SCENARIOS["onboarding"]
+        self.assertIn("recipient-chooser-stable", steps)
+        self.assertLess(
+            steps.index("whatsapp-linked"), steps.index("recipient-chooser-stable")
+        )
+        self.assertLess(
+            steps.index("recipient-chooser-stable"), steps.index("recipient-selected")
+        )
 
 
 if __name__ == "__main__":

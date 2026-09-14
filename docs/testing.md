@@ -107,6 +107,9 @@ For installation and consumer onboarding, test:
 - Clean installation and manufacturer handoff
 - Wi-Fi success, failure, and recovery
 - WhatsApp pairing and interruption
+- From the WhatsApp-ready view, choose a recipient and wait at least 3.5 seconds
+  (more than two 1.5-second poll cycles); the recipient chooser must remain open.
+  Record this as `recipient-chooser-stable` before selecting a recipient.
 - Empty-account recipient discovery and manual refresh
 - Manual international-number selection and allow-listing, including invalid
   formats, duplicates, and default preservation when merely adding a recipient

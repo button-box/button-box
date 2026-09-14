@@ -44,6 +44,7 @@ SCENARIOS = {
         "wrong-password-recovered",
         "home-wifi-connected",
         "whatsapp-linked",
+        "recipient-chooser-stable",
         "recipient-selected",
         "nfc-routed",
         "cold-reboot-resumed",
