@@ -78,6 +78,19 @@ class DashboardContactTests(unittest.TestCase):
         handler.do_GET()
         return responses[0]
 
+    def test_runtime_pairing_requires_matching_success_receipt(self):
+        store = SimpleNamespace(
+            active=lambda: None,
+            outcome=lambda attempt: {"status": "success"} if attempt == "confirmed" else None,
+        )
+        with patch.object(dashboard, "nfc_router", return_value=SimpleNamespace(enrollment=store)):
+            code, result = self.get("/api/nfc-runtime?attempt=confirmed")
+            self.assertEqual(code, 200)
+            self.assertEqual(result["status"], "success")
+            self.assertNotIn("request_id", result)
+            self.assertEqual(self.get("/api/nfc-runtime?attempt=cancelled")[1]["status"], "idle")
+            self.assertEqual(self.get("/api/nfc-runtime")[1]["status"], "idle")
+
     def test_missing_store_starts_empty_without_a_default_recipient_gate(self):
         with patch.object(dashboard, "discover_whatsapp_chats", return_value=[]):
             settings = dashboard.contact_settings()
