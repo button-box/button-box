@@ -1,15 +1,42 @@
 import json
+import io
+import types
 import tempfile
 import unittest
 from pathlib import Path
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.activity import setup_activity
+from messagebox.onboarding.whatsapp import _PairingHandler, WhatsAppPairingClient
+from unittest import mock
 from messagebox.onboarding.state import StateStore
 from test_onboarding_api import WSGIHarness, FakeAdapter, FakeWhatsApp, FakeNfc
 
 
 class SetupActivityTests(unittest.TestCase):
+    def test_activity_rpc_has_no_caller_controlled_path_or_auth_side_effects(self):
+        payload = {"cards": {}, "interactions": [], "queue": [], "hold": [], "trash": []}
+        engine = mock.Mock()
+        engine.activity_state.return_value = payload
+        handler = _PairingHandler.__new__(_PairingHandler)
+        handler.server = types.SimpleNamespace(engine=engine)
+        handler.rfile = io.BytesIO(b'{"action":"activity_state"}\n')
+        handler.wfile = io.BytesIO()
+        handler.handle()
+        response = json.loads(handler.wfile.getvalue())
+        self.assertTrue(response["ok"])
+        engine.activity_state.assert_called_once_with()
+        engine.start.assert_not_called()
+        handler.rfile = io.BytesIO(b'{"action":"activity_state","path":"private"}\n')
+        handler.wfile = io.BytesIO()
+        handler.handle()
+        self.assertFalse(json.loads(handler.wfile.getvalue())["ok"])
+        self.assertEqual(engine.activity_state.call_count, 1)
+        client = WhatsAppPairingClient()
+        with mock.patch.object(client, "_request", return_value=payload) as request:
+            self.assertEqual(client.activity_state(), payload)
+            request.assert_called_once_with({"action": "activity_state"})
+
     def test_incomplete_setup_can_read_events_without_private_fields_or_state_changes(self):
         for mode in ("HOME", "HOTSPOT"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:

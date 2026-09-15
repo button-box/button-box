@@ -753,7 +753,9 @@ function renderHome(state) {
     ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
     : "Needs attention";
   document.getElementById("home-whatsapp").textContent = progress.whatsapp === "complete" ? "Linked" : "Needs attention";
-  document.getElementById("home-runtime").textContent = state.mode === "RUNTIME" && ready ? "Ready" : "Setup in progress";
+  document.getElementById("home-runtime").textContent = state.mode === "RUNTIME"
+    ? (ready ? "Ready" : "Needs attention")
+    : "Setup in progress";
 }
 
 function populateSettings(payload) {
@@ -1283,6 +1285,8 @@ document.getElementById("manage-recipients").addEventListener("click", async () 
   location.hash = "recipients";
 });
 window.addEventListener("hashchange", () => {
-  if (currentState) route();
+  // Completion replaces the setup server with runtime. A cached HOME state
+  // must not keep navigation (including Activity) stuck in the old mode.
+  loadState();
 });
 loadState();

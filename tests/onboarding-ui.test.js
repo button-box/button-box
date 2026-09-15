@@ -5,6 +5,7 @@ const vm = require("node:vm");
 function harness(fail = false) {
   const nodes = new Map();
   const calls = [];
+  const handlers = {};
   const element = () => ({
     hidden: false, disabled: false, textContent: "", children: [], dataset: {}, handlers: {},
     addEventListener(name, fn) { this.handlers[name] = fn; },
@@ -15,7 +16,7 @@ function harness(fail = false) {
   const view = { status: "choose", mapped_count: 2, recipients: [] };
   const context = vm.createContext({
     document: { getElementById: node, querySelector: () => null, querySelectorAll: () => [], createElement: element },
-    window: { addEventListener() {}, clearTimeout() {}, setTimeout() { return 1; } },
+    window: { addEventListener(name, fn) { handlers[name] = fn; }, clearTimeout() {}, setTimeout() { return 1; } },
     URLSearchParams, FormData: class { constructor(form) { this.form = form; } get() { return this.form.phone; } },
     fetch: async (url, options) => {
       if (url === "/api/state") return new Promise(() => {});
@@ -29,8 +30,15 @@ function harness(fail = false) {
   form.phone = "+15555550123";
   form.querySelector = () => submit;
   form.reset = () => { form.phone = ""; };
-  return { context, node, calls, form, submit };
+  return { context, node, calls, form, submit, handlers };
 }
+
+test("navigation refetches server state after setup-to-runtime handoff", async () => {
+  const h = harness();
+  vm.runInContext('let refreshed = false; loadState = async () => { refreshed = true; };', h.context);
+  await h.handlers.hashchange();
+  expect(vm.runInContext("refreshed", h.context)).toBe(true);
+});
 
 test("inline allow uses existing API without cancel, default change, or automatic assignment", async () => {
   const h = harness();
