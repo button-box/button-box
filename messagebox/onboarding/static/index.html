@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <title>Button Box</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/clipboard.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <main class="shell">
+  <a id="skip-link" class="skip-link" href="#main">Skip to content</a>
+  <div class="shell">
     <header class="brand">
-      <span class="brand-mark" aria-hidden="true">B</span>
+      <span class="brand-mark" aria-hidden="true"></span>
       <span>Button Box</span>
     </header>
 
@@ -24,9 +25,16 @@
       <a href="#advanced" data-route="advanced">Advanced</a>
     </nav>
 
+    <main id="main" tabindex="-1">
     <section class="card" id="home-view" aria-labelledby="home-title">
-      <p class="eyebrow success">Button Box</p>
-      <h1 id="home-title" tabindex="-1">Home</h1>
+      <div class="home-hero">
+        <p class="eyebrow">Your household Button Box</p>
+        <h1 id="home-title" tabindex="-1">A little closer.</h1>
+        <p class="lede" id="home-summary">Checking your connections and setup.</p>
+        <button type="button" id="ring-now">Play the ringtone</button>
+        <p class="ring-help">Find your box and check its speaker. This does not test messaging.</p>
+        <p id="ring-now-status" class="field-help" role="status" aria-live="polite"></p>
+      </div>
       <div id="home-attention" class="notice" hidden>
         <strong>Setup needs attention</strong>
         <span id="home-attention-copy">Finish the required tasks before Button Box is ready.</span>
@@ -35,7 +43,7 @@
       <div class="status-grid" aria-live="polite">
         <div class="status-card"><span>Wi-Fi</span><strong id="home-wifi">Checking…</strong></div>
         <div class="status-card"><span>WhatsApp</span><strong id="home-whatsapp">Checking…</strong></div>
-        <div class="status-card"><span>Runtime</span><strong id="home-runtime">Checking…</strong></div>
+        <div class="status-card"><span>Setup</span><strong id="home-runtime">Checking…</strong></div>
       </div>
       <h2>Configure Button Box</h2>
       <div class="shortcut-grid">
@@ -43,8 +51,6 @@
         <a href="#settings" class="shortcut"><strong>Sounds and quiet hours</strong><span>Ringtone, volume, lamp, and schedule.</span></a>
         <a href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and NFC.</span></a>
       </div>
-      <button type="button" id="ring-now" class="secondary">Ring Button Box now</button>
-      <p id="ring-now-status" class="field-help" role="status" aria-live="polite"></p>
     </section>
 
     <section class="card" id="setup-view" aria-labelledby="setup-title" hidden>
@@ -441,6 +447,17 @@
     </section>
 
     <p id="page-error" class="page-error" role="alert" hidden></p>
+    <footer class="support-footer">
+      <h2 id="support-title">Need a hand?</h2>
+      <p>Share your Box ID with Dan when asking for help.</p>
+      <div class="box-identity">
+        <span>Box ID <strong id="box-id">Not assigned</strong></span>
+        <button type="button" id="copy-box-id" class="secondary compact" disabled>Copy</button>
+      </div>
+      <p id="box-id-status" class="field-help" role="status" aria-live="polite"></p>
+      <a class="button community" href="https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t" target="_blank" rel="noopener noreferrer">Join the owner community <span class="sr-only">(opens WhatsApp in a new tab)</span></a>
+    </footer>
   </main>
+  </div>
 </body>
 </html>

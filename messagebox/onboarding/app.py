@@ -12,6 +12,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import parse_qsl
 
+from messagebox.identity import read_box_id
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
@@ -511,6 +512,7 @@ def create_app(
                 nfc_setup["status"] = "idle"
         return {
             "phase": state["phase"],
+            "box_id": read_box_id(),
             "safe_error": state["safe_error"],
             "mode": selected_mode,
             "whatsapp": whatsapp_state,
