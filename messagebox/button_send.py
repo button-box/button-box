@@ -920,6 +920,29 @@ def play_pending_listened(limit=4):
     return played
 
 
+def play_send_success_cue():
+    """Keep one audio owner, but yield to a new press without consuming it."""
+    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, SEND_SUCCESS_WAV])
+    deadline = time.monotonic() + 5
+    try:
+        while (code := process.poll()) is None:
+            if button.is_pressed:
+                return
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("aplay", 5)
+            time.sleep(POLL_S)
+        if code:
+            raise subprocess.CalledProcessError(code, "aplay")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.2)
+
+
 def maybe_play_send_success():
     """The main audio owner plays accepted-send cues only while idle."""
     if _recording or _guided_active or button.is_pressed:
@@ -932,7 +955,7 @@ def maybe_play_send_success():
     if time.monotonic() - accepted_at > 30:
         return False
     try:
-        play_audio_ordinary(SEND_SUCCESS_WAV)
+        play_send_success_cue()
     except (OSError, subprocess.SubprocessError):
         # Audio failure must never turn an accepted message into a retry.
         log_event("send_cue_unavailable")
@@ -1378,6 +1401,8 @@ def main():
             time.sleep(POLL_S)
             apply_master_volume()
             maybe_play_send_success()
+            if button.is_pressed:
+                break
             play_pending_nfc_announcement()
             maybe_play_pending_listened()
             refresh_led()

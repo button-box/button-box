@@ -64,7 +64,7 @@ class SendSuccessTests(unittest.TestCase):
 
     def test_cue_waits_until_idle_and_is_played_only_once(self):
         self.notices.put(button_send.time.monotonic())
-        with mock.patch.object(button_send, "play_audio_ordinary") as play:
+        with mock.patch.object(button_send, "play_send_success_cue") as play:
             for field in ("_recording", "_guided_active"):
                 with mock.patch.object(button_send, field, True):
                     self.assertFalse(button_send.maybe_play_send_success())
@@ -73,14 +73,64 @@ class SendSuccessTests(unittest.TestCase):
             play.assert_not_called()
             self.assertTrue(button_send.maybe_play_send_success())
             self.assertFalse(button_send.maybe_play_send_success())
-            play.assert_called_once_with(button_send.SEND_SUCCESS_WAV)
+            play.assert_called_once_with()
 
     def test_stale_and_failed_audio_cues_are_not_retried(self):
         self.notices.put(button_send.time.monotonic() - 31)
-        with mock.patch.object(button_send, "play_audio_ordinary") as play:
+        with mock.patch.object(button_send, "play_send_success_cue") as play:
             self.assertFalse(button_send.maybe_play_send_success())
             play.assert_not_called()
         self.notices.put(button_send.time.monotonic())
-        with mock.patch.object(button_send, "play_audio_ordinary", side_effect=subprocess.CalledProcessError(1, "aplay")):
+        with mock.patch.object(button_send, "play_send_success_cue", side_effect=subprocess.CalledProcessError(1, "aplay")):
             self.assertFalse(button_send.maybe_play_send_success())
         self.assertTrue(self.notices.empty())
+
+    def test_new_press_interrupts_success_cue_without_being_consumed(self):
+        self.notices.put(button_send.time.monotonic())
+        process = mock.Mock()
+        process.poll.return_value = None
+
+        def press(_seconds):
+            button_send.button.is_pressed = True
+
+        with mock.patch.object(button_send.subprocess, "Popen", return_value=process) as spawn, mock.patch.object(button_send.time, "sleep", side_effect=press), mock.patch.object(button_send, "wait_for_stable_open") as discard:
+            self.assertTrue(button_send.maybe_play_send_success())
+        spawn.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, button_send.SEND_SUCCESS_WAV])
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=0.2)
+        discard.assert_not_called()
+        self.assertTrue(button_send.button.is_pressed)
+        self.assertTrue(self.notices.empty())
+
+    def test_success_cue_releases_speaker_even_if_termination_stalls(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("aplay", 0.2), 0]
+        button_send.button.is_pressed = True
+        with mock.patch.object(button_send.subprocess, "Popen", return_value=process):
+            button_send.play_send_success_cue()
+        self.assertEqual(process.method_calls, [
+            mock.call.poll(), mock.call.poll(), mock.call.terminate(),
+            mock.call.wait(timeout=0.2), mock.call.kill(), mock.call.wait(timeout=0.2),
+        ])
+
+    def test_success_cue_finishes_normally_without_killing_player(self):
+        process = mock.Mock()
+        process.poll.side_effect = [None, 0, 0]
+        with mock.patch.object(button_send.subprocess, "Popen", return_value=process), mock.patch.object(button_send.time, "sleep"):
+            button_send.play_send_success_cue()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    def test_success_cue_player_failure_or_timeout_does_not_retry_send(self):
+        for status in (1, None):
+            with self.subTest(status=status):
+                self.notices.put(100)
+                process = mock.Mock()
+                process.poll.return_value = status
+                with mock.patch.object(button_send.subprocess, "Popen", return_value=process), mock.patch.object(button_send.time, "monotonic", side_effect=[100, 100, 106]):
+                    self.assertFalse(button_send.maybe_play_send_success())
+                self.assertTrue(self.notices.empty())
+                if status is None:
+                    process.terminate.assert_called_once_with()
+                    process.wait.assert_called_once_with(timeout=0.2)
