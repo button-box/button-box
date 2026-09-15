@@ -376,6 +376,14 @@
       <h1 id="nfc-choose-title" tabindex="-1">Who is this tag for?</h1>
       <p class="lede">The tag is ready. You can remove it from Button Box now.</p>
       <ul id="nfc-recipient-list" class="recipient-list"></ul>
+      <form id="nfc-allow-form">
+        <h2>Allow a new recipient</h2>
+        <label for="nfc-allow-phone">International phone number</label>
+        <input id="nfc-allow-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="nfc-allow-help" required>
+        <p id="nfc-allow-help" class="field-help">Include + and the country code. Your scanned tag stays ready and your default recipient will not change. After adding, choose the recipient above.</p>
+        <button type="submit">Allow this number</button>
+        <p id="nfc-allow-status" class="field-help" role="status" aria-live="polite"></p>
+      </form>
       <button type="button" id="cancel-nfc-tag" class="secondary">Back</button>
       <p id="nfc-choose-status" class="field-help" role="status" aria-live="polite"></p>
     </section>

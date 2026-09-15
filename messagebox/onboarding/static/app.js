@@ -528,6 +528,31 @@ function nfcRecipientRow(recipient) {
   return row;
 }
 
+async function allowNfcRecipient(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const status = document.getElementById("nfc-allow-status");
+  if (button.disabled) return;
+  button.disabled = true;
+  status.textContent = "Saving…";
+  try {
+    // Reuse the same allowed-recipient boundary; do not select a default,
+    // restart NFC, or assign the captured tag without an explicit Choose.
+    recipientsData = await formRequest("/recipients/add-number", {
+      phone: new FormData(form).get("phone"),
+    });
+    form.reset();
+    const data = await request("/api/nfc");
+    renderNfc(data);
+    status.textContent = "Number allowed. Choose it above to pair this tag.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderNfc(data) {
   nfcData = data;
   const mapped = data.mapped_count;
@@ -728,7 +753,9 @@ function renderHome(state) {
     ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
     : "Needs attention";
   document.getElementById("home-whatsapp").textContent = progress.whatsapp === "complete" ? "Linked" : "Needs attention";
-  document.getElementById("home-runtime").textContent = state.mode === "RUNTIME" && ready ? "Ready" : "Setup in progress";
+  document.getElementById("home-runtime").textContent = state.mode === "RUNTIME"
+    ? (ready ? "Ready" : "Needs attention")
+    : "Setup in progress";
 }
 
 function populateSettings(payload) {
@@ -858,10 +885,6 @@ async function moveMessage(operation, token) {
 }
 
 async function loadActivity() {
-  if (currentState?.mode !== "RUNTIME") {
-    document.getElementById("activity-timeline").textContent = "Activity becomes available after setup is complete.";
-    return;
-  }
   try {
     const data = await request("/api/data");
     const cards = [["Sent", data.cards.sent_total], ["Received", data.cards.recv_total], ["Played", data.cards.plays], ["Rings", data.cards.rings]];
@@ -876,9 +899,10 @@ async function loadActivity() {
     timeline.replaceChildren(...data.interactions.map((item) => {
       const row = document.createElement("article"); row.className = "activity-row";
       const title = document.createElement("strong"); title.textContent = item.outcome_label;
-      const meta = document.createElement("span"); meta.textContent = `${item.flow === "standalone" ? "New message" : "Reply"} · ${new Date(item.ts * 1000).toLocaleString()}`;
+      const meta = document.createElement("span"); meta.textContent = `${item.flow === "standalone" ? "New message · " : item.flow === "reply" ? "Reply · " : ""}${new Date(item.ts * 1000).toLocaleString()}`;
       row.append(title, meta); return row;
     }));
+    if (!data.interactions.length) timeline.textContent = "No activity yet. Events will appear here as you use Button Box.";
     document.getElementById("activity-queue").replaceChildren(activityMessageList(data.queue, "queue"));
     document.getElementById("activity-hold").replaceChildren(activityMessageList(data.hold, "hold"));
     document.getElementById("activity-trash").replaceChildren(activityMessageList(data.trash, "trash"));
@@ -1199,6 +1223,7 @@ document.getElementById("manager-refresh").addEventListener("click", () => loadR
 document.getElementById("manual-allow-form").addEventListener("submit", (event) => {
   mutateRecipientNumber(event, "add");
 });
+document.getElementById("nfc-allow-form").addEventListener("submit", allowNfcRecipient);
 document.getElementById("continue-nfc").addEventListener("click", () => {
   if (currentState?.mode === "RUNTIME") {
     document.getElementById("manager-status").textContent = "Choose Pair card beside a recipient.";
@@ -1260,6 +1285,8 @@ document.getElementById("manage-recipients").addEventListener("click", async () 
   location.hash = "recipients";
 });
 window.addEventListener("hashchange", () => {
-  if (currentState) route();
+  // Completion replaces the setup server with runtime. A cached HOME state
+  // must not keep navigation (including Activity) stuck in the old mode.
+  loadState();
 });
 loadState();

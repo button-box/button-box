@@ -2,7 +2,7 @@
 
 test:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-	bun test tests/clipboard.test.js
+	bun test tests/*.test.js
 
 syntax:
 	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/install/audio_config.py scripts/install/tailscale_dashboard.py

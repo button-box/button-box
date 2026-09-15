@@ -155,6 +155,25 @@ class NfcPairingOnboardingTests(unittest.TestCase):
         self.assertEqual(reassigned["recipient"]["label"], "Family")
         self.assertEqual(self.contacts.resolve_card("04:01:02:03")["jid"], GROUP)
 
+    def test_allow_recipient_preserves_scanned_tag_default_and_existing_mapping(self):
+        self.contacts.assign_card(PERSON, "04:01:02:03")
+        self.engine.start()
+        self.engine.observe(CARD_B)
+        before = json.loads(self.engine.state_path.read_text())
+        default = self.contacts.load()["default_recipient"]
+        self.recipients.add_phone("+15555550123")
+        # A second submission is safe after a lost response; adding does not assign.
+        self.recipients.add_phone("+15555550123")
+        self.assertEqual(json.loads(self.engine.state_path.read_text()), before)
+        view = self.engine.public_state()
+        self.assertEqual(view["status"], "choose")
+        self.assertEqual(view["mapped_count"], 1)
+        added = next(r for r in view["recipients"] if r["label"] == "+15555550123")
+        self.engine.assign(added["token"])
+        self.assertEqual(self.contacts.resolve_card(CARD_B)["jid"], "15555550123@s.whatsapp.net")
+        self.assertEqual(self.contacts.resolve_card(CARD_A)["jid"], PERSON)
+        self.assertEqual(self.contacts.load()["default_recipient"], default)
+
     def test_pending_tag_resumes_then_expires_without_exposing_uid(self):
         self.engine.start()
         self.engine.observe(CARD_A)

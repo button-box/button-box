@@ -49,3 +49,20 @@ For the standalone developer flow and runtime, test:
 - First send and reply
 - Reboot and power-loss recovery
 - Rollback to the previous working release
+# Recipient and activity checks during setup
+
+Navigation refetches server state, including after the setup-to-runtime handoff.
+Runtime needing attention must not be labeled "Setup in progress". Verify Home
+and Activity after completion without reloading the tab.
+
+After scanning an unpaired tag, allow a new international number directly on
+"Who is this tag for?". The scan and existing mappings remain intact; adding
+does not change the default or assign the tag. Choose the new recipient to
+assign explicitly. Check invalid/self numbers, retry after an uncertain response,
+and background polling while typing. Existing allowed-recipient validation applies.
+
+Activity is read-only during setup and shows content-free recorded events or
+an empty state. It uses the existing group-restricted pairing-worker socket:
+the portal does not gain runtime-store access. Test before WhatsApp linking,
+after receive/play/send events, with no history, and with the worker unavailable.
+Never complete setup or expose audio/recipient identifiers just to view events.
