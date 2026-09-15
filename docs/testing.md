@@ -2,7 +2,7 @@
 
 ## Repository tests
 
-- `make test` runs the synthetic Python unit suite.
+- `make test` runs the synthetic Python unit and JavaScript UI-contract suites.
 - `make lint` requires `uvx` (from `uv`) and `bunx` (from Bun). It runs Ruff for
   Python, ShellCheck for shell scripts, and Biome for frontend assets. `uvx` and
   `bunx` download these tools on first use.
