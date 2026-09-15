@@ -1,6 +1,7 @@
 # Send confirmation
 
-`sent-swoosh.wav` is an original, synthesized 480 ms airy rising swoosh, 48 kHz,
+`sent-swoosh.wav` is an original, synthesized 1.25 second airy rising swoosh
+with a playful three-note tail, 48 kHz,
 16-bit mono PCM. It contains no sampled Apple or other third-party audio.
 It is distributed under the repository's source-code license. Reproduce it with
 `python3 scripts/dev/generate-send-swoosh.py`.
