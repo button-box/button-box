@@ -5,6 +5,7 @@ IDLE_EXIT="${MSGBOX_SYNC_IDLE_EXIT:-5s}"
 GAP_S="${MSGBOX_SYNC_GAP_S:-3}"
 WACLI_BIN=/usr/local/bin/wacli
 SYNC_PAUSE_FILE=/var/lib/messagebox/whatsapp-pairing/sync-paused
+SYNC_ACTIVE_FILE=/var/lib/messagebox/whatsapp-pairing/sync-active
 WEBHOOK_URL="${MSGBOX_WACLI_WEBHOOK_URL:-}"
 WEBHOOK_SECRET="${MSGBOX_WACLI_WEBHOOK_SECRET:-}"
 
@@ -26,10 +27,22 @@ if [[ -n "$WEBHOOK_URL" || -n "$WEBHOOK_SECRET" ]]; then
   )
 fi
 
+cleanup() {
+  rm -f -- "$SYNC_ACTIVE_FILE"
+}
+trap cleanup EXIT HUP INT TERM
+
 while true; do
   while [[ -e "$SYNC_PAUSE_FILE" ]]; do
     sleep 1
   done
+  : >"$SYNC_ACTIVE_FILE"
+  # Pairing may have paused us between the check above and this marker.
+  if [[ -e "$SYNC_PAUSE_FILE" ]]; then
+    rm -f -- "$SYNC_ACTIVE_FILE"
+    continue
+  fi
   "$WACLI_BIN" "${SYNC_ARGS[@]}"
+  rm -f -- "$SYNC_ACTIVE_FILE"
   sleep "$GAP_S"
 done

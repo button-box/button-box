@@ -249,6 +249,7 @@ class PairingEngine:
         self.stage = self.root / "staging"
         self.state_path = self.root / "state.json"
         self.sync_pause_path = self.root / "sync-paused"
+        self.sync_active_path = self.root / "sync-active"
         self.backup = self.root / "live-empty-backup"
         self.live_store = Path(live_store)
         self.candidates_path = Path(candidates_path)
@@ -418,7 +419,19 @@ class PairingEngine:
                 raise PairingError("unlink_current_account_first")
             if state["safe_error"] == "CLEANUP_FAILED":
                 raise PairingError("cleanup_required")
+            # Do this before issuing a phone code. A reset may intentionally
+            # preserve a prior store; pairing into that state cannot be safely
+            # promoted and must not lead the caregiver through a doomed link.
+            try:
+                self._check_promotion_destination()
+            except (OSError, PairingError):
+                return self._set_state("failed", error="STORE_CONFLICT")
             self._pause_sync()
+            try:
+                self._require_sync_idle()
+            except (OSError, PairingError):
+                self._resume_sync()
+                raise PairingError("sync_in_progress")
             self._remove_stage()
             self.stage.mkdir(mode=0o700)
             state.update(
@@ -824,6 +837,15 @@ class PairingEngine:
             self.sync_pause_path.unlink()
             self._sync_directory(self.root)
 
+    def _require_sync_idle(self):
+        """Fail before a code if a burst already owns the live wacli store."""
+        if self.sync_active_path.is_symlink() or (
+            self.sync_active_path.exists() and not self.sync_active_path.is_file()
+        ):
+            raise PairingError("sync_activity_path_unsafe")
+        if self.sync_active_path.exists():
+            raise PairingError("sync_in_progress")
+
     def _stage_authenticated(self):
         if not self.stage.exists():
             return False
@@ -859,15 +881,18 @@ class PairingEngine:
         self._remove_stage()
         return True
 
-    def _promote_store(self):
+    def _check_promotion_destination(self):
         if self.backup.exists() or self.backup.is_symlink():
             raise PairingError("promotion_backup_exists")
-        if self.stage.is_symlink() or not self.stage.is_dir():
-            raise PairingError("staging_store_invalid")
         if self.live_store.is_symlink():
             raise PairingError("symlinked_store_rejected")
         if self.live_store.exists() and any(self.live_store.iterdir()):
             raise PairingError("live_store_not_empty")
+
+    def _promote_store(self):
+        self._check_promotion_destination()
+        if self.stage.is_symlink() or not self.stage.is_dir():
+            raise PairingError("staging_store_invalid")
         moved_live = False
         try:
             if self.live_store.exists():
