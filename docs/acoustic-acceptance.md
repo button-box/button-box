@@ -1,7 +1,8 @@
 # Acknowledgement acoustic acceptance
 
-The press cue is 880 Hz for 400 ms; NFC detection is 1760 Hz for 280 ms
-in setup and runtime. Generated assets are refreshed/versioned so an update
+Button presses and NFC detection use the same 880 Hz, 400 ms cue at +12 dB
+in setup and runtime. The pairing-success melody stays distinct.
+Generated assets are refreshed/versioned so an update
 cannot silently keep the old quiet cue. Existing NFC presentation debouncing
 and caregiver sound settings remain intact.
 
@@ -15,7 +16,7 @@ Run the deterministic check on that capture:
 
 ```sh
 python3 scripts/dev/check-acoustic-cue.py capture.wav --frequency 880 --minimum .32 --maximum .48
-python3 scripts/dev/check-acoustic-cue.py nfc-capture.wav --frequency 1760 --minimum .22 --maximum .36
+python3 scripts/dev/check-acoustic-cue.py nfc-capture.wav --frequency 880 --minimum .32 --maximum .48
 ```
 
 The check requires one sustained cue with the expected frequency and duration,

@@ -2,6 +2,8 @@ import json
 import os
 import wave
 import struct
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,15 +36,21 @@ class Reader:
 
 
 class TonePlayerTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
     def test_read_cue_is_long_audible_and_does_not_reuse_old_asset(self):
         with tempfile.TemporaryDirectory() as directory:
-            old = Path(directory) / "read.wav"
+            old = Path(directory) / "read-v2.wav"
             old.write_bytes(b"stale cue")
             calls = []
-            player = TonePlayer(directory, run=lambda command, **kwargs: calls.append(command))
+            def run(command, **kwargs):
+                calls.append(command)
+                if command[0] == "ffmpeg":
+                    return subprocess.run(command, **kwargs)
+
+            player = TonePlayer(directory, run=run)
             player("read")
-            with wave.open(calls[0][-1], "rb") as source:
-                self.assertGreaterEqual(source.getnframes() / source.getframerate(), 0.31)
+            with wave.open(calls[-1][-1], "rb") as source:
+                self.assertAlmostEqual(source.getnframes() / source.getframerate(), 0.40)
                 raw = source.readframes(source.getnframes())
                 self.assertGreaterEqual(max(struct.unpack(f"<{len(raw) // 2}h", raw)), 15000)
             self.assertEqual(old.read_bytes(), b"stale cue")
@@ -56,7 +64,7 @@ class TonePlayerTests(unittest.TestCase):
             player = TonePlayer(
                 directory, run=lambda *args, **kwargs: calls.append((args, kwargs))
             )
-            player("read")
+            player("success")
 
         self.assertEqual(
             calls[0][0][0][0:4],

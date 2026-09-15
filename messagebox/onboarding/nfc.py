@@ -136,10 +136,22 @@ class TonePlayer:
 
     def __call__(self, kind):
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / f"{kind}-v2.wav"
+        path = self.directory / ("read-v3.wav" if kind == "read" else f"{kind}-v2.wav")
         if not path.exists():
-            sequence = [(1760, 0.28)] if kind == "read" else [(1320, 0.14), (1760, 0.22)]
-            self._write_tone(path, sequence)
+            if kind == "read":
+                # Match the runtime button acknowledgement exactly, including
+                # gain and encoding. Keep setup's separate runtime directory.
+                self.run(
+                    ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                     "-i", "sine=frequency=880:duration=0.40",
+                     "-filter:a", "volume=12dB", os.fspath(path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            else:
+                self._write_tone(path, [(1320, 0.14), (1760, 0.22)])
             os.chmod(path, 0o600)
         device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
         self.run(

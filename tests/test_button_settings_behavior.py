@@ -126,6 +126,7 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
             button_send.led = original_led
 
     def test_press_acknowledgement_is_generated_audibly(self):
+        self.assertEqual(button_send.BEEPS["nfc"][1:], button_send.BEEPS["press"][1:])
         with patch.object(button_send.subprocess, "run") as run:
             button_send.make_beeps()
 
@@ -157,6 +158,18 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
             self.assertGreaterEqual(duration_s, 0.39)
             self.assertGreaterEqual(peak, 14000)
             self.assertGreaterEqual(rms, 9000)
+
+            from messagebox.onboarding.nfc import TonePlayer
+            import subprocess
+
+            def run(command, **kwargs):
+                if command[0] == "ffmpeg":
+                    return subprocess.run(command, **kwargs)
+
+            TonePlayer(directory, run=run)("read")
+            with wave.open(os.path.join(directory, "read-v3.wav"), "rb") as setup_cue:
+                self.assertEqual(setup_cue.getframerate(), sample_rate)
+                self.assertEqual(setup_cue.readframes(setup_cue.getnframes()), struct.pack(f"<{len(samples)}h", *samples))
 
     def test_press_acknowledgement_replaces_a_stale_generated_file(self):
         with patch.object(button_send.os.path, "exists", return_value=True), patch.object(
