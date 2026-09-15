@@ -109,6 +109,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/onboarding/voice_gate.py" \
   "$REPO_DIR/./messagebox/onboarding/whatsapp.py" \
   "$REPO_DIR/./messagebox/onboarding/static/app.js" \
+  "$REPO_DIR/./messagebox/onboarding/static/clipboard.js" \
   "$REPO_DIR/./messagebox/onboarding/static/index.html" \
   "$REPO_DIR/./messagebox/onboarding/static/styles.css" \
   "$REPO_DIR/./systemd/" \

@@ -1,12 +1,10 @@
 import io
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest import mock
-from unittest.mock import patch
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
@@ -322,37 +320,6 @@ class OnboardingAPITests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def test_ringtone_preview_reports_speaker_success_and_failure(self):
-        ringtone = Path(self.directory.name) / "ringtone.wav"
-        ringtone.touch()
-        request = {"ringtone_id": "ding_dong"}
-        headers = {"Origin": f"http://{HOST}"}
-        with patch(
-            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
-        ), patch("messagebox.onboarding.app.subprocess.run") as run:
-            response = self.client.json(
-                "POST", "/api/ringtone-preview", request, headers=headers
-            )
-
-        self.assertEqual(response["status"], "200 OK")
-        self.assertTrue(run.call_args.kwargs["check"])
-
-        with patch(
-            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
-        ), patch(
-            "messagebox.onboarding.app.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, ["aplay"]),
-        ):
-            response = self.client.json(
-                "POST", "/api/ringtone-preview", request, headers=headers
-            )
-
-        self.assertEqual(response["status"], "503 Service Unavailable")
-        self.assertEqual(
-            json.loads(response["body"])["error"],
-            "Button Box audio could not play",
-        )
-
     def home_pairing_client(
         self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
     ):
@@ -389,7 +356,7 @@ class OnboardingAPITests(unittest.TestCase):
     def test_root_is_local_asset_page_with_security_headers(self):
         response = self.client.request("GET", "/")
         self.assertEqual(response["status"], "200 OK")
-        self.assertIn(b"Choose home Wi-Fi", response["body"])
+        self.assertIn(b"Choose Wi-Fi for your box", response["body"])
         self.assertIn(f"http://{HOST}/".encode(), response["body"])
         self.assertNotIn(b"__MESSAGEBOX_URL__", response["body"])
         self.assertIsNone(header(response, "Set-Cookie"))
@@ -397,6 +364,14 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
+
+    def test_clipboard_asset_is_served_by_setup_and_runtime(self):
+        from messagebox.dashboard.app import DASHBOARD_STATIC
+
+        response = self.client.request("GET", "/static/clipboard.js")
+        self.assertEqual(response["status"], "200 OK")
+        self.assertIn(b"ButtonBoxClipboard", response["body"])
+        self.assertEqual(response["body"], DASHBOARD_STATIC["/static/clipboard.js"][0])
 
     def test_button_box_canonical_hostname_is_supported_and_enforced(self):
         canonical_host = "button-box-a7.local"

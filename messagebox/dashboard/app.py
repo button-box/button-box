@@ -97,6 +97,10 @@ DASHBOARD_STATIC = {
         DASHBOARD_STATIC_DIR.joinpath("styles.css").read_bytes(),
         "text/css; charset=utf-8",
     ),
+    "/static/clipboard.js": (
+        DASHBOARD_STATIC_DIR.joinpath("clipboard.js").read_bytes(),
+        "text/javascript; charset=utf-8",
+    ),
 }
 RINGTONE_PREVIEW_LOCK = threading.Lock()
 PUBLIC_MESSAGE_LOCK = threading.Lock()
@@ -235,16 +239,17 @@ def preview_ringtone(ringtone_id):
     if not RINGTONE_PREVIEW_LOCK.acquire(blocking=False):
         raise SettingsError("Button Box audio is busy")
 
-    try:
-        subprocess.run(
-            ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
-            check=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise SettingsError("Button Box audio could not play") from exc
-    finally:
-        RINGTONE_PREVIEW_LOCK.release()
+    def play():
+        try:
+            subprocess.run(
+                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                check=False,
+                timeout=30,
+            )
+        finally:
+            RINGTONE_PREVIEW_LOCK.release()
+
+    threading.Thread(target=play, daemon=True).start()
 
 
 def log_event(**ev):
@@ -1083,15 +1088,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "Recipient setup is unavailable"}))
         if url.path == "/api/nfc-runtime":
             try:
-                enrollment = nfc_router().enrollment.active()
+                store = nfc_router().enrollment
+                enrollment = store.active()
+                attempt = urllib.parse.parse_qs(url.query).get("attempt", [""])[0]
+                outcome = store.outcome(attempt) if attempt else None
+                matching = enrollment and (not attempt or enrollment["request_id"] == attempt)
                 health_path = Path(NFC_HEALTH_FILE)
                 healthy = health_path.is_file() and time.time() - health_path.stat().st_mtime <= 10
                 return self._send(
                     200,
                     json.dumps(
                         {
-                            "status": "waiting" if enrollment else "idle",
-                            "recipient": enrollment.get("label") if enrollment else None,
+                            "status": outcome["status"] if outcome else ("waiting" if matching else "idle"),
+                            "recipient": enrollment.get("label") if matching else None,
                             "healthy": healthy,
                         }
                     ),
@@ -1168,7 +1177,7 @@ class Handler(BaseHTTPRequestHandler):
                 preview_ringtone(payload["ringtone_id"])
             except SettingsError as exc:
                 return self._send(409, json.dumps({"ok": False, "error": str(exc)}))
-            return self._send(200, json.dumps({"ok": True}))
+            return self._send(202, json.dumps({"ok": True}))
         if url.path in {"/whatsapp/pair/start", "/whatsapp/pair/cancel", "/whatsapp/unlink"}:
             payload = self._form_body()
             if payload is None:
@@ -1250,7 +1259,7 @@ class Handler(BaseHTTPRequestHandler):
                     if set(payload) != {"token"}:
                         raise NfcError("recipient token is invalid")
                     candidate = pairing_engine().recipients.configured_candidate(payload["token"])
-                    nfc_router().begin_enrollment(
+                    enrollment = nfc_router().begin_enrollment(
                         label=candidate["label"],
                         jid=candidate["jid"],
                         ttl_s=120,
@@ -1258,7 +1267,7 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     return self._send(
                         202,
-                        json.dumps({"status": "waiting", "recipient": candidate["label"]}),
+                        json.dumps({"status": "waiting", "recipient": candidate["label"], "attempt": enrollment["request_id"]}),
                     )
                 if payload:
                     raise NfcError("NFC request is invalid")

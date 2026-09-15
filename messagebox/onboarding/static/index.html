@@ -163,7 +163,7 @@
 
     <section class="card" id="wifi-view" aria-labelledby="wifi-title" hidden>
       <p class="eyebrow">Step 1 of 2</p>
-      <h1 id="wifi-title" tabindex="-1">Choose home Wi-Fi</h1>
+      <h1 id="wifi-title" tabindex="-1">Choose Wi-Fi for your box</h1>
       <p class="lede">Select a nearby network or enter its name manually.</p>
       <div id="scan-status" class="status" role="status">Scanning for networks...</div>
       <!-- biome-ignore lint/a11y/useSemanticElements: JavaScript adds listitem roles to the network buttons. -->
@@ -183,11 +183,13 @@
           <input id="wifi-password" name="password" type="password" minlength="8" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" required>
         </div>
         <aside class="notice">
-          <strong>After you connect</strong>
-          <span>Rejoin home Wi-Fi and open:</span>
+          <strong>Before you connect</strong>
+          <span>Copy this address first. Connecting will close the setup hotspot and may close this page.</span>
+          <span>Then join the same Wi-Fi you selected above, even if it is a separate IoT network. Open this address in Safari or Chrome:</span>
           <code class="setup-url" id="setup-url">__MESSAGEBOX_URL__</code>
           <button type="button" id="copy-setup-url" class="secondary">Copy setup URL</button>
           <span class="field-help" id="setup-url-copy-status" role="status" aria-live="polite"></span>
+          <span class="field-help">If the setup hotspot returns, reconnect to it and check the Wi-Fi name and password.</span>
         </aside>
         <button type="submit" id="connect-wifi">Connect Button Box</button>
       </form>

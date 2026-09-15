@@ -436,6 +436,11 @@ class PairingEngine:
                 raise PairingError("unlink_current_account_first")
             if state["safe_error"] == "CLEANUP_FAILED":
                 raise PairingError("cleanup_required")
+            # Reject conflicts before creating a WhatsApp link that cannot be saved.
+            try:
+                self._check_promotion_destination()
+            except (OSError, PairingError):
+                return self._set_state("failed", error="STORE_CONFLICT")
             self._pause_sync()
             self._remove_stage()
             self.stage.mkdir(mode=0o700)
@@ -904,15 +909,18 @@ class PairingEngine:
         self._remove_stage()
         return True
 
-    def _promote_store(self):
+    def _check_promotion_destination(self):
         if self.backup.exists() or self.backup.is_symlink():
             raise PairingError("promotion_backup_exists")
-        if self.stage.is_symlink() or not self.stage.is_dir():
-            raise PairingError("staging_store_invalid")
         if self.live_store.is_symlink():
             raise PairingError("symlinked_store_rejected")
         if self.live_store.exists() and any(self.live_store.iterdir()):
             raise PairingError("live_store_not_empty")
+
+    def _promote_store(self):
+        self._check_promotion_destination()
+        if self.stage.is_symlink() or not self.stage.is_dir():
+            raise PairingError("staging_store_invalid")
         moved_live = False
         try:
             if self.live_store.exists():
