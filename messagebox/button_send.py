@@ -934,8 +934,8 @@ def wait_for_approval(timeout, session_id=None):
     return True
 
 
-def play_warning_for_approval(path, session_id=None):
-    """The one playback state where a press is consumed as approval."""
+def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
+    """Consume only a fresh deliberate press in review or deletion warning."""
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
     process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, str(path)])
     approved = False
@@ -956,9 +956,13 @@ def play_warning_for_approval(path, session_id=None):
         if process.poll() is None:
             process.wait()
     if approved:
-        acknowledge_guided_press("approve_warning", session_id)
+        acknowledge_guided_press(action, session_id)
     wait_for_stable_open()
     return approved
+
+
+def play_warning_for_approval(path, session_id=None):
+    return play_audio_for_approval(path, session_id)
 
 
 def presence(kind, recipient):
@@ -1081,6 +1085,9 @@ class PiGuidedIO:
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
+
+    def play_review_for_approval(self, path):
+        return play_audio_for_approval(path, self.session_id, action="approve_review")
 
     def record(self):
         return capture_guided_recording(

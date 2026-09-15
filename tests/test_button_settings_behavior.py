@@ -31,6 +31,40 @@ class FakeLed:
 
 
 class ButtonSettingsBehaviorTests(unittest.TestCase):
+    def test_review_approval_requires_a_new_press_after_recording_release(self):
+        for fresh_press in (False, True):
+            with self.subTest(fresh_press=fresh_press):
+                calls = []
+                button = types.SimpleNamespace(is_pressed=True)
+                tick = [0]
+                def release():
+                    calls.append("release")
+                    button.is_pressed = False
+                def now():
+                    tick[0] += 1
+                    button.is_pressed = fresh_press and tick[0] >= 2
+                    return tick[0] * .05
+                process = types.SimpleNamespace(polls=0, stopped=False)
+                def poll():
+                    process.polls += 1
+                    return 0 if process.stopped or process.polls > 7 else None
+                def terminate():
+                    calls.append("terminate")
+                    process.stopped = True
+                process.poll = poll
+                process.terminate = terminate
+                process.wait = lambda: None
+                def spawn(*args, **kwargs):
+                    self.assertFalse(button.is_pressed)
+                    calls.append("spawn")
+                    return process
+                with patch.object(button_send, "button", button, create=True), patch.object(button_send, "wait_for_stable_open", side_effect=release), patch.object(button_send.time, "monotonic", side_effect=now), patch.object(button_send.time, "sleep"), patch.object(button_send.subprocess, "Popen", side_effect=spawn), patch.object(button_send, "acknowledge_guided_press") as acknowledge:
+                    result = button_send.play_audio_for_approval("review.wav", "test", action="approve_review")
+                self.assertEqual(result, fresh_press)
+                self.assertEqual(calls[:2], ["release", "spawn"])
+                self.assertEqual(acknowledge.call_count, int(fresh_press))
+                self.assertEqual(calls.count("terminate"), int(fresh_press))
+
     def settings(self, **changes):
         document = defaults({"TZ": "America/New_York"})
         document.update(changes)

@@ -440,10 +440,11 @@ class GuidedSession:
                 self.io.delete(recording.path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
-        self.io.play_ordinary(recording.path)
-        self.event("guided_review_played", session_id=session_id, duration=recording.duration)
-        self.io.play_ordinary(send_prompt_path)
-        approved = self.io.wait_for_approval(10.0)
+        approved = self.io.play_review_for_approval(recording.path)
+        self.event("guided_review_approved" if approved else "guided_review_played", session_id=session_id, duration=recording.duration)
+        if not approved:
+            self.io.play_ordinary(send_prompt_path)
+            approved = self.io.wait_for_approval(10.0)
         if not approved:
             approved = self.io.play_warning_for_approval(delete_warning_path)
         if approved:
