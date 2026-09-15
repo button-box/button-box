@@ -1,6 +1,7 @@
 [Unit]
 Description=Button Box PN532 recipient-card reader
-After=local-fs.target
+After=local-fs.target messagebox-audio-detect.service
+Requires=messagebox-audio-detect.service
 Before=messagebox-button.service
 PartOf=messagebox.target
 
@@ -10,6 +11,7 @@ User=messagebox
 Group=messagebox
 WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
 Environment=HOME=/var/lib/messagebox
 SupplementaryGroups=i2c gpio
 UMask=0077

@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +114,57 @@ class AudioConfigTests(unittest.TestCase):
                 "speaker",
                 "plughw:CARD=speaker,DEV=0",
             )
+
+    def test_runtime_output_contains_only_detected_audio_settings(self):
+        path = self.root / "run" / "audio.env"
+        with (
+            mock.patch.object(audio_config, "detect_microphone", return_value=("Mic", "plughw:CARD=Mic,DEV=0")),
+            mock.patch.object(audio_config, "detect_speaker", return_value=("Speaker", "plughw:CARD=Speaker,DEV=0")),
+        ):
+            self.assertEqual(audio_config.main(["--runtime-output", str(path)]), 0)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(path.read_text().splitlines(), [
+            "MSGBOX_MIC_DEV=plughw:CARD=Mic,DEV=0",
+            "MSGBOX_SPK_DEV=plughw:CARD=Speaker,DEV=0",
+            "MSGBOX_MIC_CARD=Mic",
+            "MSGBOX_SPEAKER_CARD=Speaker",
+        ])
+
+    def test_failed_runtime_detection_preserves_previous_output(self):
+        path = self.root / "audio.env"
+        path.write_text("previous\n")
+        with (
+            mock.patch.object(audio_config, "detect_microphone", side_effect=audio_config.AudioConfigError("no microphone")),
+            mock.patch("sys.stderr"),
+        ):
+            self.assertEqual(audio_config.main(["--runtime-output", str(path)]), 1)
+        self.assertEqual(path.read_text(), "previous\n")
+
+    def test_atomic_output_failure_preserves_previous_file_and_cleans_stage(self):
+        path = self.root / "audio.env"
+        path.write_text("previous\n")
+        with mock.patch.object(audio_config.os, "replace", side_effect=OSError("failed")):
+            with self.assertRaises(OSError):
+                audio_config.write_atomic(path, "new\n")
+        self.assertEqual(path.read_text(), "previous\n")
+        self.assertEqual(list(self.root.glob(".audio.env.*")), [])
+
+    def test_audio_services_require_detector_and_load_override_last(self):
+        for name in (
+            "messagebox-button.service", "messagebox-nfc.service", "messagebox-dash.service",
+            "onboarding/messagebox-onboarding-home.service",
+            "onboarding/messagebox-onboarding-nfc.service",
+            "onboarding/messagebox-onboarding-button.service",
+        ):
+            with self.subTest(service=name):
+                unit = (ROOT / "systemd" / name).read_text()
+                requires = next(line for line in unit.splitlines() if line.startswith("Requires="))
+                self.assertIn("messagebox-audio-detect.service", requires)
+                self.assertGreater(unit.index("EnvironmentFile=/run/messagebox-audio/audio.env"),
+                                   unit.index("EnvironmentFile=/etc/messagebox/env"))
+        installer = (ROOT / "scripts/setup.sh").read_text()
+        self.assertIn('"$REPO_DIR/scripts/install/audio_config.py" /usr/lib/messagebox/audio_config.py', installer)
+        self.assertIn("messagebox-dash messagebox-audio-detect; do", installer)
 
 
 if __name__ == "__main__":

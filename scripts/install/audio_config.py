@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Render initial Message Box configuration for attached audio devices."""
+"""Detect attached audio devices and render Message Box configuration."""
 
+import argparse
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -114,24 +117,74 @@ def render_environment(
     return "\n".join(rendered) + "\n"
 
 
+def render_runtime_environment(
+    microphone_card, microphone_device, speaker_card, speaker_device
+):
+    """Render volatile settings whose ALSA names can change across boots."""
+    return "".join(
+        f"{key}={value}\n"
+        for key, value in (
+            ("MSGBOX_MIC_DEV", microphone_device),
+            ("MSGBOX_SPK_DEV", speaker_device),
+            ("MSGBOX_MIC_CARD", microphone_card),
+            ("MSGBOX_SPEAKER_CARD", speaker_card),
+        )
+    )
+
+
+def write_atomic(path, content):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent, text=True
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary_name, 0o644)
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def main(argv=None):
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 1:
-        print("Usage: audio_config.py ENV_TEMPLATE", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser()
+    parser.add_argument("template", nargs="?")
+    parser.add_argument("--runtime-output")
+    options = parser.parse_args(arguments)
+    if bool(options.template) == bool(options.runtime_output):
+        parser.error("provide ENV_TEMPLATE or --runtime-output PATH")
     try:
         microphone_card, microphone_device = detect_microphone()
         speaker_card, speaker_device = detect_speaker()
-        template = Path(arguments[0]).read_text(encoding="utf-8")
-        sys.stdout.write(
-            render_environment(
-                template,
-                microphone_card,
-                microphone_device,
-                speaker_card,
-                speaker_device,
+        if options.runtime_output:
+            write_atomic(
+                options.runtime_output,
+                render_runtime_environment(
+                    microphone_card,
+                    microphone_device,
+                    speaker_card,
+                    speaker_device,
+                ),
             )
-        )
+        else:
+            template = Path(options.template).read_text(encoding="utf-8")
+            sys.stdout.write(
+                render_environment(
+                    template,
+                    microphone_card,
+                    microphone_device,
+                    speaker_card,
+                    speaker_device,
+                )
+            )
     except (AudioConfigError, OSError, UnicodeError) as exc:
         print(f"audio setup: {exc}", file=sys.stderr)
         return 1

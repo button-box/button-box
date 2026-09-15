@@ -1,0 +1,10 @@
+[Unit]
+Description=Detect Button Box USB microphone and speaker
+After=sound.target
+
+[Service]
+Type=oneshot
+RuntimeDirectory=messagebox-audio
+RuntimeDirectoryMode=0755
+ExecStart=/usr/bin/python3 /usr/lib/messagebox/audio_config.py --runtime-output /run/messagebox-audio/audio.env
+RemainAfterExit=yes

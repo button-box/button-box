@@ -1,6 +1,7 @@
 [Unit]
 Description=Button Box household dashboard
-After=network-online.target
+After=network-online.target messagebox-audio-detect.service
+Requires=messagebox-audio-detect.service
 Wants=network-online.target
 PartOf=messagebox.target
 
@@ -10,6 +11,7 @@ Group=messagebox
 SupplementaryGroups=messagebox-settings
 WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
 Environment=HOME=/var/lib/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 UMask=0077

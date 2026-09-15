@@ -415,33 +415,6 @@ class ContactStore:
 
         return self._mutate(choose_default)
 
-    def add_contact_and_choose_default(self, jid, label) -> JsonObject:
-        """Atomically add a missing contact and make it the current default."""
-        jid = _clean_chat_jid(jid)
-        label = _clean_text(label, "label", MAX_LABEL_LENGTH)
-
-        def add_and_choose(document):
-            contact = document["contacts"].get(jid)
-            changed = document["default_recipient"] != jid
-            if contact is None:
-                try:
-                    receive_after = _clean_receive_after(self.clock())
-                except Exception as exc:
-                    raise ContactError("clock did not return a valid time") from exc
-                contact = {
-                    "label": label,
-                    "kind": _chat_kind(jid),
-                    "receive_after": receive_after,
-                    "card_uids": [],
-                    "card_clip": "",
-                }
-                document["contacts"][jid] = contact
-                changed = True
-            document["default_recipient"] = jid
-            return changed, _contact_result(jid, contact)
-
-        return self._mutate(add_and_choose)
-
     def replace_default_contact(self, current_jid, new_jid, label) -> JsonObject:
         """Atomically replace an unpaired onboarding default contact."""
         current_jid = _clean_chat_jid(current_jid)

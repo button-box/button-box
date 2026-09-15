@@ -3,9 +3,9 @@ Description=Button Box setup portal on the home network
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 BindsTo=comitup.service
 PartOf=comitup.service
-Requires=messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service
+Requires=messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service messagebox-audio-detect.service
 Conflicts=comitup-web.service
-After=comitup.service network-online.target messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service comitup-web.service
+After=comitup.service network-online.target messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service comitup-web.service messagebox-audio-detect.service
 
 [Service]
 Type=simple
@@ -16,6 +16,7 @@ WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox-onboarding
 Environment=MSGBOX_ONBOARDING_MODE=HOME
 EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
 UMask=0077
 ExecStart=/usr/bin/gunicorn --workers 1 --worker-class sync --timeout 60 --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
 Restart=on-failure

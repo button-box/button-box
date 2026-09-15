@@ -65,6 +65,7 @@ for path in \
   scripts/messageboxctl \
   messagebox/syncloop.sh \
   systemd/messagebox-button.service \
+  systemd/messagebox-audio-detect.service \
   systemd/messagebox-sync.service \
   systemd/messagebox-poller.service \
   systemd/messagebox-dash.service \
@@ -349,7 +350,10 @@ sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
 "$SCRIPT_DIR/install/wacli.sh"
 "$SCRIPT_DIR/install/comitup.sh"
 
-for name in messagebox-button messagebox-sync messagebox-poller messagebox-dash; do
+sudo install -d -o root -g root -m 0755 /usr/lib/messagebox
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/scripts/install/audio_config.py" /usr/lib/messagebox/audio_config.py
+for name in messagebox-button messagebox-sync messagebox-poller messagebox-dash messagebox-audio-detect; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/$name.service" "/etc/systemd/system/$name.service"
 done

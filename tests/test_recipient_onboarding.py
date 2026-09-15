@@ -349,7 +349,7 @@ class RecipientSetupTests(unittest.TestCase):
         self.setup.remove(tokens["+15551234567"])
         self.assertEqual(set(ContactStore(self.contacts_path).load()["contacts"]), {GROUP})
 
-    def test_completed_picker_adds_and_selects_a_new_default_atomically(self):
+    def test_completed_setup_picker_cannot_bypass_recipient_manager(self):
         listed = self.candidates()
         tokens = {item["label"]: item["token"] for item in listed["recipients"]}
         self.setup.select_default(tokens["+15551234567"])
@@ -358,15 +358,15 @@ class RecipientSetupTests(unittest.TestCase):
         state["proof"].update(received=True, played=True, replied=True)
         self.setup._write(state)
 
-        changed = self.setup.select_default(tokens["Family"])
+        with self.assertRaisesRegex(RecipientError, "default recipient is fixed"):
+            self.setup.select_default(tokens["Family"])
 
-        self.assertEqual(changed["default"]["label"], "Family")
         contacts = ContactStore(self.contacts_path).load()
-        self.assertEqual(contacts["default_recipient"], GROUP)
-        self.assertEqual(set(contacts["contacts"]), {PERSON, GROUP})
-        self.assertEqual(contacts["revision"], 2)
+        self.assertEqual(contacts["default_recipient"], PERSON)
+        self.assertEqual(set(contacts["contacts"]), {PERSON})
+        self.assertEqual(self.setup.public_state()["status"], "complete")
 
-    def test_rapid_completed_picker_switches_keep_recipient_state_consistent(self):
+    def test_rapid_manager_switches_keep_recipient_state_consistent(self):
         listed = self.candidates()
         tokens = {item["label"]: item["token"] for item in listed["recipients"]}
         self.setup.select_default(tokens["+15551234567"])
@@ -374,10 +374,11 @@ class RecipientSetupTests(unittest.TestCase):
         state["status"] = "complete"
         state["proof"].update(received=True, played=True, replied=True)
         self.setup._write(state)
+        self.setup.add(tokens["Family"])
 
         choices = [tokens["Family"], tokens["+15551234567"]] * 20
         with ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(self.setup.select_default, choices))
+            results = list(pool.map(self.setup.choose_default, choices))
 
         contacts = ContactStore(self.contacts_path).load()
         persisted = json.loads(self.setup.state_path.read_text(encoding="utf-8"))
@@ -430,11 +431,9 @@ class RecipientSetupTests(unittest.TestCase):
         )
         self.assertTrue(manual["configured"])
         self.assertFalse(manual["is_default"])
-        repeated = self.setup.add_phone("+14155550199")
-        self.assertEqual(repeated["default"]["label"], "+15551234567")
-        self.assertEqual(
-            len([item for item in repeated["recipients"] if item["configured"]]), 2
-        )
+        with self.assertRaisesRegex(RecipientError, "contact already exists"):
+            self.setup.add_phone("+14155550199")
+        self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
 
     def test_defer_is_resumable_and_does_not_activate_messaging(self):
         self.candidates()

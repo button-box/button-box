@@ -2,8 +2,8 @@
 Description=Button Box private NFC setup worker
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 PartOf=comitup.service
-After=local-fs.target sound.target messagebox-whatsapp-pairing.service
-Requires=messagebox-whatsapp-pairing.service
+After=local-fs.target sound.target messagebox-whatsapp-pairing.service messagebox-audio-detect.service
+Requires=messagebox-whatsapp-pairing.service messagebox-audio-detect.service
 Conflicts=messagebox-nfc.service
 
 [Service]
@@ -15,6 +15,7 @@ WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox
 Environment=MSGBOX_NFC_ONBOARDING_SOCKET_GROUP=messagebox-onboarding
 EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
 UMask=0077
 RuntimeDirectory=messagebox-onboarding-nfc
 RuntimeDirectoryMode=0750

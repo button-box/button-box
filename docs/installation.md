@@ -1,7 +1,9 @@
 # Installation
 
-Validate installation changes on a spare Raspberry Pi 4 and microSD card. Do
-not overwrite a working device without a tested backup.
+Validate installation changes on a spare Raspberry Pi 4 and microSD card.
+Production/customer updates need a recovery plan. A disposable development box
+may explicitly waive rollback backups; never include its private state in a
+release artifact.
 
 ## Manufacturer preparation
 
@@ -32,6 +34,14 @@ not overwrite a working device without a tested backup.
    setup fails if either is unavailable. Later updates preserve the existing
    file and operator customization.
 
+   The installed audio-detection service discovers current ALSA card names at
+   boot and supplies four audio-device overrides through
+   `/run/messagebox-audio/audio.env`. Runtime and setup audio consumers wait
+   for detection. With one microphone and one USB speaker, moving their USB
+   ports while powered off should not require editing configuration. Live
+   hot-plug recovery and choosing among multiple microphones/speakers are not
+   guaranteed; power down before moving devices and repeat the physical check.
+
    The Pi needs internet access during setup. See
    [Internet access for a fresh card](developer-onboarding.md#internet-access-for-a-fresh-card).
    For an optionally shipped box that needs private, consented remote
@@ -51,10 +61,13 @@ not overwrite a working device without a tested backup.
 
 1. Power on Button Box.
 2. Join its setup hotspot with the supplied password and open the printed URL.
-3. Submit the home Wi-Fi credentials. The setup hotspot will disappear.
-4. Reconnect the phone to home Wi-Fi and reopen the same URL, such as
-   `http://button-box-001.local/`. The network switch may take up to two
-   minutes; retry if the page is not ready.
+3. Copy the setup URL before submitting Wi-Fi credentials. The setup hotspot
+   will disappear, and an iPhone may close its captive setup window.
+4. In the phone's Wi-Fi settings, join the exact network selected for the box
+   (including a separate IoT network), then open the copied URL in Safari or
+   Chrome. Closing the setup window does not prove the box connected. If the
+   address does not open, verify the phone's network and retry. If the setup
+   hotspot returns, reconnect to it and check the Wi-Fi name and password.
 5. Pair WhatsApp using a number beginning with `+` and its international country
    code.
 6. Choose a recent WhatsApp person or group as the initial default recipient, or

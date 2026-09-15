@@ -124,7 +124,9 @@ def main():
     while True:
         try:
             authorizations = load_contact_authorizations()
-            r = wacli("messages", "list", "--limit", "10", "--json", "--full")
+            # A normal listing initializes wacli.db even before an account is
+            # linked, making the empty pairing destination look occupied.
+            r = wacli("--read-only", "messages", "list", "--limit", "10", "--json", "--full")
             data = json.loads(r.stdout or "{}")
             msgs = (data.get("data") or {}).get("messages") or []
             for m in reversed(msgs):  # oldest first (R9)

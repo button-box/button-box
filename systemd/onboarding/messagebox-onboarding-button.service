@@ -1,6 +1,7 @@
 [Unit]
 Description=Button Box guided button during setup
-After=network-online.target sound.target
+After=network-online.target sound.target messagebox-audio-detect.service
+Requires=messagebox-audio-detect.service
 Wants=network-online.target
 PartOf=messagebox-onboarding-voice.target
 Conflicts=messagebox-button.service
@@ -18,6 +19,7 @@ Environment=MSGBOX_SPEAKER_CARD=Device
 Environment=MSGBOX_SPEAKER_CONTROL=PCM
 Environment=MSGBOX_SPEAKER_VOLUME=50%%
 EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
 Environment=HOME=/var/lib/messagebox
 Environment=PYTHONPATH=/opt/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
