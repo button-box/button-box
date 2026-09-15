@@ -1,5 +1,7 @@
 import json
 import os
+import wave
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +34,19 @@ class Reader:
 
 
 class TonePlayerTests(unittest.TestCase):
+    def test_read_cue_is_long_audible_and_does_not_reuse_old_asset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path(directory) / "read.wav"
+            old.write_bytes(b"stale cue")
+            calls = []
+            player = TonePlayer(directory, run=lambda command, **kwargs: calls.append(command))
+            player("read")
+            with wave.open(calls[0][-1], "rb") as source:
+                self.assertGreaterEqual(source.getnframes() / source.getframerate(), 0.31)
+                raw = source.readframes(source.getnframes())
+                self.assertGreaterEqual(max(struct.unpack(f"<{len(raw) // 2}h", raw)), 15000)
+            self.assertEqual(old.read_bytes(), b"stale cue")
+
     def test_uses_complete_configured_speaker_device(self):
         calls = []
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
