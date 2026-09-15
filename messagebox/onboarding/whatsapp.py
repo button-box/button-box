@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 
 from messagebox.onboarding.recipients import RecipientError, RecipientSetup
+from messagebox.onboarding.activity import setup_activity
+from messagebox.runtime_paths import STATE_DIR
 from messagebox.onboarding.paths import (
     MESSAGEBOX_HOME,
     WACLI_PATH,
@@ -594,6 +596,9 @@ class PairingEngine:
         except RecipientError as exc:
             raise PairingError("recipient_state_failed") from exc
 
+    def activity_state(self):
+        return setup_activity(STATE_DIR / "events.jsonl")
+
     def recipient_list(self, *, refresh=False):
         return self._live_candidates(refresh=refresh)
 
@@ -1046,6 +1051,9 @@ class WhatsAppPairingClient:
     def recipient_state(self):
         return self._request({"action": "recipient_state"})
 
+    def activity_state(self):
+        return self._request({"action": "activity_state"})
+
     def recipient_list(self, *, refresh=False):
         return self._request(
             {"action": "recipient_list", "refresh": bool(refresh)},
@@ -1100,6 +1108,8 @@ class _PairingHandler(socketserver.StreamRequestHandler):
                 state = self.server.engine.relink()
             elif action == "recipient_state" and set(request) == {"action"}:
                 state = self.server.engine.recipient_state()
+            elif action == "activity_state" and set(request) == {"action"}:
+                state = self.server.engine.activity_state()
             elif action == "recipient_list" and set(request) == {"action", "refresh"}:
                 if not isinstance(request["refresh"], bool):
                     raise PairingError("invalid_action")

@@ -50,6 +50,8 @@ STATIC_DIR = Path(__file__).with_name("static")
 RINGTONE_PREVIEW_LOCK = threading.Lock()
 _UNSET = object()
 
+
+
 _DEVICE_ID = re.compile(r"[A-Za-z0-9-]{1,32}\Z")
 _CANONICAL_HOST = re.compile(
     r"(?:button|message)-box-[A-Za-z0-9-]{1,32}\.local\Z", re.IGNORECASE
@@ -777,6 +779,13 @@ def create_app(
             if method == "GET" and path == "/api/state":
                 state = reconcile_home() if selected_mode == "HOME" else store.load()
                 return _json_response(safe_state(state))(start_response)
+
+            if method == "GET" and path == "/api/data":
+                try:
+                    activity = whatsapp.activity_state()
+                except (OSError, PairingError):
+                    raise RequestError("503 Service Unavailable", "Activity is temporarily unavailable") from None
+                return _json_response(activity)(start_response)
 
             if method == "GET" and path == "/api/settings":
                 document, warning = settings.load()
