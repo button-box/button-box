@@ -317,11 +317,23 @@ function recipientRow(recipient, actions = []) {
     });
     row.append(controls);
     if (runtimePairing?.token === recipient.token) {
-      const status = document.createElement("p");
+      const status = document.createElement("div");
       status.className = "card-pairing-status";
+      status.tabIndex = -1;
       status.setAttribute("role", "status");
       status.setAttribute("aria-live", "polite");
-      status.textContent = runtimePairing.message;
+      const message = document.createElement("p");
+      message.className = "card-pairing-message";
+      message.textContent = runtimePairing.message;
+      status.append(message);
+      if (runtimePairing.pending && runtimePairing.attempt) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "secondary compact";
+        cancel.textContent = "Cancel pairing";
+        cancel.addEventListener("click", () => runtimeNfcAction("/nfc/cancel-runtime"));
+        status.append(cancel);
+      }
       row.append(status);
     }
   }
@@ -376,6 +388,10 @@ async function loadRecipients({ refresh = false, manager = false } = {}) {
     if (manager) renderRecipientManager(data);
     else renderRecipientPicker(data);
     status.textContent = refresh ? "WhatsApp refreshed." : "";
+    if (manager && runtimePairing?.pending && runtimePairing.attempt) {
+      window.clearTimeout(nfcPollTimer);
+      nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(), 0);
+    }
     return data;
   } catch (error) {
     status.textContent = error.message;
@@ -441,24 +457,28 @@ async function deferRecipients() {
 }
 
 function setRuntimePairingMessage(message) {
+  document.getElementById("manager-status").textContent = message;
   if (!runtimePairing) return;
   runtimePairing.message = message;
   const list = document.getElementById("configured-recipient-list");
-  const status = list.querySelector(".card-pairing-status");
+  const status = list.querySelector(".card-pairing-message");
   if (status) status.textContent = message;
-  document.getElementById("manager-status").textContent = message;
 }
 
 async function beginRuntimeNfc(token, label, button) {
+  if (runtimePairing?.pending) return;
   const generation = ++runtimePairingGeneration;
   window.clearTimeout(nfcPollTimer);
   runtimePairing = { token, label, pending: true, message: `Starting card pairing for ${label}…` };
   renderRecipientManager(recipientsData);
+  document.getElementById("configured-recipient-list").querySelector(".card-pairing-status")?.focus();
   button.disabled = true;
   try {
     const result = await formRequest("/nfc/enroll", { token });
     if (generation !== runtimePairingGeneration) return;
     runtimePairing.attempt = result.attempt;
+    if (!result.attempt) throw new Error("Pairing was not confirmed. Try again.");
+    renderRecipientManager(recipientsData);
     document.getElementById("cancel-runtime-nfc").hidden = false;
     setRuntimePairingMessage(`Hold a card over Button Box for ${label}. You have two minutes.`);
     pollRuntimeNfc(generation);
@@ -479,7 +499,7 @@ async function pollRuntimeNfc(generation = runtimePairingGeneration) {
     if (generation !== runtimePairingGeneration) return;
     if (state.status === "waiting") {
       setRuntimePairingMessage(state.healthy
-        ? `Waiting for a card for ${runtimePairing.label}…`
+        ? `Hold a card over Button Box for ${runtimePairing.label}. Waiting for a scan…`
         : "Waiting for the NFC reader. Check its connection if this continues.");
       nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(generation), 800);
     } else {
