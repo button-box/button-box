@@ -12,6 +12,14 @@ presses the button to listen.
 [Join the WhatsApp community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t) ·
 [Report an issue](https://github.com/button-box/button-box/issues)
 
+## Versioned development release
+
+[v0.1.0-rc.1](https://github.com/button-box/button-box/releases/tag/v0.1.0-rc.1)
+captures the working development baseline as a source prerelease, with an
+installed-code manifest and checksums. Read the [release notes and verification
+limits](docs/releases/v0.1.0-rc.1.md) before installation. It is not a ready-made
+SD-card image or per-unit hardware certification.
+
 
 ## Build a Button Box
 
