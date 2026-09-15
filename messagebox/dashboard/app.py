@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
+from messagebox.identity import read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
 from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
@@ -207,6 +208,7 @@ def runtime_state():
         "mode": "RUNTIME",
         "phase": "COMPLETE",
         "product": "Button Box",
+        "box_id": read_box_id(),
         "setup": {
             "wifi": "complete" if wifi_connected else "attention",
             "whatsapp": "complete" if whatsapp_connected else "attention",
