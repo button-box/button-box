@@ -200,12 +200,15 @@ else
 fi
 
 printf '\n6. NFC reader and card\n'
-printf 'After pressing Enter, hold one NFC card on the reader for up to 20 seconds.\n'
-continue_prompt
-if [ ! -x "$NFC_VENV/bin/python" ]; then
+if ! confirm "Is a PN532 NFC reader connected? (Skip if absent)" no; then
+  printf 'SKIP: NFC reader not connected\n\n'
+elif [ ! -x "$NFC_VENV/bin/python" ]; then
   fail "NFC Python environment is missing at $NFC_VENV"
-elif NFC_RESET_PIN="$NFC_RESET_PIN" NFC_REQUEST_PIN="$NFC_REQUEST_PIN" \
-  "$NFC_VENV/bin/python" - <<'PY'
+else
+  printf 'After pressing Enter, hold one NFC card on the reader for up to 20 seconds.\n'
+  continue_prompt
+  if NFC_RESET_PIN="$NFC_RESET_PIN" NFC_REQUEST_PIN="$NFC_REQUEST_PIN" \
+    "$NFC_VENV/bin/python" - <<'PY'
 import os
 
 import board
@@ -220,10 +223,11 @@ pn532.SAM_configuration()
 uid = pn532.read_passive_target(timeout=20)
 raise SystemExit(0 if uid is not None else 1)
 PY
-then
-  pass "PN532 reader and NFC card"
-else
-  fail "PN532 initialized but no card was read"
+  then
+    pass "PN532 reader and NFC card"
+  else
+    fail "PN532 initialized but no card was read"
+  fi
 fi
 
 printf '\n7. WhatsApp client\n'

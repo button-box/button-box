@@ -261,14 +261,25 @@ if [ "$HARDWARE_OVERRIDE" -ne 1 ] &&
   exit 0
 fi
 
+if confirm "Enable the NFC reader service? (answer no if no reader is connected)" no; then
+  ENABLE_NFC=1
+else
+  ENABLE_NFC=0
+fi
+
 if [ "$DASHBOARD" -eq 1 ]; then
-  sudo "$MESSAGEBOXCTL" enable button sync poller dashboard nfc
-  SELECTED="button sync poller dashboard nfc"
+  BASE="button sync poller dashboard"
 else
   sudo "$MESSAGEBOXCTL" disable dashboard
-  sudo "$MESSAGEBOXCTL" enable button sync poller nfc
-  SELECTED="button sync poller nfc"
+  BASE="button sync poller"
 fi
+if [ "$ENABLE_NFC" -eq 1 ]; then
+  SELECTED="$BASE nfc"
+else
+  sudo "$MESSAGEBOXCTL" disable nfc
+  SELECTED="$BASE"
+fi
+sudo "$MESSAGEBOXCTL" enable $SELECTED
 sudo "$MESSAGEBOXCTL" start
 sleep 2
 

@@ -62,6 +62,7 @@ trap 'exit 1' HUP INT TERM
 ssh "$TARGET" "mkdir -p '$REMOTE_SOURCE/sounds/guided-reply'"
 
 echo "Copying installation files to $TARGET:$REMOTE_SOURCE"
+if command -v rsync >/dev/null 2>&1; then
 (
 cd "$REPO_DIR"
 REPO_DIR=.
@@ -121,6 +122,67 @@ rsync -az \
   "$GUIDED_PROMPT_DIR/delete-warning.wav" \
   "$GUIDED_PROMPT_DIR/not-sent.wav" \
   "$TARGET:$REMOTE_SOURCE/sounds/guided-reply/"
+else
+# rsync is not available (e.g. Git Bash on Windows); use tar over SSH.
+(
+cd "$REPO_DIR"
+tar czf - \
+  config/env.example \
+  config/onboarding \
+  config/requirements-nfc.txt \
+  scripts/install \
+  scripts/commands/messagebox-comitup-state \
+  scripts/commands/messagebox-contact \
+  scripts/commands/messagebox-init-wifi-onboarding \
+  scripts/dev/onboard.sh \
+  scripts/dev/hardware-test.sh \
+  scripts/messageboxctl \
+  scripts/setup.sh \
+  sounds \
+  messagebox/__init__.py \
+  messagebox/button_send.py \
+  messagebox/contacts.py \
+  messagebox/guided_reply.py \
+  messagebox/listened_receipts.py \
+  messagebox/make_ringtones.py \
+  messagebox/nfc.py \
+  messagebox/nfc_state.py \
+  messagebox/runtime_paths.py \
+  messagebox/settings.py \
+  messagebox/tailnet.py \
+  messagebox/syncloop.sh \
+  messagebox/voicepoll.py \
+  messagebox/wifi_change.py \
+  messagebox/dashboard/__init__.py \
+  messagebox/dashboard/app.py \
+  messagebox/onboarding/__init__.py \
+  messagebox/onboarding/app.py \
+  messagebox/onboarding/comitup_adapter.py \
+  messagebox/onboarding/connectivity.py \
+  messagebox/onboarding/completion.py \
+  messagebox/onboarding/initialize.py \
+  messagebox/onboarding/nfc.py \
+  messagebox/onboarding/paths.py \
+  messagebox/onboarding/recipients.py \
+  messagebox/onboarding/reset.py \
+  messagebox/onboarding/state.py \
+  messagebox/onboarding/voice_gate.py \
+  messagebox/onboarding/whatsapp.py \
+  messagebox/onboarding/static/app.js \
+  messagebox/onboarding/static/index.html \
+  messagebox/onboarding/static/styles.css \
+  systemd \
+  | ssh "$TARGET" "tar xzf - -C '$REMOTE_SOURCE'"
+)
+
+tar czf - -C "$GUIDED_PROMPT_DIR" \
+  reply-countdown.wav \
+  standalone-countdown.wav \
+  press-to-send.wav \
+  delete-warning.wav \
+  not-sent.wav \
+  | ssh "$TARGET" "tar xzf - -C '$REMOTE_SOURCE/sounds/guided-reply'"
+fi
 
 echo "Running setup on $TARGET"
 ssh -t "$TARGET" \

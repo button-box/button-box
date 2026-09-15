@@ -37,7 +37,8 @@ result differs, stop there and troubleshoot instead of pushing ahead.
 | Board | Current status | What to expect |
 | --- | --- | --- |
 | **Raspberry Pi 4B** | Recommended for a first build | The public installation path has been physically exercised through Wi-Fi and WhatsApp readiness. |
-| **Raspberry Pi Zero 2 W** | Supported device target; public installation gap | It needs an OTG USB hub for the USB microphone and speaker. On current `main`, provisioning stops at the Pi-4-only Comitup installer, so the fresh-card community path still needs validation. |
+| **Raspberry Pi 400** | Supported | Same BCM2711 SoC as the Pi 4B, with a built-in keyboard. Use the Pi 4B USB-C power supply and the shared parts. The Comitup installer accepts the 400. |
+| **Raspberry Pi Zero 2 W** | Supported device target; public installation gap | It needs an OTG USB hub for the USB microphone and speaker. On current `main`, provisioning stops at the Pi-4/400-only Comitup installer, so the fresh-card community path still needs validation. |
 
 Do not bypass a board-safety check on a working device. If you want to help
 finish the Zero 2 W path, please join the community or open a focused pull
@@ -50,11 +51,12 @@ affiliated with these retailers.
 
 - **Raspberry Pi Zero 2 W:** [official product and reseller page](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/?variant=raspberry-pi-zero-2-w)
 - **Or Raspberry Pi 4B:** [PiShop.US](https://www.pishop.us/product/raspberry-pi-4-model-b-1gb/), [Vilros](https://vilros.com/products/raspberry-pi-4-model-b-1), or [CanaKit](https://www.canakit.com/raspberry-pi-4.html)
+- **Or Raspberry Pi 400:** [official product page](https://www.raspberrypi.com/products/raspberry-pi-400-unit/) — uses the Pi 4B USB-C power supply below
 - **32 GB SanDisk Ultra A1 microSD card:** [Amazon](https://www.amazon.com/dp/B08L5HMJVW/)
 - **TONOR G11 USB microphone:** [Amazon](https://www.amazon.com/dp/B07GVGMW59)
 - **LIELONGREN 8 W USB speaker:** [Amazon](https://www.amazon.com/dp/B08QRYTPGH)
 - **Pi Zero 2 W power supply:** [official Raspberry Pi 12.5 W Micro USB Power Supply](https://www.raspberrypi.com/products/micro-usb-power-supply/)
-- **Or Pi 4B power supply:** [iUniker 5 V / 4 A USB-C supply](https://www.amazon.com/dp/B097P2NLVH)
+- **Or Pi 4B / 400 power supply:** [iUniker 5 V / 4 A USB-C supply](https://www.amazon.com/dp/B097P2NLVH)
 - **100 mm illuminated arcade button:** [Amazon](https://www.amazon.com/dp/B072JLSH34)
 - **NFC reader:** The original NFC build uses the [HiLetgo PN532 NFC/RFID module kit](https://www.amazon.com/dp/B01I1J17LC) and needs soldering. If you do not want to solder, use a Waveshare PN532 NFC HAT instead.
 - **Optional M2.5 screws, nuts, and washers:** [Amazon](https://www.amazon.com/dp/B0FJ1XN2XP) — useful for mounting the Pi or NFC board inside a custom enclosure; not required for a shoebox prototype
@@ -141,6 +143,20 @@ The default public GPIO configuration is:
 > diagram. Confirm button voltage, LED current limiting, connector sizes, Pi
 > pin numbering, and PN532 I²C mode before applying power. Never connect or
 > disconnect GPIO wiring while the Pi is powered.
+
+Reference wiring used on a Raspberry Pi 400 (physical pin numbers per the
+[Raspberry Pi GPIO pinout](https://raspberry.tips/en/raspberry-pi-gpio-pinout)):
+
+| Element | Physical pin | Connection |
+| --- | --- | --- |
+| Record button NO | Pin 11 (BCM GPIO 17) | Button normally-open terminal |
+| Record button COM | Pin 9 (GND) | Button common terminal |
+| Button LED anode | Pin 37 (BCM GPIO 26) | Through a current-limiting resistor to the LED |
+| Button LED cathode | Pin 39 (GND) | LED to ground |
+
+Confirm the resistor value matches your LED forward voltage and current
+before applying power. NFC wiring is not included here; see the pin list above
+for PN532 I²C, reset, and request pins.
 
 For the printable prototype, download the [top](hardware/enclosure/button-box-enclosure-top.stl)
 and [bottom](hardware/enclosure/button-box-enclosure-bottom.stl) enclosure files.
@@ -276,7 +292,12 @@ The guided workflow will:
 3. Configure the first approved recipient.
 4. Optionally configure the private dashboard.
 5. Offer to test the physical hardware.
-6. Enable and start the selected runtime services.
+6. Ask whether to enable the NFC reader service; answer no for a no-NFC build.
+7. Enable and start the selected runtime services.
+
+With no NFC reader connected, decline the NFC service and add the first contact
+with the default-recipient path. The zero-tag routing sends every recorded
+message to that default recipient without depending on the reader.
 
 Enter phone numbers and other private values directly into the terminal when
 prompted. Do not paste them into an agent conversation or GitHub issue.
@@ -378,7 +399,8 @@ on the physical device.
 | --- | --- | --- |
 | Device runtime | **Experimental** | Recording, sending, receiving, playback, fail-closed recipient routing, and NFC support exist. |
 | Raspberry Pi 4B | **Supported** | A brand-new-card installation has been physically completed through Wi-Fi and WhatsApp onboarding. |
-| Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
+| Raspberry Pi 400 | **Supported** | Same BCM2711 SoC as the Pi 4B. The Comitup installer accepts the 400; physical installation is not yet exercised end to end. |
+| Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4/400-only Comitup gate and needs clean-install validation. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
 | Recipient and NFC browser onboarding | **Experimental** | Repository coverage is included; fresh-Pi NFC and final activation acceptance are still required. |
 | Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
@@ -412,7 +434,13 @@ or with `ssh -i`.
 On macOS, confirm that `rsync --version` reports modern GNU rsync and rerun
 provisioning with Homebrew first in `PATH`.
 
-### The installer says Comitup is validated only on Raspberry Pi 4
+### Provisioning says `rsync: command not found`
+
+Git Bash on Windows does not include rsync. The provisioning script falls back
+to `tar` over SSH when rsync is absent, so the install proceeds normally. No
+extra software is needed.
+
+### The installer says Comitup is validated only on Raspberry Pi 4 / 400
 
 You are installing on a different Pi model. This is the current public Zero 2 W
 installation gap described above. Do not edit out the model check on a working
