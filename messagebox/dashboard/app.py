@@ -629,7 +629,7 @@ def build_guided_observability(events, names, outbox_states=None, now=None, limi
         elif kind == "guided_playback_only":
             session["ended_at"] = event["ts"]
             session["outcome"] = "played_only"
-        elif kind == "guided_review_played":
+        elif kind in {"guided_review_played", "guided_review_approved"}:
             session["reviewed_at"] = event["ts"]
             session["duration"] = event.get("duration")
         elif kind == "guided_press":

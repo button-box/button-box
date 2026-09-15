@@ -49,6 +49,7 @@ For the standalone developer flow and runtime, test:
 - First send and reply
 - Reboot and power-loss recovery
 - Rollback to the previous working release
+
 # Recipient and activity checks during setup
 
 Navigation refetches server state, including after the setup-to-runtime handoff.
@@ -66,3 +67,18 @@ an empty state. It uses the existing group-restricted pairing-worker socket:
 the portal does not gain runtime-store access. Test before WhatsApp linking,
 after receive/play/send events, with no history, and with the worker unavailable.
 Never complete setup or expose audio/recipient identifiers just to view events.
+
+# Early send during own-recording review
+
+In tap/review mode, a fresh deliberate press during review of the user's own
+recording stops preview and approves that recording once. It skips the later
+send prompt, approval timeout and delete warning. Incoming-message listening
+is unchanged. A held recording-stop press must be released before review can
+accept a new press. With no review press, the existing prompt, timeout, warning
+and cancellation flow remains unchanged. Approval queues a send; only actual
+send success may trigger the successful-send sound.
+
+On a named box, verify early review approval for both standalone and reply
+flows, a held recording-stop press, a short bounce, no approval/cancellation,
+and exactly one outgoing voice note in the intended chat. Keep software tests
+and physical switch/audio/delivery evidence separate.

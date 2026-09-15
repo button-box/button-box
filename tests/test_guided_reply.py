@@ -221,11 +221,16 @@ class InboxRestartTests(unittest.TestCase):
 
 
 class FakeIO:
-    def __init__(self, recordings, approve_initial=False, approve_warning=False):
+    def __init__(self, recordings, approve_initial=False, approve_warning=False, approve_review=False):
         self.recordings = list(recordings)
         self.approve_initial = approve_initial
         self.approve_warning = approve_warning
         self.calls = []
+        self.approve_review = approve_review
+
+    def play_review_for_approval(self, path):
+        self.calls.append(("review", os.path.basename(path)))
+        return self.approve_review
 
     def play_ordinary(self, path):
         self.calls.append(("ordinary", os.path.basename(path)))
@@ -249,6 +254,24 @@ class FakeIO:
 
 
 class SessionTests(unittest.TestCase):
+    def test_early_review_press_approves_once_without_prompt_or_warning(self):
+        for flow in ("reply", "standalone"):
+            with self.subTest(flow=flow), tempfile.TemporaryDirectory() as directory:
+                paths = self._paths(directory)
+                io = FakeIO([RecordingResult(paths["reply"], .25, True)], approve_review=True)
+                store = OutboxStore(str(Path(directory) / "outbox"))
+                events = []
+                session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+                result = session.run(recipient="origin@g.us", flow_kind=flow, countdown_path=paths["standalone"], send_prompt_path=paths["send"], delete_warning_path=paths["warning"], not_sent_path=paths["not-sent"], incoming_path=paths["incoming"] if flow == "reply" else None)
+                self.assertEqual(result, "approved")
+                self.assertEqual(len(store.jobs()), 1)
+                self.assertEqual(store.jobs()[0].recipient, "origin@g.us")
+                self.assertEqual(events.count("guided_approved"), 1)
+                self.assertNotIn(("ordinary", "send.wav"), io.calls)
+                self.assertFalse(any(c[0] in ("wait", "warning") for c in io.calls))
+                if flow == "reply":
+                    self.assertEqual(io.calls[0], ("ordinary", "incoming.wav"))
+
     def _paths(self, directory):
         paths = {}
         for name in ("incoming", "reply", "standalone", "send", "warning", "not-sent"):
