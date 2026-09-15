@@ -1,0 +1,126 @@
+{
+  "revision": "EU S8",
+  "printable_front_transition": true,
+  "units": "mm",
+  "scope": "Reusable S7 geometry with closed floor opening and no engravings",
+  "speaker": {
+    "front_width": 187.0,
+    "front_height": 56.0,
+    "rear_width": 186.0,
+    "rear_height": 54.0,
+    "body_depth": 36.0,
+    "grille_projection": 1.5,
+    "front_rim_depth": 1.0,
+    "corner_radius_trial": 16.0,
+    "front_y": -56.9,
+    "floor_z": 2.5
+  },
+  "fit": {
+    "end_span": 188.2,
+    "pocket_depth": 37.2,
+    "front_clearance": 0.2,
+    "top_clearance": 1.4,
+    "front_overlap": 1.1,
+    "bottom_overlap": 2.2,
+    "grille_clearance": 0.2,
+    "saddle_clearance": 0.4
+  },
+  "shell": {
+    "base_width": 197.0,
+    "lid_extra_each_side": 0.25,
+    "depth": 120.0,
+    "height": 82.0,
+    "outer_corner_radius": 8.0,
+    "edge_radius": 3.0,
+    "seam_z": 15.5,
+    "skirt_bottom_z": 7.5,
+    "roof_under_z": 79.5,
+    "crop_rear_y": -13.0,
+    "inner_half_width": 96.0,
+    "inner_front_y": -57.9,
+    "joint_front_radius": 4.0,
+    "joint_corner_x": 92.0,
+    "joint_corner_y": -53.5,
+    "legacy_side_front_x": 94.951,
+    "legacy_side_transition_y": -16.2113,
+    "legacy_side_rear_x": 94.0
+  },
+  "retainers": {
+    "rear_x_ranges": [
+      [
+        -72,
+        -20
+      ],
+      [
+        20,
+        72
+      ]
+    ],
+    "rear_thickness": 3.0,
+    "rear_top_z": 22.5,
+    "saddle_x_ranges": [
+      [
+        -93.7,
+        -74
+      ],
+      [
+        74,
+        93.7
+      ]
+    ],
+    "saddle_depth": 4.0,
+    "saddle_top_z": 12.5,
+    "ledge_half_width": 15.0,
+    "ledge_front_y": -59.0,
+    "ledge_rear_y": -47.0,
+    "ledge_thickness": 3.0,
+    "ledge_ramp_height": 12.0,
+    "cable_slot_x": [
+      -7.5,
+      6.5
+    ],
+    "cable_slot_top_z": 5.0
+  },
+  "mic": {
+    "post_x": [
+      37.75,
+      67.75
+    ],
+    "post_y": -43.5,
+    "post_z": 70.5,
+    "post_diameters": [
+      6.0,
+      4.5
+    ],
+    "pilot_diameter": 2.0,
+    "pilot_depth": 6.5,
+    "slot_center_x": 53.75,
+    "slot_y": [
+      -47.5,
+      -43.5,
+      -39.5
+    ],
+    "slot_lengths": [
+      8.0,
+      12.0,
+      8.0
+    ],
+    "slot_width": 2.0
+  },
+  "evidence": {
+    "front_to_rear_support_printed": 39.0,
+    "grey_rim_protrusion_reported": 0.9,
+    "reported_previous_print_widths": {
+      "base": 196.5,
+      "lid": 196.0
+    },
+    "unresolved": [
+      "R16 front/rear corner radius is a photo-based trial, not measured.",
+      "Centred linear taper and 1 mm rim depth are retained modelling assumptions.",
+      "Reported 0.9 mm protrusion conflicts with nominal recessed pose; STEP does not resolve this physical datum discrepancy.",
+      "Cable envelope and bend remain unmeasured.",
+      "Exterior lid width compensation is retained from V7, not applied to the pocket."
+    ]
+  },
+  "close_floor_opening": true
+}

@@ -10,3 +10,6 @@
 *.pdf binary
 *.wav binary
 *.stl binary
+
+# Generated CAD exchange files: review analytic source and preview instead.
+hardware/enclosure/eu-el001/exports/*.step binary linguist-generated=true

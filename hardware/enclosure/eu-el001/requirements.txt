@@ -1,0 +1,3 @@
+cadquery==2.8.0
+trimesh==5.1.0
+networkx==3.6.1

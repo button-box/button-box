@@ -1,0 +1,152 @@
+{
+  "revision": "EU S8",
+  "units": "mm",
+  "engraving": false,
+  "parts": {
+    "base": {
+      "valid": true,
+      "solids": 1,
+      "volume_mm3": 99683.41485598919,
+      "bounds_mm": [
+        [
+          -98.5000001,
+          -60.0000001,
+          -1e-07
+        ],
+        [
+          98.5000001,
+          60.00000010008361,
+          22.5
+        ]
+      ],
+      "faces": 330,
+      "surface_types": {
+        "PLANE": 269,
+        "CYLINDER": 34,
+        "TORUS": 8,
+        "CONE": 4,
+        "BSPLINE": 15
+      },
+      "precise_volume_mm3": 99683.75808971413,
+      "step_roundtrip_volume_mm3": 99683.75859305228
+    },
+    "base-print": {
+      "valid": true,
+      "solids": 1,
+      "volume_mm3": 99683.41485598919,
+      "bounds_mm": [
+        [
+          -98.5000001,
+          -60.0000001,
+          -1e-07
+        ],
+        [
+          98.5000001,
+          60.00000010008361,
+          22.5
+        ]
+      ],
+      "faces": 330,
+      "surface_types": {
+        "PLANE": 269,
+        "CYLINDER": 34,
+        "TORUS": 8,
+        "CONE": 4,
+        "BSPLINE": 15
+      },
+      "precise_volume_mm3": 99683.75808971413,
+      "step_roundtrip_volume_mm3": 99683.75859305228,
+      "zero_area_triangles_removed": 4
+    },
+    "lid": {
+      "valid": true,
+      "solids": 1,
+      "volume_mm3": 148891.8347742305,
+      "bounds_mm": [
+        [
+          -98.7500001,
+          -60.00000010000001,
+          7.5
+        ],
+        [
+          98.75000010000002,
+          60.0000001000836,
+          82.00000010000004
+        ]
+      ],
+      "faces": 149,
+      "surface_types": {
+        "PLANE": 65,
+        "CYLINDER": 41,
+        "BSPLINE": 35,
+        "TORUS": 4,
+        "CONE": 4
+      },
+      "precise_volume_mm3": 148892.23182613912,
+      "step_roundtrip_volume_mm3": 148892.23182608874
+    },
+    "lid-print": {
+      "valid": true,
+      "solids": 1,
+      "volume_mm3": 148891.83477423023,
+      "bounds_mm": [
+        [
+          -98.7500001,
+          -60.0000001000836,
+          -1.0000000740911314e-07
+        ],
+        [
+          98.75000010000002,
+          60.0000001,
+          74.5
+        ]
+      ],
+      "faces": 149,
+      "surface_types": {
+        "PLANE": 65,
+        "CYLINDER": 41,
+        "BSPLINE": 35,
+        "TORUS": 4,
+        "CONE": 4
+      },
+      "precise_volume_mm3": 148892.2318261391,
+      "step_roundtrip_volume_mm3": 148892.23182609963,
+      "zero_area_triangles_removed": 2
+    }
+  },
+  "intersections_mm3": {
+    "lid_lift_0/base": 0,
+    "lid_lift_0/speaker": 0,
+    "lid_lift_0.5/base": 0,
+    "lid_lift_0.5/speaker": 0,
+    "lid_lift_2/base": 0,
+    "lid_lift_2/speaker": 0,
+    "lid_lift_5/base": 0,
+    "lid_lift_5/speaker": 0,
+    "lid_lift_10/base": 0,
+    "lid_lift_10/speaker": 0,
+    "lid_lift_20/base": 0,
+    "lid_lift_20/speaker": 0,
+    "lid_lift_40/base": 0,
+    "lid_lift_40/speaker": 0,
+    "lid_lift_80/base": 0,
+    "lid_lift_80/speaker": 0,
+    "base/speaker": 0
+  },
+  "files": {
+    "assembly.step": "81c9a95a14e76cc9f17aef887da44e650313cbb0b1060a07e97e251029093195",
+    "base-print.step": "56283424066a97ae9eb8541678627676dd2fb828c8ae1cda85a885bf6b09fed5",
+    "base-print.stl": "c9af29cadd3c7259763470b3835101f21c3abadbe0de3d9e5f71a690107c0d08",
+    "base.step": "beac7224797dfa7cc20c01ce140fc588d4870cdc00e5b112cff9ad98373433db",
+    "lid-print.step": "0717cbbdd898a124ed2bd981fb6587fdffe2a22c643f85ba3d74f1691749a037",
+    "lid-print.stl": "fadc62e155c08c7503a8ac1969aeb209508c109bf4f341a69680c5ad97eec994",
+    "lid.step": "622d21415654cdec5d9e9c281de9cde7185d47d001f4e6cb829e4a5351d776b3"
+  },
+  "source_files": {
+    "source/build.py": "327ac8ee9af1fcd84f428a37056eed5417898f28c7531e55d0026625a4fe17c3",
+    "source/front.py": "0638debe3312f3c3a4b1e724227692f1d4fbf0afea0b8a2cee7bd361dfb8195b",
+    "source/section_profiles.py": "91d0be576853f0f818b6a9b066868096aaf1b032c43e763d3370bdbdb65ae9ad",
+    "parameters.json": "da8334c0eec2a55fa8d4fa440ca535b027f1d70883b154d50fb9647ee561c77d",
+    "rear-sketches.json": "53701a046cb7c72828466ed544b5b8d161c6ede53b7dce52c39a36d439cbaad7"
+  }
+}

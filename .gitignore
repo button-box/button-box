@@ -49,6 +49,7 @@ config/env
 *.ogg
 *.stl
 !hardware/enclosure/*.stl
+!hardware/enclosure/eu-el001/exports/*-print.stl
 *.img
 *.iso
 *.tar

@@ -1,0 +1,1059 @@
+{
+  "revision": "EU S8",
+  "full_assembly_accepted": false,
+  "parts": [
+    {
+      "name": "01 EU S8 lid",
+      "group": "Enclosure",
+      "notes": "Analytic current shell",
+      "sha256": "fadc62e155c08c7503a8ac1969aeb209508c109bf4f341a69680c5ad97eec994",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "02 EU S8 base",
+      "group": "Enclosure",
+      "notes": "Analytic current shell",
+      "sha256": "c9af29cadd3c7259763470b3835101f21c3abadbe0de3d9e5f71a690107c0d08",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "03 Speaker reference",
+      "group": "Speaker",
+      "notes": "Measured overall dimensions; R16 corners and taper remain approximate",
+      "sha256": "5470953bc8580918dc89c9164f90b8092ddebf55fc21bfa6083d8288a04d4d6b",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "04 Button cap",
+      "group": "Button",
+      "notes": "Diameter and above-lid height are estimates.",
+      "bounds_mm": [
+        [
+          -93.0,
+          -50.0,
+          82.0
+        ],
+        [
+          7.0,
+          50.0,
+          104.0
+        ]
+      ],
+      "sha256": "678628b63911e58381b16a94c0c7b37accb72bfb241b91169dbcd2dd1ed9ee85",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "05 Button underside and switch",
+      "group": "Button",
+      "notes": "Measured 16 mm shoulder and 61 mm total depth; other outlines estimated.",
+      "bounds_mm": [
+        [
+          -93.0,
+          -50.0,
+          21.0
+        ],
+        [
+          7.0,
+          50.0,
+          82.0
+        ]
+      ],
+      "sha256": "c9d21d83823315338c0067499287db5e6ce2f1f1f19eef8bd50692a8de58c753",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "06 HOTUT microphone PCB",
+      "group": "Microphone",
+      "notes": "39 x 26 mm envelope; measured hole pitch 30; thickness allowance 1.6 mm.",
+      "bounds_mm": [
+        [
+          33.25,
+          -56.5,
+          68.9000015258789
+        ],
+        [
+          72.25,
+          -30.5,
+          70.5
+        ]
+      ],
+      "sha256": "3ee1d800a1348d3edd4a182de948e59101308f2964ee9874a4905752017b7858",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "07 Microphone capsule",
+      "group": "Microphone",
+      "notes": "Measured centre and height8; diameter11 is a visual estimate.",
+      "bounds_mm": [
+        [
+          48.25,
+          -49.0,
+          70.5
+        ],
+        [
+          59.25,
+          -38.0,
+          78.5
+        ]
+      ],
+      "sha256": "c9654786f9b0aa710eff3390555aec2b3c550b7f252968750a5b1986e324451e",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "08 Mute switch housing",
+      "group": "Microphone",
+      "notes": "Footprint illustrative; nearest housing edge3 mm from hole centre.",
+      "bounds_mm": [
+        [
+          60.25,
+          -45.75,
+          70.5
+        ],
+        [
+          64.75,
+          -41.25,
+          74.5
+        ]
+      ],
+      "sha256": "606011c562bab159e163e587d179003de9d1b79527f876c508dbcfa170612818",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "09 Mute button",
+      "group": "Microphone",
+      "notes": "Measured released total height6 mm; cap diameter estimated.",
+      "bounds_mm": [
+        [
+          61.1,
+          -44.9,
+          74.5
+        ],
+        [
+          63.9,
+          -42.1,
+          76.5
+        ]
+      ],
+      "sha256": "6cacad7961ac75ec225b3e7a0061bbd78b6a1b6fd68e2bd96addf070b8430d5c",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "10 Microphone screws - estimated heads",
+      "group": "Microphone",
+      "notes": "Measured shaft2.5; length/head assumptions retained. Second matching screw needed.",
+      "bounds_mm": [
+        [
+          35.25,
+          -46.0,
+          66.4000015258789
+        ],
+        [
+          70.25,
+          -41.0,
+          74.9000015258789
+        ]
+      ],
+      "sha256": "31587dde1a09afa25c7537c31d56c9564ab118c264936f5dd1bd5e05cd05ee8e",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "11 Raspberry Pi 4 PCB",
+      "group": "Raspberry Pi",
+      "notes": "Existing approximate Pi model; mounting datum unchanged.",
+      "bounds_mm": [
+        [
+          -18.0,
+          -1.2999999523162842,
+          12.5
+        ],
+        [
+          70.0,
+          54.70000076293945,
+          14.09999942779541
+        ]
+      ],
+      "sha256": "871cbe20f26e5e5c6ee3e5ea5235534d441885b38ed11ebf4c492d4783e06d49",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "12 Pi GPIO header",
+      "group": "Raspberry Pi",
+      "notes": "Simplified component outline.",
+      "bounds_mm": [
+        [
+          12.0,
+          -0.30000001192092896,
+          14.100000381469727
+        ],
+        [
+          63.0,
+          4.699999809265137,
+          22.599998474121094
+        ]
+      ],
+      "sha256": "dd167eeb7697fe077796b4086902b66649caaab93e914853f1e67b934a42d9d5",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "13 Pi processor proxy",
+      "group": "Raspberry Pi",
+      "notes": "Simplified component outline.",
+      "bounds_mm": [
+        [
+          33.5,
+          14.699999809265137,
+          14.100000381469727
+        ],
+        [
+          48.5,
+          29.700000762939453,
+          16.5
+        ]
+      ],
+      "sha256": "2f3f2efe460395630ec49f2b7bfad3b98d5a8e07ef884b4af98f3b13db0bc2dd",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "14 Pi USB Ethernet power and HDMI ports",
+      "group": "Raspberry Pi",
+      "notes": "Connector envelope approximations; USB proxy is 0.1 mm taller than measured HAT underside clearance.",
+      "bounds_mm": [
+        [
+          -18.0,
+          0.949999988079071,
+          14.100000381469727
+        ],
+        [
+          63.29999923706055,
+          55.70000076293945,
+          30.099998474121094
+        ]
+      ],
+      "sha256": "7ce9c03167093f574629749907d0c8c48a643b8159e57b512fd1575d85cf752b",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "15 Pi microSD card",
+      "group": "Raspberry Pi",
+      "notes": "Approximate seated card envelope.",
+      "bounds_mm": [
+        [
+          -15.0,
+          -1.2999999523162842,
+          10.5
+        ],
+        [
+          71.0,
+          54.70000076293945,
+          12.5
+        ]
+      ],
+      "sha256": "42d824125239de38b7b12f7652c25fb6e2ce2e809f670f87e60614b5cf590820",
+      "watertight": false,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "16 Waveshare HAT PCB",
+      "group": "Waveshare PN532 HAT",
+      "notes": "Official Waveshare STEP; measured17.5 PCB-top spacing; vendor model2023.",
+      "bounds_mm": [
+        [
+          -15.1578626871027,
+          -1.3685044268045425,
+          30.00000069141388
+        ],
+        [
+          70.12520860732423,
+          54.90757631567383,
+          31.6
+        ]
+      ],
+      "sha256": "8b17b167d11267458882f4ab1516af971bda3973afe491826f1c16a4f569fd92",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "17 HAT components",
+      "group": "Waveshare PN532 HAT",
+      "notes": "Official Waveshare STEP; measured17.5 PCB-top spacing; vendor model2023.",
+      "bounds_mm": [
+        [
+          -12.65498305260315,
+          10.194582693847657,
+          31.586955717206003
+        ],
+        [
+          26.756533375390624,
+          52.64540361669922,
+          33.1
+        ]
+      ],
+      "sha256": "b2d6a2c7ae07f14908396b3164c9f565389b91e74cb120ed15592f3270049844",
+      "watertight": false,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "18 HAT headers and pins",
+      "group": "Waveshare PN532 HAT",
+      "notes": "Official Waveshare STEP; measured17.5 PCB-top spacing; vendor model2023.",
+      "bounds_mm": [
+        [
+          -13.969267854086304,
+          -0.33999998065567016,
+          17.00000057220459
+        ],
+        [
+          62.930002918847656,
+          54.14306520727539,
+          40.900000190734865
+        ]
+      ],
+      "sha256": "4332355942dedc25e4353df87e50615286b139ae19cae59542394c45f1b15c53",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "19 Microphone USB cable - route estimate",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -48.73752091189032,
+          -30.5,
+          20.6
+        ],
+        [
+          54.25,
+          29.2,
+          71.2
+        ]
+      ],
+      "sha256": "8ca48afae2ddf99d5d92ba0eb8c6890b87171d441047721bab399bcae27b7408",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "20 Speaker USB cable - route estimate",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -62.75435528353828,
+          -18.9,
+          5.3
+        ],
+        [
+          76.7,
+          47.400000000000006,
+          23.8
+        ]
+      ],
+      "sha256": "d4e909845f72a0ded5017c7c2aa026d58a439ae863daff764fd4139eb80d49e0",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "21 Pi USB-C power cable - route estimate",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          57.0,
+          71.0,
+          15.2
+        ],
+        [
+          91.16296434287653,
+          89.79260777164187,
+          18.8
+        ]
+      ],
+      "sha256": "4985cb1ebb340af94ff6892b7586f3de0c8a030a48c2bee708da7eb2a38da64f",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "22 Button signal wire - illustrative",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -52.65,
+          2.8200000000000003,
+          22.467499251662623
+        ],
+        [
+          49.58,
+          18.649999511555762,
+          48.64999997054696
+        ]
+      ],
+      "sha256": "4c9082638c643f2ef1cb015af72c0c9ec3db9602c903133b03edf8048b1df60b",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "23 Button return wire - illustrative",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -50.65,
+          2.8200000000000003,
+          22.418622325850055
+        ],
+        [
+          52.12,
+          22.410274531316308,
+          49.649999979745026
+        ]
+      ],
+      "sha256": "f2069e4c606f477acba2cc5cd1b2294c178f03d9e5076c9dbb670547505cb278",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "24 LED signal wire - illustrative",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -47.12540615528829,
+          2.8200000000000003,
+          22.426200823026473
+        ],
+        [
+          16.56,
+          23.313215713348484,
+          45.51295998430023
+        ]
+      ],
+      "sha256": "8a7e6d7a845a3a930ee04cdf4014bc7c66a106f5b325a96ab69268805e1adf7d",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "25 LED return wire - illustrative",
+      "group": "Cables - illustrative routes",
+      "notes": "Unmeasured route, diameter and exit/terminal positions. Length shown is routed centreline only; excess cable not represented.",
+      "bounds_mm": [
+        [
+          -44.12032164036104,
+          2.8200000000000003,
+          22.395761823793872
+        ],
+        [
+          14.02,
+          26.191206479729043,
+          46.50345001282905
+        ]
+      ],
+      "sha256": "545e61c0d5f1a289a18f6b91cb5e21b78303a9bae8bec6390ccefb3ddf03a32c",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "26 Microphone USB-A plug",
+      "group": "Cable plugs - estimated",
+      "notes": "Straight plug envelope assumed; actual plug dimensions unmeasured.",
+      "bounds_mm": [
+        [
+          -39.0,
+          22.700000000000003,
+          18.6
+        ],
+        [
+          -22.0,
+          32.7,
+          25.6
+        ]
+      ],
+      "sha256": "103c145ae648235754879d7cbf5bbfd3c7d445b1a8858f5a1dc853874f816efb",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "26 Microphone USB-A plug metal",
+      "group": "Cable plugs - estimated",
+      "notes": "Intended insertion into Pi USB socket; mating overlap is expected.",
+      "bounds_mm": [
+        [
+          -22.0,
+          22.0,
+          20.1
+        ],
+        [
+          -16.0,
+          33.4,
+          24.1
+        ]
+      ],
+      "sha256": "ecf3094e5313b9d2f051f4ddb0846e409066b738cbb50e77f7f9f189189d80ca",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "27 Speaker USB-A plug",
+      "group": "Cable plugs - estimated",
+      "notes": "Straight plug envelope assumed; actual plug dimensions unmeasured.",
+      "bounds_mm": [
+        [
+          -39.0,
+          40.7,
+          18.6
+        ],
+        [
+          -22.0,
+          50.7,
+          25.6
+        ]
+      ],
+      "sha256": "d13ffcbbb2150d44c36f4e8c8fb613ea917152710ddde4dfab821626b385146f",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "27 Speaker USB-A plug metal",
+      "group": "Cable plugs - estimated",
+      "notes": "Intended insertion into Pi USB socket; mating overlap is expected.",
+      "bounds_mm": [
+        [
+          -22.0,
+          40.0,
+          20.1
+        ],
+        [
+          -16.0,
+          51.400000000000006,
+          24.1
+        ]
+      ],
+      "sha256": "0835dade2a7535ab0ed0715e549d4b94f76e0df57463a4efe19a2b176c97426d",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "28 USB-C power plug",
+      "group": "Cable plugs - estimated",
+      "notes": "Assumed straight plug; exits the existing rear power opening.",
+      "bounds_mm": [
+        [
+          53.3,
+          60.5,
+          14.0
+        ],
+        [
+          64.3,
+          71.0,
+          20.0
+        ]
+      ],
+      "sha256": "cabdef7959f7411c4453ba45cf6fd834fae28a6dd7d53e8bec6c13b7ca05b9c9",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "28 USB-C plug metal neck",
+      "group": "Cable plugs - estimated",
+      "notes": "Estimated narrow insertion neck; wider plastic body stays outside the rear wall.",
+      "bounds_mm": [
+        [
+          54.3,
+          54.5,
+          15.5
+        ],
+        [
+          63.3,
+          60.5,
+          18.5
+        ]
+      ],
+      "sha256": "5eea95dcb45889aac87894265fa64b9b350b562cf4fbcb8c546700bd897a9096",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "29 GPIO jumper plug 1",
+      "group": "Cable plugs - estimated",
+      "notes": "Header/plug model is for spatial inspection, not an electrical wiring instruction.",
+      "bounds_mm": [
+        [
+          47.88,
+          2.42,
+          37.5
+        ],
+        [
+          49.98,
+          4.5200000000000005,
+          43.5
+        ]
+      ],
+      "sha256": "af5b32f41f5f7f7f6b5b781f23219d84f0612a3be79e9296c84da3d7f7ec7b95",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "29 GPIO jumper plug 2",
+      "group": "Cable plugs - estimated",
+      "notes": "Header/plug model is for spatial inspection, not an electrical wiring instruction.",
+      "bounds_mm": [
+        [
+          50.42,
+          2.42,
+          37.5
+        ],
+        [
+          52.519999999999996,
+          4.5200000000000005,
+          43.5
+        ]
+      ],
+      "sha256": "050afabb9781923b8f2d1fcdc517df35c8655cf3f75c0dd1a315a24e5f8e0377",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "29 GPIO jumper plug 3",
+      "group": "Cable plugs - estimated",
+      "notes": "Header/plug model is for spatial inspection, not an electrical wiring instruction.",
+      "bounds_mm": [
+        [
+          14.86,
+          2.42,
+          37.5
+        ],
+        [
+          16.96,
+          4.5200000000000005,
+          43.5
+        ]
+      ],
+      "sha256": "f7f1242a2a33786e86d5f103e4d77a70780128a6fd5bdc6c07d995f9405c0524",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "29 GPIO jumper plug 4",
+      "group": "Cable plugs - estimated",
+      "notes": "Header/plug model is for spatial inspection, not an electrical wiring instruction.",
+      "bounds_mm": [
+        [
+          12.319999999999999,
+          2.42,
+          37.5
+        ],
+        [
+          14.42,
+          4.5200000000000005,
+          43.5
+        ]
+      ],
+      "sha256": "7bc546439d7e8f6a47012cec694f7eb42bf8be015bc48a7596d0902d3abe4064",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "30 Pi mounting screw 1",
+      "group": "Fasteners - illustrative",
+      "notes": "Unmeasured screw dimensions; Pi mounting locations from reviewed proxy.",
+      "bounds_mm": [
+        [
+          6.25,
+          -0.05000000074505806,
+          8.5
+        ],
+        [
+          10.75,
+          4.449999809265137,
+          15.5
+        ]
+      ],
+      "sha256": "34d8020d68d20d39f129bcb127db5543cda813991f874e752b60809e270ff987",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "30 Pi mounting screw 2",
+      "group": "Fasteners - illustrative",
+      "notes": "Unmeasured screw dimensions; Pi mounting locations from reviewed proxy.",
+      "bounds_mm": [
+        [
+          64.25,
+          -0.05000000074505806,
+          8.5
+        ],
+        [
+          68.75,
+          4.449999809265137,
+          15.5
+        ]
+      ],
+      "sha256": "89acb65444e2403759e71644604e7b5e59667a9d70377cdb7de981c1af8453f1",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "30 Pi mounting screw 3",
+      "group": "Fasteners - illustrative",
+      "notes": "Unmeasured screw dimensions; Pi mounting locations from reviewed proxy.",
+      "bounds_mm": [
+        [
+          6.25,
+          48.95000076293945,
+          8.5
+        ],
+        [
+          10.75,
+          53.45000076293945,
+          15.5
+        ]
+      ],
+      "sha256": "defd2feed4f143a6a1404a5df5f3df074792f4dae3e8d9f88815133d00fd27b1",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "30 Pi mounting screw 4",
+      "group": "Fasteners - illustrative",
+      "notes": "Unmeasured screw dimensions; Pi mounting locations from reviewed proxy.",
+      "bounds_mm": [
+        [
+          64.25,
+          48.95000076293945,
+          8.5
+        ],
+        [
+          68.75,
+          53.45000076293945,
+          15.5
+        ]
+      ],
+      "sha256": "a7f449d7c8b9fd1466ce834f9a97447bb00adf3e45fa7c149b728a2cb6e52c67",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "31 Rear enclosure screw 1",
+      "group": "Fasteners - illustrative",
+      "notes": "Reviewed rear axes; screw head, shaft and length are illustrative.",
+      "bounds_mm": [
+        [
+          -93.48930358886719,
+          49.48929977416992,
+          0.800000011920929
+        ],
+        [
+          -87.98930358886719,
+          54.98929977416992,
+          15.199999809265137
+        ]
+      ],
+      "sha256": "356f5994682abb5aaaaa11117149f4f5fb4dfcb693a810f538634d6a08b48d2b",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    },
+    {
+      "name": "31 Rear enclosure screw 2",
+      "group": "Fasteners - illustrative",
+      "notes": "Reviewed rear axes; screw head, shaft and length are illustrative.",
+      "bounds_mm": [
+        [
+          87.98930358886719,
+          49.48929977416992,
+          0.800000011920929
+        ],
+        [
+          93.48930358886719,
+          54.98929977416992,
+          15.199999809265137
+        ]
+      ],
+      "sha256": "e005e025e5956e61835b0e63062f8f4ef87ee00aa01a8e5d31b1dc3102d84eb3",
+      "watertight": true,
+      "manifold_status": "Error.NoError"
+    }
+  ],
+  "closure_samples": [
+    {
+      "lid_lift_mm": 0.5,
+      "minimum_gap_mm_capped_at_2": 0.0,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 2,
+      "minimum_gap_mm_capped_at_2": 0.0,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 5,
+      "minimum_gap_mm_capped_at_2": 0.0,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 10,
+      "minimum_gap_mm_capped_at_2": 0.1999969482421875,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 20,
+      "minimum_gap_mm_capped_at_2": 0.1999969482421875,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 40,
+      "minimum_gap_mm_capped_at_2": 2.0,
+      "intersections": []
+    },
+    {
+      "lid_lift_mm": 80,
+      "minimum_gap_mm_capped_at_2": 2.0,
+      "intersections": []
+    }
+  ],
+  "conservative_microphone_intersections_mm3": {
+    "pcb": 0,
+    "populated_envelope": 0
+  },
+  "limits": [
+    "Mesh intersection and minimum gap checks use current shell tessellation and attributed reference meshes. Gaps above2mm are capped, not exact distances.",
+    "Actual button nut, terminals, bezel dimensions and actuation travel are missing/estimated. Dan reports actual button fits; proxy results do not override that report.",
+    "Pi and connector dimensions are approximate. HAT vendor model and reported17.5mm spacing are retained; real seating needs verification.",
+    "All cable routes, diameters, exits, spare lengths, bends and service slack are unmeasured. Illustrative routes are checked in closed pose only; no cable service-clearance pass.",
+    "Fastener lengths/heads/thread engagement and microphone boss strength remain unverified. Intended mating overlaps must be reviewed separately.",
+    "Seven sampled vertical lid poses are not a swept-volume or force simulation. Speaker insertion, plug installation, button actuation and actual reopening path need physical checks.",
+    "Dan reports the S7 full print is great; S8 floor closure and unnumbered surfaces have not been physically printed/tested."
+  ],
+  "coverage": {
+    "object_count": 41,
+    "closed_pair_count": 820,
+    "closed_pairs_over_0_005_mm3": 30
+  },
+  "closed_intersections": [
+    {
+      "a": "01 EU S8 lid",
+      "b": "10 Microphone screws - estimated heads",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 15.521085301808343,
+      "disposition": "Intentional nominal shaft/pilot interference; actual screw engagement and boss strength unverified."
+    },
+    {
+      "a": "02 EU S8 base",
+      "b": "30 Pi mounting screw 1",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1.5260435355737627,
+      "disposition": "Intentional nominal shaft/pilot interference; actual screw engagement and boss strength unverified."
+    },
+    {
+      "a": "02 EU S8 base",
+      "b": "30 Pi mounting screw 2",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1.5260342438668864,
+      "disposition": "Intentional nominal shaft/pilot interference; actual screw engagement and boss strength unverified."
+    },
+    {
+      "a": "02 EU S8 base",
+      "b": "30 Pi mounting screw 3",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1.5260451043432137,
+      "disposition": "Intentional nominal shaft/pilot interference; actual screw engagement and boss strength unverified."
+    },
+    {
+      "a": "02 EU S8 base",
+      "b": "30 Pi mounting screw 4",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1.5260358126252027,
+      "disposition": "Intentional nominal shaft/pilot interference; actual screw engagement and boss strength unverified."
+    },
+    {
+      "a": "05 Button underside and switch",
+      "b": "22 Button signal wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.12327473959987378,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "05 Button underside and switch",
+      "b": "23 Button return wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.08805548485257295,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "05 Button underside and switch",
+      "b": "24 LED signal wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.09863089164601556,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "05 Button underside and switch",
+      "b": "25 LED return wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.07425800946061928,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "12 Pi GPIO header",
+      "b": "18 HAT headers and pins",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1253.5453165147596,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "14 Pi USB Ethernet power and HDMI ports",
+      "b": "16 Waveshare HAT PCB",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 42.191846068167116,
+      "disposition": "Known approximate Pi USB envelope is0.1mm too tall for reported HAT spacing; inspect actual seating."
+    },
+    {
+      "a": "14 Pi USB Ethernet power and HDMI ports",
+      "b": "26 Microphone USB-A plug metal",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 91.20001220703126,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "14 Pi USB Ethernet power and HDMI ports",
+      "b": "27 Speaker USB-A plug metal",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 91.20001220703126,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "14 Pi USB Ethernet power and HDMI ports",
+      "b": "28 USB-C plug metal neck",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 19.440004119867794,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "16 Waveshare HAT PCB",
+      "b": "17 HAT components",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.062407360417995744,
+      "disposition": "Small internal vendor board/component model overlap."
+    },
+    {
+      "a": "18 HAT headers and pins",
+      "b": "29 GPIO jumper plug 1",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.7791650828242654,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "18 HAT headers and pins",
+      "b": "29 GPIO jumper plug 2",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.7791699236832506,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "18 HAT headers and pins",
+      "b": "29 GPIO jumper plug 3",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.779159451367439,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "18 HAT headers and pins",
+      "b": "29 GPIO jumper plug 4",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.7791606615821851,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "19 Microphone USB cable - route estimate",
+      "b": "22 Button signal wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 6.01083124423727,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "19 Microphone USB cable - route estimate",
+      "b": "23 Button return wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 6.473398624869562,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "19 Microphone USB cable - route estimate",
+      "b": "24 LED signal wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 5.266981586438724,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "19 Microphone USB cable - route estimate",
+      "b": "25 LED return wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.6094310469022631,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "22 Button signal wire - illustrative",
+      "b": "29 GPIO jumper plug 1",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 5.044500130095321,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "23 Button return wire - illustrative",
+      "b": "24 LED signal wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.5513680381491705,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "23 Button return wire - illustrative",
+      "b": "29 GPIO jumper plug 2",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 5.044490877102006,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "24 LED signal wire - illustrative",
+      "b": "25 LED return wire - illustrative",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 1.5669218076968217,
+      "disposition": "Unresolved illustrative cable crossing; actual routing and service slack require physical check."
+    },
+    {
+      "a": "24 LED signal wire - illustrative",
+      "b": "29 GPIO jumper plug 3",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 5.076106029787909,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "24 LED signal wire - illustrative",
+      "b": "29 GPIO jumper plug 4",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 0.02356428533511379,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    },
+    {
+      "a": "25 LED return wire - illustrative",
+      "b": "29 GPIO jumper plug 4",
+      "gap_mm_capped_at_2": 0.0,
+      "intersection_mm3": 5.044485483910389,
+      "disposition": "Nominal mating/termination region in simplified connector or wiring geometry; actual installation unverified."
+    }
+  ],
+  "fixture_availability": "Audit performed with retained reference component meshes. Those fixtures are not distributed in this package; build.py reproduces enclosure/speaker checks only.",
+  "source_report_sha256": "7dd001d9812338cd5cc14496a297859ca40100a467138c0d70ec764b43d02fdc"
+}

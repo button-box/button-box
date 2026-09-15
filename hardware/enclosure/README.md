@@ -1,6 +1,8 @@
 # Button Box enclosure
 
-These STL files form the two-part prototype Button Box enclosure:
+For the European EL001 speaker, use the [EU S8 enclosure](eu-el001/README.md), with editable STEP/source and matching print meshes.
+
+The original STL files below form the earlier two-part prototype enclosure:
 
 - [Top](button-box-enclosure-top.stl)
 - [Bottom](button-box-enclosure-bottom.stl)
