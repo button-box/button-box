@@ -78,6 +78,20 @@ class DashboardSettingsTests(unittest.TestCase):
         )
         self.assertEqual(code, 409)
 
+    def test_runtime_state_exposes_only_assigned_inventory_identity(self):
+        with patch.object(dashboard, "contacts_store") as contacts, patch.object(
+            dashboard, "RecipientSetup"
+        ), patch.object(dashboard.subprocess, "run", side_effect=OSError), patch.object(
+            dashboard, "read_box_id"
+        ) as identity:
+            contacts.return_value.public_view.return_value = {"contacts": {}}
+            for value in (None, "BOX-42"):
+                identity.return_value = value
+                code, payload = self.request("GET", "/api/state")
+                self.assertEqual(code, 200)
+                self.assertEqual(payload["box_id"], value)
+                self.assertEqual(payload["mode"], "RUNTIME")
+
     def test_cross_site_update_is_rejected_before_reading_body(self):
         code, payload = self.request(
             "PUT",
