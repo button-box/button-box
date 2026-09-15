@@ -118,7 +118,7 @@ BEEPS = {
     # following prompt. The old 70 ms tone at ffmpeg's default level was not
     # audible in a real-box acoustic test.
     "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
-    "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.08", "0"),
+    "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "1760", "0.28", "12"),
     "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12", "0"),
     "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
 }
