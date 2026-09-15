@@ -382,23 +382,6 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertFalse(engine.stage.exists())
         self.assertEqual(existing.read_bytes(), b"preserve prior store")
 
-    def test_start_defers_until_an_inflight_sync_releases_the_live_store(self):
-        engine = self.engine()
-        engine.sync_active_path.touch()
-        with mock.patch("messagebox.onboarding.whatsapp.threading.Thread") as worker:
-            with self.assertRaisesRegex(PairingError, "sync_in_progress"):
-                engine.start("+14155550123")
-            worker.assert_not_called()
-        self.assertFalse(engine.stage.exists())
-        self.assertFalse(engine.sync_pause_path.exists())
-
-    def test_start_rejects_an_unsafe_sync_activity_marker(self):
-        engine = self.engine()
-        engine.sync_active_path.symlink_to(self.root / "missing")
-        with self.assertRaisesRegex(PairingError, "sync_in_progress"):
-            engine.start("+14155550123")
-        self.assertFalse(engine.stage.exists())
-
     def test_start_rejects_interrupted_promotion_and_symlinked_destination(self):
         engine = self.engine()
         engine.backup.mkdir()
@@ -696,7 +679,6 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("ReadWritePaths=/var/lib/messagebox", worker)
         self.assertIn("/run/messagebox /run/messagebox-whatsapp-pairing", worker)
         self.assertIn("/var/lib/messagebox/whatsapp-pairing/sync-paused", syncloop)
-        self.assertIn("/var/lib/messagebox/whatsapp-pairing/sync-active", syncloop)
         self.assertIn('while [[ -e "$SYNC_PAUSE_FILE" ]]', syncloop)
         self.assertNotIn("/var/lib/messagebox/wacli", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)

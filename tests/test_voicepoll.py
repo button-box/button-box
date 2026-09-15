@@ -2,6 +2,10 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from messagebox import voicepoll
 
 from messagebox.contacts import ContactStore
 from messagebox.voicepoll import (
@@ -13,6 +17,30 @@ from messagebox.voicepoll import (
 
 PERSON = "15551234567@s.whatsapp.net"
 GROUP = "120363123456789@g.us"
+
+
+class PollingStoreTests(unittest.TestCase):
+    def test_unlinked_poll_does_not_initialize_a_store_before_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "wacli.db"
+
+            def run(arguments, **kwargs):
+                # Models the real CLI boundary, reproduced on the device:
+                # ordinary listing creates the database; read-only does not.
+                if "--read-only" not in arguments:
+                    database.touch()
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+            with (
+                mock.patch.object(voicepoll, "load_seen", return_value=set()),
+                mock.patch.object(voicepoll, "load_contact_authorizations", return_value={}),
+                mock.patch.object(voicepoll.subprocess, "run", side_effect=run) as process,
+                mock.patch.object(voicepoll.time, "sleep", side_effect=KeyboardInterrupt),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                voicepoll.main()
+            process.assert_called_once()
+            self.assertFalse(database.exists())
 
 
 class TimestampTests(unittest.TestCase):

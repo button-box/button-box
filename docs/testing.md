@@ -24,6 +24,12 @@ For installation and consumer onboarding, test:
 - Clean installation and manufacturer handoff
 - Wi-Fi success, failure, and recovery
 - WhatsApp pairing and interruption
+- After account unlink and a Wi-Fi setup reset, run the voice poller before
+  linking again. It must leave an absent/empty WhatsApp store unchanged.
+  Complete one real phone link and verify store promotion succeeds. Also
+  repeat with an occupied store: pairing must reject it before issuing a
+  code and preserve it across retries. Synthetic subprocess tests do not
+  replace this check against the installed wacli binary.
 - Empty-account recipient discovery and manual refresh
 - Manual international-number selection and allow-listing, including invalid
   formats, duplicates, and default preservation when merely adding a recipient

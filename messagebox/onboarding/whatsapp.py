@@ -249,7 +249,6 @@ class PairingEngine:
         self.stage = self.root / "staging"
         self.state_path = self.root / "state.json"
         self.sync_pause_path = self.root / "sync-paused"
-        self.sync_active_path = self.root / "sync-active"
         self.backup = self.root / "live-empty-backup"
         self.live_store = Path(live_store)
         self.candidates_path = Path(candidates_path)
@@ -427,11 +426,6 @@ class PairingEngine:
             except (OSError, PairingError):
                 return self._set_state("failed", error="STORE_CONFLICT")
             self._pause_sync()
-            try:
-                self._require_sync_idle()
-            except (OSError, PairingError):
-                self._resume_sync()
-                raise PairingError("sync_in_progress")
             self._remove_stage()
             self.stage.mkdir(mode=0o700)
             state.update(
@@ -836,15 +830,6 @@ class PairingEngine:
         if self.sync_pause_path.exists():
             self.sync_pause_path.unlink()
             self._sync_directory(self.root)
-
-    def _require_sync_idle(self):
-        """Fail before a code if a burst already owns the live wacli store."""
-        if self.sync_active_path.is_symlink() or (
-            self.sync_active_path.exists() and not self.sync_active_path.is_file()
-        ):
-            raise PairingError("sync_activity_path_unsafe")
-        if self.sync_active_path.exists():
-            raise PairingError("sync_in_progress")
 
     def _stage_authenticated(self):
         if not self.stage.exists():
