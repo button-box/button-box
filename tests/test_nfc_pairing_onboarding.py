@@ -152,7 +152,7 @@ class NfcPairingOnboardingTests(unittest.TestCase):
 
         paired = self.engine.assign(TOKEN_A)
         self.assertEqual(paired["status"], "success")
-        self.assertEqual(paired["recipient"], {"label": "+15551234567", "kind": "person"})
+        self.assertEqual(paired["recipient"], {"label": "Grandma", "kind": "person"})
         self.assertEqual(paired["mapped_count"], 1)
         self.assertEqual(self.tones, ["read", "success"])
 
@@ -170,7 +170,7 @@ class NfcPairingOnboardingTests(unittest.TestCase):
         self.engine.start()
         mapped = self.engine.observe(CARD_A)
         self.assertEqual(mapped["status"], "already_paired")
-        self.assertEqual(mapped["recipient"]["label"], "+15551234567")
+        self.assertEqual(mapped["recipient"]["label"], "Grandma")
         with self.assertRaises(NfcOnboardingError):
             self.engine.assign(TOKEN_B)
         self.assertEqual(self.engine.allow_reassign()["status"], "choose")

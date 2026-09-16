@@ -537,10 +537,17 @@ def create_app(
             raise PairingError("recipient_response_invalid")
         cleaned = []
         for recipient in recipients:
-            if not isinstance(recipient, dict) or set(recipient) != {
+            legacy_keys = {
                 "token", "label", "kind", "configured", "is_default", "available", "card_count"
+            }
+            current_keys = legacy_keys | {"secondary_label", "metadata_status"}
+            if not isinstance(recipient, dict) or set(recipient) not in {
+                frozenset(legacy_keys), frozenset(current_keys)
             }:
                 raise PairingError("recipient_response_invalid")
+            recipient = dict(recipient)
+            recipient.setdefault("secondary_label", None)
+            recipient.setdefault("metadata_status", "ready")
             token = recipient["token"]
             label = recipient["label"]
             if (
@@ -549,6 +556,15 @@ def create_app(
                 or not isinstance(label, str)
                 or not label.strip()
                 or len(label) > 80
+                or (
+                    recipient["secondary_label"] is not None
+                    and (
+                        not isinstance(recipient["secondary_label"], str)
+                        or not recipient["secondary_label"].strip()
+                        or len(recipient["secondary_label"]) > 80
+                    )
+                )
+                or recipient["metadata_status"] not in {"ready", "unavailable"}
                 or recipient["kind"] not in {"person", "group"}
                 or any(
                     not isinstance(recipient[key], bool)
@@ -955,6 +971,7 @@ def create_app(
                 "/recipients/add-number",
                 "/recipients/remove",
                 "/recipients/default",
+                "/recipients/rename",
                 "/recipients/defer",
             }:
                 _require_same_origin(environ, expected_origin)
@@ -974,7 +991,7 @@ def create_app(
                         "/recipients/select-number",
                         "/recipients/add-number",
                     }:
-                        if set(document) != {"phone"}:
+                        if set(document) not in ({"phone"}, {"phone", "name"}):
                             raise RequestError(
                                 "400 Bad Request", "Invalid recipient number request"
                             )
@@ -983,7 +1000,20 @@ def create_app(
                             "/recipients/select-number": whatsapp.recipient_select_phone,
                             "/recipients/add-number": whatsapp.recipient_add_phone,
                         }[path]
-                        result = operation(phone)
+                        if "name" in document:
+                            result = operation(phone, document["name"])
+                        else:
+                            result = operation(phone)
+                    elif path == "/recipients/rename":
+                        if set(document) != {"token", "name"} or not _RECIPIENT_TOKEN.fullmatch(
+                            document["token"]
+                        ):
+                            raise RequestError(
+                                "400 Bad Request", "Invalid recipient name request"
+                            )
+                        result = whatsapp.recipient_rename(
+                            document["token"], document["name"]
+                        )
                     else:
                         if set(document) != {"token"} or not _RECIPIENT_TOKEN.fullmatch(
                             document["token"]
@@ -1006,6 +1036,11 @@ def create_app(
                         raise RequestError(
                             "409 Conflict",
                             "Choose someone else—the linked WhatsApp account cannot be its own recipient",
+                        ) from exc
+                    if str(exc) == "recipient name is invalid":
+                        raise RequestError(
+                            "400 Bad Request",
+                            "Enter a name of 80 characters or fewer without control characters",
                         ) from exc
                     raise RequestError(
                         "409 Conflict", "Recipient setup could not be updated; refresh and try again"

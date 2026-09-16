@@ -435,6 +435,40 @@ class RecipientSetupTests(unittest.TestCase):
             self.setup.add_phone("+14155550199")
         self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
 
+    def test_manual_name_and_rename_persist_without_changing_identity(self):
+        selected = self.setup.select_phone("+15551234567", name="סבתא")
+        token = selected["default"]["token"]
+        ContactStore(self.contacts_path).assign_card(PERSON, "04:A1:00:FF")
+
+        refreshed = self.setup.reconcile([{"jid": PERSON, "label": "WhatsApp name"}])
+        person = next(item for item in refreshed["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "סבתא")
+        self.assertEqual(person["secondary_label"], "+15551234567")
+
+        renamed = self.setup.rename(token, "Cafe\u0301")
+        person = next(item for item in renamed["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "Café")
+        contact = ContactStore(self.contacts_path).load()
+        self.assertEqual(contact["default_recipient"], PERSON)
+        self.assertEqual(contact["contacts"][PERSON]["card_uids"], ["04:A1:00:FF"])
+
+        fallback = self.setup.rename(token, "   ")
+        person = next(item for item in fallback["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "+15551234567")
+        self.assertEqual(self.setup.public_state(), fallback)
+
+    def test_invalid_manual_or_rename_name_is_rejected_without_mutation(self):
+        with self.assertRaisesRegex(RecipientError, "recipient name is invalid"):
+            self.setup.select_phone("+15551234567", name="x" * 81)
+        self.assertEqual(ContactStore(self.contacts_path).load()["contacts"], {})
+
+        selected = self.setup.select_phone("+15551234567", name="Safe")
+        token = selected["default"]["token"]
+        before = ContactStore(self.contacts_path).load()
+        with self.assertRaisesRegex(RecipientError, "recipient name is invalid"):
+            self.setup.rename(token, "unsafe\nname")
+        self.assertEqual(ContactStore(self.contacts_path).load(), before)
+
     def test_defer_is_resumable_and_does_not_activate_messaging(self):
         self.candidates()
         deferred = self.setup.defer()

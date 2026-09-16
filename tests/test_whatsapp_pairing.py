@@ -53,12 +53,18 @@ class RecordingPopen:
 
 class WacliRunner:
     def __init__(
-        self, *, authenticated=True, connected=True, logout_ok=True, chats=None, sync_ok=True
+        self, *, authenticated=True, connected=True, logout_ok=True, chats=None,
+        groups=None, sync_ok=True
     ):
         self.authenticated = authenticated
         self.connected = connected
         self.logout_ok = logout_ok
         self.chats = chats or []
+        self.groups = groups if groups is not None else [
+            {"JID": row["jid"], "Name": row.get("name", "")}
+            for row in self.chats
+            if str(row.get("jid", "")).endswith("@g.us")
+        ]
         self.sync_ok = sync_ok
         self.calls = []
 
@@ -86,6 +92,12 @@ class WacliRunner:
             return SimpleNamespace(
                 returncode=0,
                 stdout=json.dumps({"chats": self.chats}),
+                stderr="",
+            )
+        if "groups" in arguments and "list" in arguments:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"data": self.groups}),
                 stderr="",
             )
         if "sync" in arguments:
@@ -255,6 +267,30 @@ class WhatsAppPairingTests(unittest.TestCase):
             eligible_conversations({"chats": [{"jid": "0@s.whatsapp.net", "name": "Invalid"}]}),
             [],
         )
+
+    def test_group_names_merge_from_read_only_group_metadata_and_fail_clearly(self):
+        chats = {
+            "data": [
+                {"jid": "111-222@g.us", "name": "111-222@g.us"},
+                {"jid": "333-444@g.us", "name": ""},
+                {"jid": "555-666@g.us", "name": "Shared name"},
+                {"jid": "777-888@g.us", "name": "Shared name"},
+            ]
+        }
+        groups = {"data": [{"JID": "111-222@g.us", "Name": "Synthetic family"}]}
+
+        result = eligible_conversations(chats, groups=groups)
+
+        self.assertEqual(result[0]["label"], "Synthetic family")
+        self.assertEqual(result[1]["label"], "Group name unavailable")
+        self.assertEqual([row["label"] for row in result[2:]], ["Shared name", "Shared name"])
+        self.assertEqual(len({row["jid"] for row in result}), 4)
+
+        unsafe = eligible_conversations(
+            {"data": [{"jid": "999-000@g.us", "name": "hidden\u202ename"}]},
+            groups={"data": [{"JID": "999-000@g.us", "Name": "safe\nname"}]},
+        )
+        self.assertEqual(unsafe[0]["label"], "Group name unavailable")
 
     def test_recipient_refresh_is_bounded_private_and_preserves_last_list_on_failure(self):
         recipient_setup = RecipientSetup(

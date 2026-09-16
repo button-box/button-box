@@ -295,9 +295,16 @@ function recipientRow(recipient, actions = []) {
   const tagCopy = recipient.card_count
     ? ` · ${recipient.card_count} tag${recipient.card_count === 1 ? "" : "s"}`
     : "";
+  const identity = recipient.secondary_label && recipient.secondary_label !== recipient.label
+    ? ` · ${recipient.secondary_label}`
+    : "";
+  const metadata = recipient.metadata_status === "unavailable"
+    ? " · name unavailable — refresh WhatsApp to retry"
+    : "";
+  meta.className = "recipient-secondary";
   meta.textContent = recipient.is_default
-    ? `${recipient.kind} · default${tagCopy}`
-    : `${recipient.kind}${tagCopy}`;
+    ? `${recipient.kind} · default${identity}${metadata}${tagCopy}`
+    : `${recipient.kind}${identity}${metadata}${tagCopy}`;
   copy.append(name, meta);
   row.append(copy);
   if (actions.length) {
@@ -311,6 +318,7 @@ function recipientRow(recipient, actions = []) {
     if (action === "pair-card") button.disabled = Boolean(runtimePairing?.pending);
     button.addEventListener("click", () => {
       if (action === "pair-card") beginRuntimeNfc(recipient.token, recipient.label, button);
+      else if (action === "rename") beginRecipientRename(row, recipient);
       else mutateRecipient(action, recipient.token, button);
     });
       controls.append(button);
@@ -340,6 +348,51 @@ function recipientRow(recipient, actions = []) {
   return row;
 }
 
+function beginRecipientRename(row, recipient) {
+  if (row.querySelector(".recipient-rename")) return;
+  const form = document.createElement("form");
+  form.className = "recipient-rename";
+  const label = document.createElement("label");
+  label.textContent = "Name";
+  const input = document.createElement("input");
+  input.name = "name";
+  input.type = "text";
+  input.maxLength = 80;
+  input.value = recipient.label === recipient.secondary_label ? "" : recipient.label;
+  input.placeholder = "Leave empty to use the phone number";
+  label.append(input);
+  const controls = document.createElement("div");
+  controls.className = "button-row";
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "compact";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary compact";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => form.remove());
+  controls.append(save, cancel);
+  form.append(label, controls);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      recipientsData = await formRequest("/recipients/rename", {
+        token: recipient.token,
+        name: input.value,
+      });
+      renderRecipientManager(recipientsData);
+      document.getElementById("manager-status").textContent = "Name saved.";
+    } catch (error) {
+      document.getElementById("manager-status").textContent = error.message;
+      save.disabled = false;
+    }
+  });
+  row.append(form);
+  input.focus();
+}
+
 function renderRecipientPicker(data) {
   recipientsData = data;
   const list = document.getElementById("recipient-list");
@@ -367,6 +420,10 @@ function renderRecipientManager(data) {
       { action: "default", label: "Make default" },
       { action: "remove", label: "Remove" },
     );
+    if (recipient.kind === "person") actions.unshift({
+      action: "rename",
+      label: recipient.label === recipient.secondary_label ? "Add name" : "Rename",
+    });
     return recipientRow(recipient, actions);
   }));
   document.getElementById("available-recipient-list").replaceChildren(
@@ -449,14 +506,16 @@ async function mutateRecipientNumber(event, action) {
   event.preventDefault();
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
-  const phone = new FormData(form).get("phone");
+  const fields = new FormData(form);
+  const phone = fields.get("phone");
+  const name = fields.get("name") || "";
   const manager = action === "add";
   const status = document.getElementById(manager ? "manager-status" : "recipient-status");
   button.disabled = true;
   showError("");
   status.textContent = "Saving…";
   try {
-    const data = await formRequest(`/recipients/${action}-number`, { phone });
+    const data = await formRequest(`/recipients/${action}-number`, { phone, name });
     recipientsData = data;
     form.reset();
     if (manager) {
@@ -603,6 +662,7 @@ async function allowNfcRecipient(event) {
     // restart NFC, or assign the captured tag without an explicit Choose.
     recipientsData = await formRequest("/recipients/add-number", {
       phone: new FormData(form).get("phone"),
+      name: new FormData(form).get("name") || "",
     });
     form.reset();
     const data = await request("/api/nfc");
