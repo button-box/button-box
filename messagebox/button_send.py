@@ -106,7 +106,10 @@ RING_PHRASE = [
     (True, 1.6),
     (False, 0.6),
 ] * 3
-MIN_HOLD_S = 0.7
+# The audible press acknowledgement doubles as the hold-intent window. A press
+# released while the cue plays remains a playback tap; a press still held when
+# it ends starts capture immediately after the speaker is quiet.
+MIN_HOLD_S = 0.4
 POLL_S = 0.005
 SETTLE_OPEN_S = 0.5
 CONFIRM_PRESS_S = 0.08
@@ -119,7 +122,7 @@ BEEPS = {
     # audible in a real-box acoustic test.
     "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
     "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "880", "0.40", "12"),
-    "start": (str(RUNTIME_DIR / "beep-start.wav"), "880", "0.12", "0"),
+    "ready": (str(RUNTIME_DIR / "beep-ready.wav"), "1320", "0.24", "8"),
     "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
 }
 
@@ -209,7 +212,19 @@ def make_beeps():
 
 
 def beep(name):
-    subprocess.run(["aplay", "-q", "-D", SPK_DEV, BEEPS[name][0]])
+    return subprocess.run(["aplay", "-q", "-D", SPK_DEV, BEEPS[name][0]])
+
+
+def announce_runtime_ready():
+    """Signal readiness once without making audio availability a boot gate."""
+    try:
+        result = beep("ready")
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, "aplay")
+        log_event("runtime_ready_cue")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"runtime ready cue unavailable: {exc}")
+        log_event("runtime_ready_cue_unavailable", error=type(exc).__name__)
 
 
 def acknowledge_guided_press(action, session_id=None):
@@ -318,18 +333,32 @@ def wait_for_hold_intent(
     minimum_hold_s,
     poll_s,
     *,
+    started_at=None,
     monotonic=time.monotonic,
     sleeper=time.sleep,
 ):
     """Classify the shared button before resolving or claiming a recipient."""
     if minimum_hold_s <= 0 or poll_s <= 0:
         raise ValueError("button timing values must be positive")
-    started = monotonic()
+    started = monotonic() if started_at is None else started_at
     while monotonic() - started < minimum_hold_s:
         if not is_pressed():
             return "play"
         sleeper(poll_s)
-    return "record"
+    return "record" if is_pressed() else "play"
+
+
+def acknowledge_and_classify_legacy_press(pressed_at=None):
+    """Acknowledge the initial press, then classify it after the cue ends."""
+    started = time.monotonic() if pressed_at is None else pressed_at
+    beep("press")
+    log_event("legacy_press")
+    return wait_for_hold_intent(
+        lambda: button.is_pressed,
+        MIN_HOLD_S,
+        POLL_S,
+        started_at=started,
+    )
 
 
 def prompt_for_token():
@@ -1157,11 +1186,11 @@ def play_next_legacy():
     refresh_led(force=True)
 
 
-def record_and_send_legacy(settings=None):
+def record_and_send_legacy(settings=None, pressed_at=None):
     global _recording
     settings = settings or caregiver_settings()
     max_seconds = settings["max_recording_seconds"]
-    intent = wait_for_hold_intent(lambda: button.is_pressed, MIN_HOLD_S, POLL_S)
+    intent = acknowledge_and_classify_legacy_press(pressed_at)
     if intent == "play":
         wait_for_stable_open()
         play_next_legacy()
@@ -1178,7 +1207,6 @@ def record_and_send_legacy(settings=None):
         return
     _recording = True
     led.on()
-    beep("start")
     part = os.path.join(OUTBOX_DIR, f"{int(time.time() * 1000)}.part")
     recorder = subprocess.Popen(
         [
@@ -1371,6 +1399,7 @@ def main():
         f"({len(queued())} queued, "
         f"{len(outbox_store.jobs()) + len(legacy_outbox_files())} unsent)"
     )
+    announce_runtime_ready()
 
     while True:
         wait_for_stable_open()
@@ -1401,7 +1430,7 @@ def main():
                 wait_for_stable_open()
                 run_guided_once(interaction_settings)
             else:
-                record_and_send_legacy(interaction_settings)
+                record_and_send_legacy(interaction_settings, pressed_at=closed_at)
         except Exception as exc:
             log(f"button flow error: {exc}")
             log_event(

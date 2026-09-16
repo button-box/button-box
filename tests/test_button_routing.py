@@ -123,6 +123,10 @@ class ButtonRoutingTests(unittest.TestCase):
         with mock.patch.object(button_send, "wait_for_stable_open"), mock.patch.object(
             button_send, "play_next_legacy"
         ) as play, mock.patch.object(
+            button_send, "beep"
+        ), mock.patch.object(
+            button_send, "log_event"
+        ), mock.patch.object(
             button_send,
             "current_recipient_context",
             side_effect=AssertionError("recipient resolved on short press"),
