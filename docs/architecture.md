@@ -13,7 +13,7 @@ root access they require.
 | Unit | Role |
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
-| `messagebox-poller.service` | Queue voice messages from configured contacts |
+| `messagebox-poller.service` | Queue audio from voice notes and ordinary videos from configured contacts |
 | `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
@@ -21,6 +21,16 @@ root access they require.
 One exact default recipient is stored with the private contact allow-list. A
 recognized NFC selection overrides that default; otherwise the default is used.
 No default, an unknown card, or invalid routing state fails closed.
+
+The poller applies the same allowed-chat, sender attribution, ordering,
+deduplication, and reply-routing path to voice notes and ordinary videos. It
+uses FFprobe to require an audio stream and enforce the configured byte and
+duration limits, then converts the first audio stream to the existing mono
+48 kHz WAV queue format. A failed download remains eligible for retry. Media
+that has no audio, is invalid, or exceeds a configured limit is marked handled
+so one bad item cannot block newer messages. See
+[WhatsApp media compatibility](whatsapp-media-compatibility.md) for the exact
+wacli boundary.
 
 ## Setup services
 
