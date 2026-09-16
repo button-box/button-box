@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -41,6 +42,78 @@ class PollingStoreTests(unittest.TestCase):
                 voicepoll.main()
             process.assert_called_once()
             self.assertFalse(database.exists())
+
+    def test_consecutive_senders_queue_oldest_first_without_store_write_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue = root / "queue"
+            state = root / "seen.json"
+            events = root / "events.jsonl"
+            first = {
+                "MsgID": "first-message",
+                "ChatJID": GROUP,
+                "SenderJID": PERSON,
+                "SenderName": "First",
+                "Timestamp": 1001,
+                "MediaType": "audio",
+                "FromMe": False,
+            }
+            second = {
+                "MsgID": "second-message",
+                "ChatJID": GROUP,
+                "SenderJID": "15557654321@s.whatsapp.net",
+                "SenderName": "Second",
+                "Timestamp": 1002,
+                "MediaType": "audio",
+                "FromMe": False,
+            }
+            listing = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"data": {"messages": [second, first]}}),
+                stderr="",
+            )
+            calls = []
+
+            def run_wacli(*arguments):
+                calls.append(arguments)
+                if "messages" in arguments:
+                    return listing
+                output = Path(arguments[arguments.index("--output") + 1])
+                output.write_bytes(b"downloaded")
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({"success": True, "data": {"path": "ignored"}}),
+                    stderr="",
+                )
+
+            def convert(arguments, **_kwargs):
+                Path(arguments[-1]).write_bytes(b"wav")
+                return SimpleNamespace(returncode=0)
+
+            with (
+                mock.patch.object(voicepoll, "QUEUE_DIR", str(queue)),
+                mock.patch.object(voicepoll, "STATE_FILE", str(state)),
+                mock.patch.object(voicepoll, "EVENTS_FILE", str(events)),
+                mock.patch.object(voicepoll, "_last_queue_ms", 0),
+                mock.patch.object(voicepoll, "wacli", side_effect=run_wacli),
+                mock.patch.object(voicepoll.subprocess, "run", side_effect=convert),
+            ):
+                seen = set()
+                self.assertEqual(voicepoll.poll_once(seen, {GROUP: 1000}), 2)
+
+            wavs = sorted(queue.glob("*.wav"))
+            self.assertEqual([path.name.split("-", 1)[1] for path in wavs], [
+                "first-message.wav",
+                "second-message.wav",
+            ])
+            self.assertEqual(seen, {"first-message", "second-message"})
+            self.assertEqual(len(list(queue.glob("*.media.part"))), 0)
+            downloads = [call for call in calls if "media" in call]
+            self.assertEqual(len(downloads), 2)
+            for call in downloads:
+                self.assertEqual(call[0], "--read-only")
+                self.assertIn("--output", call)
+                self.assertNotIn("--lock-wait", call)
 
 
 class TimestampTests(unittest.TestCase):
