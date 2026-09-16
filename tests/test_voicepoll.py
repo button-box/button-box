@@ -1,8 +1,10 @@
+import io
 import json
 import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -259,6 +261,47 @@ class MediaQueueTests(unittest.TestCase):
         self.assertTrue(Path(queued).is_file())
         self.assertAlmostEqual(duration, 2, delta=0.1)
 
+    def test_video_transcode_always_has_a_hard_duration_cap(self):
+        def create_output(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"synthetic wav")
+            return SimpleNamespace(returncode=0)
+
+        with (
+            mock.patch.object(voicepoll, "audio_duration", return_value=2),
+            mock.patch.object(voicepoll, "wav_duration", return_value=2),
+            mock.patch.object(voicepoll.subprocess, "run", side_effect=create_output) as run,
+        ):
+            voicepoll.queue_message(
+                self.message("video", "bounded-video"), str(self.video)
+            )
+
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command[command.index("-t") + 1],
+            str(voicepoll.VIDEO_MAX_DURATION_S),
+        )
+
+    def test_probe_and_transcode_timeouts_remain_retryable(self):
+        message = self.message("video", "retryable-timeout")
+        with mock.patch.object(
+            voicepoll.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("ffprobe", 30),
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                voicepoll.queue_message(message, str(self.video))
+
+        with (
+            mock.patch.object(voicepoll, "audio_duration", return_value=2),
+            mock.patch.object(
+                voicepoll.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("ffmpeg", 120),
+            ),
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                voicepoll.queue_message(message, str(self.video))
+
     def test_video_without_audio_is_rejected_without_queue_artifacts(self):
         with self.assertRaisesRegex(MediaRejected, "no audio track"):
             voicepoll.queue_message(
@@ -336,6 +379,104 @@ class MessageIsolationTests(unittest.TestCase):
         ):
             voicepoll.process_message(message, seen)
         self.assertNotIn("timeout", seen)
+
+    def test_transient_queue_failures_clear_seen_for_retry(self):
+        message = {
+            "MsgID": "private-message-id",
+            "ChatJID": GROUP,
+            "SenderName": "Private sender",
+            "Timestamp": 1,
+        }
+        failures = (
+            subprocess.TimeoutExpired("ffprobe", 30),
+            subprocess.TimeoutExpired("ffmpeg", 120),
+            OSError("temporary queue failure"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                seen = set()
+                with (
+                    mock.patch.object(voicepoll, "save_seen"),
+                    mock.patch.object(voicepoll, "download_path", return_value="/private/input.mp4"),
+                    mock.patch.object(voicepoll, "queue_message", side_effect=failure),
+                    mock.patch.object(voicepoll, "log_event") as event,
+                ):
+                    voicepoll.process_message(message, seen)
+
+                self.assertNotIn(message["MsgID"], seen)
+                event.assert_called_once_with(
+                    type="receive_retry",
+                    msgid=message["MsgID"],
+                    reason="queue failure",
+                )
+
+    def test_service_output_omits_private_message_and_path_fields(self):
+        message = {
+            "MsgID": "PRIVATE-MESSAGE-ID",
+            "ChatJID": GROUP,
+            "SenderJID": PERSON,
+            "SenderName": "PRIVATE-SENDER-NAME",
+            "Timestamp": "PRIVATE-TIMESTAMP",
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.object(voicepoll, "save_seen"),
+            mock.patch.object(
+                voicepoll,
+                "download_path",
+                return_value="/private/download/PRIVATE-MESSAGE-ID.mp4",
+            ),
+            mock.patch.object(
+                voicepoll,
+                "queue_message",
+                return_value=("/private/queue/PRIVATE-MESSAGE-ID.wav", 2),
+            ),
+            mock.patch.object(voicepoll, "log_event") as event,
+            redirect_stdout(output),
+        ):
+            voicepoll.process_message(message, set())
+
+        rendered = output.getvalue()
+        for private_value in (
+            message["MsgID"],
+            message["SenderName"],
+            message["Timestamp"],
+            "/private/download/PRIVATE-MESSAGE-ID.mp4",
+            "/private/queue/PRIVATE-MESSAGE-ID.wav",
+        ):
+            self.assertNotIn(private_value, rendered)
+        event.assert_called_once_with(
+            type="received",
+            chat=GROUP,
+            sender=message["SenderName"],
+            sender_jid=PERSON,
+            msgid=message["MsgID"],
+            file="PRIVATE-MESSAGE-ID.wav",
+            dur=2,
+        )
+
+    def test_download_failure_does_not_print_raw_wacli_output(self):
+        private_output = "PRIVATE WACLI ERROR /private/download/path"
+        message = {
+            "MsgID": "PRIVATE-MESSAGE-ID",
+            "ChatJID": GROUP,
+            "SenderName": "PRIVATE-SENDER-NAME",
+            "Timestamp": "PRIVATE-TIMESTAMP",
+        }
+        result = SimpleNamespace(returncode=1, stdout=private_output, stderr=private_output)
+        output = io.StringIO()
+        with (
+            mock.patch.object(voicepoll, "save_seen"),
+            mock.patch.object(voicepoll, "wacli", return_value=result),
+            redirect_stdout(output),
+        ):
+            voicepoll.process_message(message, set())
+
+        rendered = output.getvalue()
+        self.assertNotIn(private_output, rendered)
+        self.assertNotIn(message["MsgID"], rendered)
+        self.assertNotIn(message["SenderName"], rendered)
+        self.assertNotIn(message["Timestamp"], rendered)
 
 
 if __name__ == "__main__":

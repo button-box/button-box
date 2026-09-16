@@ -28,7 +28,9 @@ originating chat and sender in the existing private routing sidecar. Ordinary
 videos are bounded by `MSGBOX_VIDEO_MAX_BYTES` and
 `MSGBOX_VIDEO_MAX_DURATION_S`. A download failure is retried; missing audio,
 invalid media, or a configured-limit rejection is recorded and skipped so later
-messages can continue in order.
+messages can continue in order. Routine service output reports only generic
+processing status and elapsed time; identifiers and routing details remain in
+the restricted routing sidecars and structured event log.
 
 The pinned wacli 0.17.1 client does not expose WhatsApp circular instant video
 notes. Those notes use the separate WhatsApp `ptvMessage` field, while that

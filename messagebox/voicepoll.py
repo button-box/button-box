@@ -96,8 +96,8 @@ def log_event(**ev):
         os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
         with open(EVENTS_FILE, "a") as f:
             f.write(json.dumps(ev) + "\n")
-    except Exception as e:
-        print(f"event log error: {e}", flush=True)
+    except Exception:
+        print("event log error", flush=True)
 # EQ for the small boxy speaker: cut low-mid mud, lift presence/highs, then
 # normalize loudness. Set to "" to disable, or override with any ffmpeg -af chain.
 EQ_FILTER = os.environ.get("MSGBOX_EQ_FILTER",
@@ -191,21 +191,13 @@ def download_path(message):
 
 def queue_message(message, source_path):
     media_type = str(message.get("MediaType") or "").strip().lower()
-    transcode_limit = None
     if media_type == "video":
-        try:
-            source_size = os.path.getsize(source_path)
-        except OSError as exc:
-            raise MediaRejected("downloaded media is unavailable") from exc
+        source_size = os.path.getsize(source_path)
         if source_size > VIDEO_MAX_BYTES:
             raise MediaRejected("video exceeds the configured size limit")
         duration = audio_duration(source_path)
         if duration is not None and duration > VIDEO_MAX_DURATION_S:
             raise MediaRejected("video exceeds the configured duration limit")
-        if duration is None:
-            # Some valid containers omit duration metadata. Decode one second
-            # past the limit so the resulting WAV can still prove oversize.
-            transcode_limit = VIDEO_MAX_DURATION_S + 1
 
     os.makedirs(QUEUE_DIR, exist_ok=True)
     # Millisecond prefix keeps the queue sorted oldest-first.
@@ -217,7 +209,10 @@ def queue_message(message, source_path):
     try:
         eq = ["-af", EQ_FILTER] if EQ_FILTER else []
         audio_selection = ["-map", "0:a:0", "-vn"] if media_type == "video" else []
-        duration_limit = ["-t", str(transcode_limit)] if transcode_limit is not None else []
+        # Probe metadata is advisory. Always cap video output so corrupt or
+        # misreported input cannot expand until the process timeout or storage
+        # exhaustion on the Pi.
+        duration_limit = ["-t", str(VIDEO_MAX_DURATION_S)] if media_type == "video" else []
         subprocess.run(
             [
                 "ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-i", source_path,
@@ -248,7 +243,9 @@ def queue_message(message, source_path):
         metadata_published = True
         os.replace(qtmp, qwav)  # WAV appears only after routing metadata
         return qwav, duration
-    except subprocess.SubprocessError as exc:
+    except subprocess.TimeoutExpired:
+        raise
+    except subprocess.CalledProcessError as exc:
         raise MediaRejected("media audio could not be decoded") from exc
     finally:
         safe_unlink(qtmp)
@@ -263,16 +260,13 @@ def process_message(message, seen):
     seen.add(message_id)
     save_seen(seen)
     started = time.time()
-    print(
-        f"NEW {message_id} from {message.get('SenderName')} ts={message.get('Timestamp')}",
-        flush=True,
-    )
+    print("NEW media message", flush=True)
     try:
         path = download_path(message)
     except Exception:
         path = None
     if path is None:
-        print(f"DOWNLOAD FAILED {message_id}", flush=True)
+        print("DOWNLOAD FAILED", flush=True)
         seen.discard(message_id)  # Transient download failures retry next cycle.
         save_seen(seen)
         return
@@ -280,12 +274,14 @@ def process_message(message, seen):
     try:
         queued_path, duration = queue_message(message, path)
     except MediaRejected as exc:
-        print(f"SKIPPED {message_id}: {exc}", flush=True)
+        print(f"SKIPPED media: {exc}", flush=True)
         log_event(type="receive_skipped", msgid=message_id, reason=str(exc))
         return
-    except Exception as exc:
-        print(f"SKIPPED {message_id}: queue failure ({type(exc).__name__})", flush=True)
-        log_event(type="receive_skipped", msgid=message_id, reason="queue failure")
+    except Exception:
+        seen.discard(message_id)
+        save_seen(seen)
+        print("RETRY media: queue failure", flush=True)
+        log_event(type="receive_retry", msgid=message_id, reason="queue failure")
         return
 
     log_event(
@@ -297,7 +293,7 @@ def process_message(message, seen):
         file=os.path.basename(queued_path),
         dur=duration,
     )
-    print(f"QUEUED {os.path.basename(queued_path)} total={time.time() - started:.1f}s", flush=True)
+    print(f"QUEUED media total={time.time() - started:.1f}s", flush=True)
 
 
 def main():
@@ -320,8 +316,8 @@ def main():
                 if media_type not in PLAYABLE_MEDIA_TYPES:
                     continue
                 process_message(m, seen)
-        except Exception as e:
-            print(f"poll error: {e}", flush=True)
+        except Exception:
+            print("poll error: processing failed", flush=True)
         time.sleep(POLL_S)
 
 
