@@ -13,13 +13,23 @@ root access they require.
 | Unit | Role |
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
-| `messagebox-poller.service` | Queue voice messages from configured contacts |
+| `messagebox-poller.service` | Queue voice notes and ordinary-video soundtracks from configured contacts |
 | `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
 
 One exact default recipient is stored with the private contact allow-list. A
 recognized NFC selection overrides that default; otherwise the default is used.
+
+The poller accepts wacli media classified as `audio` or `video`, verifies that
+the downloaded file contains audio, applies configured byte and duration
+limits, and converts it to the same mono 48 kHz WAV queue format. A rejected or
+failed item is isolated so later messages can still be queued in order. The
+pinned wacli 0.17.1 release classifies ordinary `VideoMessage` media as `video`,
+but does not extract WhatsApp's separate `PtvMessage` payload used for circular
+instant video notes. Those notes therefore have no downloadable media metadata
+in this version and remain unsupported pending an upstream-compatible transport
+update and a separate live receive test.
 No default, an unknown card, or invalid routing state fails closed.
 
 ## Setup services

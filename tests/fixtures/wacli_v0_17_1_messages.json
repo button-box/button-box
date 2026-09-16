@@ -1,0 +1,41 @@
+{
+  "success": true,
+  "data": {
+    "messages": [
+      {
+        "ChatJID": "15551234567@s.whatsapp.net",
+        "MsgID": "PTV-SYNTHETIC-1",
+        "SenderJID": "15551234567@s.whatsapp.net",
+        "SenderName": "Example sender",
+        "Timestamp": "2026-09-16T12:00:02Z",
+        "FromMe": false,
+        "Text": "(message)",
+        "MediaType": "",
+        "MimeType": ""
+      },
+      {
+        "ChatJID": "15551234567@s.whatsapp.net",
+        "MsgID": "VIDEO-SYNTHETIC-1",
+        "SenderJID": "15551234567@s.whatsapp.net",
+        "SenderName": "Example sender",
+        "Timestamp": "2026-09-16T12:00:01Z",
+        "FromMe": false,
+        "Text": "Synthetic ordinary video",
+        "MediaType": "video",
+        "MimeType": "video/mp4"
+      },
+      {
+        "ChatJID": "15551234567@s.whatsapp.net",
+        "MsgID": "AUDIO-SYNTHETIC-1",
+        "SenderJID": "15551234567@s.whatsapp.net",
+        "SenderName": "Example sender",
+        "Timestamp": "2026-09-16T12:00:00Z",
+        "FromMe": false,
+        "Text": "[Audio]",
+        "MediaType": "audio",
+        "MimeType": "audio/ogg; codecs=opus"
+      }
+    ],
+    "fts": true
+  }
+}
