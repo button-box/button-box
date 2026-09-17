@@ -382,6 +382,22 @@ class ContactStore:
 
         return self._mutate(remove)
 
+    def rename_contact(self, jid, label) -> JsonObject:
+        """Change only a contact's display label, preserving routing and cards."""
+        jid = _clean_chat_jid(jid)
+        label = _clean_text(label, "label", MAX_LABEL_LENGTH)
+
+        def rename(document):
+            contact = document["contacts"].get(jid)
+            if contact is None:
+                raise ContactError("contact does not exist")
+            if contact["label"] == label:
+                return False, _contact_result(jid, contact)
+            contact["label"] = label
+            return True, _contact_result(jid, contact)
+
+        return self._mutate(rename)
+
     def set_default_recipient(self, jid) -> JsonObject:
         """Set the first explicit default without replacing an existing one."""
         jid = _clean_chat_jid(jid)

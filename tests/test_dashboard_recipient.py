@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from unittest.mock import patch
 
 
@@ -77,6 +78,54 @@ class DashboardContactTests(unittest.TestCase):
         )
         handler.do_GET()
         return responses[0]
+
+    def post_form(self, path, payload):
+        body = urlencode(payload).encode()
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = path
+        handler.headers = {
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": "button-box.local",
+        }
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        handler.tailscale_host = None
+        handler.rfile = io.BytesIO(body)
+        responses = []
+        handler._send = lambda code, data, ctype="application/json": responses.append(
+            (code, json.loads(data))
+        )
+        handler.do_POST()
+        return responses[0]
+
+    def test_recipient_phone_form_accepts_optional_name_field(self):
+        calls = []
+        engine = SimpleNamespace(
+            recipient_add_phone=lambda phone, name: calls.append((phone, name)) or {}
+        )
+
+        with patch.object(dashboard, "pairing_engine", return_value=engine):
+            code, result = self.post_form(
+                "/recipients/add-number",
+                {"phone": "+1 555 123 4567", "name": ""},
+            )
+
+        self.assertEqual(code, 200)
+        self.assertEqual(result, {})
+        self.assertEqual(calls, [("+15551234567", "")])
+
+    def test_recipient_selection_rejects_name_field(self):
+        engine = SimpleNamespace(recipient_select_phone=lambda phone: {})
+
+        with patch.object(dashboard, "pairing_engine", return_value=engine):
+            code, result = self.post_form(
+                "/recipients/select-number",
+                {"phone": "+1 555 123 4567", "name": "Not accepted here"},
+            )
+
+        self.assertEqual(code, 409)
+        self.assertEqual(result["error"], "phone number invalid")
 
     def test_runtime_pairing_requires_matching_success_receipt(self):
         store = SimpleNamespace(

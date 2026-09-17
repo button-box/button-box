@@ -151,16 +151,26 @@ class FakeWhatsApp:
         self.calls.append(("recipient_select", token))
         return self.recipient_state()
 
-    def recipient_select_phone(self, phone):
-        self.calls.append(("recipient_select_phone", phone))
+    def recipient_select_phone(self, phone, name=None):
+        call = (
+            ("recipient_select_phone", phone, name)
+            if name is not None
+            else ("recipient_select_phone", phone)
+        )
+        self.calls.append(call)
         return self.recipient_state()
 
     def recipient_add(self, token):
         self.calls.append(("recipient_add", token))
         return self.recipient_state()
 
-    def recipient_add_phone(self, phone):
-        self.calls.append(("recipient_add_phone", phone))
+    def recipient_add_phone(self, phone, name=None):
+        call = (
+            ("recipient_add_phone", phone, name)
+            if name is not None
+            else ("recipient_add_phone", phone)
+        )
+        self.calls.append(call)
         return self.recipient_state()
 
     def recipient_remove(self, token):
@@ -169,6 +179,10 @@ class FakeWhatsApp:
 
     def recipient_default(self, token):
         self.calls.append(("recipient_default", token))
+        return self.recipient_state()
+
+    def recipient_rename(self, token, name):
+        self.calls.append(("recipient_rename", token, name))
         return self.recipient_state()
 
 
@@ -975,6 +989,18 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(added_phone["status"], "200 OK")
         self.assertIn(("recipient_add_phone", "+447700900123"), worker.calls)
+        named_phone = client.form(
+            "POST",
+            "/recipients/add-number",
+            {"phone": "+1 202 555 0199", "name": "סבתא"},
+        )
+        self.assertEqual(named_phone["status"], "200 OK")
+        self.assertIn(("recipient_add_phone", "+12025550199", "סבתא"), worker.calls)
+        renamed = client.form(
+            "POST", "/recipients/rename", {"token": token, "name": "Grandma"}
+        )
+        self.assertEqual(renamed["status"], "200 OK")
+        self.assertIn(("recipient_rename", token, "Grandma"), worker.calls)
         self.assertEqual(store.load()["phase"], "WHATSAPP_READY")
 
     def test_recipient_api_explains_that_the_box_cannot_select_itself(self):

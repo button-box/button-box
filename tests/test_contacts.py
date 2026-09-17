@@ -37,6 +37,21 @@ class ContactStoreTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def test_rename_changes_only_the_display_label(self):
+        self.store.add_contact(PERSON, "Original", receive_after=123, make_default=True)
+        self.store.assign_card(PERSON, CARD_ONE)
+        before = self.store.load()
+
+        renamed = self.store.rename_contact(PERSON, "סבתא")
+
+        after = self.store.load()
+        self.assertEqual(renamed["jid"], PERSON)
+        self.assertEqual(after["default_recipient"], PERSON)
+        self.assertEqual(after["revision"], before["revision"] + 1)
+        self.assertEqual(after["contacts"][PERSON]["label"], "סבתא")
+        for key in ("kind", "receive_after", "card_uids", "card_clip"):
+            self.assertEqual(after["contacts"][PERSON][key], before["contacts"][PERSON][key])
+
     def test_missing_store_loads_empty_without_writing(self):
         self.assertEqual(
             self.store.load(),

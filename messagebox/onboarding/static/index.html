@@ -288,6 +288,8 @@
         <form id="manual-default-form">
           <label for="manual-default-phone">International phone number</label>
           <input id="manual-default-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="manual-default-help" required>
+          <label for="manual-default-name">Name <span class="optional">optional</span></label>
+          <input id="manual-default-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
           <p id="manual-default-help" class="field-help">Include + and the country code.</p>
           <button type="submit">Choose this number</button>
         </form>
@@ -343,6 +345,8 @@
         <form id="manual-allow-form">
           <label for="manual-allow-phone">International phone number</label>
           <input id="manual-allow-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="manual-allow-help" required>
+          <label for="manual-allow-name">Name <span class="optional">optional</span></label>
+          <input id="manual-allow-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
           <p id="manual-allow-help" class="field-help">Include + and the country code. This will not change the default recipient.</p>
           <button type="submit">Allow this number</button>
         </form>
@@ -388,6 +392,8 @@
         <h2>Allow a new recipient</h2>
         <label for="nfc-allow-phone">International phone number</label>
         <input id="nfc-allow-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="nfc-allow-help" required>
+        <label for="nfc-allow-name">Name <span class="optional">optional</span></label>
+        <input id="nfc-allow-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
         <p id="nfc-allow-help" class="field-help">Include + and the country code. Your scanned tag stays ready and your default recipient will not change. After adding, choose the recipient above.</p>
         <button type="submit">Allow this number</button>
         <p id="nfc-allow-status" class="field-help" role="status" aria-live="polite"></p>

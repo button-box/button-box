@@ -431,9 +431,64 @@ class RecipientSetupTests(unittest.TestCase):
         )
         self.assertTrue(manual["configured"])
         self.assertFalse(manual["is_default"])
-        with self.assertRaisesRegex(RecipientError, "contact already exists"):
-            self.setup.add_phone("+14155550199")
+        repeated = self.setup.add_phone("+14155550199")
+        self.assertEqual(repeated, added)
         self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
+
+    def test_manager_allowing_existing_default_phone_is_idempotent(self):
+        listed = self.candidates()
+        token = next(
+            item["token"]
+            for item in listed["recipients"]
+            if item["label"] == "+15551234567"
+        )
+        self.setup.select_default(token)
+        state = json.loads(self.setup.state_path.read_text(encoding="utf-8"))
+        state["status"] = "complete"
+        state["proof"].update(received=True, played=True, replied=True)
+        self.setup._write(state)
+        before = self.setup.public_state()
+        contacts = ContactStore(self.contacts_path).load()
+
+        repeated = self.setup.add_phone("+15551234567")
+
+        self.assertEqual(repeated, before)
+        self.assertEqual(repeated["default"]["token"], token)
+        self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
+
+    def test_manual_name_and_rename_persist_without_changing_identity(self):
+        selected = self.setup.select_phone("+15551234567", name="סבתא")
+        token = selected["default"]["token"]
+        ContactStore(self.contacts_path).assign_card(PERSON, "04:A1:00:FF")
+
+        refreshed = self.setup.reconcile([{"jid": PERSON, "label": "WhatsApp name"}])
+        person = next(item for item in refreshed["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "סבתא")
+        self.assertEqual(person["secondary_label"], "+15551234567")
+
+        renamed = self.setup.rename(token, "Cafe\u0301")
+        person = next(item for item in renamed["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "Café")
+        contact = ContactStore(self.contacts_path).load()
+        self.assertEqual(contact["default_recipient"], PERSON)
+        self.assertEqual(contact["contacts"][PERSON]["card_uids"], ["04:A1:00:FF"])
+
+        fallback = self.setup.rename(token, "   ")
+        person = next(item for item in fallback["recipients"] if item["token"] == token)
+        self.assertEqual(person["label"], "+15551234567")
+        self.assertEqual(self.setup.public_state(), fallback)
+
+    def test_invalid_manual_or_rename_name_is_rejected_without_mutation(self):
+        with self.assertRaisesRegex(RecipientError, "recipient name is invalid"):
+            self.setup.select_phone("+15551234567", name="x" * 81)
+        self.assertEqual(ContactStore(self.contacts_path).load()["contacts"], {})
+
+        selected = self.setup.select_phone("+15551234567", name="Safe")
+        token = selected["default"]["token"]
+        before = ContactStore(self.contacts_path).load()
+        with self.assertRaisesRegex(RecipientError, "recipient name is invalid"):
+            self.setup.rename(token, "unsafe\nname")
+        self.assertEqual(ContactStore(self.contacts_path).load(), before)
 
     def test_defer_is_resumable_and_does_not_activate_messaging(self):
         self.candidates()

@@ -240,8 +240,12 @@ h1:focus-visible, main:focus-visible { outline: none; }
 }
 .recipient-row strong { display: block; overflow-wrap: anywhere; }
 .recipient-row span { display: block; margin-top: 0.2rem; color: var(--muted); font-size: 0.8rem; text-transform: capitalize; }
+.recipient-row .recipient-secondary { text-transform: none; }
 .recipient-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.5rem; }
+.recipient-rename { grid-column: 1 / -1; display: grid; gap: 0.5rem; }
+.recipient-rename .button-row { margin-top: 0.25rem; }
 button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
+.optional { color: var(--muted); font-size: 0.8em; font-weight: 500; }
 .section-title { margin: 1.5rem 0 -0.5rem; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .manual-recipient { margin: 1.5rem 0; border-top: 1px solid var(--line); padding-top: 0.25rem; }
 .manual-recipient form { margin-top: 1rem; }
