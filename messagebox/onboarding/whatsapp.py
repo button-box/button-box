@@ -633,7 +633,16 @@ class PairingEngine:
         return setup_activity(STATE_DIR / "events.jsonl")
 
     def recipient_list(self, *, refresh=False):
-        return self._live_candidates(refresh=refresh)
+        if not refresh:
+            return self._live_candidates()
+        with self._lock:
+            # Continuous sync owns the writable store; release it for the
+            # bounded one-shot refresh and restart it on every outcome.
+            self._pause_sync()
+            try:
+                return self._live_candidates(refresh=True)
+            finally:
+                self._resume_sync()
 
     def recipient_defer(self):
         self._require_ready()

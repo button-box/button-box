@@ -10,7 +10,8 @@ presses the button to listen.
 
 [Visit button.box](https://button.box/) ·
 [Join the WhatsApp community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t) ·
-[Report an issue](https://github.com/button-box/button-box/issues)
+[Report an issue](https://github.com/button-box/button-box/issues) ·
+[Testing and regression matrix](docs/testing.md)
 
 ## Versioned development release
 

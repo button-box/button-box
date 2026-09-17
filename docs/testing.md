@@ -14,6 +14,20 @@ required.
 Synthetic tests cover routing, onboarding, redaction, pairing, NFC, and recovery
 contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
+## Regression test matrix
+
+Matrix case IDs are permanent. Add new cases with the next available ID; do not
+renumber or reuse an existing ID.
+
+Every confirmed product bug must add a matrix case or explicitly update an
+existing case and its regression test before the fix is complete. If automation
+is impossible, record the reason in the pull request and keep a precise manual
+assertion in this matrix.
+
+| Case ID | Regression | Synthetic setup and expected result | Software evidence | Separate physical assertion |
+| --- | --- | --- | --- | --- |
+| `BB-RX-001` | Consecutive inbound voice notes | Provide two allowed audio messages from different synthetic senders in one poll while sync remains active. Both queue exactly once in oldest-first order with unique queue filenames; media retrieval is read-only and does not make continuous sync release the store lock. | `tests/test_voicepoll.py::PollingStoreTests::test_consecutive_senders_queue_oldest_first_without_store_write_lock` and `tests/test_whatsapp_pairing.py::WhatsAppFrontendAndServiceContractTests::test_service_separates_web_user_from_live_store_and_keeps_runtime_stopped` | On a test box, send two voice notes from separate test accounts in quick succession while the first is downloading. Verify both appear and play once in send order. Record device, revision, observed times, and result without storing message content or account identifiers. |
+
 ## Physical test scenarios
 
 Use a spare Raspberry Pi 4 with a freshly imaged test microSD card. Confirm it
