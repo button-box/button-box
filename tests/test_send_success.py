@@ -41,8 +41,10 @@ class SendSuccessTests(unittest.TestCase):
                 path.write_bytes(b"audio")
                 button_send.bind_legacy_job_recipient(str(path), "family@g.us")
                 results = [types.SimpleNamespace(returncode=0), types.SimpleNamespace(returncode=code, stdout="", stderr="")]
-                with mock.patch.object(button_send.subprocess, "run", side_effect=results):
+                with mock.patch.object(button_send.subprocess, "run", side_effect=results) as run:
                     button_send.send_legacy_outbox_file(path.name)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--lock-wait") + 1], "0s")
                 self.assertEqual(self.notices.empty(), code != 0)
                 self.assertEqual(path.exists(), code != 0)
 
@@ -54,13 +56,25 @@ class SendSuccessTests(unittest.TestCase):
                 store.set_state.return_value = job
                 store.complete.side_effect = completion_error
                 results = [types.SimpleNamespace(returncode=0), types.SimpleNamespace(returncode=code, stdout="", stderr="")]
-                with mock.patch.object(button_send, "outbox_store", store), mock.patch.object(button_send.subprocess, "run", side_effect=results):
+                with mock.patch.object(button_send, "outbox_store", store), mock.patch.object(button_send.subprocess, "run", side_effect=results) as run:
                     if completion_error:
                         with self.assertRaises(OSError):
                             button_send.send_guided_job(job)
                     else:
                         button_send.send_guided_job(job)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--lock-wait") + 1], "0s")
                 self.assertEqual(self.notices.empty(), code != 0 or completion_error is not None)
+
+    def test_presence_and_played_reactions_delegate_without_waiting_for_sync(self):
+        with mock.patch.object(button_send.subprocess, "Popen") as spawn:
+            button_send.presence("recording", "120363000001@g.us")
+            button_send.presence("paused", "120363000001@g.us")
+            button_send.react_played({"chat": "120363000001@g.us", "msgid": "synthetic"})
+        self.assertEqual(spawn.call_count, 3)
+        for call in spawn.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[command.index("--lock-wait") + 1], "0s")
 
     def test_cue_waits_until_idle_and_is_played_only_once(self):
         self.notices.put(button_send.time.monotonic())

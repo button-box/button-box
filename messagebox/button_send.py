@@ -54,7 +54,9 @@ SPEAKER_CARD = os.environ.get("MSGBOX_SPEAKER_CARD", "Device")
 SPEAKER_CONTROL = os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM")
 BUTTON_PIN = int(os.environ.get("MSGBOX_BUTTON_PIN", "17"))
 LED_PIN = int(os.environ.get("MSGBOX_LED_PIN", "26"))
-LOCK_WAIT = os.environ.get("MSGBOX_LOCK_WAIT", "60s")
+# Sync owns the store continuously. An immediate lock failure lets wacli
+# delegate supported sends to its active sync connection without delaying them.
+SEND_LOCK_WAIT = "0s"
 WACLI_BIN = "/usr/local/bin/wacli"
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
 OUTBOX_DIR = str(DEFAULT_OUTBOX_DIR)
@@ -631,7 +633,7 @@ def send_legacy_outbox_file(fname):
             "--to",
             recipient,
             "--lock-wait",
-            LOCK_WAIT,
+            SEND_LOCK_WAIT,
             "--json",
         ],
         capture_output=True,
@@ -705,7 +707,7 @@ def send_guided_job(job):
     # automatic duplicate resend.
     job = outbox_store.set_state(job, "sending", increment_attempts=True)
     sent = subprocess.run(
-        voice_send_command(WACLI_BIN, ogg, job.recipient, LOCK_WAIT),
+        voice_send_command(WACLI_BIN, ogg, job.recipient, SEND_LOCK_WAIT),
         capture_output=True,
         text=True,
     )
@@ -945,7 +947,7 @@ def react_played(meta):
             "--reaction",
             "🎧",
             "--lock-wait",
-            LOCK_WAIT,
+            SEND_LOCK_WAIT,
         ]
         if meta.get("sender_jid"):
             command += ["--sender", meta["sender_jid"]]
@@ -1126,7 +1128,7 @@ def play_warning_for_approval(path, session_id=None):
 def presence(kind, recipient):
     subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
     subprocess.Popen(
-        [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", LOCK_WAIT],
+        [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", SEND_LOCK_WAIT],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

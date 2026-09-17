@@ -29,6 +29,12 @@ or the default. The explicit default is used only when played history is absent
 or expired. Unknown-card state and stale or missing NFC reader health also fail
 closed before recent-sender routing.
 
+Continuous sync owns the writable WhatsApp store. Outbound voice notes,
+played reactions, and recording presence use an immediate lock attempt so the
+pinned client delegates them to the active sync connection immediately.
+Commands that require exclusive store access, such as recipient refresh, pause
+sync and retain their bounded lock wait.
+
 The poller accepts wacli media types `audio` and `video`, converts the first
 audio track to the same mono 48 kHz WAV queue format, and retains the exact
 originating chat and sender in the existing private routing sidecar. Ordinary
