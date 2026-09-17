@@ -67,6 +67,10 @@ class WifiResetTests(unittest.TestCase):
         self.enabled = self.root / "etc/messagebox-onboarding/enabled"
         self.configured = self.root / "etc/messagebox-onboarding/configured"
         self.state = self.root / "var/lib/messagebox-onboarding/state.json"
+        self.lock = self.root / "run/lock/messagebox-mode-transition.lock"
+        self.pending = self.root / "run/messagebox-mode-reconcile.pending"
+        self.lock.parent.mkdir(parents=True)
+        self.pending.parent.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
         self.directory.cleanup()
@@ -87,6 +91,8 @@ class WifiResetTests(unittest.TestCase):
             configured_path=self.configured,
             state_path=self.state,
             state_clock=lambda: 200.0,
+            lock_path=self.lock,
+            pending_path=self.pending,
         )
 
     def test_not_initially_pressed_exits_without_waiting_or_side_effects(self):
@@ -158,7 +164,12 @@ class WifiResetTests(unittest.TestCase):
         self.assertEqual(state["proofs"], [])
         self.assertEqual(self.enabled.read_bytes(), b"enabled\n")
         commands = [call[0] for call in runner.calls]
+        self.assertEqual(
+            commands[0],
+            ["systemctl", "start", "--no-block", "messagebox-mode-reconcile.service"],
+        )
         self.assertIn(["systemctl", "enable", *reset.SETUP_UNITS], commands)
+        self.assertNotIn(["systemctl", "enable", "comitup.service"], commands)
         self.assertIn(["systemctl", "stop", *reset.RUNTIME_UNITS], commands)
         self.assertIn(["systemctl", "stop", *reset.ONBOARDING_UNITS], commands)
         self.assertIn(["rm", "-f", "--", "/var/lib/comitup/dhcpleaseinfo"], commands)
@@ -169,6 +180,19 @@ class WifiResetTests(unittest.TestCase):
             commands[-1],
             ["systemctl", "--no-block", "start", *reset.ONBOARDING_START_UNITS],
         )
+
+    def test_reset_stops_runtime_before_committing_setup_marker(self):
+        self.initialize_state()
+
+        class OrderingRunner(Runner):
+            def __call__(runner_self, arguments, **kwargs):
+                if list(arguments) == ["systemctl", "stop", *reset.RUNTIME_UNITS]:
+                    self.assertFalse(self.enabled.exists())
+                if list(arguments) == ["systemctl", "daemon-reload"]:
+                    self.assertEqual(self.enabled.read_bytes(), b"enabled\n")
+                return super().__call__(arguments, **kwargs)
+
+        self.run_held(OrderingRunner())
 
     def test_confirmed_reset_is_idempotent(self):
         self.initialize_state()
@@ -243,6 +267,8 @@ class WifiResetTests(unittest.TestCase):
             state_path=self.state,
             geteuid=lambda: 0,
             stderr=error,
+            lock_path=self.lock,
+            pending_path=self.pending,
         )
         self.assertEqual(code, reset.EXIT_FAILED)
         self.assertIn("failed", error.getvalue())

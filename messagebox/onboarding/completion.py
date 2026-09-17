@@ -12,8 +12,18 @@ from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.onboarding.paths import (
+    MODE_RECONCILE_PENDING_PATH,
+    MODE_TRANSITION_LOCK_PATH,
     ONBOARDING_COMPLETION_REQUEST_PATH,
     ONBOARDING_ENABLED_PATH,
+)
+from messagebox.onboarding.mode import (
+    Mode,
+    queue_reconcile,
+    read_mode,
+    remove_setup_marker,
+    transition_lock,
+    write_setup_marker,
 )
 from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 from messagebox.runtime_paths import CONTACTS_FILE
@@ -63,13 +73,8 @@ def _valid_request(path=ONBOARDING_COMPLETION_REQUEST_PATH):
 
 
 def _restore_onboarding(enabled_path, *, run):
-    enabled_path = Path(enabled_path)
-    descriptor = os.open(enabled_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(descriptor, b"enabled\n")
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    write_setup_marker(enabled_path)
+    run(["systemctl", "daemon-reload"], check=False)
     run(["systemctl", "stop", RUNTIME_TARGET], check=False)
     run(["systemctl", "start", "comitup.service"], check=False)
 
@@ -83,48 +88,55 @@ def complete(
     run=subprocess.run,
     sleep=time.sleep,
     response_grace=3.0,
+    lock_path=MODE_TRANSITION_LOCK_PATH,
+    pending_path=MODE_RECONCILE_PENDING_PATH,
+    marker_uid=0,
+    lock_uid=None,
 ):
     if os.geteuid() != 0:
         raise RuntimeError("completion gate requires root")
-    _valid_request(request_path)
-    enabled_path = Path(enabled_path)
-    if not enabled_path.is_file() or enabled_path.is_symlink():
-        raise RuntimeError("onboarding gate is unavailable")
-    recipient_setup = recipients or RecipientSetup(contacts_path=contacts_path)
-    recipient_state = recipient_setup.public_state()
-    contacts = ContactStore(contacts_path).load()
-    default = contacts["default_recipient"]
-    if recipient_state["status"] != "complete" or default not in contacts["contacts"]:
-        raise RuntimeError("recipient setup is incomplete")
-    has_cards = any(contact["card_uids"] for contact in contacts["contacts"].values())
-    sleep(response_grace)
-    removed_gate = False
-    try:
-        run(["systemctl", "enable", *RUNTIME_UNITS, RUNTIME_TARGET], check=True)
-        # The reader remains available so caregivers can pair cards later.
-        # With zero mappings it cannot affect the default-recipient route.
-        run(["systemctl", "enable", "messagebox-nfc.service"], check=True)
-        run(
-            [
-                "systemctl",
-                "stop",
-                "messagebox-onboarding-voice.target",
-                "messagebox-onboarding-nfc.service",
-            ],
-            check=True,
-        )
-        enabled_path.unlink()
-        removed_gate = True
-        run(["systemctl", "stop", "comitup.service"], check=True)
-        # Comitup's mDNS records disappear on exit. Let Avahi republish the
-        # hostname before the dashboard takes over, including its IPv4 record.
-        run(["systemctl", "restart", "avahi-daemon.service"], check=True)
-        run(["systemctl", "start", RUNTIME_TARGET], check=True)
-        Path(request_path).unlink(missing_ok=True)
-    except (OSError, subprocess.SubprocessError):
-        if removed_gate:
-            _restore_onboarding(enabled_path, run=run)
-        raise
+    with transition_lock(lock_path, trusted_uid=lock_uid):
+        _valid_request(request_path)
+        enabled_path = Path(enabled_path)
+        if read_mode(enabled_path, trusted_uid=marker_uid) is not Mode.SETUP:
+            raise RuntimeError("onboarding gate is unavailable")
+        recipient_setup = recipients or RecipientSetup(contacts_path=contacts_path)
+        recipient_state = recipient_setup.public_state()
+        contacts = ContactStore(contacts_path).load()
+        default = contacts["default_recipient"]
+        if recipient_state["status"] != "complete" or default not in contacts["contacts"]:
+            raise RuntimeError("recipient setup is incomplete")
+        has_cards = any(contact["card_uids"] for contact in contacts["contacts"].values())
+        sleep(response_grace)
+        queue_reconcile(run=run, pending_path=pending_path, reason="completion")
+        removed_gate = False
+        try:
+            run(["systemctl", "enable", *RUNTIME_UNITS], check=True)
+            # The reader remains available so caregivers can pair cards later.
+            # With zero mappings it cannot affect the default-recipient route.
+            run(["systemctl", "enable", "messagebox-nfc.service"], check=True)
+            run(
+                [
+                    "systemctl",
+                    "stop",
+                    "messagebox-onboarding-voice.target",
+                    "messagebox-onboarding-nfc.service",
+                ],
+                check=True,
+            )
+            remove_setup_marker(enabled_path)
+            removed_gate = True
+            run(["systemctl", "daemon-reload"], check=True)
+            run(["systemctl", "stop", "comitup.service"], check=True)
+            # Comitup's mDNS records disappear on exit. Let Avahi republish the
+            # hostname before the dashboard takes over, including its IPv4 record.
+            run(["systemctl", "restart", "avahi-daemon.service"], check=True)
+            run(["systemctl", "start", RUNTIME_TARGET], check=True)
+            Path(request_path).unlink(missing_ok=True)
+        except (OSError, subprocess.SubprocessError):
+            if removed_gate:
+                _restore_onboarding(enabled_path, run=run)
+            raise
     return {"has_cards": has_cards}
 
 

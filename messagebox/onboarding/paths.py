@@ -20,6 +20,8 @@ COMITUP_BOOT_CONFIG_PATH = Path("/boot/comitup.conf")
 COMITUP_FIRMWARE_CONFIG_PATH = Path("/boot/firmware/comitup.conf")
 RUNTIME_DIR = Path("/run")
 INITIALIZER_LOCK_PATH = Path("/run/lock/messagebox-init-wifi-onboarding.lock")
+MODE_TRANSITION_LOCK_PATH = Path("/run/lock/messagebox-mode-transition.lock")
+MODE_RECONCILE_PENDING_PATH = Path("/run/messagebox-mode-reconcile.pending")
 
 WHATSAPP_SOCKET_PATH = Path("/run/messagebox-whatsapp-pairing/worker.sock")
 NFC_ONBOARDING_SOCKET_PATH = Path("/run/messagebox-onboarding-nfc/worker.sock")

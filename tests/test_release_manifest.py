@@ -13,6 +13,14 @@ class ReleaseManifestTests(unittest.TestCase):
         paths = release_manifest.installed_paths(ROOT)
         self.assertEqual(len(paths.values()), len(set(paths.values())))
         self.assertEqual(paths["scripts/install/audio_config.py"], "/usr/lib/messagebox/audio_config.py")
+        self.assertEqual(
+            paths["scripts/install/messagebox-mode-migrate.py"],
+            "/usr/lib/messagebox/messagebox-mode-migrate.py",
+        )
+        self.assertEqual(
+            paths["systemd/messagebox-mode-generator"],
+            "/usr/local/lib/systemd/system-generators/messagebox-mode-generator",
+        )
         self.assertIn("systemd/messagebox-audio-detect.service", paths)
         self.assertIn("messagebox/onboarding/static/clipboard.js", paths)
         self.assertIn("sounds/feedback/sent-swoosh.wav", paths)

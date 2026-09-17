@@ -23,7 +23,7 @@ make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py vo
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
-onboarding/completion.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
+onboarding/completion.py onboarding/mode.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
 STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/index.html onboarding/static/styles.css"
 GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
@@ -55,6 +55,7 @@ for path in \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
   scripts/install/audio_config.py \
+  scripts/install/messagebox-mode-migrate.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
   scripts/commands/messagebox-comitup-state \
@@ -72,6 +73,9 @@ for path in \
   systemd/messagebox-wifi-change.service \
   systemd/messagebox-wifi-change.path \
   systemd/messagebox-nfc.service \
+  systemd/messagebox-mode-generator \
+  systemd/messagebox-mode-reconcile.service \
+  systemd/messagebox-mode-reconcile.path \
   systemd/onboarding/comitup.service.d/messagebox.conf \
   systemd/onboarding/comitup-web.service.d/messagebox.conf \
   systemd/onboarding/messagebox-onboarding-home.service \
@@ -143,11 +147,31 @@ if [ -L "$APP_DIR" ] || { [ -e "$APP_DIR" ] && [ ! -d "$APP_DIR" ]; }; then
   echo "Cannot install into non-directory application path: $APP_DIR" >&2
   exit 1
 fi
-if sudo test -e "$ONBOARDING_CONFIG_DIR/enabled"; then
-  echo "Refusing to update while Wi-Fi onboarding is armed." >&2
-  exit 1
-fi
+GENERATED_ENV=
+CONFIG_STAGE=
+MODE_GENERATOR_STAGE=
+MODE_PATH_WAS_ACTIVE=0
+cleanup() {
+  if [ -n "$GENERATED_ENV" ]; then
+    rm -f "$GENERATED_ENV"
+  fi
+  if [ -n "$CONFIG_STAGE" ]; then
+    sudo rm -f "$CONFIG_STAGE"
+  fi
+  if [ -n "$MODE_GENERATOR_STAGE" ]; then
+    sudo rm -f "$MODE_GENERATOR_STAGE"
+  fi
+  if [ "$MODE_PATH_WAS_ACTIVE" -eq 1 ]; then
+    sudo systemctl start messagebox-mode-reconcile.path 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
+if systemctl is-active --quiet messagebox-mode-reconcile.path 2>/dev/null; then
+  MODE_PATH_WAS_ACTIVE=1
+fi
+sudo systemctl stop messagebox-mode-reconcile.path messagebox-mode-reconcile.service 2>/dev/null || true
 for unit in \
   messagebox.target \
   messagebox-button.service \
@@ -170,19 +194,6 @@ for unit in \
     exit 1
   fi
 done
-
-GENERATED_ENV=
-CONFIG_STAGE=
-cleanup() {
-  if [ -n "$GENERATED_ENV" ]; then
-    rm -f "$GENERATED_ENV"
-  fi
-  if [ -n "$CONFIG_STAGE" ]; then
-    sudo rm -f "$CONFIG_STAGE"
-  fi
-}
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
 
 if sudo test -L "$CONFIG_DIR/env" || {
   sudo test -e "$CONFIG_DIR/env" && ! sudo test -f "$CONFIG_DIR/env"
@@ -348,7 +359,33 @@ fi
 (cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
 sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
 "$SCRIPT_DIR/install/wacli.sh"
-"$SCRIPT_DIR/install/comitup.sh"
+
+# Stage the selector inputs before Comitup installation. The package installer
+# preserves the selected legacy link while onboarding is armed; migration then
+# removes the legacy links in marker-safe order after all package hooks finish.
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/systemd/messagebox.target" /etc/systemd/system/messagebox.target
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/systemd/messagebox-mode-reconcile.service" \
+  /etc/systemd/system/messagebox-mode-reconcile.service
+sudo install -o root -g root -m 0644 \
+  "$REPO_DIR/systemd/messagebox-mode-reconcile.path" \
+  /etc/systemd/system/messagebox-mode-reconcile.path
+sudo install -d -o root -g root -m 0755 /usr/lib/messagebox
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/scripts/install/messagebox-mode-migrate.py" \
+  /usr/lib/messagebox/messagebox-mode-migrate.py
+MODE_GENERATOR_STAGE=$(sudo mktemp /run/messagebox-mode-generator.XXXXXX)
+sudo install -o root -g root -m 0755 \
+  "$REPO_DIR/systemd/messagebox-mode-generator" "$MODE_GENERATOR_STAGE"
+sudo /usr/bin/python3 /usr/lib/messagebox/messagebox-mode-migrate.py \
+  --check "$MODE_GENERATOR_STAGE"
+MSGBOX_MODE_MIGRATION_PENDING=1 "$SCRIPT_DIR/install/comitup.sh"
+sudo /usr/bin/python3 /usr/lib/messagebox/messagebox-mode-migrate.py \
+  "$MODE_GENERATOR_STAGE"
+sudo systemctl stop messagebox-mode-reconcile.path messagebox-mode-reconcile.service
+sudo rm -f "$MODE_GENERATOR_STAGE"
+MODE_GENERATOR_STAGE=
 
 sudo install -d -o root -g root -m 0755 /usr/lib/messagebox
 sudo install -o root -g root -m 0644 \
@@ -363,8 +400,6 @@ sudo install -o root -g root -m 0644 \
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/messagebox-wifi-change.path" \
   /etc/systemd/system/messagebox-wifi-change.path
-sudo install -o root -g root -m 0644 \
-  "$REPO_DIR/systemd/messagebox.target" /etc/systemd/system/messagebox.target
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/messagebox.tmpfiles.conf" /etc/tmpfiles.d/messagebox.conf
 sudo install -o root -g root -m 0755 \
@@ -407,10 +442,14 @@ for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target 
 done
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
+sudo systemctl start messagebox-mode-reconcile.path
+MODE_PATH_WAS_ACTIVE=0
 sudo systemctl enable messagebox-onboarding-voice.path messagebox-onboarding-complete.path
 sudo systemctl enable --now messagebox-wifi-change.path
 sudo systemd-analyze verify \
   /etc/systemd/system/messagebox.target \
+  /etc/systemd/system/messagebox-mode-reconcile.service \
+  /etc/systemd/system/messagebox-mode-reconcile.path \
   /etc/systemd/system/messagebox-button.service \
   /etc/systemd/system/messagebox-sync.service \
   /etc/systemd/system/messagebox-poller.service \

@@ -1,0 +1,83 @@
+#!/usr/bin/python3
+"""Generate exactly one Button Box boot-mode dependency from the marker."""
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+
+MARKER = Path("/etc/messagebox-onboarding/enabled")
+DEPENDENCIES = {
+    "runtime": ("messagebox.target", "/etc/systemd/system/messagebox.target"),
+    "setup": ("comitup.service", "/usr/lib/systemd/system/comitup.service"),
+}
+
+
+class UnsafeMarker(RuntimeError):
+    pass
+
+
+def read_mode(path=MARKER, *, trusted_uid=0):
+    path = Path(path)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory = os.open(path.parent, directory_flags)
+    except OSError as exc:
+        raise UnsafeMarker from exc
+    try:
+        parent = os.fstat(directory)
+        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != trusted_uid or parent.st_mode & 0o022:
+            raise UnsafeMarker
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        try:
+            descriptor = os.open(path.name, flags, dir_fd=directory)
+        except FileNotFoundError:
+            return "runtime"
+        except OSError as exc:
+            raise UnsafeMarker from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != trusted_uid
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or os.read(descriptor, 9) != b"enabled\n"
+                or os.read(descriptor, 1)
+            ):
+                raise UnsafeMarker
+            return "setup"
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory)
+
+
+def generate(output, marker=MARKER, *, trusted_uid=0):
+    mode = read_mode(marker, trusted_uid=trusted_uid)
+    wants = Path(output) / "multi-user.target.wants"
+    wants.mkdir(parents=True, exist_ok=True)
+    for unit, unused_source in DEPENDENCIES.values():
+        (wants / unit).unlink(missing_ok=True)
+    unit, source = DEPENDENCIES[mode]
+    os.symlink(source, wants / unit)
+    return mode
+
+
+def main(arguments):
+    if len(arguments) not in (2, 4):
+        print("messagebox-mode-generator: invalid generator invocation", file=sys.stderr)
+        return 1
+    try:
+        generate(arguments[1])
+    except (OSError, UnsafeMarker):
+        print("messagebox-mode-generator: unsafe onboarding marker; no mode selected", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

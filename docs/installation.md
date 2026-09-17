@@ -28,6 +28,15 @@ release artifact.
    Neither method transfers device runtime state, pairs WhatsApp, or starts
    Button Box services.
 
+   Updates migrate boot selection without changing the onboarding marker or
+   runtime component selection. The installer validates the staged generator,
+   removes the non-selected legacy boot link first, atomically installs the
+   generator, then removes the selected legacy link. It enables the
+   marker/reconciliation path only after a daemon reload proves that exactly
+   one generated dependency matches the marker. Repeating the migration is
+   safe. An unsafe marker or unexpected legacy link stops the update before
+   either legacy link is removed.
+
    Connect the microphone and USB speaker before running setup. On a fresh
    installation, setup selects the lowest-numbered ALSA capture device and USB
    playback device, then records their card names in `/etc/messagebox/env`;
@@ -112,3 +121,27 @@ guesses the default while mapped-card state is unsafe. Do not continue with
 
 Before deployment, run the [physical test scenarios](testing.md#physical-test-scenarios)
 on a spare device.
+
+## Boot-mode recovery
+
+Use these checks only after stopping Button Box runtime and setup services.
+The marker must be either absent for runtime or a root-owned regular mode-0600
+file containing exactly `enabled` plus a newline for setup. Symlinks, devices,
+directories, unexpected content, and unreadable markers intentionally select
+neither mode.
+
+After correcting an authorized marker or restoring reviewed unit files, run:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl start messagebox-mode-reconcile.path
+sudo systemctl start messagebox-mode-reconcile.service
+systemctl status messagebox-mode-reconcile.path messagebox-mode-reconcile.service
+```
+
+Runtime mode should have `messagebox.target` active, Comitup inactive, and all
+enabled target components active. Setup mode should have the target inactive
+and Comitup active; verify either its connected home portal or its setup
+hotspot portal before calling recovery usable. Do not recreate either legacy
+`multi-user.target.wants` link. The generator-owned link under `/run` is
+ephemeral and must match the marker after every daemon reload.

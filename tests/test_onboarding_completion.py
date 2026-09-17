@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -27,6 +28,9 @@ class CompletionTests(unittest.TestCase):
             self.root, Clock()
         )
         self.calls = []
+        self.uid = os.getuid()
+        self.lock = self.root / "mode.lock"
+        self.pending = self.root / "reconcile.pending"
 
     def tearDown(self):
         self.directory.cleanup()
@@ -35,9 +39,18 @@ class CompletionTests(unittest.TestCase):
         self.calls.append((command, check))
         return subprocess.CompletedProcess(command, 0)
 
+    def complete(self, **kwargs):
+        return complete(
+            lock_path=self.lock,
+            pending_path=self.pending,
+            marker_uid=self.uid,
+            lock_uid=self.uid,
+            **kwargs,
+        )
+
     @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
     def test_zero_cards_enables_runtime_dashboard_without_nfc(self, _geteuid):
-        result = complete(
+        result = self.complete(
             request_path=self.request,
             enabled_path=self.enabled,
             contacts_path=self.contacts_path,
@@ -47,6 +60,10 @@ class CompletionTests(unittest.TestCase):
         )
         self.assertEqual(result, {"has_cards": False})
         commands = [call[0] for call in self.calls]
+        self.assertEqual(
+            commands[0],
+            ["systemctl", "start", "--no-block", "messagebox-mode-reconcile.service"],
+        )
         self.assertIn(["systemctl", "enable", "messagebox-nfc.service"], commands)
         self.assertIn(
             [
@@ -56,8 +73,11 @@ class CompletionTests(unittest.TestCase):
                 "messagebox-sync.service",
                 "messagebox-poller.service",
                 "messagebox-dash.service",
-                "messagebox.target",
             ],
+            commands,
+        )
+        self.assertNotIn(
+            ["systemctl", "enable", "messagebox.target"],
             commands,
         )
         self.assertIn(["systemctl", "start", "messagebox.target"], commands)
@@ -72,6 +92,15 @@ class CompletionTests(unittest.TestCase):
         def discovery_runner(command, check=False):
             nonlocal hostname_available, setup_running
             self.calls.append((command, check))
+            if command == [
+                "systemctl",
+                "stop",
+                "messagebox-onboarding-voice.target",
+                "messagebox-onboarding-nfc.service",
+            ]:
+                self.assertTrue(self.enabled.exists())
+            elif command == ["systemctl", "daemon-reload"]:
+                self.assertFalse(self.enabled.exists())
             if command == ["systemctl", "stop", "comitup.service"]:
                 setup_running = False
                 hostname_available = False
@@ -83,7 +112,7 @@ class CompletionTests(unittest.TestCase):
                 self.assertTrue(hostname_available, "dashboard would lose its local URL")
             return subprocess.CompletedProcess(command, 0)
 
-        complete(
+        self.complete(
             request_path=self.request,
             enabled_path=self.enabled,
             contacts_path=self.contacts_path,
@@ -106,7 +135,7 @@ class CompletionTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
 
         with self.assertRaises(subprocess.CalledProcessError):
-            complete(
+            self.complete(
                 request_path=self.request,
                 enabled_path=self.enabled,
                 contacts_path=self.contacts_path,
@@ -125,7 +154,7 @@ class CompletionTests(unittest.TestCase):
             ["systemctl", "start", "comitup.service"],
         ])
 
-        result = complete(
+        result = self.complete(
             request_path=self.request,
             enabled_path=self.enabled,
             contacts_path=self.contacts_path,
@@ -141,7 +170,7 @@ class CompletionTests(unittest.TestCase):
     @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
     def test_any_mapping_enables_fail_closed_nfc_runtime(self, _geteuid):
         self.contacts.assign_card(PERSON, CARD_A)
-        complete(
+        self.complete(
             request_path=self.request,
             enabled_path=self.enabled,
             contacts_path=self.contacts_path,
@@ -163,7 +192,7 @@ class CompletionTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
 
         with self.assertRaises(subprocess.CalledProcessError):
-            complete(
+            self.complete(
                 request_path=self.request,
                 enabled_path=self.enabled,
                 contacts_path=self.contacts_path,
