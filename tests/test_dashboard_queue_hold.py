@@ -210,14 +210,17 @@ class DashboardQueueHoldTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual([response["code"] for response in responses], [200] * 4)
-        self.assertEqual(len(list(self.queue.glob("*.wav"))), 1)
-        queued = self.queue / newer.name
+        queued_files = list(self.queue.glob("*.wav"))
+        self.assertEqual(len(queued_files), 1)
+        queued = queued_files[0]
+        self.assertNotEqual(queued.name, newer.name)
         self.assertEqual(queued.read_bytes(), newer.read_bytes())
         queued_metadata = json.loads(
             Path(f"{queued}.json").read_text(encoding="utf-8")
         )
         self.assertEqual(queued_metadata["chat"], self.family)
         self.assertEqual(queued_metadata["msgid"], "message")
+        self.assertEqual(queued_metadata["replay_history_file"], newer.name)
 
         dashboard.PUBLIC_MESSAGES.clear()
         dashboard.PUBLIC_MESSAGE_REVERSE.clear()
@@ -252,6 +255,30 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(response["code"], 200)
         self.assertEqual(response["body"], archived.read_bytes())
         self.assertEqual(response["ctype"], "audio/wav")
+
+    def test_expired_played_token_cannot_stream_or_requeue(self):
+        archived = self.archive_message(played_at=100)
+        token = dashboard.public_message_token("played", archived.name)
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}?played=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=body, ctype=ctype
+        )
+
+        with mock.patch(
+            "messagebox.played_history.time.time",
+            return_value=100 + 14 * 86400 + 1,
+        ):
+            handler.do_GET()
+            requeue = self.post(f"/api/requeue?f={token}")
+
+        self.assertEqual(response["code"], 404)
+        self.assertEqual(requeue["code"], 409)
+        self.assertFalse(archived.exists())
 
     def test_dashboard_serves_static_assets(self):
         expected_types = {

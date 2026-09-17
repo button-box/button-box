@@ -5,8 +5,10 @@ import wave
 from pathlib import Path
 
 from messagebox.played_history import (
+    RETENTION_SECONDS,
     archive_played_file,
     list_played_history,
+    read_played_file,
     requeue_played_file,
 )
 
@@ -53,16 +55,76 @@ class PlayedHistoryTests(unittest.TestCase):
         self.assertEqual(metadata["duration_s"], 1)
 
         self.assertEqual(requeue_played_file(self.queue, archived.name, now=2001), "queued")
+        queued = next(self.queue.glob("*.wav"))
+        self.assertNotEqual(queued.name, archived.name)
         self.assertEqual(
             requeue_played_file(self.queue, archived.name, now=2002),
             "already_queued",
         )
         queued_metadata = json.loads(
-            Path(f"{self.queue / archived.name}.json").read_text(encoding="utf-8")
+            Path(f"{queued}.json").read_text(encoding="utf-8")
         )
         self.assertEqual(queued_metadata["chat"], metadata["chat"])
         self.assertEqual(queued_metadata["msgid"], metadata["msgid"])
+        self.assertEqual(queued_metadata["replay_history_file"], archived.name)
         self.assertTrue(list_played_history(self.queue, now=2002)[0]["queued"])
+
+        replayed = archive_played_file(self.queue, queued, played_at=2003)
+        self.assertEqual(replayed, archived)
+        self.assertEqual(len(list((self.queue / ".played").glob("*.wav.json"))), 1)
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2004), "queued")
+
+    def test_replays_append_after_waiting_items_and_keep_request_order(self):
+        first = archive_played_file(
+            self.queue, self.message("1000-first.wav"), played_at=2000
+        )
+        second = archive_played_file(
+            self.queue, self.message("1001-second.wav"), played_at=2001
+        )
+        waiting = self.message("3000-waiting.wav")
+
+        self.assertEqual(requeue_played_file(self.queue, first.name, now=4), "queued")
+        self.assertEqual(requeue_played_file(self.queue, second.name, now=4), "queued")
+
+        ordered = sorted(path.name for path in self.queue.glob("*.wav"))
+        self.assertEqual(ordered[0], waiting.name)
+        self.assertIn("-replay-", ordered[1])
+        self.assertIn("-replay-", ordered[2])
+        self.assertLess(ordered[1], ordered[2])
+
+    def test_interrupted_publication_recovers_without_phantom_duplicate(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=2000
+        )
+        metadata_path = Path(f"{archived}.json")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        interrupted = "3000-replay-interrupted.wav"
+        metadata.update(replay_queued_at=3, replay_name=interrupted)
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        (self.queue / f"{interrupted}.part").write_bytes(b"partial")
+        (self.queue / f"{interrupted}.json").write_text("{}", encoding="utf-8")
+
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=4), "queued")
+        self.assertFalse((self.queue / f"{interrupted}.part").exists())
+        self.assertFalse((self.queue / f"{interrupted}.json").exists())
+        self.assertEqual(len(list(self.queue.glob("*.wav"))), 1)
+        self.assertEqual(
+            requeue_played_file(self.queue, archived.name, now=5),
+            "already_queued",
+        )
+
+    def test_expired_media_cannot_be_read_or_requeued_without_later_archive(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=100
+        )
+        expired_at = 100 + RETENTION_SECONDS + 1
+
+        with self.assertRaises(FileNotFoundError):
+            read_played_file(self.queue, archived.name, now=expired_at)
+        with self.assertRaises(FileNotFoundError):
+            requeue_played_file(self.queue, archived.name, now=expired_at)
+        self.assertFalse(archived.exists())
+        self.assertFalse(Path(f"{archived}.json").exists())
 
     def test_retention_keeps_bounded_metadata_and_marks_pruned_media(self):
         for index in range(4):
@@ -86,11 +148,16 @@ class PlayedHistoryTests(unittest.TestCase):
         self.assertEqual([record["available"] for record in records], [True, False, False])
 
     def test_unroutable_history_cannot_be_requeued(self):
-        source = self.message("1000-message.wav")
-        Path(f"{source}.json").write_text("{}", encoding="utf-8")
-        archived = archive_played_file(self.queue, source, played_at=2000)
-        with self.assertRaisesRegex(ValueError, "reply route"):
-            requeue_played_file(self.queue, archived.name, now=2001)
+        for index, route in enumerate(
+            (None, "", "not-a-chat", "12345@example.com", " 12345@g.us ")
+        ):
+            with self.subTest(route=route):
+                source = self.message(f"{1000 + index}-message.wav")
+                metadata = {} if route is None else {"chat": route}
+                Path(f"{source}.json").write_text(json.dumps(metadata), encoding="utf-8")
+                archived = archive_played_file(self.queue, source, played_at=2000)
+                with self.assertRaisesRegex(ValueError, "reply route"):
+                    requeue_played_file(self.queue, archived.name, now=2001)
 
 
 if __name__ == "__main__":

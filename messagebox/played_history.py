@@ -6,18 +6,20 @@ import fcntl
 import json
 import math
 import os
+import secrets
 import shutil
 import time
 import wave
 from contextlib import contextmanager
 from pathlib import Path
 
+from messagebox.contacts import ContactError, validate_contact
+
 
 METADATA_LIMIT = 20
 MEDIA_LIMIT = 10
 RETENTION_SECONDS = 14 * 86400
 MEDIA_BYTES_LIMIT = 128 * 1024 * 1024
-REPLAY_PENDING_SECONDS = 3600
 
 
 def played_dir(queue_dir: str | Path) -> Path:
@@ -82,8 +84,63 @@ def _record_time(metadata_path: Path, metadata: dict) -> float:
 
 
 def _has_reply_route(metadata: dict) -> bool:
-    chat = metadata.get("chat")
-    return isinstance(chat, str) and bool(chat.strip())
+    try:
+        contact = validate_contact(metadata.get("chat"), "Original reply route")
+    except ContactError:
+        return False
+    return contact["jid"] == metadata.get("chat")
+
+
+def _replay_name(metadata: dict) -> str | None:
+    value = metadata.get("replay_name")
+    try:
+        return _safe_name(value)
+    except ValueError:
+        return None
+
+
+def _active_replay(queue: Path, metadata: dict) -> bool:
+    name = _replay_name(metadata)
+    return bool(
+        name
+        and any(
+            (directory / name).is_file()
+            for directory in (queue, queue / ".inflight", queue / ".hold")
+        )
+    )
+
+
+def _allocate_queue_name(queue: Path, now: float) -> str:
+    largest_prefix = 0
+    for directory in (queue, queue / ".inflight", queue / ".hold"):
+        try:
+            names = (path.name for path in directory.iterdir() if path.suffix == ".wav")
+            for name in names:
+                prefix = name.split("-", 1)[0]
+                if prefix.isdigit():
+                    largest_prefix = max(largest_prefix, int(prefix))
+        except FileNotFoundError:
+            continue
+    prefix = max(int(now * 1000), largest_prefix + 1)
+    return f"{prefix}-replay-{secrets.token_hex(8)}.wav"
+
+
+def _require_retained(
+    directory: Path,
+    name: str,
+    metadata: dict,
+    *,
+    now: float,
+) -> Path:
+    metadata_path = Path(f"{directory / name}.json")
+    if not metadata or _record_time(metadata_path, metadata) < now - RETENTION_SECONDS:
+        metadata_path.unlink(missing_ok=True)
+        (directory / name).unlink(missing_ok=True)
+        raise FileNotFoundError(directory / name)
+    media = directory / name
+    if not media.is_file():
+        raise FileNotFoundError(media)
+    return media
 
 
 def _prune_locked(
@@ -139,22 +196,25 @@ def archive_played_file(
     """Move a successfully played WAV into private history and prune it."""
     queue = Path(queue_dir)
     source = Path(source_path)
-    name = _safe_name(source.name)
+    source_name = _safe_name(source.name)
     source_metadata = Path(f"{source}.json")
     now = time.time() if played_at is None else float(played_at)
     directory = played_dir(queue)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    destination = directory / name
-    destination_metadata = Path(f"{destination}.json")
 
     with _history_lock(queue):
         document = _read_json(source_metadata)
         if metadata:
             document.update(metadata)
+        history_name = document.pop("replay_history_file", source_name)
+        name = _safe_name(history_name)
+        destination = directory / name
+        destination_metadata = Path(f"{destination}.json")
         document.setdefault("version", 1)
         document.setdefault("media_type", "audio")
         document["played_at"] = now
         document.pop("replay_queued_at", None)
+        document.pop("replay_name", None)
         duration = _wav_duration(source)
         if duration is not None:
             document["duration_s"] = duration
@@ -179,35 +239,50 @@ def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> l
     directory = played_dir(queue)
     current = time.time() if now is None else now
     records = []
-    for metadata_path in directory.glob("*.wav.json"):
-        name = metadata_path.name[:-5]
-        try:
-            _safe_name(name)
-        except ValueError:
-            continue
-        metadata = _read_json(metadata_path)
-        played_at = _record_time(metadata_path, metadata)
-        if played_at < current - RETENTION_SECONDS:
-            continue
-        active = any(
-            (path / name).exists()
-            for path in (queue, queue / ".inflight", queue / ".hold")
+    with _history_lock(queue):
+        _prune_locked(
+            directory,
+            now=current,
+            metadata_limit=METADATA_LIMIT,
+            media_limit=MEDIA_LIMIT,
+            retention_seconds=RETENTION_SECONDS,
+            media_bytes_limit=MEDIA_BYTES_LIMIT,
         )
-        queued_at = metadata.get("replay_queued_at")
-        queued = active or (
-            isinstance(queued_at, (int, float))
-            and current - queued_at < REPLAY_PENDING_SECONDS
-        )
-        records.append(
-            {
-                "file": name,
-                "played_at": played_at,
-                "available": (directory / name).is_file(),
-                "queued": queued,
-                "metadata": metadata,
-            }
-        )
+        for metadata_path in directory.glob("*.wav.json"):
+            name = metadata_path.name[:-5]
+            try:
+                _safe_name(name)
+            except ValueError:
+                continue
+            metadata = _read_json(metadata_path)
+            played_at = _record_time(metadata_path, metadata)
+            records.append(
+                {
+                    "file": name,
+                    "played_at": played_at,
+                    "available": (directory / name).is_file(),
+                    "queued": _active_replay(queue, metadata),
+                    "metadata": metadata,
+                }
+            )
     return sorted(records, key=lambda item: item["played_at"], reverse=True)[:METADATA_LIMIT]
+
+
+def read_played_file(
+    queue_dir: str | Path,
+    name: str,
+    *,
+    now: float | None = None,
+) -> bytes:
+    """Read retained history media while enforcing the retention boundary."""
+    queue = Path(queue_dir)
+    name = _safe_name(name)
+    directory = played_dir(queue)
+    current = time.time() if now is None else now
+    with _history_lock(queue):
+        metadata = _read_json(Path(f"{directory / name}.json"))
+        media = _require_retained(directory, name, metadata, now=current)
+        return media.read_bytes()
 
 
 def requeue_played_file(
@@ -226,33 +301,33 @@ def requeue_played_file(
 
     with _history_lock(queue):
         metadata = _read_json(source_metadata)
+        source = _require_retained(directory, name, metadata, now=current)
         if not metadata or not _has_reply_route(metadata):
             raise ValueError("Original reply route is unavailable")
-        active = any(
-            (path / name).exists()
-            for path in (queue, queue / ".inflight", queue / ".hold")
-        )
-        queued_at = metadata.get("replay_queued_at")
-        if active or (
-            isinstance(queued_at, (int, float))
-            and current - queued_at < REPLAY_PENDING_SECONDS
-        ):
+        if _active_replay(queue, metadata):
             return "already_queued"
-        if not source.is_file():
-            raise FileNotFoundError(source)
 
-        destination = queue / name
+        interrupted_name = _replay_name(metadata)
+        if interrupted_name:
+            for suffix in ("", ".json", ".part", ".json.part"):
+                (queue / f"{interrupted_name}{suffix}").unlink(missing_ok=True)
+
+        replay_name = _allocate_queue_name(queue, current)
+        destination = queue / replay_name
         destination_metadata = Path(f"{destination}.json")
         wav_temporary = destination.with_name(destination.name + ".part")
         metadata_temporary = destination_metadata.with_name(
             destination_metadata.name + ".part"
         )
         metadata["replay_queued_at"] = current
+        metadata["replay_name"] = replay_name
         _write_json(source_metadata, metadata)
+        queued_metadata = dict(metadata)
+        queued_metadata["replay_history_file"] = name
         try:
             shutil.copyfile(source, wav_temporary)
             with metadata_temporary.open("w", encoding="utf-8") as handle:
-                json.dump(metadata, handle, sort_keys=True)
+                json.dump(queued_metadata, handle, sort_keys=True)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(metadata_temporary, destination_metadata)
@@ -263,6 +338,7 @@ def requeue_played_file(
             if not destination.exists():
                 destination_metadata.unlink(missing_ok=True)
             metadata.pop("replay_queued_at", None)
+            metadata.pop("replay_name", None)
             _write_json(source_metadata, metadata)
             raise
     return "queued"

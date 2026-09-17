@@ -51,7 +51,11 @@ from messagebox.listened_receipts import (
 )
 from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 from messagebox.onboarding.whatsapp import PairingEngine, PairingError, normalize_phone
-from messagebox.played_history import list_played_history, requeue_played_file
+from messagebox.played_history import (
+    list_played_history,
+    read_played_file,
+    requeue_played_file,
+)
 from messagebox.settings import (
     RINGTONES,
     RevisionConflict,
@@ -1159,6 +1163,13 @@ class Handler(BaseHTTPRequestHandler):
             name = resolve_message_token(token, kind)
             if not name:
                 return self._send(400, "{}")
+            if kind == "played":
+                try:
+                    return self._send(
+                        200, read_played_file(QUEUE_DIR, name), "audio/wav"
+                    )
+                except FileNotFoundError:
+                    return self._send(404, "{}")
             path = os.path.join(d, name)
             if not os.path.exists(path):
                 return self._send(404, "{}")
