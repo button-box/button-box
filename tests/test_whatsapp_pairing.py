@@ -54,7 +54,7 @@ class RecordingPopen:
 class WacliRunner:
     def __init__(
         self, *, authenticated=True, connected=True, logout_ok=True, chats=None,
-        groups=None, sync_ok=True
+        groups=None, groups_ok=True, groups_stdout=None, sync_ok=True
     ):
         self.authenticated = authenticated
         self.connected = connected
@@ -65,6 +65,8 @@ class WacliRunner:
             for row in self.chats
             if str(row.get("jid", "")).endswith("@g.us")
         ]
+        self.groups_ok = groups_ok
+        self.groups_stdout = groups_stdout
         self.sync_ok = sync_ok
         self.calls = []
 
@@ -96,8 +98,12 @@ class WacliRunner:
             )
         if "groups" in arguments and "list" in arguments:
             return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"data": self.groups}),
+                returncode=0 if self.groups_ok else 1,
+                stdout=(
+                    self.groups_stdout
+                    if self.groups_stdout is not None
+                    else json.dumps({"data": self.groups})
+                ),
                 stderr="",
             )
         if "sync" in arguments:
@@ -344,6 +350,47 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(self.candidates.read_bytes(), preserved)
         self.assertEqual(pause_observations, [True])
         self.assertFalse(engine.sync_pause_path.exists())
+
+    def test_group_metadata_failures_preserve_the_last_verified_recipient_list(self):
+        group_jid = "111-222@g.us"
+        chats = [{"jid": group_jid, "name": group_jid}]
+        recipient_setup = RecipientSetup(
+            state_path=self.root / "recipient-state.json",
+            contacts_path=self.root / "contacts.json",
+            events_path=self.root / "events.jsonl",
+            voice_request_path=self.root / "voice-request.json",
+            token_factory=lambda: "recipient-token-0001",
+        )
+        runner = WacliRunner(
+            chats=chats,
+            groups=[{"JID": group_jid, "Name": "Household"}],
+        )
+        engine = self.engine(runner=runner, recipient_setup=recipient_setup)
+        self.live_store.mkdir()
+        self.candidates.write_text(
+            json.dumps({"version": 1, "conversations": []}), encoding="utf-8"
+        )
+        engine._set_state(
+            "ready", phone_hint="WhatsApp number ending in 0123", eligible_count=0
+        )
+        verified = engine.recipient_list(refresh=True)
+        self.assertEqual(verified["recipients"][0]["label"], "Household")
+        preserved = self.candidates.read_bytes()
+
+        failures = (
+            WacliRunner(chats=chats, groups_ok=False),
+            WacliRunner(chats=chats, groups_stdout="{"),
+            WacliRunner(chats=chats, groups_stdout=json.dumps({"data": {}})),
+        )
+        for failing_runner in failures:
+            with self.subTest(runner=failing_runner), self.assertRaisesRegex(
+                PairingError, "recipient_refresh_failed"
+            ):
+                engine.run = failing_runner
+                engine.recipient_list(refresh=True)
+            self.assertEqual(self.candidates.read_bytes(), preserved)
+            self.assertEqual(engine.recipient_list(), verified)
+            self.assertFalse(engine.sync_pause_path.exists())
 
     def test_recipient_list_excludes_the_linked_whatsapp_account(self):
         recipient_setup = RecipientSetup(

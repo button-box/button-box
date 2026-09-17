@@ -129,6 +129,19 @@ class DashboardSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(SettingsError, "audio could not play"):
                 dashboard.preview_ringtone("ding_dong")
 
+    def test_ringtone_preview_timeout_releases_lock_for_retry(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        timeout = subprocess.TimeoutExpired(["aplay"], 30)
+        with patch.object(dashboard, "ringtone_path", return_value=ringtone), patch.object(
+            dashboard.subprocess, "run", side_effect=[timeout, None]
+        ) as run:
+            with self.assertRaisesRegex(SettingsError, "audio could not play"):
+                dashboard.preview_ringtone("ding_dong")
+            dashboard.preview_ringtone("ding_dong")
+
+        self.assertEqual(run.call_count, 2)
+
     def test_cross_site_update_is_rejected_before_reading_body(self):
         code, payload = self.request(
             "PUT",

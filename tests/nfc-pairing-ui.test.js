@@ -6,7 +6,7 @@ const section = (start, end) => source.slice(source.indexOf(start), source.index
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function harness() {
   const nodes = new Map(); const calls = []; const timers = [];
-  function element() { return {children: [], handlers: {}, textContent: "", disabled: false,
+  function element() { return {children: [], dataset: {}, handlers: {}, textContent: "", disabled: false,
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     setAttribute() {}, focus() { this.focused = true; },
@@ -22,7 +22,7 @@ function harness() {
     formRequest: async (url,payload) => {calls.push({url,payload});return url === "/nfc/enroll" ? h.enroll() : {};},
   });
   vm.runInContext('let runtimePairing=null, runtimePairingGeneration=0, nfcPollTimer=null, currentState={mode:"RUNTIME"}, recipientsData='+JSON.stringify({recipients:[recipient]})+';', context);
-  vm.runInContext(section("function recipientRow", "function renderRecipientPicker") + section("function renderRecipientManager", "async function mutateRecipient") + section("function setRuntimePairingMessage", "function scheduleNfcPoll"),context);
+  vm.runInContext(section("function acceptanceControl", "function showView") + section("function recipientRow", "function renderRecipientPicker") + section("function renderRecipientManager", "async function mutateRecipient") + section("function setRuntimePairingMessage", "function scheduleNfcPoll"),context);
   h.run = code => vm.runInContext(code,context);
   h.start = () => h.run('beginRuntimeNfc("person-a", "Grandma", {})');
   h.status = () => node("configured-recipient-list").querySelector(".card-pairing-message")?.textContent;

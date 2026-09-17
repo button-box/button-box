@@ -181,6 +181,14 @@ def _rows(value):
     return []
 
 
+def _has_row_list(value):
+    if isinstance(value, list):
+        return True
+    return isinstance(value, dict) and any(
+        isinstance(value.get(key), list) for key in ("data", "chats", "results")
+    )
+
+
 def _group_label(value):
     if not isinstance(value, str):
         return None
@@ -603,9 +611,14 @@ class PairingEngine:
             )
             if groups.returncode != 0:
                 raise PairingError("recipient_refresh_failed")
-            candidates = eligible_conversations(
-                _json_document(chats.stdout), groups=_json_document(groups.stdout)
-            )
+            try:
+                chats_document = _json_document(chats.stdout)
+                groups_document = _json_document(groups.stdout)
+            except PairingError as exc:
+                raise PairingError("recipient_refresh_failed") from exc
+            if not _has_row_list(chats_document) or not _has_row_list(groups_document):
+                raise PairingError("recipient_refresh_failed")
+            candidates = eligible_conversations(chats_document, groups=groups_document)
             self._write_candidates(candidates, self.candidates_path)
         else:
             try:
@@ -820,9 +833,14 @@ class PairingEngine:
         )
         if groups.returncode != 0:
             raise PairingError("conversation_list_failed")
-        candidates = eligible_conversations(
-            _json_document(chats.stdout), groups=_json_document(groups.stdout)
-        )
+        try:
+            chats_document = _json_document(chats.stdout)
+            groups_document = _json_document(groups.stdout)
+        except PairingError as exc:
+            raise PairingError("conversation_list_failed") from exc
+        if not _has_row_list(chats_document) or not _has_row_list(groups_document):
+            raise PairingError("conversation_list_failed")
+        candidates = eligible_conversations(chats_document, groups=groups_document)
         self._write_candidates(candidates, self.stage / self.candidates_path.name)
         with self._lock:
             self._raise_if_cancelled()

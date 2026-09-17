@@ -368,6 +368,28 @@ class OnboardingAPITests(unittest.TestCase):
             "Button Box audio could not play",
         )
 
+    def test_ringtone_preview_timeout_releases_lock_for_retry(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        request = {"ringtone_id": "ding_dong"}
+        headers = {"Origin": f"http://{HOST}"}
+        timeout = subprocess.TimeoutExpired(["aplay"], 30)
+        with patch(
+            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
+        ), patch(
+            "messagebox.onboarding.app.subprocess.run", side_effect=[timeout, None]
+        ) as run:
+            failed = self.client.json(
+                "POST", "/api/ringtone-preview", request, headers=headers
+            )
+            retried = self.client.json(
+                "POST", "/api/ringtone-preview", request, headers=headers
+            )
+
+        self.assertEqual(failed["status"], "503 Service Unavailable")
+        self.assertEqual(retried["status"], "200 OK")
+        self.assertEqual(run.call_count, 2)
+
     def home_pairing_client(
         self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
     ):
