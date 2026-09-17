@@ -4,32 +4,41 @@
 set -u
 
 CONFIG_FILE=/etc/messagebox/env
+RUNTIME_AUDIO_CONFIG_FILE=/run/messagebox-audio/audio.env
 TEST_WORK_DIR=/var/lib/messagebox/state
 RINGTONE=/opt/messagebox/ringtones/ring1.wav
 
 config_value() {
-  if [ ! -r "$CONFIG_FILE" ]; then
+  if [ ! -r "$1" ]; then
     return
   fi
-  key=$1
   while IFS= read -r line; do
     case "$line" in
-      "$key="*) printf '%s\n' "${line#*=}"; return ;;
+      "$2="*) printf '%s\n' "${line#*=}"; return ;;
     esac
-  done <"$CONFIG_FILE"
+  done <"$1"
 }
 
-MIC_DEV=${MSGBOX_MIC_DEV:-$(config_value MSGBOX_MIC_DEV)}
+audio_config_value() {
+  value=$(config_value "$RUNTIME_AUDIO_CONFIG_FILE" "$1")
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  config_value "$CONFIG_FILE" "$1"
+}
+
+MIC_DEV=${MSGBOX_MIC_DEV:-$(audio_config_value MSGBOX_MIC_DEV)}
 MIC_DEV=${MIC_DEV:-plughw:CARD=mic,DEV=0}
-SPK_DEV=${MSGBOX_SPK_DEV:-$(config_value MSGBOX_SPK_DEV)}
+SPK_DEV=${MSGBOX_SPK_DEV:-$(audio_config_value MSGBOX_SPK_DEV)}
 SPK_DEV=${SPK_DEV:-plughw:CARD=Device,DEV=0}
-BUTTON_PIN=${MSGBOX_BUTTON_PIN:-$(config_value MSGBOX_BUTTON_PIN)}
+BUTTON_PIN=${MSGBOX_BUTTON_PIN:-$(config_value "$CONFIG_FILE" MSGBOX_BUTTON_PIN)}
 BUTTON_PIN=${BUTTON_PIN:-17}
-LED_PIN=${MSGBOX_LED_PIN:-$(config_value MSGBOX_LED_PIN)}
+LED_PIN=${MSGBOX_LED_PIN:-$(config_value "$CONFIG_FILE" MSGBOX_LED_PIN)}
 LED_PIN=${LED_PIN:-26}
-NFC_RESET_PIN=${MSGBOX_NFC_RESET_PIN:-$(config_value MSGBOX_NFC_RESET_PIN)}
+NFC_RESET_PIN=${MSGBOX_NFC_RESET_PIN:-$(config_value "$CONFIG_FILE" MSGBOX_NFC_RESET_PIN)}
 NFC_RESET_PIN=${NFC_RESET_PIN:-D20}
-NFC_REQUEST_PIN=${MSGBOX_NFC_REQUEST_PIN:-$(config_value MSGBOX_NFC_REQUEST_PIN)}
+NFC_REQUEST_PIN=${MSGBOX_NFC_REQUEST_PIN:-$(config_value "$CONFIG_FILE" MSGBOX_NFC_REQUEST_PIN)}
 NFC_REQUEST_PIN=${NFC_REQUEST_PIN:-D16}
 NFC_VENV=/opt/messagebox/venv-nfc
 WACLI_STORE_DIR=/var/lib/messagebox/wacli
