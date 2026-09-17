@@ -28,6 +28,12 @@ class AcceptanceRunTests(unittest.TestCase):
     def test_complete_current_run_is_ready(self):
         self.assertEqual(validate(valid_run(), MATRIX, "abc1234"), [])
 
+    def test_invalid_matrix_cannot_accept_a_run(self):
+        self.assertIn("matrix has no acceptance cases",
+                      validate(valid_run(), "# Unavailable matrix", "abc1234"))
+        self.assertIn("matrix contains duplicate cases",
+                      validate(valid_run(), MATRIX + MATRIX, "abc1234"))
+
     def test_rejects_failed_missing_and_stale_evidence(self):
         run = valid_run()
         run["matrix_revision"] = "old"

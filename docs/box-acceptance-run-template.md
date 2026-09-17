@@ -18,7 +18,7 @@ Copy this file for each unit run. Keep private evidence in the operational syste
 |---|---|---|---|---|---|---|
 | BB-HOME-01 | Not run | UI+API | | | | |
 
-Add one row for every case in [the canonical matrix](box-acceptance.md). Use only `Pass`, `Fail`, `Blocked`, `Inconclusive`, `Not run`, or `Not fitted`. Never collapse a partial layer into an unconditional pass.
+Add one row for every case in [the canonical matrix](box-acceptance.md). Use only `Passed`, `Failed`, `Blocked`, `Inconclusive`, `Not run`, or `Not fitted`. Never collapse a partial layer into an unconditional pass.
 
 ## Completion accounting
 

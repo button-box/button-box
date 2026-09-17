@@ -14,7 +14,12 @@ CASE_RE = re.compile(r"^\| (BB-[A-Z]+-[0-9]+) \| ([A-Z+]+) \|", re.MULTILINE)
 
 def validate(run, matrix_text, expected_matrix_revision):
     errors = []
-    matrix = dict(CASE_RE.findall(matrix_text))
+    matrix_rows = CASE_RE.findall(matrix_text)
+    matrix = dict(matrix_rows)
+    if not matrix:
+        errors.append("matrix has no acceptance cases")
+    if len(matrix) != len(matrix_rows):
+        errors.append("matrix contains duplicate cases")
     for field in ("run_id", "unit_id", "matrix_revision", "deployed_code_revision",
                   "tested_code_revision", "unit_configuration_revision",
                   "tested_configuration_revision", "started_at", "tester", "cases"):

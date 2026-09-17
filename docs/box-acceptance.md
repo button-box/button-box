@@ -5,7 +5,7 @@ This is the canonical, reusable definition of the checks required before a box i
 ## Evidence and completion
 
 - `TEST`: deterministic synthetic test; `UI`, `API`, and `LOG`: observed on the named live revision; `PHYSICAL`: a person operated the hardware; `ACOUSTIC`: a bounded measurement or listening check; `MOCK`: simulated hardware input.
-- `Pass` applies only to the listed evidence layer. `Pass (TEST)` never proves physical behavior. Use `Blocked`, `Not run`, or `Inconclusive` honestly.
+- `Passed` applies only to the listed evidence layer. `Passed (TEST)` never proves physical behavior. Use `Blocked`, `Not run`, or `Inconclusive` honestly.
 - A unit is accepted only when every Required case passes at its required layer on the same identified unit and revision, including a cold reboot. Optional NFC cases may be `Not fitted`; if NFC is fitted, all NFC cases are required.
 - Run repository checks with `make check`. Run the guided device checks with `sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh`. Preserve sanitized timestamps and defect/PR links for failures.
 - Validate a JSON run before delivery with `python3 scripts/dev/validate_acceptance_run.py RUN.json --expected-matrix-revision MATRIX_COMMIT`. The command rejects missing, non-passing, duplicate, insufficient-evidence, and stale revision records.
