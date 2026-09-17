@@ -248,6 +248,28 @@ class WifiResetTests(unittest.TestCase):
         self.assertIn("failed", error.getvalue())
         self.assertNotIn("secret", error.getvalue())
 
+    def test_service_runs_gpio_from_a_private_writable_directory(self):
+        unit_path = (
+            Path(__file__).parents[1]
+            / "systemd/onboarding/messagebox-wifi-reset.service"
+        )
+        service = unit_path.read_text(encoding="utf-8").split("[Install]", 1)[0]
+
+        self.assertEqual(
+            [line for line in service.splitlines() if line.startswith("RuntimeDirectory=")],
+            ["RuntimeDirectory=messagebox-wifi-reset"],
+        )
+        self.assertEqual(
+            [line for line in service.splitlines() if line.startswith("RuntimeDirectoryMode=")],
+            ["RuntimeDirectoryMode=0700"],
+        )
+        self.assertEqual(
+            [line for line in service.splitlines() if line.startswith("WorkingDirectory=")],
+            ["WorkingDirectory=/run/messagebox-wifi-reset"],
+        )
+        self.assertIn("Environment=PYTHONPATH=/opt/messagebox", service.splitlines())
+        self.assertIn("ProtectSystem=strict", service.splitlines())
+
 
 if __name__ == "__main__":
     unittest.main()
