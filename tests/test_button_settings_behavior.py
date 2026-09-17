@@ -40,6 +40,7 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
 
             def ring_alert(*, source):
                 observed.append((source, request.exists()))
+                return True
 
             with patch.object(button_send, "RING_REQUEST_FILE", str(request)), patch.object(
                 button_send, "ring_alert", side_effect=ring_alert
@@ -61,6 +62,30 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
                     button_send.maybe_manual_ring()
 
             self.assertTrue(request.exists())
+
+    def test_manual_ring_request_survives_missing_ringtone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request = Path(directory) / "ring-request"
+            request.touch()
+
+            with patch.object(
+                button_send, "RING_REQUEST_FILE", str(request)
+            ), patch.object(
+                button_send, "ring_alert", return_value=False
+            ):
+                button_send.maybe_manual_ring()
+
+            self.assertTrue(request.exists())
+
+    def test_missing_ringtone_reports_incomplete_playback(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            button_send, "ringtone_path", return_value=Path(directory) / "missing.wav"
+        ), patch.object(button_send, "log"), patch.object(
+            button_send.subprocess,
+            "Popen",
+            side_effect=AssertionError("player started"),
+        ):
+            self.assertFalse(button_send.ring_alert(source="dashboard", settings={}))
 
     def test_review_approval_requires_a_new_press_after_recording_release(self):
         for fresh_press in (False, True):

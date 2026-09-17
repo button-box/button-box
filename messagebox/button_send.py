@@ -783,7 +783,8 @@ def maybe_manual_ring():
         return
     # Keep the marker in place so a crash cannot lose the request and repeated
     # dashboard taps stay idempotent until playback finishes.
-    ring_alert(source="dashboard")
+    if not ring_alert(source="dashboard"):
+        return
     try:
         os.remove(RING_REQUEST_FILE)
     except FileNotFoundError:
@@ -801,7 +802,7 @@ def ring_alert(source="new_message", settings=None):
     flash_lamp = signal in {"ring_and_lamp", "lamp_only"}
     if play_ring and not os.path.exists(path):
         log(f"ring skipped ({source}): ringtone unavailable")
-        return
+        return False
     log(f"ringing: {source}")
     log_event("ring", source=source)
     process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
@@ -822,6 +823,7 @@ def ring_alert(source="new_message", settings=None):
         if process is not None and process.poll() is None:
             process.wait()
         refresh_led(force=True)
+    return process is None or process.returncode == 0
 
 
 def load_event_metadata(fname):
