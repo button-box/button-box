@@ -24,7 +24,6 @@ from messagebox.guided_reply import (
     RecordingResult,
     claim_inbox_file,
     discard_held_playback_press,
-    finish_inbox_file,
     invalid_prompt_files,
     raw_pcm_to_trimmed_wav,
     recover_inflight_files,
@@ -32,6 +31,7 @@ from messagebox.guided_reply import (
     should_ring_after_unsent_session,
     voice_send_command,
 )
+from messagebox.played_history import archive_played_file
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
@@ -842,7 +842,12 @@ def claim_oldest():
 
 
 def finish_claim(claim):
-    finish_inbox_file(claim["path"])
+    archive_played_file(
+        QUEUE_DIR,
+        claim["path"],
+        metadata=claim.get("meta"),
+        played_at=claim.get("played_at"),
+    )
 
 
 def release_claim(claim):
@@ -1171,8 +1176,10 @@ def play_next_legacy():
     log(f"playing {names[0]} ({len(names)} waiting)")
     try:
         subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(path)], check=True, timeout=600)
-        path.unlink()
-        Path(str(path) + ".json").unlink(missing_ok=True)
+        played_at = time.time()
+        archive_played_file(
+            QUEUE_DIR, path, metadata=meta, played_at=played_at
+        )
         react_played(meta)
         try:
             wait_s = time.time() - int(names[0].split("-", 1)[0]) / 1000
@@ -1288,6 +1295,7 @@ def run_guided_once(settings=None):
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
             play_audio_ordinary(claim["path"])
+            claim["played_at"] = time.time()
             finish_claim(claim)
             log_event("guided_unroutable_inbound")
         except Exception:
@@ -1303,6 +1311,7 @@ def run_guided_once(settings=None):
             data["source_file"] = claim["path"].name
         log_event(kind, **data)
         if kind == "guided_inbound_played":
+            claim["played_at"] = time.time()
             react_played(metadata)
 
     session = GuidedSession(io, outbox_store, session_event)

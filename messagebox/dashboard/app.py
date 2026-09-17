@@ -52,6 +52,11 @@ from messagebox.listened_receipts import (
 )
 from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 from messagebox.onboarding.whatsapp import PairingEngine, PairingError, normalize_phone
+from messagebox.played_history import (
+    list_played_history,
+    read_played_file,
+    requeue_played_file,
+)
 from messagebox.settings import (
     RINGTONES,
     RevisionConflict,
@@ -72,6 +77,7 @@ PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
 HOLD_DIR = os.path.join(QUEUE_DIR, ".hold")
 TRASH_DIR = os.path.join(QUEUE_DIR, ".trash")
+PLAYED_DIR = os.path.join(QUEUE_DIR, ".played")
 OUTBOX_DIR = str(DEFAULT_OUTBOX_DIR)
 EVENTS_FILE = str(STATE_DIR / "events.jsonl")
 WACLI_BIN = "/usr/local/bin/wacli"
@@ -916,6 +922,24 @@ def build_data():
             item["sender"] = meta.get("sender") or "?"
             item["token"] = public_message_token(kind, item.pop("file"))
 
+    recent = []
+    for record in list_played_history(QUEUE_DIR):
+        metadata = record["metadata"]
+        event = file_meta.get(record["file"], {})
+        media_type = metadata.get("media_type")
+        recent.append(
+            {
+                "ts": record["played_at"],
+                "dur": metadata.get("duration_s"),
+                "chat": label(event.get("chat") or metadata.get("chat", "")) or "?",
+                "sender": event.get("sender") or "?",
+                "media_kind": "video_soundtrack" if media_type == "video" else "voice_message",
+                "available": record["available"],
+                "queued": record["queued"],
+                "token": public_message_token("played", record["file"]),
+            }
+        )
+
     def avg(values):
         return round(sum(values) / len(values), 1) if values else None
 
@@ -953,6 +977,7 @@ def build_data():
         "queue": queue,
         "hold": hold,
         "trash": trash,
+        "recently_played": recent,
     }
 
 
@@ -1128,7 +1153,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, json.dumps({"ok": False, "error": str(exc)}))
         if url.path.startswith("/audio/"):
             query = urllib.parse.parse_qs(url.query or "")
-            if query.get("hold") == ["1"]:
+            if query.get("played") == ["1"]:
+                d, kind = PLAYED_DIR, "played"
+            elif query.get("hold") == ["1"]:
                 d, kind = HOLD_DIR, "hold"
             elif query.get("trash") == ["1"]:
                 d, kind = TRASH_DIR, "trash"
@@ -1138,6 +1165,13 @@ class Handler(BaseHTTPRequestHandler):
             name = resolve_message_token(token, kind)
             if not name:
                 return self._send(400, "{}")
+            if kind == "played":
+                try:
+                    return self._send(
+                        200, read_played_file(QUEUE_DIR, name), "audio/wav"
+                    )
+                except FileNotFoundError:
+                    return self._send(404, "{}")
             path = os.path.join(d, name)
             if not os.path.exists(path):
                 return self._send(404, "{}")
@@ -1438,6 +1472,25 @@ class Handler(BaseHTTPRequestHandler):
             except OSError as e:
                 return self._send(500, json.dumps({"ok": False, "error": str(e)}))
             return self._send(202, '{"ok":true,"status":"queued"}')
+        if url.path == "/api/requeue":
+            q = urllib.parse.parse_qs(url.query or "")
+            token = (q.get("f") or [""])[0]
+            name = resolve_message_token(token, "played")
+            if not name:
+                return self._send(400, "{}")
+            try:
+                status = requeue_played_file(QUEUE_DIR, name)
+            except FileNotFoundError:
+                return self._send(
+                    409,
+                    json.dumps({"ok": False, "error": "Audio is no longer available"}),
+                )
+            except ValueError as exc:
+                return self._send(409, json.dumps({"ok": False, "error": str(exc)}))
+            except OSError as exc:
+                return self._send(500, json.dumps({"ok": False, "error": str(exc)}))
+            log_event(type="dash_requeue_played", status=status)
+            return self._send(200, json.dumps({"ok": True, "status": status}))
         q = urllib.parse.parse_qs(url.query or "")
         if url.path == "/api/hold":
             source_kind, source_dir, destination_dir = "queue", QUEUE_DIR, HOLD_DIR

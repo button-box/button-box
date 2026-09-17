@@ -14,6 +14,20 @@ required.
 Synthetic tests cover routing, onboarding, redaction, pairing, NFC, and recovery
 contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
+## Regression test matrix
+
+Matrix case IDs are permanent. Add new cases with a new descriptive ID; do not
+renumber or reuse an existing ID.
+
+Every confirmed product bug must add a matrix case or explicitly update an
+existing case and its regression test before the fix is complete. If automation
+is impossible, record the reason in the pull request and keep a precise manual
+assertion in this matrix.
+
+| Case ID | Regression | Synthetic setup and expected result | Software evidence | Separate physical assertion |
+| --- | --- | --- | --- | --- |
+| `BB-RQ-001` | Caregiver requeues recently played media | Archive synthetic voice audio and an ordinary video soundtrack after playback. The dashboard returns safe newest-first metadata and an opaque handle. Each replay appends after existing waiting messages using a fresh queue identity while preserving its original history identity and routing sidecar. Repeated and concurrent requests create one playable WAV; restart preserves real queued state, while an interrupted pre-publication attempt retries without a phantom duplicate. Expired, missing or policy-pruned media cannot stream or requeue. | `tests/test_played_history.py::PlayedHistoryTests`, `tests/test_dashboard_queue_hold.py::DashboardQueueHoldTests::test_recently_played_is_newest_first_safe_and_requeues_once`, and the recently-played cases in `tests/onboarding-ui.test.js` | On a test box at the exact candidate revision, leave two synthetic messages waiting, then requeue a retained voice note and ordinary video soundtrack. Confirm both append in request order, refresh and restart before playback, then verify exactly one playback each and that reply routing remains bound to the original chats. Confirm a deliberately expired or pruned fixture cannot stream or requeue. Do not treat circular video notes as supported. |
+
 ## Physical test scenarios
 
 Use a spare Raspberry Pi 4 with a freshly imaged test microSD card. Confirm it
@@ -33,7 +47,10 @@ For installation and consumer onboarding, test:
 - Initial default selection, switching the default among allowed recipients,
   protection from removing the current default, no-card routing after a switch,
   defer/resume, and recipient-manager recovery
-- New voice note, physical playback, guided reply review, and accepted send
+- New voice note and ordinary video with speech, physical playback, guided reply
+  review, and accepted send. Confirm a no-audio video is skipped and the next
+  valid message still plays. Circular instant video notes remain an explicit
+  unsupported case with the pinned wacli 0.17.1 client.
 - Zero-tag Skip, person and group pairing, multiple tags per recipient,
   explicit reassignment, remove-after-beep behavior, Retry/Skip when the reader
   is unavailable, and the distinct read/success tones

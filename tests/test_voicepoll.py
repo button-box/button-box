@@ -1,6 +1,10 @@
+import io
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +14,7 @@ from messagebox import voicepoll
 
 from messagebox.contacts import ContactStore
 from messagebox.voicepoll import (
+    MediaRejected,
     load_contact_authorizations,
     message_is_authorized,
     parse_wacli_timestamp,
@@ -43,77 +48,44 @@ class PollingStoreTests(unittest.TestCase):
             process.assert_called_once()
             self.assertFalse(database.exists())
 
-    def test_consecutive_senders_queue_oldest_first_without_store_write_lock(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            queue = root / "queue"
-            state = root / "seen.json"
-            events = root / "events.jsonl"
-            first = {
-                "MsgID": "first-message",
+    def test_poll_preserves_authorization_deduplication_and_oldest_first_order(self):
+        def message(message_id, timestamp, **changes):
+            result = {
+                "MsgID": message_id,
                 "ChatJID": GROUP,
-                "SenderJID": PERSON,
-                "SenderName": "First",
-                "Timestamp": 1001,
-                "MediaType": "audio",
+                "Timestamp": timestamp,
+                "MediaType": "video",
                 "FromMe": False,
             }
-            second = {
-                "MsgID": "second-message",
-                "ChatJID": GROUP,
-                "SenderJID": "15557654321@s.whatsapp.net",
-                "SenderName": "Second",
-                "Timestamp": 1002,
-                "MediaType": "audio",
-                "FromMe": False,
-            }
-            listing = SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"data": {"messages": [second, first]}}),
-                stderr="",
-            )
-            calls = []
+            result.update(changes)
+            return result
 
-            def run_wacli(*arguments):
-                calls.append(arguments)
-                if "messages" in arguments:
-                    return listing
-                output = Path(arguments[arguments.index("--output") + 1])
-                output.write_bytes(b"downloaded")
-                return SimpleNamespace(
-                    returncode=0,
-                    stdout=json.dumps({"success": True, "data": {"path": "ignored"}}),
-                    stderr="",
-                )
+        newest_first = [
+            message("new", 6),
+            message("mine", 5, FromMe=True),
+            message("image", 4, MediaType="image"),
+            message("seen", 3),
+            message("unauthorized", 2, ChatJID=PERSON),
+            message("old", 1, MediaType="audio"),
+        ]
+        response = SimpleNamespace(
+            stdout=json.dumps({"data": {"messages": newest_first}}),
+        )
+        seen = {"seen"}
+        with (
+            mock.patch.object(voicepoll, "load_seen", return_value=seen),
+            mock.patch.object(voicepoll, "load_contact_authorizations", return_value={GROUP: 0}),
+            mock.patch.object(voicepoll, "wacli", return_value=response),
+            mock.patch.object(voicepoll, "process_message") as process,
+            mock.patch.object(voicepoll.time, "sleep", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            voicepoll.main()
 
-            def convert(arguments, **_kwargs):
-                Path(arguments[-1]).write_bytes(b"wav")
-                return SimpleNamespace(returncode=0)
-
-            with (
-                mock.patch.object(voicepoll, "QUEUE_DIR", str(queue)),
-                mock.patch.object(voicepoll, "STATE_FILE", str(state)),
-                mock.patch.object(voicepoll, "EVENTS_FILE", str(events)),
-                mock.patch.object(voicepoll, "_last_queue_ms", 0),
-                mock.patch.object(voicepoll, "wacli", side_effect=run_wacli),
-                mock.patch.object(voicepoll.subprocess, "run", side_effect=convert),
-            ):
-                seen = set()
-                self.assertEqual(voicepoll.poll_once(seen, {GROUP: 1000}), 2)
-
-            wavs = sorted(queue.glob("*.wav"))
-            self.assertEqual([path.name.split("-", 1)[1] for path in wavs], [
-                "first-message.wav",
-                "second-message.wav",
-            ])
-            self.assertEqual(seen, {"first-message", "second-message"})
-            self.assertEqual(len(list(queue.glob("*.media.part"))), 0)
-            downloads = [call for call in calls if "media" in call]
-            self.assertEqual(len(downloads), 2)
-            for call in downloads:
-                self.assertEqual(call[0], "--read-only")
-                self.assertIn("--output", call)
-                self.assertNotIn("--lock-wait", call)
+        self.assertEqual(
+            [call.args[0]["MsgID"] for call in process.call_args_list],
+            ["old", "new"],
+        )
 
 
 class TimestampTests(unittest.TestCase):
@@ -176,6 +148,356 @@ class ContactAuthorizationTests(unittest.TestCase):
         self.assertTrue(message_is_authorized(message("1970-01-01T00:16:41Z"), authorizations))
         self.assertFalse(message_is_authorized(message(None), authorizations))
         self.assertFalse(message_is_authorized(message(2_000, PERSON), authorizations))
+
+
+class DownloadContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.original_queue = voicepoll.QUEUE_DIR
+        voicepoll.QUEUE_DIR = str(Path(self.temporary.name) / "queue")
+
+    def tearDown(self):
+        voicepoll.QUEUE_DIR = self.original_queue
+        self.temporary.cleanup()
+
+    def test_download_uses_exact_chat_and_message_and_returns_path(self):
+        def download(*arguments):
+            output = arguments[arguments.index("--output") + 1]
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"success": True, "data": {"path": output}}),
+            )
+
+        message = {"ChatJID": GROUP, "MsgID": "synthetic-video"}
+        with mock.patch.object(voicepoll, "wacli", side_effect=download) as wacli:
+            path = voicepoll.download_path(message)
+        arguments = wacli.call_args.args
+        self.assertEqual(
+            arguments[:7],
+            (
+                "--read-only", "media", "download", "--chat", GROUP,
+                "--id", "synthetic-video",
+            ),
+        )
+        self.assertEqual(arguments[-1], "--json")
+        self.assertEqual(arguments[arguments.index("--output") + 1], path)
+        self.assertEqual(Path(path).parent, Path(voicepoll.QUEUE_DIR))
+        self.assertTrue(Path(path).name.startswith(".media-"))
+
+    def test_failed_or_malformed_download_has_no_path(self):
+        for result in (
+            SimpleNamespace(returncode=1, stdout=""),
+            SimpleNamespace(returncode=0, stdout="not json"),
+            SimpleNamespace(returncode=0, stdout=json.dumps({"success": True, "data": {}})),
+        ):
+            with self.subTest(result=result):
+                with mock.patch.object(voicepoll, "wacli", return_value=result):
+                    self.assertIsNone(
+                        voicepoll.download_path({"ChatJID": GROUP, "MsgID": "synthetic"})
+                    )
+
+
+@unittest.skipUnless(
+    shutil.which("ffmpeg") and shutil.which("ffprobe"),
+    "ffmpeg and ffprobe are required",
+)
+class MediaQueueTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.queue = self.root / "queue"
+        self.audio = self.root / "voice.wav"
+        self.video = self.root / "video.mp4"
+        self.silent_video = self.root / "silent.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                "-ar", "48000", "-ac", "1", str(self.audio),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=blue:s=32x32:d=2",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                "-shortest", "-c:v", "mpeg4", "-c:a", "aac", str(self.video),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=blue:s=32x32:d=2",
+                "-c:v", "mpeg4", str(self.silent_video),
+            ],
+            check=True,
+        )
+        self.patches = (
+            mock.patch.object(voicepoll, "QUEUE_DIR", str(self.queue)),
+            mock.patch.object(voicepoll, "EQ_FILTER", ""),
+            mock.patch.object(voicepoll, "VIDEO_MAX_BYTES", 10 * 1024 * 1024),
+            mock.patch.object(voicepoll, "VIDEO_MAX_DURATION_S", 10),
+        )
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self):
+        for patch in reversed(self.patches):
+            patch.stop()
+        self.temporary.cleanup()
+
+    def message(self, media_type, message_id):
+        return {
+            "ChatJID": GROUP,
+            "MsgID": message_id,
+            "SenderJID": PERSON,
+            "MediaType": media_type,
+        }
+
+    def test_ordinary_video_queues_first_audio_track_with_routing_sidecar(self):
+        queued, duration = voicepoll.queue_message(
+            self.message("video", "synthetic-video"), str(self.video)
+        )
+        queued = Path(queued)
+        self.assertTrue(queued.is_file())
+        self.assertAlmostEqual(duration, 2, delta=0.1)
+        self.assertEqual(
+            json.loads(Path(f"{queued}.json").read_text(encoding="utf-8")),
+            {
+                "version": 1,
+                "chat": GROUP,
+                "msgid": "synthetic-video",
+                "sender_jid": PERSON,
+                "media_type": "video",
+            },
+        )
+        self.assertEqual(list(self.queue.glob("*.part")), [])
+
+    def test_existing_voice_note_path_still_queues_audio(self):
+        queued, duration = voicepoll.queue_message(
+            self.message("audio", "synthetic-audio"), str(self.audio)
+        )
+        self.assertTrue(Path(queued).is_file())
+        self.assertAlmostEqual(duration, 2, delta=0.1)
+
+    def test_video_transcode_always_has_a_hard_duration_cap(self):
+        def create_output(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"synthetic wav")
+            return SimpleNamespace(returncode=0)
+
+        with (
+            mock.patch.object(voicepoll, "audio_duration", return_value=2),
+            mock.patch.object(voicepoll, "wav_duration", return_value=2),
+            mock.patch.object(voicepoll.subprocess, "run", side_effect=create_output) as run,
+        ):
+            voicepoll.queue_message(
+                self.message("video", "bounded-video"), str(self.video)
+            )
+
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command[command.index("-t") + 1],
+            str(voicepoll.VIDEO_MAX_DURATION_S),
+        )
+
+    def test_probe_and_transcode_timeouts_remain_retryable(self):
+        message = self.message("video", "retryable-timeout")
+        with mock.patch.object(
+            voicepoll.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("ffprobe", 30),
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                voicepoll.queue_message(message, str(self.video))
+
+        with (
+            mock.patch.object(voicepoll, "audio_duration", return_value=2),
+            mock.patch.object(
+                voicepoll.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("ffmpeg", 120),
+            ),
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                voicepoll.queue_message(message, str(self.video))
+
+    def test_video_without_audio_is_rejected_without_queue_artifacts(self):
+        with self.assertRaisesRegex(MediaRejected, "no audio track"):
+            voicepoll.queue_message(
+                self.message("video", "synthetic-silent"), str(self.silent_video)
+            )
+        self.assertFalse(self.queue.exists())
+
+    def test_invalid_and_configured_limits_are_rejected(self):
+        invalid = self.root / "invalid.mp4"
+        invalid.write_text("synthetic invalid media", encoding="utf-8")
+        cases = (
+            (invalid, {}, "invalid media"),
+            (self.video, {"VIDEO_MAX_BYTES": 1}, "size limit"),
+            (self.video, {"VIDEO_MAX_DURATION_S": 1}, "duration limit"),
+        )
+        for source, changes, expected in cases:
+            with self.subTest(expected=expected):
+                patches = [mock.patch.object(voicepoll, name, value) for name, value in changes.items()]
+                for patch in patches:
+                    patch.start()
+                try:
+                    with self.assertRaisesRegex(MediaRejected, expected):
+                        voicepoll.queue_message(
+                            self.message("video", f"synthetic-{expected}"), str(source)
+                        )
+                finally:
+                    for patch in reversed(patches):
+                        patch.stop()
+        self.assertFalse(self.queue.exists())
+
+
+class MessageIsolationTests(unittest.TestCase):
+    def test_download_failure_retries_but_permanent_rejection_does_not_block_next(self):
+        seen = set()
+        saved = []
+        messages = [
+            {"MsgID": "retry", "ChatJID": GROUP, "SenderName": "Synthetic", "Timestamp": 1},
+            {"MsgID": "bad", "ChatJID": GROUP, "SenderName": "Synthetic", "Timestamp": 2},
+            {"MsgID": "good", "ChatJID": GROUP, "SenderName": "Synthetic", "Timestamp": 3},
+        ]
+        with (
+            mock.patch.object(voicepoll, "save_seen", side_effect=lambda value: saved.append(set(value))),
+            mock.patch.object(
+                voicepoll,
+                "download_path",
+                side_effect=[None, "/tmp/bad.mp4", "/tmp/good.mp4"],
+            ),
+            mock.patch.object(
+                voicepoll,
+                "queue_message",
+                side_effect=[MediaRejected("invalid media"), ("/tmp/queued.wav", 2)],
+            ) as queue,
+            mock.patch.object(voicepoll, "log_event"),
+        ):
+            for message in messages:
+                voicepoll.process_message(message, seen)
+
+        self.assertNotIn("retry", seen)
+        self.assertIn("bad", seen)
+        self.assertIn("good", seen)
+        self.assertEqual(queue.call_count, 2)
+        self.assertEqual(saved[-1], {"bad", "good"})
+
+    def test_download_exception_retries_without_raising(self):
+        seen = set()
+        message = {
+            "MsgID": "timeout",
+            "ChatJID": GROUP,
+            "SenderName": "Synthetic",
+            "Timestamp": 1,
+        }
+        with (
+            mock.patch.object(voicepoll, "save_seen"),
+            mock.patch.object(voicepoll, "download_path", side_effect=subprocess.TimeoutExpired("wacli", 1)),
+        ):
+            voicepoll.process_message(message, seen)
+        self.assertNotIn("timeout", seen)
+
+    def test_transient_queue_failures_clear_seen_for_retry(self):
+        message = {
+            "MsgID": "private-message-id",
+            "ChatJID": GROUP,
+            "SenderName": "Private sender",
+            "Timestamp": 1,
+        }
+        failures = (
+            subprocess.TimeoutExpired("ffprobe", 30),
+            subprocess.TimeoutExpired("ffmpeg", 120),
+            OSError("temporary queue failure"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                seen = set()
+                with (
+                    mock.patch.object(voicepoll, "save_seen"),
+                    mock.patch.object(voicepoll, "download_path", return_value="/private/input.mp4"),
+                    mock.patch.object(voicepoll, "queue_message", side_effect=failure),
+                    mock.patch.object(voicepoll, "log_event") as event,
+                ):
+                    voicepoll.process_message(message, seen)
+
+                self.assertNotIn(message["MsgID"], seen)
+                event.assert_called_once_with(
+                    type="receive_retry",
+                    msgid=message["MsgID"],
+                    reason="queue failure",
+                )
+
+    def test_service_output_omits_private_message_and_path_fields(self):
+        message = {
+            "MsgID": "PRIVATE-MESSAGE-ID",
+            "ChatJID": GROUP,
+            "SenderJID": PERSON,
+            "SenderName": "PRIVATE-SENDER-NAME",
+            "Timestamp": "PRIVATE-TIMESTAMP",
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.object(voicepoll, "save_seen"),
+            mock.patch.object(
+                voicepoll,
+                "download_path",
+                return_value="/private/download/PRIVATE-MESSAGE-ID.mp4",
+            ),
+            mock.patch.object(
+                voicepoll,
+                "queue_message",
+                return_value=("/private/queue/PRIVATE-MESSAGE-ID.wav", 2),
+            ),
+            mock.patch.object(voicepoll, "log_event") as event,
+            redirect_stdout(output),
+        ):
+            voicepoll.process_message(message, set())
+
+        rendered = output.getvalue()
+        for private_value in (
+            message["MsgID"],
+            message["SenderName"],
+            message["Timestamp"],
+            "/private/download/PRIVATE-MESSAGE-ID.mp4",
+            "/private/queue/PRIVATE-MESSAGE-ID.wav",
+        ):
+            self.assertNotIn(private_value, rendered)
+        event.assert_called_once_with(
+            type="received",
+            chat=GROUP,
+            sender=message["SenderName"],
+            sender_jid=PERSON,
+            msgid=message["MsgID"],
+            file="PRIVATE-MESSAGE-ID.wav",
+            dur=2,
+        )
+
+    def test_download_failure_does_not_print_raw_wacli_output(self):
+        private_output = "PRIVATE WACLI ERROR /private/download/path"
+        message = {
+            "MsgID": "PRIVATE-MESSAGE-ID",
+            "ChatJID": GROUP,
+            "SenderName": "PRIVATE-SENDER-NAME",
+            "Timestamp": "PRIVATE-TIMESTAMP",
+        }
+        result = SimpleNamespace(returncode=1, stdout=private_output, stderr=private_output)
+        output = io.StringIO()
+        with (
+            mock.patch.object(voicepoll, "save_seen"),
+            mock.patch.object(voicepoll, "wacli", return_value=result),
+            redirect_stdout(output),
+        ):
+            voicepoll.process_message(message, set())
+
+        rendered = output.getvalue()
+        self.assertNotIn(private_output, rendered)
+        self.assertNotIn(message["MsgID"], rendered)
+        self.assertNotIn(message["SenderName"], rendered)
+        self.assertNotIn(message["Timestamp"], rendered)
 
 
 if __name__ == "__main__":

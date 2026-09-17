@@ -40,4 +40,11 @@ def setup_activity(events_path):
     except FileNotFoundError:
         pass
     # No queue/audio/recipient identifiers or mutation controls during setup.
-    return {"cards": cards, "interactions": list(reversed(recent)), "queue": [], "hold": [], "trash": []}
+    return {
+        "cards": cards,
+        "interactions": list(reversed(recent)),
+        "queue": [],
+        "recently_played": [],
+        "hold": [],
+        "trash": [],
+    }

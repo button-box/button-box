@@ -1,11 +1,14 @@
 import json
 import tempfile
+import threading
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
 
 import messagebox.dashboard.app as dashboard
+from messagebox.played_history import archive_played_file
 
 
 class DashboardQueueHoldTests(unittest.TestCase):
@@ -15,7 +18,8 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.queue = self.root / "queue"
         self.hold = self.queue / ".hold"
         self.trash = self.queue / ".trash"
-        for path in (self.queue, self.hold, self.trash):
+        self.played = self.queue / ".played"
+        for path in (self.queue, self.hold, self.trash, self.played):
             path.mkdir(parents=True, exist_ok=True)
 
         self.originals = {
@@ -24,6 +28,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
                 "QUEUE_DIR",
                 "HOLD_DIR",
                 "TRASH_DIR",
+                "PLAYED_DIR",
                 "EVENTS_FILE",
                 "CONTACTS_FILE",
                 "LISTENED_DIR",
@@ -34,6 +39,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
         dashboard.QUEUE_DIR = str(self.queue)
         dashboard.HOLD_DIR = str(self.hold)
         dashboard.TRASH_DIR = str(self.trash)
+        dashboard.PLAYED_DIR = str(self.played)
         dashboard.EVENTS_FILE = str(self.root / "events.jsonl")
         dashboard.CONTACTS_FILE = self.root / "contacts.json"
         dashboard.LISTENED_DIR = str(self.root / "listened")
@@ -64,9 +70,20 @@ class DashboardQueueHoldTests(unittest.TestCase):
 
     def make_message(self, name="1000-message.wav"):
         wav = self.queue / name
-        wav.write_bytes(b"RIFF-test")
+        with wave.open(str(wav), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            audio.writeframes(b"\x00\x00" * 8000)
         Path(str(wav) + ".json").write_text(
-            json.dumps({"chat": self.family, "msgid": "message"})
+            json.dumps(
+                {
+                    "chat": self.family,
+                    "msgid": "message",
+                    "sender_jid": "15551234567@s.whatsapp.net",
+                    "media_type": "audio",
+                }
+            )
         )
         Path(dashboard.EVENTS_FILE).write_text(
             json.dumps(
@@ -81,6 +98,10 @@ class DashboardQueueHoldTests(unittest.TestCase):
             + "\n"
         )
         return wav
+
+    def archive_message(self, name="1000-message.wav", played_at=2_000_000_000):
+        wav = self.make_message(name)
+        return archive_played_file(self.queue, wav, played_at=played_at)
 
     def token(self, kind="queue", name="1000-message.wav"):
         return dashboard.public_message_token(kind, name)
@@ -157,6 +178,107 @@ class DashboardQueueHoldTests(unittest.TestCase):
         handler._send = send
         handler.do_GET()
         self.assertEqual(response, {"code": 200, "body": expected, "ctype": "audio/wav"})
+
+    def test_recently_played_is_newest_first_safe_and_requeues_once(self):
+        self.archive_message("1000-audio.wav", played_at=2_000_000_000)
+        newer = self.archive_message("1001-video.wav", played_at=2_000_000_001)
+        newer_metadata = json.loads(Path(f"{newer}.json").read_text(encoding="utf-8"))
+        newer_metadata["media_type"] = "video"
+        Path(f"{newer}.json").write_text(json.dumps(newer_metadata), encoding="utf-8")
+
+        data = dashboard.build_data()
+        self.assertEqual(
+            [item["media_kind"] for item in data["recently_played"]],
+            ["video_soundtrack", "voice_message"],
+        )
+        self.assertEqual(data["recently_played"][0]["sender"], "Mommy")
+        self.assertEqual(data["recently_played"][0]["chat"], "Family")
+        self.assertEqual(data["recently_played"][0]["ts"], 2_000_000_001)
+        self.assertNotIn("file", data["recently_played"][0])
+        token = data["recently_played"][0]["token"]
+
+        responses = []
+        threads = [
+            threading.Thread(
+                target=lambda: responses.append(self.post(f"/api/requeue?f={token}"))
+            )
+            for _ in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual([response["code"] for response in responses], [200] * 4)
+        queued_files = list(self.queue.glob("*.wav"))
+        self.assertEqual(len(queued_files), 1)
+        queued = queued_files[0]
+        self.assertNotEqual(queued.name, newer.name)
+        self.assertEqual(queued.read_bytes(), newer.read_bytes())
+        queued_metadata = json.loads(
+            Path(f"{queued}.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(queued_metadata["chat"], self.family)
+        self.assertEqual(queued_metadata["msgid"], "message")
+        self.assertEqual(queued_metadata["replay_history_file"], newer.name)
+
+        dashboard.PUBLIC_MESSAGES.clear()
+        dashboard.PUBLIC_MESSAGE_REVERSE.clear()
+        refreshed = dashboard.build_data()["recently_played"][0]
+        self.assertTrue(refreshed["queued"])
+        self.assertTrue(refreshed["token"])
+
+    def test_missing_played_media_is_visible_but_unavailable(self):
+        archived = self.archive_message(played_at=2_000_000_000)
+        archived.unlink()
+        item = dashboard.build_data()["recently_played"][0]
+        self.assertFalse(item["available"])
+        response = self.post(f"/api/requeue?f={item['token']}")
+        self.assertEqual(response["code"], 409)
+        self.assertEqual(response["body"]["error"], "Audio is no longer available")
+
+    def test_played_audio_stream_uses_opaque_token(self):
+        archived = self.archive_message(played_at=2_000_000_000)
+        item = dashboard.build_data()["recently_played"][0]
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{item['token']}?played=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=body, ctype=ctype
+        )
+
+        handler.do_GET()
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(response["body"], archived.read_bytes())
+        self.assertEqual(response["ctype"], "audio/wav")
+
+    def test_expired_played_token_cannot_stream_or_requeue(self):
+        archived = self.archive_message(played_at=100)
+        token = dashboard.public_message_token("played", archived.name)
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}?played=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=body, ctype=ctype
+        )
+
+        with mock.patch(
+            "messagebox.played_history.time.time",
+            return_value=100 + 14 * 86400 + 1,
+        ):
+            handler.do_GET()
+            requeue = self.post(f"/api/requeue?f={token}")
+
+        self.assertEqual(response["code"], 404)
+        self.assertEqual(requeue["code"], 409)
+        self.assertFalse(archived.exists())
 
     def test_dashboard_serves_static_assets(self):
         expected_types = {
