@@ -31,7 +31,7 @@ from messagebox.guided_reply import (
     should_ring_after_unsent_session,
     voice_send_command,
 )
-from messagebox.played_history import archive_played_file
+from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
@@ -312,6 +312,27 @@ def current_recipient_context(*, claim=False):
     except (ContactError, NfcError, OSError) as exc:
         log(f"contact routing unavailable: {exc}")
         return None
+
+
+def recording_recipient_context():
+    """Prefer an intentional card, then the exact recently played sender."""
+    if Path(NFC_SELECTION_FILE).exists():
+        selected = current_recipient_context(claim=True)
+        if selected is not None and selected["via_card"]:
+            return selected
+    try:
+        contacts = ContactStore(CONTACTS_FILE)
+        recipient = recent_reply_recipient(QUEUE_DIR, contacts.allowed_jids())
+        if recipient is not None:
+            document = contacts.load()
+            return {
+                "contact": {"jid": recipient, **document["contacts"][recipient]},
+                "via_card": False,
+                "via_recent_reply": True,
+            }
+    except (ContactError, OSError):
+        pass
+    return current_recipient_context(claim=True)
 
 
 def routing_mode():
@@ -1202,7 +1223,7 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         wait_for_stable_open()
         play_next_legacy()
         return
-    context = current_recipient_context(claim=True)
+    context = recording_recipient_context()
     if context is None:
         block_unavailable_recipient()
         return

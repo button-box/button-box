@@ -162,6 +162,38 @@ class ButtonRoutingTests(unittest.TestCase):
             button_send.record_and_send_legacy()
         play.assert_called_once_with()
 
+    def test_recently_played_sender_routes_recording_without_nfc(self):
+        self.add_grandma()
+        self.add_family()
+        self.selection_path.write_text("{}", encoding="utf-8")
+        with mock.patch.object(
+            button_send, "current_recipient_context", return_value=None
+        ) as current, mock.patch.object(
+            button_send, "recent_reply_recipient", return_value=FAMILY
+        ):
+            context = button_send.recording_recipient_context()
+
+        self.assertEqual(context["contact"]["jid"], FAMILY)
+        self.assertFalse(context["via_card"])
+        self.assertTrue(context["via_recent_reply"])
+        current.assert_called_once_with(claim=True)
+
+    def test_fresh_card_overrides_recently_played_sender(self):
+        self.selection_path.write_text("{}", encoding="utf-8")
+        selected = {
+            "contact": {"jid": GRANDMA, "label": "Grandma"},
+            "uid": CARD,
+            "via_card": True,
+        }
+        with mock.patch.object(
+            button_send, "current_recipient_context", return_value=selected
+        ), mock.patch.object(
+            button_send,
+            "recent_reply_recipient",
+            side_effect=AssertionError("recent route inspected"),
+        ):
+            self.assertEqual(button_send.recording_recipient_context(), selected)
+
     def test_missing_or_corrupt_legacy_recipient_sidecar_blocks(self):
         wav = Path(self.directory.name) / "legacy.wav"
         wav.write_bytes(b"audio")

@@ -8,6 +8,7 @@ from messagebox.played_history import (
     RETENTION_SECONDS,
     archive_played_file,
     list_played_history,
+    recent_reply_recipient,
     read_played_file,
     requeue_played_file,
 )
@@ -158,6 +159,18 @@ class PlayedHistoryTests(unittest.TestCase):
                 archived = archive_played_file(self.queue, source, played_at=2000)
                 with self.assertRaisesRegex(ValueError, "reply route"):
                     requeue_played_file(self.queue, archived.name, now=2001)
+
+    def test_recent_reply_uses_only_fresh_authorized_latest_route(self):
+        source = self.message("2000-message.wav")
+        archive_played_file(self.queue, source, played_at=2000)
+        allowed = {"120363000001@g.us"}
+
+        self.assertEqual(
+            recent_reply_recipient(self.queue, allowed, now=2001),
+            "120363000001@g.us",
+        )
+        self.assertIsNone(recent_reply_recipient(self.queue, set(), now=2001))
+        self.assertIsNone(recent_reply_recipient(self.queue, allowed, now=5601))
 
 
 if __name__ == "__main__":
