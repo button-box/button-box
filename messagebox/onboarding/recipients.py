@@ -428,7 +428,8 @@ class RecipientSetup:
         )
         candidate = self._candidate(state, token)
         if candidate["jid"] in self.contacts.load()["contacts"]:
-            raise RecipientError("contact already exists")
+            self._write(state)
+            return self.public_state(state)
         self._write(state)
         return self.add(token, excluded_jid=excluded_jid)
 

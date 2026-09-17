@@ -11,7 +11,7 @@ from unittest import mock
 
 from messagebox.contacts import ContactStore
 from messagebox.onboarding.nfc import NfcOnboardingEngine, NfcOnboardingError, TonePlayer
-from messagebox.onboarding.recipients import RecipientError, RecipientSetup
+from messagebox.onboarding.recipients import RecipientSetup
 
 
 TOKEN_A = "recipient-token-0001"
@@ -184,10 +184,9 @@ class NfcPairingOnboardingTests(unittest.TestCase):
         self.engine.observe(CARD_B)
         before = json.loads(self.engine.state_path.read_text())
         default = self.contacts.load()["default_recipient"]
-        self.recipients.add_phone("+15555550123")
-        # The deployed API rejects duplicates without changing the pending tag.
-        with self.assertRaisesRegex(RecipientError, "contact already exists"):
-            self.recipients.add_phone("+15555550123")
+        added_recipient = self.recipients.add_phone("+15555550123")
+        repeated = self.recipients.add_phone("+15555550123")
+        self.assertEqual(repeated, added_recipient)
         self.assertEqual(json.loads(self.engine.state_path.read_text()), before)
         view = self.engine.public_state()
         self.assertEqual(view["status"], "choose")

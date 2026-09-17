@@ -1227,14 +1227,24 @@ class Handler(BaseHTTPRequestHandler):
                         raise PairingError("recipient_request_invalid")
                     result = engine.recipient_defer()
                 elif url.path in {"/recipients/select-number", "/recipients/add-number"}:
-                    if set(payload) != {"phone"}:
+                    allowed_fields = (
+                        ({"phone"}, {"phone", "name"})
+                        if url.path == "/recipients/add-number"
+                        else ({"phone"},)
+                    )
+                    if set(payload) not in allowed_fields:
                         raise PairingError("phone_number_invalid")
                     operation = (
                         engine.recipient_select_phone
                         if url.path == "/recipients/select-number"
                         else engine.recipient_add_phone
                     )
-                    result = operation(normalize_phone(payload["phone"]))
+                    phone = normalize_phone(payload["phone"])
+                    result = (
+                        operation(phone, payload.get("name"))
+                        if "name" in payload
+                        else operation(phone)
+                    )
                 else:
                     if set(payload) != {"token"}:
                         raise PairingError("recipient_request_invalid")

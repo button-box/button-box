@@ -431,8 +431,29 @@ class RecipientSetupTests(unittest.TestCase):
         )
         self.assertTrue(manual["configured"])
         self.assertFalse(manual["is_default"])
-        with self.assertRaisesRegex(RecipientError, "contact already exists"):
-            self.setup.add_phone("+14155550199")
+        repeated = self.setup.add_phone("+14155550199")
+        self.assertEqual(repeated, added)
+        self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
+
+    def test_manager_allowing_existing_default_phone_is_idempotent(self):
+        listed = self.candidates()
+        token = next(
+            item["token"]
+            for item in listed["recipients"]
+            if item["label"] == "+15551234567"
+        )
+        self.setup.select_default(token)
+        state = json.loads(self.setup.state_path.read_text(encoding="utf-8"))
+        state["status"] = "complete"
+        state["proof"].update(received=True, played=True, replied=True)
+        self.setup._write(state)
+        before = self.setup.public_state()
+        contacts = ContactStore(self.contacts_path).load()
+
+        repeated = self.setup.add_phone("+15551234567")
+
+        self.assertEqual(repeated, before)
+        self.assertEqual(repeated["default"]["token"], token)
         self.assertEqual(ContactStore(self.contacts_path).load(), contacts)
 
     def test_manual_name_and_rename_persist_without_changing_identity(self):
