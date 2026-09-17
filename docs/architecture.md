@@ -46,6 +46,20 @@ and expires when that recording interaction completes or is abandoned. In
 hold-to-record mode, releasing before the hold threshold cancels the selected
 recording intent without playing the queue or saving a silent recording.
 
+After successful playback, the private WAV and routing sidecar move into
+`queue/.played`. The dashboard shows up to 20 metadata records from the last 14
+days, newest first. Playable media is further bounded to the 10 newest files and
+128 MiB; a retained record whose media was pruned remains visible as
+unavailable. Requeueing gives the retained item a fresh queue-order filename so
+it follows messages already waiting, while its sidecar keeps the original
+history identity and reply route. The sidecar is published before the WAV. A
+locked history record names the actual replay file, so repeated or concurrent
+requests cannot create duplicate playable entries and an interrupted
+pre-publication attempt can be retried immediately. History reads, audio access,
+and requeue all enforce expiry without a polling service. This covers voice
+notes and ordinary video soundtracks only; it does not add circular video-note
+support.
+
 ## Setup services
 
 | Unit | Role |

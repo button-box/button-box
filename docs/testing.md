@@ -16,7 +16,7 @@ contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
 ## Regression test matrix
 
-Matrix case IDs are permanent. Add new cases with the next available ID; do not
+Matrix case IDs are permanent. Add new cases with a new descriptive ID; do not
 renumber or reuse an existing ID.
 
 Every confirmed product bug must add a matrix case or explicitly update an
@@ -27,6 +27,7 @@ assertion in this matrix.
 | Case ID | Regression | Synthetic setup and expected result | Software evidence | Separate physical assertion |
 | --- | --- | --- | --- | --- |
 | `BB-RX-001` | Consecutive inbound voice notes | Provide two allowed audio messages from different synthetic senders in one poll while sync remains active. Both queue exactly once in oldest-first order with unique queue filenames; media retrieval is read-only and does not make continuous sync release the store lock. | `tests/test_voicepoll.py::PollingStoreTests::test_consecutive_senders_queue_oldest_first_without_store_write_lock` and `tests/test_whatsapp_pairing.py::WhatsAppFrontendAndServiceContractTests::test_service_separates_web_user_from_live_store_and_keeps_runtime_stopped` | On a test box, send two voice notes from separate test accounts in quick succession while the first is downloading. Verify both appear and play once in send order. Record device, revision, observed times, and result without storing message content or account identifiers. |
+| `BB-RQ-001` | Caregiver requeues recently played media | Archive synthetic voice audio and an ordinary video soundtrack after playback. The dashboard returns safe newest-first metadata and an opaque handle. Each replay appends after existing waiting messages using a fresh queue identity while preserving its original history identity, exact sender/chat display identity, and routing sidecar. An active replay is absent from Recently played until it is played again, including while held or in trash. Repeated and concurrent requests create one playable WAV; restart preserves real queued state, while an interrupted pre-publication attempt retries without a phantom duplicate. Expired, missing or policy-pruned media cannot stream or requeue. | `tests/test_played_history.py::PlayedHistoryTests`, `tests/test_dashboard_queue_hold.py::DashboardQueueHoldTests::test_recently_played_is_newest_first_safe_and_requeues_once`, and the recently-played cases in `tests/onboarding-ui.test.js` | On a test box at the exact candidate revision, leave two synthetic messages waiting, then requeue a retained voice note and ordinary video soundtrack. Confirm both append in request order with the original sender/chat labels and disappear from Recently played while queued, held or in trash. Refresh and restart before playback, then verify exactly one playback each, that each returns to Recently played only after playback, and that reply routing remains bound to the original chats. Confirm a deliberately expired or pruned fixture cannot stream or requeue. Do not treat circular video notes as supported. |
 
 ## Physical test scenarios
 
