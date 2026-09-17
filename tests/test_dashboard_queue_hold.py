@@ -224,9 +224,15 @@ class DashboardQueueHoldTests(unittest.TestCase):
 
         dashboard.PUBLIC_MESSAGES.clear()
         dashboard.PUBLIC_MESSAGE_REVERSE.clear()
-        refreshed = dashboard.build_data()["recently_played"][0]
-        self.assertTrue(refreshed["queued"])
-        self.assertTrue(refreshed["token"])
+        refreshed = dashboard.build_data()
+        self.assertEqual(
+            [item["media_kind"] for item in refreshed["recently_played"]],
+            ["voice_message"],
+        )
+        self.assertEqual(len(refreshed["queue"]), 1)
+        self.assertEqual(refreshed["queue"][0]["sender"], "Mommy")
+        self.assertEqual(refreshed["queue"][0]["chat"], "Family")
+        self.assertFalse(refreshed["queue"][0]["sender"].startswith("?"))
 
     def test_missing_played_media_is_visible_but_unavailable(self):
         archived = self.archive_message(played_at=2_000_000_000)

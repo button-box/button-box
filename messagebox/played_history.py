@@ -105,7 +105,12 @@ def _active_replay(queue: Path, metadata: dict) -> bool:
         name
         and any(
             (directory / name).is_file()
-            for directory in (queue, queue / ".inflight", queue / ".hold")
+            for directory in (
+                queue,
+                queue / ".inflight",
+                queue / ".hold",
+                queue / ".trash",
+            )
         )
     )
 
@@ -255,13 +260,15 @@ def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> l
             except ValueError:
                 continue
             metadata = _read_json(metadata_path)
+            if _active_replay(queue, metadata):
+                continue
             played_at = _record_time(metadata_path, metadata)
             records.append(
                 {
                     "file": name,
                     "played_at": played_at,
                     "available": (directory / name).is_file(),
-                    "queued": _active_replay(queue, metadata),
+                    "queued": False,
                     "metadata": metadata,
                 }
             )

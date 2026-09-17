@@ -67,11 +67,12 @@ class PlayedHistoryTests(unittest.TestCase):
         self.assertEqual(queued_metadata["chat"], metadata["chat"])
         self.assertEqual(queued_metadata["msgid"], metadata["msgid"])
         self.assertEqual(queued_metadata["replay_history_file"], archived.name)
-        self.assertTrue(list_played_history(self.queue, now=2002)[0]["queued"])
+        self.assertEqual(list_played_history(self.queue, now=2002), [])
 
         replayed = archive_played_file(self.queue, queued, played_at=2003)
         self.assertEqual(replayed, archived)
         self.assertEqual(len(list((self.queue / ".played").glob("*.wav.json"))), 1)
+        self.assertFalse(list_played_history(self.queue, now=2003)[0]["queued"])
         self.assertEqual(requeue_played_file(self.queue, archived.name, now=2004), "queued")
 
     def test_replays_append_after_waiting_items_and_keep_request_order(self):
@@ -92,6 +93,25 @@ class PlayedHistoryTests(unittest.TestCase):
         self.assertIn("-replay-", ordered[2])
         self.assertLess(ordered[1], ordered[2])
 
+    def test_trashed_replay_remains_hidden_and_cannot_be_queued_twice(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=2000
+        )
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2001), "queued")
+        queued = next(self.queue.glob("*.wav"))
+        trash = self.queue / ".trash"
+        trash.mkdir()
+        queued.replace(trash / queued.name)
+        Path(f"{queued}.json").replace(trash / f"{queued.name}.json")
+
+        self.assertEqual(list_played_history(self.queue, now=2002), [])
+        self.assertEqual(
+            requeue_played_file(self.queue, archived.name, now=2002),
+            "already_queued",
+        )
+        self.assertEqual(list(self.queue.glob("*.wav")), [])
+        self.assertEqual(len(list(trash.glob("*.wav"))), 1)
+
     def test_interrupted_publication_recovers_without_phantom_duplicate(self):
         archived = archive_played_file(
             self.queue, self.message("1000-message.wav"), played_at=2000
@@ -104,10 +124,15 @@ class PlayedHistoryTests(unittest.TestCase):
         (self.queue / f"{interrupted}.part").write_bytes(b"partial")
         (self.queue / f"{interrupted}.json").write_text("{}", encoding="utf-8")
 
+        self.assertEqual(
+            [record["file"] for record in list_played_history(self.queue, now=4)],
+            [archived.name],
+        )
         self.assertEqual(requeue_played_file(self.queue, archived.name, now=4), "queued")
         self.assertFalse((self.queue / f"{interrupted}.part").exists())
         self.assertFalse((self.queue / f"{interrupted}.json").exists())
         self.assertEqual(len(list(self.queue.glob("*.wav"))), 1)
+        self.assertEqual(list_played_history(self.queue, now=4), [])
         self.assertEqual(
             requeue_played_file(self.queue, archived.name, now=5),
             "already_queued",

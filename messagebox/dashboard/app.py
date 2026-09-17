@@ -910,14 +910,33 @@ def build_data():
     def label(jid):
         return safe_contact_label(jid, names)
 
+    def message_identity(directory, name):
+        try:
+            with open(os.path.join(directory, name) + ".json") as handle:
+                metadata = json.load(handle)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        history_name = metadata.get("replay_history_file")
+        if not isinstance(history_name, str):
+            history_name = name
+        event = file_meta.get(history_name) or file_meta.get(name) or {}
+        chat = label(metadata.get("chat") or event.get("chat") or "")
+        sender = event.get("sender") or label(metadata.get("sender_jid") or "")
+        return chat, sender
+
     queue = list_wavs(QUEUE_DIR)
     hold = list_wavs(HOLD_DIR)
     trash = list_wavs(TRASH_DIR)
-    for kind, items in (("queue", queue), ("hold", hold), ("trash", trash)):
+    for kind, directory, items in (
+        ("queue", QUEUE_DIR, queue),
+        ("hold", HOLD_DIR, hold),
+        ("trash", TRASH_DIR, trash),
+    ):
         for item in items:
-            meta = file_meta.get(item["file"], {})
-            item["chat"] = label(meta.get("chat", "")) or "?"
-            item["sender"] = meta.get("sender") or "?"
+            item["chat"], item["sender"] = message_identity(directory, item["file"])
             item["token"] = public_message_token(kind, item.pop("file"))
 
     recent = []
