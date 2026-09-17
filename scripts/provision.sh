@@ -2,7 +2,7 @@
 # Run this on your computer to install or update a Pi over SSH.
 # It sends only installation inputs to a temporary directory on the Pi, then
 # runs setup.sh there. The installed runtime uses fixed system paths.
-# Usage: ./scripts/provision.sh [--guided-prompts DIR] user@host
+# Usage: ./scripts/provision.sh [--guided-prompts DIR] [--development-admin NAME] user@host
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -10,28 +10,46 @@ REPO_DIR=$(dirname "$SCRIPT_DIR")
 GUIDED_PROMPT_NAMES="reply-countdown.wav standalone-countdown.wav press-to-send.wav
 delete-warning.wav not-sent.wav"
 
-case "$#" in
-  1)
-    TARGET=$1
-    GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
-    ;;
-  3)
-    if [ "$1" != "--guided-prompts" ]; then
-      echo "Usage: $0 [--guided-prompts DIR] user@host" >&2
-      exit 2
-    fi
-    GUIDED_PROMPT_DIR=$2
-    TARGET=$3
-    ;;
-  *)
-    echo "Usage: $0 [--guided-prompts DIR] user@host" >&2
-    exit 2
-    ;;
-esac
+usage() {
+  echo "Usage: $0 [--guided-prompts DIR] [--development-admin NAME] user@host" >&2
+}
+
+GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
+DEVELOPMENT_ADMIN=
+DEVELOPMENT_ADMIN_SET=0
+while [ "$#" -gt 1 ]; do
+  case "$1" in
+    --guided-prompts)
+      [ "$#" -ge 3 ] || { usage; exit 2; }
+      GUIDED_PROMPT_DIR=$2
+      shift 2
+      ;;
+    --development-admin)
+      [ "$#" -ge 3 ] || { usage; exit 2; }
+      DEVELOPMENT_ADMIN=$2
+      DEVELOPMENT_ADMIN_SET=1
+      shift 2
+      ;;
+    *) usage; exit 2 ;;
+  esac
+done
+[ "$#" -eq 1 ] || { usage; exit 2; }
+TARGET=$1
 
 case "$TARGET" in
   -*|*[!A-Za-z0-9._@-]*)
     echo "Invalid SSH target: $TARGET" >&2
+    exit 2
+    ;;
+esac
+case "$DEVELOPMENT_ADMIN_SET:$DEVELOPMENT_ADMIN" in
+  1:)
+    echo "Invalid development administrator: empty name" >&2
+    exit 2
+    ;;
+  0:) ;;
+  ?:root|?:messagebox|?:*[!A-Za-z0-9_-]*|?:[!a-z_]*|?:-*)
+    echo "Invalid development administrator: $DEVELOPMENT_ADMIN" >&2
     exit 2
     ;;
 esac
@@ -126,5 +144,9 @@ rsync -az \
   "$TARGET:$REMOTE_SOURCE/sounds/guided-reply/"
 
 echo "Running setup on $TARGET"
+SETUP_ENVIRONMENT="MESSAGEBOX_SSH_TARGET='$TARGET'"
+if [ -n "$DEVELOPMENT_ADMIN" ]; then
+  SETUP_ENVIRONMENT="$SETUP_ENVIRONMENT MESSAGEBOX_DEVELOPMENT_ADMIN='$DEVELOPMENT_ADMIN'"
+fi
 ssh -t "$TARGET" \
-  "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
+  "$SETUP_ENVIRONMENT '$REMOTE_SOURCE/scripts/setup.sh'"

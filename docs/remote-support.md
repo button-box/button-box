@@ -20,6 +20,34 @@ passwordless `sudo` for this unattended support model. Protect the operator's
 private key with a passphrase and keep a second authorized computer or recovery
 key available.
 
+For a designated development appliance only, provisioning can install that
+policy for an existing named administrator:
+
+```sh
+./scripts/provision.sh --development-admin admin admin@button-box-dev.local
+```
+
+The option is off by default. It refuses root and service accounts, requires
+the named account to already have an interactive shell and membership in the
+`sudo` group, and does not create an account or change SSH keys, passwords, or
+the SSH server. The installed rule deliberately grants the named development
+operator broad `ALL=(ALL:ALL) NOPASSWD: ALL` access so unattended maintenance can
+run as root and the device service users. Do not use this option for a customer
+or production box.
+
+The bootstrap saves a private receipt below
+`/var/backups/messagebox-development-access/` and installs the reviewed
+rollback command. To remove the exact policy later, use the backup directory
+name printed for that installation:
+
+```sh
+sudo messagebox-development-sudo-rollback \
+  --development-only --operator admin --backup-id setup-YYYYMMDDTHHMMSSZ
+```
+
+Rollback is hash guarded and refuses to remove a rule that has changed. It
+does not remove the administrator's existing SSH key or account.
+
 From a clean, reviewed repository checkout on a computer that can currently
 reach the Pi over LAN or Ethernet, run:
 

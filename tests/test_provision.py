@@ -60,7 +60,7 @@ esac
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run(self, target, *, prompt_dir=None):
+    def _run(self, target, *, prompt_dir=None, development_admin=None):
         env = os.environ.copy()
         env.update(
             {
@@ -73,8 +73,10 @@ esac
             str(PROVISION),
             "--guided-prompts",
             str(prompt_dir or self.prompt_dir),
-            target,
         ]
+        if development_admin is not None:
+            arguments.extend(("--development-admin", development_admin))
+        arguments.append(target)
         return subprocess.run(
             arguments,
             cwd=self.root,
@@ -151,6 +153,7 @@ esac
             "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
+        self.assertNotIn("MESSAGEBOX_DEVELOPMENT_ADMIN", ssh_calls[2])
         self.assertEqual(
             ssh_calls[3],
             "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
@@ -173,6 +176,26 @@ esac
         self.assertIn("Invalid SSH target", result.stderr)
         self.assertFalse(self.ssh_log.exists())
         self.assertFalse(self.rsync_log.exists())
+
+    def test_development_admin_is_explicitly_forwarded_to_setup(self):
+        result = self._run(
+            "admin@message-box.local", development_admin="devoperator"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        setup_call = self.ssh_log.read_text(encoding="utf-8").splitlines()[2]
+        self.assertIn("MESSAGEBOX_DEVELOPMENT_ADMIN='devoperator'", setup_call)
+
+    def test_invalid_development_admin_fails_before_connecting(self):
+        for name in ("root", ""):
+            with self.subTest(name=name):
+                result = self._run(
+                    "admin@message-box.local", development_admin=name
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Invalid development administrator", result.stderr)
+                self.assertFalse(self.ssh_log.exists())
+                self.assertFalse(self.rsync_log.exists())
 
 
 if __name__ == "__main__":
