@@ -2,7 +2,7 @@
 """Button Box incoming-audio poller (v0 production rig).
 
 Polls the wacli DB for fresh voice notes and ordinary videos in allowed chats,
-downloads their media between sync bursts, and queues the audio as WAVs for the
+downloads their media read-only while continuous sync stays connected, and queues the audio as WAVs for the
 button service to play (answering-machine model: nothing auto-plays; the
 button's lamp signals waiting messages). Queue dir is persistent — survives
 reboots. Config is loaded from /etc/messagebox/env by systemd.
