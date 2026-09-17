@@ -39,6 +39,13 @@ or `media download`. Ordinary videos are supported. Circular-note playback
 therefore remains unavailable until the pinned client gains that classification
 and download support, and must not be claimed from poller tests alone.
 
+A fresh valid NFC selection reserves the next button interaction for a new
+outbound message before any unread incoming message is claimed. The incoming
+queue stays intact for the following ordinary press. The selection is one-shot
+and expires when that recording interaction completes or is abandoned. In
+hold-to-record mode, releasing before the hold threshold cancels the selected
+recording intent without playing the queue or saving a silent recording.
+
 ## Setup services
 
 | Unit | Role |
