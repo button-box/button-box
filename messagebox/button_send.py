@@ -728,14 +728,17 @@ def maybe_ring():
 
 
 def maybe_manual_ring():
+    if not os.path.exists(RING_REQUEST_FILE):
+        return
+    # Keep the marker in place so a crash cannot lose the request and repeated
+    # dashboard taps stay idempotent until playback finishes.
+    ring_alert(source="dashboard")
     try:
         os.remove(RING_REQUEST_FILE)
     except FileNotFoundError:
-        return
+        pass
     except OSError as exc:
         log(f"manual ring request error: {exc}")
-        return
-    ring_alert(source="dashboard")
 
 
 def ring_alert(source="new_message", settings=None):

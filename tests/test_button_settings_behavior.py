@@ -8,6 +8,7 @@ import wave
 import sys
 import types
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,36 @@ class FakeLed:
 
 
 class ButtonSettingsBehaviorTests(unittest.TestCase):
+    def test_manual_ring_request_remains_in_flight_until_ring_finishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request = Path(directory) / "ring-request"
+            request.touch()
+            observed = []
+
+            def ring_alert(*, source):
+                observed.append((source, request.exists()))
+
+            with patch.object(button_send, "RING_REQUEST_FILE", str(request)), patch.object(
+                button_send, "ring_alert", side_effect=ring_alert
+            ):
+                button_send.maybe_manual_ring()
+
+            self.assertEqual(observed, [("dashboard", True)])
+            self.assertFalse(request.exists())
+
+    def test_manual_ring_request_survives_failed_playback_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request = Path(directory) / "ring-request"
+            request.touch()
+
+            with patch.object(button_send, "RING_REQUEST_FILE", str(request)), patch.object(
+                button_send, "ring_alert", side_effect=RuntimeError("playback failed")
+            ):
+                with self.assertRaisesRegex(RuntimeError, "playback failed"):
+                    button_send.maybe_manual_ring()
+
+            self.assertTrue(request.exists())
+
     def test_review_approval_requires_a_new_press_after_recording_release(self):
         for fresh_press in (False, True):
             with self.subTest(fresh_press=fresh_press):

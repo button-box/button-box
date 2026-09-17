@@ -28,6 +28,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
                 "CONTACTS_FILE",
                 "LISTENED_DIR",
                 "OUTBOX_DIR",
+                "RING_REQUEST_FILE",
             )
         }
         self.family = "120363000001@g.us"
@@ -38,6 +39,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
         dashboard.CONTACTS_FILE = self.root / "contacts.json"
         dashboard.LISTENED_DIR = str(self.root / "listened")
         dashboard.OUTBOX_DIR = str(self.root / "outbox")
+        dashboard.RING_REQUEST_FILE = str(self.root / "ring-request")
         dashboard.PUBLIC_MESSAGES.clear()
         dashboard.PUBLIC_MESSAGE_REVERSE.clear()
         dashboard.contacts_store().add_contact(self.family, "Family")
@@ -84,6 +86,24 @@ class DashboardQueueHoldTests(unittest.TestCase):
 
     def token(self, kind="queue", name="1000-message.wav"):
         return dashboard.public_message_token(kind, name)
+
+    def test_ring_request_is_idempotent_until_button_service_consumes_it(self):
+        request = Path(dashboard.RING_REQUEST_FILE)
+
+        first = self.post("/api/ring")
+        first_inode = request.stat().st_ino
+        second = self.post("/api/ring")
+
+        self.assertEqual(
+            first,
+            {
+                "code": 202,
+                "body": {"ok": True, "status": "queued"},
+                "ctype": "application/json",
+            },
+        )
+        self.assertEqual(second, first)
+        self.assertEqual(request.stat().st_ino, first_inode)
 
     def test_hold_removes_message_from_player_queue_and_resume_restores_it(self):
         wav = self.make_message()
