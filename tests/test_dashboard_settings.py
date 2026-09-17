@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import messagebox.dashboard.app as dashboard
@@ -77,6 +78,21 @@ class DashboardSettingsTests(unittest.TestCase):
             {"Origin": "http://button-box.local"},
         )
         self.assertEqual(code, 409)
+
+    def test_runtime_state_exposes_only_assigned_inventory_identity(self):
+        with patch.object(dashboard, "contacts_store") as contacts, patch.object(
+            dashboard, "RecipientSetup"
+        ), patch.object(dashboard.subprocess, "run", side_effect=OSError), patch.object(
+            dashboard, "read_box_id"
+        ) as identity:
+            contacts.return_value.public_view.return_value = {"contacts": {}}
+            for value in (None, "BOX-42"):
+                identity.return_value = value
+                code, payload = self.request("GET", "/api/state")
+                self.assertEqual(code, 200)
+                self.assertEqual(payload["box_id"], value)
+                self.assertEqual(payload["mode"], "RUNTIME")
+                self.assertEqual(payload["health"]["runtime"], "attention")
 
     def test_cross_site_update_is_rejected_before_reading_body(self):
         code, payload = self.request(
@@ -165,6 +181,23 @@ class DashboardSettingsTests(unittest.TestCase):
                 {"success": True, "data": {"connected": True}}
             )
         )
+
+    def test_runtime_health_requires_active_button_service(self):
+        with patch.object(
+            dashboard.subprocess, "run", return_value=SimpleNamespace(returncode=0)
+        ) as run:
+            self.assertTrue(dashboard.runtime_running())
+        run.assert_called_once_with(
+            ["systemctl", "is-active", "--quiet", "messagebox-button.service"],
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+
+        with patch.object(
+            dashboard.subprocess, "run", return_value=SimpleNamespace(returncode=3)
+        ):
+            self.assertFalse(dashboard.runtime_running())
 
 
 if __name__ == "__main__":

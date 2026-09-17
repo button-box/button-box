@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Button Box dashboard visual proposal</title>
+  <style>
+    :root {
+      --paper: #fbf9f4;
+      --ink: #1a1a1a;
+      --muted: #6f706a;
+      --blue: #5ea7ff;
+      --blue-soft: #dcebff;
+      --green: #25d366;
+      --green-dark: #128c4a;
+      --green-soft: #dff8e8;
+      --yellow: #ffc94d;
+      --yellow-soft: #fff3c4;
+      --red: #a13326;
+      --red-soft: #f8e0dc;
+      --white: #fff;
+      --line: 2px solid var(--ink);
+      --shadow: 4px 4px 0 var(--ink);
+      --radius: 16px;
+      --small-radius: 11px;
+      --display: Futura, "Avenir Next Condensed", "Trebuchet MS", sans-serif;
+      --body: "Avenir Next", Avenir, Futura, "Trebuchet MS", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--paper); color: var(--ink); font-family: var(--body); }
+    body { margin: 0; min-width: 320px; background:
+      radial-gradient(circle at 88% 2%, rgba(94,167,255,.17), transparent 22rem),
+      var(--paper); }
+    button, input, select { font: inherit; color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+    :focus-visible { outline: 4px solid var(--blue); outline-offset: 3px; }
+    [hidden] { display: none !important; }
+
+    .skip-link { position: fixed; top: 8px; left: 8px; z-index: 99; transform: translateY(-160%); background: var(--ink); color: var(--white); padding: 10px 14px; border-radius: 8px; }
+    .skip-link:focus { transform: none; }
+
+    .proposal-strip { background: var(--yellow); border-bottom: var(--line); padding: 8px 16px; text-align: center; font-size: .78rem; font-weight: 800; letter-spacing: .04em; }
+    .app-header { padding: 18px; border-bottom: var(--line); background: rgba(251,249,244,.94); position: sticky; top: 0; z-index: 20; backdrop-filter: blur(12px); }
+    .brand-row, .section-head, .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .brand { display: inline-flex; align-items: center; gap: 9px; font-family: var(--display); font-weight: 800; text-decoration: none; }
+    .brand-dot { width: 22px; height: 22px; border: var(--line); border-radius: 50%; background: var(--green); box-shadow: 2px 2px 0 var(--ink); display: grid; place-items: center; font-size: .7rem; }
+    .pill { min-height: 30px; display: inline-flex; align-items: center; gap: 7px; border: var(--line); border-radius: 999px; padding: 4px 10px; background: var(--white); font-size: .76rem; font-weight: 800; white-space: nowrap; }
+    .pill.good { background: var(--green-soft); }
+    .pill.attention { background: var(--yellow-soft); }
+    .pill.danger { background: var(--red-soft); color: var(--red); }
+    .signal { width: 9px; height: 9px; border: 1.5px solid var(--ink); border-radius: 50%; background: var(--green); }
+    .unit-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .app-shell { max-width: 1180px; margin: 0 auto; }
+    .desktop-rail { display: none; }
+    main { padding: 22px 16px 112px; }
+    .route { max-width: 760px; margin: 0 auto; }
+    .eyebrow { margin: 0 0 7px; font-size: .72rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 12px; font-family: var(--display); font-size: clamp(2.35rem, 12vw, 4.7rem); line-height: .92; letter-spacing: -.045em; max-width: 10ch; }
+    h1:focus { outline: none; }
+    h2 { font-family: var(--display); font-size: 1.55rem; line-height: 1.02; letter-spacing: -.02em; }
+    h3 { font-size: 1rem; }
+    .lede { color: var(--muted); font-size: 1.04rem; line-height: 1.45; max-width: 52ch; }
+    .accent { color: var(--green-dark); }
+    .route-title { margin-bottom: 22px; }
+
+    .card { background: var(--white); border: var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+    .card + .card, .stack > * + * { margin-top: 16px; }
+    .hero { overflow: hidden; position: relative; background: var(--blue-soft); padding: 22px; }
+    .hero::after { content: ""; position: absolute; width: 130px; height: 130px; border: var(--line); border-radius: 50%; background: var(--blue); right: -54px; bottom: -66px; }
+    .hero-copy { position: relative; z-index: 1; max-width: 35rem; }
+    .hero h1 { font-size: clamp(2.7rem, 13vw, 5rem); }
+    .hero p { max-width: 34ch; }
+
+    .status-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 18px 0; }
+    .status-tile { min-height: 100px; display: flex; flex-direction: column; justify-content: space-between; border: var(--line); border-radius: var(--small-radius); padding: 14px; background: var(--white); }
+    .status-tile.good { background: var(--green-soft); }
+    .status-tile.attention { background: var(--yellow-soft); }
+    .status-label { display: flex; align-items: center; gap: 8px; font-size: .75rem; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+    .status-value { font-family: var(--display); font-size: 1.2rem; line-height: 1.08; }
+    .dot-icon { width: 15px; height: 15px; border: 2px solid var(--ink); border-radius: 50%; background: var(--green); }
+    .attention .dot-icon { background: var(--yellow); border-radius: 4px; transform: rotate(45deg); }
+
+    .button-row { display: flex; flex-wrap: wrap; gap: 10px; }
+    .button { min-height: 48px; border: var(--line); border-radius: var(--small-radius); box-shadow: var(--shadow); padding: 10px 16px; background: var(--blue); font-weight: 900; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+    .button:hover { filter: brightness(.98); transform: translate(-1px,-1px); }
+    .button:active { transform: translate(2px,2px); box-shadow: 2px 2px 0 var(--ink); }
+    .button.secondary { background: var(--white); }
+    .button.quiet { background: transparent; box-shadow: none; border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
+    .button.danger { background: var(--red-soft); color: var(--red); }
+    .button.busy { color: var(--muted); background: #eeeae0; }
+    .button.full { width: 100%; }
+    .button.community { background: var(--green-soft); }
+    .ring-explainer { margin: 12px 0 0; color: #454641; font-size: .86rem; line-height: 1.4; max-width: 52ch; }
+
+    .notice { display: grid; grid-template-columns: auto 1fr; gap: 12px; border: var(--line); border-radius: var(--small-radius); background: var(--yellow-soft); padding: 14px; }
+    .notice.privacy { background: var(--blue-soft); }
+    .notice.danger { background: var(--red-soft); }
+    .notice-icon { width: 28px; height: 28px; display: grid; place-items: center; border: var(--line); border-radius: 50%; background: var(--white); font-weight: 900; }
+    .notice strong { display: block; margin-bottom: 3px; }
+    .notice p { margin: 0; color: #454641; font-size: .9rem; line-height: 1.35; }
+
+    .action-list { display: grid; gap: 11px; }
+    .action-card { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 12px; min-height: 68px; border: var(--line); border-radius: var(--small-radius); padding: 11px; background: var(--white); text-decoration: none; }
+    .action-card:hover { background: var(--blue-soft); }
+    .action-icon { width: 40px; height: 40px; display: grid; place-items: center; border: var(--line); border-radius: 10px; background: var(--yellow); font-weight: 900; }
+    .action-card strong { display: block; }
+    .action-card small { color: var(--muted); line-height: 1.3; }
+    .chevron { font-size: 1.35rem; font-weight: 900; }
+
+    .task-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .task-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 11px; align-items: center; border: var(--line); border-radius: var(--small-radius); padding: 12px; background: var(--white); }
+    .task-mark { width: 32px; height: 32px; border: var(--line); border-radius: 50%; display: grid; place-items: center; background: var(--paper); font-weight: 900; }
+    .task-row.complete .task-mark { background: var(--green); }
+    .task-row.active { background: var(--yellow-soft); box-shadow: 3px 3px 0 var(--ink); }
+    .task-badge { border: 1.5px solid var(--ink); border-radius: 999px; padding: 4px 8px; font-size: .7rem; font-weight: 900; white-space: nowrap; }
+    .task-row.complete .task-badge { background: var(--green-soft); }
+
+    .section-label { margin: 22px 0 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .section-label h2 { margin: 0; }
+    .section-label span { color: var(--muted); font-size: .8rem; }
+    .choice-grid { display: grid; gap: 11px; }
+    .choice-card { position: relative; display: grid; grid-template-columns: auto 1fr; gap: 11px; border: var(--line); border-radius: var(--small-radius); background: var(--white); padding: 14px; }
+    .choice-card.selected { background: var(--blue-soft); box-shadow: 3px 3px 0 var(--ink); }
+    .choice-card input { width: 22px; height: 22px; margin: 1px 0 0; accent-color: var(--blue); }
+    .choice-card strong, .choice-card small { display: block; }
+    .choice-card small { color: var(--muted); margin-top: 4px; line-height: 1.35; }
+    .field { display: grid; gap: 7px; margin-top: 14px; }
+    .field label, legend { font-weight: 800; }
+    input[type="text"], input[type="time"], select { min-height: 48px; width: 100%; border: var(--line); border-radius: 9px; background: var(--white); padding: 9px 11px; }
+    input[type="range"] { width: 100%; accent-color: var(--blue); }
+    fieldset { border: 0; padding: 0; margin: 0; }
+    .field-help { color: var(--muted); font-size: .82rem; line-height: 1.35; }
+
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .metric { border: var(--line); border-radius: 12px; padding: 12px; background: var(--white); }
+    .metric span { display: block; color: var(--muted); font-size: .75rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+    .metric strong { font-family: var(--display); font-size: 1.7rem; }
+    .segment-control { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; border: var(--line); border-radius: 12px; background: var(--ink); padding: 2px; }
+    .segment-control button { min-height: 42px; border: 0; border-radius: 8px; background: var(--white); font-weight: 800; }
+    .segment-control button[aria-selected="true"] { background: var(--yellow); }
+    .activity-row { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: start; border-top: 1.5px solid #d7d3c9; padding: 14px 0; }
+    .activity-row:first-child { border-top: 0; }
+    .activity-symbol { width: 30px; height: 30px; display: grid; place-items: center; border: 1.5px solid var(--ink); border-radius: 9px; background: var(--green-soft); font-weight: 900; }
+    .activity-row strong, .activity-row small { display: block; }
+    .activity-row small { color: var(--muted); margin-top: 2px; }
+    .activity-time { color: var(--muted); font-size: .75rem; }
+    .audio-card { border: var(--line); border-radius: var(--small-radius); padding: 13px; background: var(--white); }
+    .audio-wave { height: 34px; margin: 12px 0; background: repeating-linear-gradient(90deg,var(--ink) 0 3px,transparent 3px 8px); mask: linear-gradient(0deg,transparent 8%,#000 42% 58%,transparent 92%); opacity: .65; }
+
+    .identity-card { background: var(--blue-soft); }
+    .identity-grid { display: grid; gap: 0; }
+    .identity-item { display: flex; justify-content: space-between; gap: 20px; border-top: 1.5px solid rgba(26,26,26,.25); padding: 11px 0; }
+    .identity-item:first-child { border-top: 0; }
+    .identity-item span { color: var(--muted); }
+    .identity-item strong { text-align: right; }
+    details { border: var(--line); border-radius: var(--small-radius); background: var(--white); overflow: hidden; }
+    details + details { margin-top: 10px; }
+    summary { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; cursor: pointer; font-weight: 900; }
+    summary::marker { content: ""; }
+    summary::after { content: "+"; font-size: 1.35rem; }
+    details[open] summary::after { content: "−"; }
+    .details-body { border-top: var(--line); padding: 14px; }
+
+    .stage { text-align: center; padding: 22px 16px; }
+    .stage-art { width: 150px; height: 150px; margin: 8px auto 22px; display: grid; place-items: center; border: var(--line); border-radius: 50%; background: var(--blue); box-shadow: var(--shadow); font-family: var(--display); font-size: 1.35rem; font-weight: 900; }
+    .pairing-code { display: inline-block; margin: 8px 0 20px; padding: 14px 18px; border: var(--line); border-radius: 12px; background: var(--yellow); box-shadow: var(--shadow); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 2rem; font-weight: 900; letter-spacing: .16em; }
+    .proof-list { text-align: left; display: grid; gap: 9px; margin: 18px 0; }
+    .proof-row { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: 9px; border: var(--line); border-radius: 10px; padding: 11px; background: var(--white); }
+    .proof-row.done { background: var(--green-soft); }
+
+    .state-toolbar { max-width: 760px; margin: 0 auto 16px; border: 1.5px dashed var(--muted); border-radius: 12px; padding: 10px; background: rgba(255,255,255,.65); }
+    .state-toolbar label { display: grid; grid-template-columns: auto 1fr; gap: 9px; align-items: center; font-size: .8rem; font-weight: 800; }
+    .state-toolbar select { min-height: 40px; }
+
+    .support-footer { max-width: 760px; margin: 34px auto 0; border-top: var(--line); padding: 22px 0 4px; }
+    .support-footer h2 { margin-bottom: 7px; }
+    .support-footer > p { color: var(--muted); line-height: 1.4; }
+    .support-actions { display: grid; gap: 12px; margin-top: 16px; }
+    .support-panel { border: var(--line); border-radius: var(--small-radius); background: var(--white); padding: 14px; }
+    .support-panel p { margin: 5px 0 12px; color: var(--muted); font-size: .88rem; line-height: 1.4; }
+    .box-id-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .box-id-row strong { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; }
+    .box-id-row .unit-id { display: block; margin-top: 3px; font-size: 1.05rem; }
+    .support-status { min-height: 1.2em; margin: 9px 0 0 !important; color: var(--green-dark) !important; }
+
+    .mobile-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(5,1fr); border-top: var(--line); background: var(--paper); padding-bottom: env(safe-area-inset-bottom); }
+    .nav-link { min-height: 68px; display: grid; place-items: center; align-content: center; gap: 3px; text-decoration: none; font-size: .66rem; font-weight: 800; color: var(--muted); border-right: 1px solid rgba(26,26,26,.14); }
+    .nav-link:last-child { border-right: 0; }
+    .nav-link::before { content: attr(data-icon); width: 25px; height: 25px; display: grid; place-items: center; border: 1.5px solid transparent; border-radius: 8px; font-size: 1rem; }
+    .nav-link[aria-current="page"] { color: var(--ink); background: var(--yellow-soft); }
+    .nav-link[aria-current="page"]::before { border-color: var(--ink); background: var(--yellow); box-shadow: 2px 2px 0 var(--ink); }
+
+    .toast { position: fixed; left: 50%; bottom: 90px; z-index: 50; transform: translateX(-50%); width: calc(100% - 32px); max-width: 520px; border: var(--line); border-radius: 11px; box-shadow: var(--shadow); background: var(--ink); color: var(--white); padding: 12px 14px; font-weight: 800; }
+
+    @media (min-width: 520px) {
+      .status-grid { grid-template-columns: repeat(3,1fr); }
+      .metric-grid { grid-template-columns: repeat(4,1fr); }
+      .choice-grid.two { grid-template-columns: repeat(2,1fr); }
+    }
+
+    @media (min-width: 900px) {
+      .app-header { position: static; padding: 18px 28px; }
+      .app-shell { display: grid; grid-template-columns: 220px 1fr; gap: 0; }
+      .desktop-rail { display: block; min-height: calc(100vh - 108px); border-right: var(--line); padding: 22px 14px; }
+      .desktop-rail .nav-link { min-height: 50px; grid-template-columns: 32px 1fr; justify-items: start; align-content: center; padding: 0 12px; border: var(--line); border-color: transparent; border-radius: 10px; margin-bottom: 7px; font-size: .86rem; }
+      .desktop-rail .nav-link[aria-current="page"] { border-color: var(--ink); box-shadow: 3px 3px 0 var(--ink); }
+      .mobile-nav { display: none; }
+      main { padding: 34px 42px 70px; }
+      .route { max-width: 820px; margin-left: 0; }
+      .state-toolbar { max-width: 820px; margin-left: 0; }
+      .support-footer { max-width: 820px; margin-left: 0; }
+      .support-actions { grid-template-columns: 1fr 1fr; }
+      .hero { padding: 30px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <div class="proposal-strip">REVIEW PROTOTYPE · SAMPLE DATA · NOT CONNECTED TO A LIVE BOX</div>
+
+  <header class="app-header">
+    <div class="brand-row">
+      <a class="brand" href="#home" aria-label="Button Box home"><span class="brand-dot" aria-hidden="true">B</span><span>Button Box</span></a>
+      <span class="pill good" id="header-health"><span class="signal" aria-hidden="true"></span><span>Ready</span></span>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <nav class="desktop-rail" aria-label="Button Box dashboard">
+      <a class="nav-link" data-route="home" data-icon="⌂" href="#home">Home</a>
+      <a class="nav-link" data-route="setup" data-icon="✓" href="#setup">Setup</a>
+      <a class="nav-link" data-route="settings" data-icon="◎" href="#settings">Settings</a>
+      <a class="nav-link" data-route="activity" data-icon="↕" href="#activity">Activity</a>
+      <a class="nav-link" data-route="advanced" data-icon="⋯" href="#advanced">Advanced</a>
+    </nav>
+
+    <main id="main">
+      <div class="state-toolbar">
+        <label for="preview-state"><span>Preview state</span>
+          <select id="preview-state">
+            <option value="ready">Ready household</option>
+            <option value="attention">Needs attention</option>
+            <option value="loading">Loading</option>
+            <option value="pairing">WhatsApp pairing code</option>
+            <option value="voice-test">First message proof</option>
+            <option value="nfc">NFC card waiting</option>
+            <option value="error">Recoverable error</option>
+          </select>
+        </label>
+      </div>
+
+      <section class="route" data-view="home" aria-labelledby="home-title">
+        <div class="card hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Your household</p>
+            <h1 id="home-title" tabindex="-1">Ready to <span class="accent">say hello.</span></h1>
+            <p class="lede">Button Box is connected. New family messages can ring here, and the big button is ready for your next voice note.</p>
+            <div class="button-row"><button class="button" data-toast="Prototype only. On a live box, the ringtone request waits until the button service is idle.">Play the ringtone</button><a class="button secondary" href="#activity">Open activity</a></div>
+            <p class="ring-explainer"><strong>A quick sound check, not a full message test.</strong> Use this to identify the box or check that its speaker can play the configured ringtone. It does not test receiving, playing, recording, or sending a message.</p>
+          </div>
+        </div>
+        <div class="status-grid" aria-label="Button Box health">
+          <article class="status-tile good"><span class="status-label"><span class="dot-icon"></span>Wi-Fi</span><strong class="status-value">Connected<br><small>Home network</small></strong></article>
+          <article class="status-tile good"><span class="status-label"><span class="dot-icon"></span>WhatsApp</span><strong class="status-value">Linked</strong></article>
+          <article class="status-tile good"><span class="status-label"><span class="dot-icon"></span>Runtime</span><strong class="status-value">Ready</strong></article>
+        </div>
+        <div class="section-label"><h2>Useful now</h2><span>Caregiver controls</span></div>
+        <div class="action-list">
+          <a class="action-card" href="#settings"><span class="action-icon">◎</span><span><strong>Button and recording</strong><small>Choose tap-and-review or press-and-hold.</small></span><span class="chevron">›</span></a>
+          <a class="action-card" href="#settings"><span class="action-icon">☾</span><span><strong>Sounds and quiet hours</strong><small>Ringtone, volume, lamp, and schedule.</small></span><span class="chevron">›</span></a>
+          <a class="action-card" href="#setup"><span class="action-icon">⌁</span><span><strong>Connections and recipients</strong><small>Wi-Fi, WhatsApp, recipients, and NFC cards.</small></span><span class="chevron">›</span></a>
+        </div>
+      </section>
+
+      <section class="route" data-view="setup" aria-labelledby="setup-title" hidden>
+        <div class="route-title"><p class="eyebrow">Resumable setup</p><h1 id="setup-title" tabindex="-1">Make it ready for your family.</h1><p class="lede">Complete required tasks in any available order. Button Box saves every completed step.</p></div>
+        <div class="notice"><span class="notice-icon">!</span><div><strong>One physical check remains</strong><p>Receive, play, record, and send one test message before calling this household ready.</p></div></div>
+        <div class="section-label"><h2>Required</h2><span>3 of 4 complete</span></div>
+        <ol class="task-list">
+          <li class="task-row complete"><span class="task-mark">✓</span><span><strong>Connect Wi-Fi</strong><br><small>Home network</small></span><span class="task-badge">Complete</span></li>
+          <li class="task-row complete"><span class="task-mark">✓</span><span><strong>Link WhatsApp</strong><br><small>Account connected</small></span><span class="task-badge">Complete</span></li>
+          <li class="task-row complete"><span class="task-mark">✓</span><span><strong>Choose a default recipient</strong><br><small>Family group</small></span><span class="task-badge">Complete</span></li>
+          <li class="task-row active"><span class="task-mark">4</span><span><strong>Test one whole message</strong><br><small>Receive → play → record → send</small></span><span class="task-badge">Continue</span></li>
+        </ol>
+        <div class="section-label"><h2>Optional</h2><span>Do now or later</span></div>
+        <ol class="task-list">
+          <li class="task-row"><span class="task-mark">＋</span><span><strong>Pair NFC cards</strong><br><small>Choose family without a screen</small></span><span class="task-badge">Optional</span></li>
+          <li class="task-row"><span class="task-mark">＋</span><span><strong>Personalize the box</strong><br><small>Button, sounds, quiet hours</small></span><span class="task-badge">Optional</span></li>
+        </ol>
+      </section>
+
+      <section class="route" data-view="settings" aria-labelledby="settings-title" hidden>
+        <div class="route-title"><p class="eyebrow">Caregiver controls</p><h1 id="settings-title" tabindex="-1">Settings that fit your household.</h1><p class="lede">The proposal groups existing controls. It does not remove or change their behavior.</p></div>
+        <form class="stack" onsubmit="return false">
+          <section class="card" aria-labelledby="recording-heading">
+            <div class="section-head"><h2 id="recording-heading">Button and recording</h2><span class="pill">Core</span></div>
+            <fieldset><legend>Recording mode</legend><div class="choice-grid two">
+              <label class="choice-card selected"><input type="radio" name="mode" checked><span><strong>Tap and review</strong><small>Press to start and stop, listen back, then press to send.</small></span></label>
+              <label class="choice-card"><input type="radio" name="mode"><span><strong>Press and hold</strong><small>Hold to record. Releasing sends immediately without review.</small></span></label>
+            </div></fieldset>
+            <fieldset class="field"><legend>After listening</legend><div class="choice-grid two"><label class="choice-card selected"><input type="radio" name="after" checked><span><strong>Play only</strong></span></label><label class="choice-card"><input type="radio" name="after"><span><strong>Invite a reply</strong></span></label></div></fieldset>
+            <label class="field">Maximum recording<select><option>60 seconds</option><option>30 seconds</option><option>120 seconds</option></select><span class="field-help">The no-speech timeout remains 20 seconds.</span></label>
+          </section>
+          <section class="card" aria-labelledby="sound-heading">
+            <h2 id="sound-heading">Sounds and arrival</h2>
+            <label class="field">Ringtone<div class="button-row"><select><option>Gentle music box</option><option>Playful chiptune</option><option>Ding-dong chime</option><option>Cuckoo clock</option></select><button class="button secondary" data-toast="Playing ringtone preview.">Preview</button></div></label>
+            <label class="field">Master volume · 50%<input type="range" min="0" max="100" value="50"><span class="field-help">Voice messages, prompts, beeps, and ringtones.</span></label>
+            <label class="field">New message signal<select><option>Ring and lamp</option><option>Ring only</option><option>Lamp only</option><option>Silent</option></select></label>
+          </section>
+          <section class="card" aria-labelledby="quiet-heading"><h2 id="quiet-heading">Quiet hours and NFC</h2><label class="choice-card selected"><input type="checkbox" checked><span><strong>Enable quiet hours</strong><small>Messages wait without ringing or lighting the lamp.</small></span></label><div class="choice-grid two"><label class="field">Start<input type="time" value="20:00"></label><label class="field">End<input type="time" value="07:00"></label></div><label class="field">Timezone<input type="text" value="Europe/Lisbon"></label><label class="choice-card selected"><input type="checkbox" checked><span><strong>Beep when an NFC card is detected or confirmed</strong></span></label></section>
+          <button class="button full" data-toast="Settings saved. Changes apply at the next idle interaction.">Save settings</button>
+        </form>
+      </section>
+
+      <section class="route" data-view="activity" aria-labelledby="activity-title" hidden>
+        <div class="route-title"><p class="eyebrow">Privacy-sensitive</p><h1 id="activity-title" tabindex="-1">What your box has done.</h1><p class="lede">A content-free household timeline: no transcripts, raw NFC identifiers, or internal message identifiers.</p></div>
+        <div class="notice privacy"><span class="notice-icon">i</span><div><strong>Voice stays in the message</strong><p>This page shows outcomes and queue controls, not what anyone said.</p></div></div>
+        <div class="metric-grid" style="margin:16px 0"><div class="metric"><span>Sent</span><strong>8</strong></div><div class="metric"><span>Received</span><strong>11</strong></div><div class="metric"><span>Played</span><strong>10</strong></div><div class="metric"><span>Rings</span><strong>7</strong></div></div>
+        <section class="card"><div class="section-head"><h2>Recent interactions</h2><span class="pill good">Up to date</span></div><div class="activity-row"><span class="activity-symbol">✓</span><span><strong>Reply sent</strong><small>Reply · played, recorded, approved</small></span><time class="activity-time">10:42</time></div><div class="activity-row"><span class="activity-symbol">↓</span><span><strong>Message played</strong><small>New message · family group</small></span><time class="activity-time">09:16</time></div><div class="activity-row"><span class="activity-symbol">!</span><span><strong>Reply needs attention</strong><small>Recorded but not sent</small></span><time class="activity-time">Yesterday</time></div></section>
+        <div class="section-label"><h2>Messages</h2><span>Recoverable queue controls</span></div>
+        <div class="segment-control" role="tablist" aria-label="Message location"><button role="tab" aria-selected="true">Queue · 1</button><button role="tab" aria-selected="false">On hold · 0</button><button role="tab" aria-selected="false">Trash · 1</button></div>
+        <article class="audio-card" style="margin-top:10px"><div class="row-between"><span><strong>Family member · Family group</strong><br><small class="field-help">Today, 09:16 · 18s</small></span><button class="button secondary">Play</button></div><div class="audio-wave" aria-hidden="true"></div><div class="button-row"><button class="button secondary" data-toast="Message moved to On hold.">Hold</button><button class="button danger" data-toast="Message moved to recoverable Trash.">Trash</button></div></article>
+      </section>
+
+      <section class="route" data-view="advanced" aria-labelledby="advanced-title" hidden>
+        <div class="route-title"><p class="eyebrow">Support and recovery</p><h1 id="advanced-title" tabindex="-1">Recover connections safely.</h1><p class="lede">Health and recovery tools stay explicit and reversible where the current system supports it.</p></div>
+        <section class="card identity-card" aria-labelledby="technical-heading"><div class="section-head"><h2 id="technical-heading">Technical details</h2><span class="pill good">Online</span></div><div class="identity-grid"><div class="identity-item"><span>Network hostname</span><strong class="unit-id">button-box-demo</strong></div><div class="identity-item"><span>Software</span><strong class="unit-id">demo-build</strong></div></div><p class="field-help" style="margin:10px 0 0">For local network and software troubleshooting. The customer-facing Box ID is kept in the support footer below.</p></section>
+        <div class="notice" style="margin:16px 0"><span class="notice-icon">!</span><div><strong>Household network access</strong><p>This dashboard has no login. Anyone on household Wi-Fi, the setup hotspot, or an authorized configured tailnet device can change settings and play queued audio.</p></div></div>
+        <details open><summary>Connections and recipients <span class="pill good">Healthy</span></summary><div class="details-body"><div class="action-list"><a class="action-card" href="#setup"><span class="action-icon">W</span><span><strong>Wi-Fi and WhatsApp</strong><small>Reconnect, relink, or continue setup.</small></span><span class="chevron">›</span></a><a class="action-card" href="#setup"><span class="action-icon">N</span><span><strong>Recipients and NFC cards</strong><small>Add, remove, select, pair, reassign, or unpair.</small></span><span class="chevron">›</span></a></div></div></details>
+        <details><summary>Change household Wi-Fi <span>+</span></summary><div class="details-body"><label class="field">New Wi-Fi name<input type="text" placeholder="Network name"></label><div class="notice" style="margin:12px 0"><span class="notice-icon">↺</span><div><strong>The old Wi-Fi is kept during checks</strong><p>If the new network fails, Button Box restores the old one. If recovery also fails, the protected setup hotspot returns.</p></div></div><button class="button">Test and change Wi-Fi</button></div></details>
+        <details><summary>Listener profiles <span>+</span></summary><div class="details-body"><p class="field-help">Names and listened sounds for allowed household listeners. GPIO, audio devices, microphone gain, retry timing, and service internals remain operator-only.</p><button class="button secondary">Add listener profile</button></div></details>
+      </section>
+
+      <section class="route" data-view="pairing" aria-labelledby="pairing-title" hidden><div class="card stage"><p class="eyebrow">WhatsApp pairing</p><h1 id="pairing-title" tabindex="-1" style="margin-inline:auto">Enter this code.</h1><p class="lede" style="margin-inline:auto">In WhatsApp, open Linked devices, choose Link a device, then Link with phone number.</p><div class="pairing-code" aria-label="Sample pairing code">ABCD 1234</div><div class="button-row" style="justify-content:center"><button class="button">Copy code</button><button class="button secondary">Cancel</button></div><p class="field-help" role="status" aria-live="polite" style="margin-top:16px">Waiting for you to enter this code in WhatsApp…</p></div></section>
+
+      <section class="route" data-view="voice-test" aria-labelledby="voice-title" hidden><div class="card stage"><p class="eyebrow">Try your Button Box</p><h1 id="voice-title" tabindex="-1" style="margin-inline:auto">Say hello to your family.</h1><p class="lede" style="margin-inline:auto">Use the physical box. This page records only whether each step completed.</p><div class="proof-list"><div class="proof-row done"><span class="task-mark">✓</span><strong>Voice message received</strong></div><div class="proof-row done"><span class="task-mark">✓</span><strong>Message played on Button Box</strong></div><div class="proof-row"><span class="task-mark">3</span><strong>Record and send a reply</strong></div></div><p role="status">Waiting for the physical button…</p></div></section>
+
+      <section class="route" data-view="nfc" aria-labelledby="nfc-title" hidden><div class="card stage"><p class="eyebrow">NFC setup</p><div class="stage-art" aria-hidden="true">NFC</div><h1 id="nfc-title" tabindex="-1" style="margin-inline:auto">Hold a card over Button Box.</h1><p class="lede" style="margin-inline:auto">Keep it near the reader until Button Box beeps. After the beep, you can remove it.</p><p class="pill attention" role="status">Waiting for a card…</p><p class="field-help">2 cards paired.</p><div class="button-row" style="justify-content:center"><button class="button secondary">Back</button><button class="button">Done</button></div></div></section>
+
+      <section class="route" data-view="error" aria-labelledby="error-title" hidden><div class="card stage"><p class="eyebrow" style="color:var(--red)">Connection needs attention</p><div class="stage-art" style="background:var(--red-soft);color:var(--red)" aria-hidden="true">!</div><h1 id="error-title" tabindex="-1" style="margin-inline:auto">Button Box did not respond.</h1><p class="lede" style="margin-inline:auto">Your saved choices were not overwritten. Check that this phone is on the same household Wi-Fi, then try again.</p><div class="button-row" style="justify-content:center"><button class="button">Try again</button><a class="button secondary" href="#advanced">Recovery options</a></div></div></section>
+
+      <footer class="support-footer" aria-labelledby="support-heading">
+        <p class="eyebrow">Support</p>
+        <h2 id="support-heading">Need a hand?</h2>
+        <p>Keep these lower-priority support details at the bottom, after the household task at hand.</p>
+        <div class="support-actions">
+          <section class="support-panel" aria-labelledby="box-id-heading">
+            <div class="box-id-row">
+              <span><strong id="box-id-heading">Box ID</strong><span class="unit-id" id="box-id-value">BOX-DEMO</span></span>
+              <button class="button secondary" id="copy-box-id" type="button">Copy</button>
+            </div>
+            <p>Share this Box ID when you ask for help. It identifies this physical box; it is not the network name.</p>
+            <p class="support-status" id="box-id-copy-status" role="status" aria-live="polite"></p>
+            <p><strong>Prototype boundary:</strong> BOX-DEMO is sample identity data. Durable Box ID storage and recovery after a reimage are not implemented yet.</p>
+          </section>
+          <section class="support-panel" aria-labelledby="community-heading">
+            <strong id="community-heading">Meet other Button Box owners</strong>
+            <p>Join the WhatsApp community for ideas, questions, and shared experience.</p>
+            <a class="button community" href="https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t" target="_blank" rel="noreferrer">Join the WhatsApp community</a>
+          </section>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <nav class="mobile-nav" aria-label="Button Box dashboard">
+    <a class="nav-link" data-route="home" data-icon="⌂" href="#home">Home</a><a class="nav-link" data-route="setup" data-icon="✓" href="#setup">Setup</a><a class="nav-link" data-route="settings" data-icon="◎" href="#settings">Settings</a><a class="nav-link" data-route="activity" data-icon="↕" href="#activity">Activity</a><a class="nav-link" data-route="advanced" data-icon="⋯" href="#advanced">Advanced</a>
+  </nav>
+  <div class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    "use strict";
+    const canonicalRoutes = new Set(["home", "setup", "settings", "activity", "advanced"]);
+    const previewViews = new Set(["pairing", "voice-test", "nfc", "error"]);
+    const stateSelect = document.getElementById("preview-state");
+    const toast = document.querySelector(".toast");
+    let toastTimer;
+
+    function showView(name) {
+      const selected = canonicalRoutes.has(name) || previewViews.has(name) ? name : "home";
+      document.querySelectorAll("[data-view]").forEach((view) => { view.hidden = view.dataset.view !== selected; });
+      document.querySelectorAll("[data-route]").forEach((link) => link.setAttribute("aria-current", link.dataset.route === selected ? "page" : "false"));
+      const heading = document.querySelector(`[data-view="${selected}"] h1`);
+      if (heading) heading.focus({preventScroll:true});
+      return selected;
+    }
+
+    function applyState(value) {
+      const header = document.getElementById("header-health");
+      if (value === "pairing" || value === "voice-test" || value === "nfc" || value === "error") {
+        showView(value);
+        header.className = `pill ${value === "error" ? "danger" : "attention"}`;
+        header.innerHTML = `<span class="signal" aria-hidden="true"></span><span>${value === "error" ? "Attention" : "Setup"}</span>`;
+        return;
+      }
+      showView(location.hash.slice(1) || "home");
+      const text = value === "ready" ? "Ready" : value === "loading" ? "Checking…" : "Attention";
+      header.className = `pill ${value === "ready" ? "good" : "attention"}`;
+      header.innerHTML = `<span class="signal" aria-hidden="true"></span><span>${text}</span>`;
+      document.querySelectorAll("[data-view=home] .status-tile").forEach((tile, index) => {
+        tile.classList.toggle("good", value === "ready");
+        tile.classList.toggle("attention", value === "attention" || value === "loading");
+        const target = tile.querySelector(".status-value");
+        if (value === "loading") target.textContent = "Checking…";
+        if (value === "attention" && index === 1) target.textContent = "Needs attention";
+      });
+    }
+
+    function route() {
+      stateSelect.value = "ready";
+      applyState("ready");
+    }
+
+    window.addEventListener("hashchange", route);
+    stateSelect.addEventListener("change", () => applyState(stateSelect.value));
+    document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => {
+      toast.textContent = button.dataset.toast;
+      toast.hidden = false;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2600);
+    }));
+    document.querySelectorAll(".segment-control button").forEach((button) => button.addEventListener("click", () => {
+      button.parentElement.querySelectorAll("button").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+    }));
+    document.getElementById("copy-box-id").addEventListener("click", async () => {
+      const value = document.getElementById("box-id-value").textContent.trim();
+      const status = document.getElementById("box-id-copy-status");
+      try {
+        await navigator.clipboard.writeText(value);
+        status.textContent = "Box ID copied.";
+      } catch {
+        status.textContent = `Copy this Box ID: ${value}`;
+      }
+    });
+    route();
+  </script>
+</body>
+</html>

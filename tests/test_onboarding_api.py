@@ -572,6 +572,14 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(response["status"], "200 OK")
         self.assertEqual(json.loads(response["body"])["networks"], self.adapter.networks)
 
+    def test_state_includes_assigned_identity_or_explicitly_unassigned(self):
+        with mock.patch("messagebox.onboarding.app.read_box_id") as identity:
+            for value in (None, "BOX-42"):
+                identity.return_value = value
+                response = self.client.request("GET", "/api/state")
+                self.assertTrue(response["status"].startswith("200"))
+                self.assertEqual(json.loads(response["body"])["box_id"], value)
+
     def test_state_is_public_sanitized_and_has_no_session_fields(self):
         response = self.client.request(
             "GET", "/api/state", headers={"Cookie": "messagebox_session=obsolete"}
@@ -579,7 +587,7 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(response["status"], "200 OK")
         self.assertEqual(
             set(json.loads(response["body"])),
-            {"mode", "phase", "safe_error", "whatsapp", "recipient_setup", "nfc_setup"},
+            {"mode", "phase", "safe_error", "whatsapp", "recipient_setup", "nfc_setup", "box_id"},
         )
         self.assertIsNone(header(response, "Set-Cookie"))
 

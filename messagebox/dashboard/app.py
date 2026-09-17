@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
+from messagebox.identity import read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
 from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
@@ -150,6 +151,19 @@ def whatsapp_authenticated(value):
     return False
 
 
+def runtime_running():
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "messagebox-button.service"],
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def runtime_state():
     contacts = {"contacts": {}}
     try:
@@ -207,6 +221,7 @@ def runtime_state():
         "mode": "RUNTIME",
         "phase": "COMPLETE",
         "product": "Button Box",
+        "box_id": read_box_id(),
         "setup": {
             "wifi": "complete" if wifi_connected else "attention",
             "whatsapp": "complete" if whatsapp_connected else "attention",
@@ -222,7 +237,7 @@ def runtime_state():
             "wifi": "connected" if wifi_connected else "attention",
             "network_name": network_name,
             "whatsapp": "connected" if whatsapp_connected else "attention",
-            "runtime": "running",
+            "runtime": "running" if runtime_running() else "attention",
             "software_version": os.environ.get("MSGBOX_VERSION", "installed"),
         },
     }
