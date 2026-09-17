@@ -22,6 +22,13 @@ One exact default recipient is stored with the private contact allow-list. A
 recognized NFC selection overrides that default; otherwise the default is used.
 No default, an unknown card, or invalid routing state fails closed.
 
+A fresh valid NFC selection reserves the next button interaction for a new
+outbound message before any unread incoming message is claimed. The incoming
+queue stays intact for the following ordinary press. The selection is one-shot
+and expires when that recording interaction completes or is abandoned. In
+hold-to-record mode, releasing before the hold threshold cancels the selected
+recording intent without playing the queue or saving a silent recording.
+
 ## Setup services
 
 | Unit | Role |

@@ -299,6 +299,28 @@ def current_recipient_context(*, claim=False):
         return None
 
 
+def claim_fresh_card_intent():
+    """Claim a fresh card selection before choosing inbound playback.
+
+    The state distinguishes no scan, an already-stale scan, a claimed valid
+    scan, and a valid scan that became invalid during the claim. Callers use
+    that distinction to preserve normal playback while failing closed for
+    outbound routing and claim races.
+    """
+    if not Path(NFC_SELECTION_FILE).exists():
+        return "none", None
+    pending = current_recipient_context(claim=False)
+    if pending is None or not pending["via_card"]:
+        # Consume stale state so it cannot keep blocking later interactions.
+        current_recipient_context(claim=True)
+        return "stale", None
+    claimed = current_recipient_context(claim=True)
+    if claimed is None or not claimed["via_card"]:
+        log_event("nfc_selection_expired")
+        return "expired", None
+    return "claimed", claimed
+
+
 def routing_mode():
     """Describe startup routing without exposing a contact JID."""
     try:
@@ -1161,12 +1183,23 @@ def record_and_send_legacy(settings=None):
     global _recording
     settings = settings or caregiver_settings()
     max_seconds = settings["max_recording_seconds"]
+    card_state, context = claim_fresh_card_intent()
     intent = wait_for_hold_intent(lambda: button.is_pressed, MIN_HOLD_S, POLL_S)
     if intent == "play":
         wait_for_stable_open()
+        if card_state in {"claimed", "expired"}:
+            # Hold-to-record still needs a hold. A quick release consumes the
+            # one-shot choice without playing an unrelated queued message or
+            # creating a near-silent recording.
+            log_event("nfc_recording_cancelled", reason="short_press")
+            return
         play_next_legacy()
         return
-    context = current_recipient_context(claim=True)
+    if card_state in {"stale", "expired"}:
+        block_unavailable_recipient()
+        return
+    if card_state == "none":
+        context = current_recipient_context(claim=True)
     if context is None:
         block_unavailable_recipient()
         return
@@ -1236,10 +1269,18 @@ def run_guided_once(settings=None):
     global _guided_active
     settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
-    claim = claim_oldest()
+    card_state, context = claim_fresh_card_intent()
+    if card_state == "expired":
+        block_unavailable_recipient()
+        return
+    claim = None if card_state == "claimed" else claim_oldest()
+    if card_state == "stale" and not claim:
+        block_unavailable_recipient()
+        return
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
-    context = current_recipient_context(claim=True) if not claim else None
+    if not claim and card_state == "none":
+        context = current_recipient_context(claim=True)
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )
