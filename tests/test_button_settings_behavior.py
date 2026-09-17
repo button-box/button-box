@@ -127,6 +127,7 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
 
     def test_press_acknowledgement_is_generated_audibly(self):
         self.assertEqual(button_send.BEEPS["nfc"][1:], button_send.BEEPS["press"][1:])
+        self.assertEqual(button_send.BEEPS["ready"][1:], ("1320", "0.24", "8"))
         with patch.object(button_send.subprocess, "run") as run:
             button_send.make_beeps()
 
@@ -179,6 +180,44 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
 
         self.assertEqual(run.call_count, len(button_send.BEEPS))
         self.assertIn("-y", run.call_args_list[0].args[0])
+
+    def test_runtime_ready_cue_is_logged_once_and_audio_failure_is_non_fatal(self):
+        for result, event in (
+            (types.SimpleNamespace(returncode=0), "runtime_ready_cue"),
+            (types.SimpleNamespace(returncode=1), "runtime_ready_cue_unavailable"),
+        ):
+            with self.subTest(returncode=result.returncode), patch.object(
+                button_send, "beep", return_value=result
+            ) as beep, patch.object(button_send, "log_event") as log_event, patch.object(
+                button_send, "log"
+            ):
+                button_send.announce_runtime_ready()
+            beep.assert_called_once_with("ready")
+            self.assertEqual(log_event.call_args.args[0], event)
+
+    def test_legacy_press_cue_finishes_before_intent_is_returned(self):
+        button = types.SimpleNamespace(is_pressed=True)
+        with patch.object(button_send, "button", button, create=True), patch.object(
+            button_send, "beep", side_effect=lambda _name: setattr(button, "is_pressed", False)
+        ) as beep, patch.object(button_send, "log_event"):
+            intent = button_send.acknowledge_and_classify_legacy_press(
+                pressed_at=button_send.time.monotonic()
+            )
+        beep.assert_called_once_with("press")
+        self.assertEqual(intent, "play")
+
+    def test_elapsed_press_cue_starts_recording_without_an_extra_wait(self):
+        sleeps = []
+        intent = button_send.wait_for_hold_intent(
+            lambda: True,
+            button_send.MIN_HOLD_S,
+            button_send.POLL_S,
+            started_at=10.0,
+            monotonic=lambda: 10.0 + button_send.MIN_HOLD_S,
+            sleeper=sleeps.append,
+        )
+        self.assertEqual(intent, "record")
+        self.assertEqual(sleeps, [])
 
 
 if __name__ == "__main__":
