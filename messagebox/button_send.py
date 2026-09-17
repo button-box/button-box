@@ -31,7 +31,7 @@ from messagebox.guided_reply import (
     should_ring_after_unsent_session,
     voice_send_command,
 )
-from messagebox.played_history import archive_played_file
+from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
@@ -334,6 +334,23 @@ def claim_fresh_card_intent():
         log_event("nfc_selection_expired")
         return "expired", None
     return "claimed", claimed
+
+
+def recording_recipient_context():
+    """Prefer the exact recently played sender, then the configured default."""
+    try:
+        contacts = ContactStore(CONTACTS_FILE)
+        document = contacts.load()
+        recipient = recent_reply_recipient(QUEUE_DIR, document["contacts"])
+        if recipient is not None:
+            return {
+                "contact": {"jid": recipient, **document["contacts"][recipient]},
+                "via_card": False,
+                "via_recent_reply": True,
+            }
+    except (ContactError, OSError):
+        pass
+    return current_recipient_context(claim=True)
 
 
 def routing_mode():
@@ -1263,7 +1280,7 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         block_unavailable_recipient()
         return
     if card_state == "none":
-        context = current_recipient_context(claim=True)
+        context = recording_recipient_context()
     if context is None:
         block_unavailable_recipient()
         return

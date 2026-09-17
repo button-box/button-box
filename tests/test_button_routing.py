@@ -175,6 +175,69 @@ class ButtonRoutingTests(unittest.TestCase):
             button_send.record_and_send_legacy()
         play.assert_called_once_with()
 
+    def test_recently_played_sender_routes_recording_without_nfc(self):
+        self.add_grandma()
+        self.add_family()
+        with mock.patch.object(
+            button_send,
+            "recent_reply_recipient",
+            return_value=FAMILY,
+        ), mock.patch.object(
+            button_send,
+            "current_recipient_context",
+            side_effect=AssertionError("default route inspected"),
+        ):
+            context = button_send.recording_recipient_context()
+
+        self.assertEqual(context["contact"]["jid"], FAMILY)
+        self.assertFalse(context["via_card"])
+        self.assertTrue(context["via_recent_reply"])
+
+    def test_expired_recent_sender_falls_back_to_configured_default(self):
+        configured = {
+            "contact": {"jid": GRANDMA, "label": "Grandma"},
+            "via_card": False,
+        }
+        with mock.patch.object(
+            button_send,
+            "recent_reply_recipient",
+            return_value=None,
+        ), mock.patch.object(
+            button_send,
+            "current_recipient_context",
+            return_value=configured,
+        ) as current:
+            self.assertEqual(button_send.recording_recipient_context(), configured)
+
+        current.assert_called_once_with(claim=True)
+
+    def test_fresh_card_overrides_recently_played_sender(self):
+        selected = {
+            "contact": {"jid": GRANDMA, "label": "Grandma"},
+            "uid": CARD,
+            "via_card": True,
+        }
+        with mock.patch.object(
+            button_send,
+            "claim_fresh_card_intent",
+            return_value=("claimed", selected),
+        ), mock.patch.object(
+            button_send,
+            "acknowledge_and_classify_legacy_press",
+            return_value="record",
+        ), mock.patch.object(
+            button_send,
+            "recording_recipient_context",
+            side_effect=AssertionError("recent route inspected"),
+        ), mock.patch.object(
+            button_send,
+            "ensure_nfc_confirmation",
+            return_value=False,
+        ) as confirm:
+            button_send.record_and_send_legacy({"max_recording_seconds": 60})
+
+        confirm.assert_called_once_with(selected)
+
     def test_fresh_card_guided_send_preserves_queue_for_next_press(self):
         self.add_grandma()
         self.contacts.assign_card(GRANDMA, CARD)

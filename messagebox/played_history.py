@@ -20,6 +20,7 @@ METADATA_LIMIT = 20
 MEDIA_LIMIT = 10
 RETENTION_SECONDS = 14 * 86400
 MEDIA_BYTES_LIMIT = 128 * 1024 * 1024
+RECENT_REPLY_SECONDS = 3600
 
 
 def played_dir(queue_dir: str | Path) -> Path:
@@ -273,6 +274,25 @@ def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> l
                 }
             )
     return sorted(records, key=lambda item: item["played_at"], reverse=True)[:METADATA_LIMIT]
+
+
+def recent_reply_recipient(
+    queue_dir: str | Path,
+    allowed_jids,
+    *,
+    now: float | None = None,
+    max_age: float = RECENT_REPLY_SECONDS,
+) -> str | None:
+    """Return the exact route of the newest recently played inbound message."""
+    current = time.time() if now is None else now
+    records = list_played_history(queue_dir, now=current)
+    if not records:
+        return None
+    latest = records[0]
+    chat = latest["metadata"].get("chat")
+    if current - latest["played_at"] > max_age:
+        return None
+    return chat if isinstance(chat, str) and chat in set(allowed_jids) else None
 
 
 def read_played_file(
