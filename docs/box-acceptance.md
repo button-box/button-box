@@ -38,6 +38,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-RECIP-08 | TEST | Rapid concurrent switching remains atomic and consistent. |
 | BB-RECIP-09 | TEST+UI | Removing a non-default affects only that recipient. |
 | BB-RECIP-10 | TEST+UI | Removing the default is rejected safely. |
+| BB-RECIP-11 | TEST+UI+API | Naming or renaming a recipient preserves chat identity, default selection, and NFC mappings; names persist after reload. |
 | BB-NFC-01 | UI | Waiting, back, skip, retry, and unavailable states remain coherent. |
 | BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. |
 | BB-NFC-03 | PHYSICAL | A real tag pairs, debounces, re-presents, reassigns, unpairs, and persists. |

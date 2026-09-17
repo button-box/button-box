@@ -323,6 +323,7 @@ function recipientRow(recipient, actions = []) {
       "make-default": ["BB-RECIP-07"],
       remove: ["BB-RECIP-09", "BB-RECIP-10"],
       allow: ["BB-RECIP-05"],
+      rename: ["BB-RECIP-11"],
     }[action] || ["BB-RECIP-01"];
     const button = acceptanceControl("button", ...caseIds);
     button.type = "button";
@@ -348,7 +349,7 @@ function recipientRow(recipient, actions = []) {
       message.textContent = runtimePairing.message;
       status.append(message);
       if (runtimePairing.pending && runtimePairing.attempt) {
-        const cancel = document.createElement("button");
+        const cancel = acceptanceControl("button", "BB-NFC-03");
         cancel.type = "button";
         cancel.className = "secondary compact";
         cancel.textContent = "Cancel pairing";
@@ -376,11 +377,11 @@ function beginRecipientRename(row, recipient) {
   label.append(input);
   const controls = document.createElement("div");
   controls.className = "button-row";
-  const save = document.createElement("button");
+  const save = acceptanceControl("button", "BB-RECIP-11");
   save.type = "submit";
   save.className = "compact";
   save.textContent = "Save";
-  const cancel = document.createElement("button");
+  const cancel = acceptanceControl("button", "BB-RECIP-11");
   cancel.type = "button";
   cancel.className = "secondary compact";
   cancel.textContent = "Cancel";

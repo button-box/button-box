@@ -11,6 +11,15 @@ MATRIX = ROOT / "docs" / "box-acceptance.md"
 
 
 CONTROL_CASES = {
+    "skip-link": ["BB-LAYOUT-01"],
+    "copy-box-id": ["BB-LAYOUT-01"],
+    "owner-community": ["BB-LAYOUT-01"],
+    "manual-default-name": ["BB-RECIP-11"],
+    "manual-allow-name": ["BB-RECIP-11"],
+    "change-test-recipient": ["BB-RECIP-01"],
+    "nfc-allow-phone": ["BB-RECIP-05", "BB-RECIP-06"],
+    "nfc-allow-name": ["BB-RECIP-11"],
+    "allow-nfc-recipient": ["BB-RECIP-05", "BB-NFC-03"],
     "nav-home": ["BB-NAV-01"],
     "nav-setup": ["BB-NAV-01"],
     "nav-settings": ["BB-NAV-01"],
@@ -124,8 +133,10 @@ class DashboardControlCoverageTests(unittest.TestCase):
 
     def test_every_dynamic_control_uses_acceptance_wrapper(self):
         source = APP.read_text(encoding="utf-8")
-        self.assertNotIn('document.createElement("button")', source)
-        self.assertNotIn('document.createElement("a")', source)
+        self.assertFalse('document.createElement("button")' in source,
+                         "dynamic buttons need an acceptance case")
+        self.assertFalse('document.createElement("a")' in source,
+                         "dynamic links need an acceptance case")
         dynamic_ids = set(re.findall(r'acceptanceControl\("(?:button|a)", "(BB-[A-Z]+-[0-9]+)"', source))
         case_ids = set(re.findall(r"^\| (BB-[A-Z]+-[0-9]+) \|", MATRIX.read_text(encoding="utf-8"), re.MULTILINE))
         self.assertTrue(dynamic_ids)

@@ -396,7 +396,7 @@
         <label for="nfc-allow-name">Name <span class="optional">optional</span></label>
         <input id="nfc-allow-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
         <p id="nfc-allow-help" class="field-help">Include + and the country code. Your scanned tag stays ready and your default recipient will not change. After adding, choose the recipient above.</p>
-        <button type="submit">Allow this number</button>
+        <button id="allow-nfc-recipient" type="submit">Allow this number</button>
         <p id="nfc-allow-status" class="field-help" role="status" aria-live="polite"></p>
       </form>
       <button type="button" id="cancel-nfc-tag" class="secondary">Back</button>
@@ -462,7 +462,7 @@
         <button type="button" id="copy-box-id" class="secondary compact" disabled>Copy</button>
       </div>
       <p id="box-id-status" class="field-help" role="status" aria-live="polite"></p>
-      <a class="button community" href="https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t" target="_blank" rel="noopener noreferrer">Join the owner community <span class="sr-only">(opens WhatsApp in a new tab)</span></a>
+      <a id="owner-community" class="button community" href="https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t" target="_blank" rel="noopener noreferrer">Join the owner community <span class="sr-only">(opens WhatsApp in a new tab)</span></a>
     </footer>
   </main>
   </div>
