@@ -62,7 +62,9 @@ def _wav_duration(path: Path) -> float | None:
 
 
 @contextmanager
-def _history_lock(queue: Path):
+def played_history_lock(queue_dir: str | Path):
+    """Serialize history scans with replay-relevant queue transitions."""
+    queue = Path(queue_dir)
     queue.mkdir(parents=True, exist_ok=True)
     lock_path = queue / ".played.lock"
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -208,7 +210,7 @@ def archive_played_file(
     directory = played_dir(queue)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-    with _history_lock(queue):
+    with played_history_lock(queue):
         document = _read_json(source_metadata)
         if metadata:
             document.update(metadata)
@@ -219,13 +221,18 @@ def archive_played_file(
         document.setdefault("version", 1)
         document.setdefault("media_type", "audio")
         document["played_at"] = now
-        document.pop("replay_queued_at", None)
-        document.pop("replay_name", None)
         duration = _wav_duration(source)
         if duration is not None:
             document["duration_s"] = duration
+
+        # Commit metadata with the replay marker first. A failed move or a
+        # crash before the final metadata write can then be recovered without
+        # publishing a second copy of the same replay.
         _write_json(destination_metadata, document)
         os.replace(source, destination)
+        document.pop("replay_queued_at", None)
+        document.pop("replay_name", None)
+        _write_json(destination_metadata, document)
         if source_metadata != destination_metadata:
             source_metadata.unlink(missing_ok=True)
         _prune_locked(
@@ -250,7 +257,7 @@ def list_played_history(
     directory = played_dir(queue)
     current = time.time() if now is None else now
     records = []
-    with _history_lock(queue):
+    with played_history_lock(queue):
         _prune_locked(
             directory,
             now=current,
@@ -314,7 +321,7 @@ def read_played_file(
     name = _safe_name(name)
     directory = played_dir(queue)
     current = time.time() if now is None else now
-    with _history_lock(queue):
+    with played_history_lock(queue):
         metadata = _read_json(Path(f"{directory / name}.json"))
         media = _require_retained(directory, name, metadata, now=current)
         return media.read_bytes()
@@ -334,7 +341,7 @@ def requeue_played_file(
     source_metadata = Path(f"{source}.json")
     current = time.time() if now is None else now
 
-    with _history_lock(queue):
+    with played_history_lock(queue):
         metadata = _read_json(source_metadata)
         source = _require_retained(directory, name, metadata, now=current)
         if not metadata or not _has_reply_route(metadata):

@@ -68,11 +68,14 @@ it follows messages already waiting, while its sidecar keeps the original
 history identity and reply route. The sidecar is published before the WAV. A
 locked history record names the actual replay file, so repeated or concurrent
 requests cannot create duplicate playable entries and an interrupted
-pre-publication attempt can be retried immediately. History reads, audio access,
-and requeue all enforce expiry without a polling service. Active replays remain
-part of routing history even though the dashboard suppresses their duplicate
-Recently played row. This covers voice notes and ordinary video soundtracks
-only; it does not add circular video-note support.
+pre-publication attempt can be retried immediately. The same lock covers replay
+scans, player claim/release/recovery, and dashboard hold/trash moves. Archiving
+keeps the replay marker until the WAV move commits, so restart recovery cannot
+lose the marker and publish a duplicate. History reads, audio access, and
+requeue all enforce expiry without a polling service. Active replays remain part
+of routing history even though the dashboard suppresses their duplicate Recently
+played row. This covers voice notes and ordinary video soundtracks only; it does
+not add circular video-note support.
 
 ## Setup services
 

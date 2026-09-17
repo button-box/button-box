@@ -19,6 +19,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from messagebox.played_history import played_history_lock
+
 
 def env_flag(name: str, default: bool = False, environ=None) -> bool:
     values = os.environ if environ is None else environ
@@ -80,56 +82,62 @@ def voice_send_command(wacli_bin: str, ogg_path: str, recipient: str, lock_wait:
 
 def claim_inbox_file(queue_dir: str, filename: str) -> Path:
     queue = Path(queue_dir)
-    source = queue / filename
-    inflight = queue / ".inflight"
-    inflight.mkdir(parents=True, exist_ok=True)
-    claimed = inflight / source.name
-    os.replace(source, claimed)
-    source_meta = Path(str(source) + ".json")
-    if source_meta.exists():
-        os.replace(source_meta, Path(str(claimed) + ".json"))
+    with played_history_lock(queue):
+        source = queue / filename
+        inflight = queue / ".inflight"
+        inflight.mkdir(parents=True, exist_ok=True)
+        claimed = inflight / source.name
+        os.replace(source, claimed)
+        source_meta = Path(str(source) + ".json")
+        if source_meta.exists():
+            os.replace(source_meta, Path(str(claimed) + ".json"))
     return claimed
 
 
 def release_inbox_file(queue_dir: str, claimed: Path) -> None:
-    target = Path(queue_dir) / claimed.name
-    claimed_meta = Path(str(claimed) + ".json")
-    target_meta = Path(str(target) + ".json")
-    if claimed_meta.exists():
-        os.replace(claimed_meta, target_meta)
-    if claimed.exists():
-        os.replace(claimed, target)
+    queue = Path(queue_dir)
+    with played_history_lock(queue):
+        target = queue / claimed.name
+        claimed_meta = Path(str(claimed) + ".json")
+        target_meta = Path(str(target) + ".json")
+        if claimed_meta.exists():
+            os.replace(claimed_meta, target_meta)
+        if claimed.exists():
+            os.replace(claimed, target)
 
 
 def finish_inbox_file(claimed: Path) -> None:
-    for path in (claimed, Path(str(claimed) + ".json")):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+    queue = claimed.parent.parent
+    with played_history_lock(queue):
+        for path in (claimed, Path(str(claimed) + ".json")):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def recover_inflight_files(queue_dir: str) -> list[str]:
     queue = Path(queue_dir)
-    inflight = queue / ".inflight"
-    recovered = []
-    if not inflight.exists():
-        return recovered
-    for wav in sorted(inflight.glob("*.wav")):
-        target = queue / wav.name
-        meta = Path(str(wav) + ".json")
-        target_meta = Path(str(target) + ".json")
-        if meta.exists() and not target_meta.exists():
-            os.replace(meta, target_meta)
-        if not target.exists():
-            os.replace(wav, target)
-            recovered.append(wav.name)
-    # Repair the narrow crash window after the WAV was claimed but before its
-    # sidecar moved. The WAV recovery above leaves the original sidecar valid.
-    for meta in inflight.glob("*.wav.json"):
-        target_meta = queue / meta.name
-        if not target_meta.exists():
-            os.replace(meta, target_meta)
+    with played_history_lock(queue):
+        inflight = queue / ".inflight"
+        recovered = []
+        if not inflight.exists():
+            return recovered
+        for wav in sorted(inflight.glob("*.wav")):
+            target = queue / wav.name
+            meta = Path(str(wav) + ".json")
+            target_meta = Path(str(target) + ".json")
+            if meta.exists() and not target_meta.exists():
+                os.replace(meta, target_meta)
+            if not target.exists():
+                os.replace(wav, target)
+                recovered.append(wav.name)
+        # Repair the narrow crash window after the WAV was claimed but before its
+        # sidecar moved. The WAV recovery above leaves the original sidecar valid.
+        for meta in inflight.glob("*.wav.json"):
+            target_meta = queue / meta.name
+            if not target_meta.exists():
+                os.replace(meta, target_meta)
     return recovered
 
 

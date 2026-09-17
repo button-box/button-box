@@ -54,6 +54,7 @@ from messagebox.onboarding.recipients import RecipientError, RecipientSetup
 from messagebox.onboarding.whatsapp import PairingEngine, PairingError, normalize_phone
 from messagebox.played_history import (
     list_played_history,
+    played_history_lock,
     read_played_file,
     requeue_played_file,
 )
@@ -444,13 +445,18 @@ def resolve_message_token(token, expected_kind):
     return value[1]
 
 
-def move_queue_message(source_dir, destination_dir, name, *, exposing_to_player):
+def move_queue_message(
+    source_dir, destination_dir, name, *, queue_dir, exposing_to_player
+):
     """Move a WAV and routing sidecar without exposing a metadata-less item."""
     source = os.path.join(source_dir, name)
     destination = os.path.join(destination_dir, name)
     source_meta = source + ".json"
     destination_meta = destination + ".json"
-    with QUEUE_ACTION_LOCK:
+    # The cross-process history lock is always acquired before the dashboard's
+    # process-local action lock. Replay scans and every queue move therefore
+    # observe one complete state without holding either lock during playback.
+    with played_history_lock(queue_dir), QUEUE_ACTION_LOCK:
         if not os.path.exists(source):
             raise FileNotFoundError(source)
         if os.path.exists(destination) or os.path.exists(destination_meta):
@@ -1556,6 +1562,7 @@ class Handler(BaseHTTPRequestHandler):
                 source_dir,
                 destination_dir,
                 name,
+                queue_dir=QUEUE_DIR,
                 exposing_to_player=destination_dir == QUEUE_DIR,
             )
         except FileNotFoundError:

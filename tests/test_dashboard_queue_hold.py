@@ -8,7 +8,7 @@ from unittest import mock
 
 
 import messagebox.dashboard.app as dashboard
-from messagebox.played_history import archive_played_file
+from messagebox.played_history import archive_played_file, played_history_lock
 
 
 class DashboardQueueHoldTests(unittest.TestCase):
@@ -148,6 +148,30 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertTrue(sidecar.exists())
         self.assertFalse((self.hold / wav.name).exists())
         self.assertEqual(dashboard.list_wavs(str(self.queue))[0]["file"], wav.name)
+
+    def test_dashboard_move_waits_for_replay_history_transition(self):
+        wav = self.make_message()
+        started = threading.Event()
+        finished = threading.Event()
+        response = {}
+
+        def hold_message():
+            started.set()
+            response.update(self.post(f"/api/hold?f={self.token()}"))
+            finished.set()
+
+        with played_history_lock(self.queue):
+            thread = threading.Thread(target=hold_message)
+            thread.start()
+            self.assertTrue(started.wait(1))
+            self.assertFalse(finished.wait(0.1))
+            self.assertTrue(wav.exists())
+
+        self.assertTrue(finished.wait(1))
+        thread.join()
+        self.assertEqual(response["code"], 200)
+        self.assertFalse(wav.exists())
+        self.assertTrue((self.hold / wav.name).exists())
 
     def test_destination_conflict_does_not_overwrite_or_lose_message(self):
         wav = self.make_message()

@@ -1,9 +1,17 @@
 import json
 import tempfile
+import threading
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
+import messagebox.played_history as played_history
+from messagebox.guided_reply import (
+    claim_inbox_file,
+    recover_inflight_files,
+    release_inbox_file,
+)
 from messagebox.played_history import (
     RETENTION_SECONDS,
     archive_played_file,
@@ -138,6 +146,115 @@ class PlayedHistoryTests(unittest.TestCase):
             requeue_played_file(self.queue, archived.name, now=5),
             "already_queued",
         )
+
+    def test_requeue_scan_is_atomic_with_release_and_claim_transitions(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=2000
+        )
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2001), "queued")
+        replay = next(self.queue.glob("*.wav"))
+        replay_metadata = Path(f"{replay}.json")
+        hold = self.queue / ".hold"
+        hold.mkdir()
+        held = hold / replay.name
+        held_metadata = Path(f"{held}.json")
+        replay.replace(held)
+        replay_metadata.replace(held_metadata)
+
+        transition_started = threading.Event()
+        transition_finished = threading.Event()
+        transition_threads = []
+        real_is_file = Path.is_file
+
+        def transition():
+            transition_started.set()
+            release_inbox_file(self.queue, held)
+            claim_inbox_file(self.queue, replay.name)
+            transition_finished.set()
+
+        def is_file(path):
+            if path == held and not transition_threads:
+                thread = threading.Thread(target=transition)
+                transition_threads.append(thread)
+                thread.start()
+                self.assertTrue(transition_started.wait(1))
+                self.assertFalse(transition_finished.wait(0.1))
+            return real_is_file(path)
+
+        with mock.patch.object(Path, "is_file", new=is_file):
+            self.assertEqual(
+                requeue_played_file(self.queue, archived.name, now=2002),
+                "already_queued",
+            )
+
+        self.assertTrue(transition_finished.wait(1))
+        transition_threads[0].join()
+        self.assertEqual(list(self.queue.glob("*.wav")), [])
+        self.assertEqual(
+            [path.name for path in (self.queue / ".inflight").glob("*.wav")],
+            [replay.name],
+        )
+
+    def test_archive_move_failure_keeps_replay_marker_through_recovery(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=2000
+        )
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2001), "queued")
+        replay = next(self.queue.glob("*.wav"))
+        claimed = claim_inbox_file(self.queue, replay.name)
+        real_replace = played_history.os.replace
+
+        def replace(source, destination):
+            if Path(source) == claimed and Path(destination) == archived:
+                raise OSError("simulated archive move failure")
+            return real_replace(source, destination)
+
+        with mock.patch.object(played_history.os, "replace", side_effect=replace):
+            with self.assertRaisesRegex(OSError, "archive move failure"):
+                archive_played_file(self.queue, claimed, played_at=2002)
+
+        metadata = json.loads(Path(f"{archived}.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["replay_name"], replay.name)
+        self.assertEqual(recover_inflight_files(self.queue), [replay.name])
+        self.assertEqual(
+            requeue_played_file(self.queue, archived.name, now=2003),
+            "already_queued",
+        )
+        self.assertEqual([path.name for path in self.queue.glob("*.wav")], [replay.name])
+        self.assertEqual(list((self.queue / ".inflight").glob("*.wav")), [])
+
+    def test_archive_metadata_failure_requeues_once_after_restart_recovery(self):
+        archived = archive_played_file(
+            self.queue, self.message("1000-message.wav"), played_at=2000
+        )
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2001), "queued")
+        replay = next(self.queue.glob("*.wav"))
+        claimed = claim_inbox_file(self.queue, replay.name)
+        archived_metadata = Path(f"{archived}.json")
+        real_write_json = played_history._write_json
+        destination_writes = 0
+
+        def write_json(path, value):
+            nonlocal destination_writes
+            if path == archived_metadata:
+                destination_writes += 1
+            if path == archived_metadata and destination_writes == 2:
+                raise OSError("simulated metadata commit failure")
+            return real_write_json(path, value)
+
+        with mock.patch.object(played_history, "_write_json", side_effect=write_json):
+            with self.assertRaisesRegex(OSError, "metadata commit failure"):
+                archive_played_file(self.queue, claimed, played_at=2002)
+
+        metadata = json.loads(archived_metadata.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["replay_name"], replay.name)
+        self.assertFalse(claimed.exists())
+        self.assertEqual(recover_inflight_files(self.queue), [])
+        self.assertEqual(requeue_played_file(self.queue, archived.name, now=2003), "queued")
+        queued = list(self.queue.glob("*.wav"))
+        self.assertEqual(len(queued), 1)
+        self.assertNotEqual(queued[0].name, replay.name)
+        self.assertFalse(Path(f"{self.queue / replay.name}.json").exists())
 
     def test_expired_media_cannot_be_read_or_requeued_without_later_archive(self):
         archived = archive_played_file(
