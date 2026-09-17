@@ -15,7 +15,14 @@ from test_onboarding_api import WSGIHarness, FakeAdapter, FakeWhatsApp, FakeNfc
 
 class SetupActivityTests(unittest.TestCase):
     def test_activity_rpc_has_no_caller_controlled_path_or_auth_side_effects(self):
-        payload = {"cards": {}, "interactions": [], "queue": [], "hold": [], "trash": []}
+        payload = {
+            "cards": {},
+            "interactions": [],
+            "queue": [],
+            "recently_played": [],
+            "hold": [],
+            "trash": [],
+        }
         engine = mock.Mock()
         engine.activity_state.return_value = payload
         handler = _PairingHandler.__new__(_PairingHandler)
@@ -58,6 +65,7 @@ class SetupActivityTests(unittest.TestCase):
                 self.assertNotIn(b"secret", response["body"])
                 self.assertEqual(store.load(), before)
                 self.assertEqual(data["queue"], [])
+                self.assertEqual(data["recently_played"], [])
 
     def test_missing_events_has_empty_history(self):
         with tempfile.TemporaryDirectory() as directory:

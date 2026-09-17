@@ -3,6 +3,7 @@ import sys
 import tempfile
 import types
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -29,6 +30,7 @@ class ButtonRoutingTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
+        self.root = root
         self.contacts_path = root / "contacts.json"
         self.selection_path = root / "nfc-selection.json"
         self.health_path = root / "nfc-health"
@@ -48,6 +50,7 @@ class ButtonRoutingTests(unittest.TestCase):
             ),
             mock.patch.object(button_send.time, "time", return_value=1000),
             mock.patch.object(button_send, "log"),
+            mock.patch.object(button_send, "QUEUE_DIR", str(root / "queue")),
         )
         for patcher in self.paths:
             patcher.start()
@@ -102,6 +105,31 @@ class ButtonRoutingTests(unittest.TestCase):
         self.contacts_path.write_text("not json", encoding="utf-8")
         self.assertIsNone(button_send.current_recipient_context(claim=True))
         self.assertEqual(button_send.routing_mode(), "unavailable")
+
+    def test_successful_claim_moves_to_recent_history_with_original_route(self):
+        inflight = self.root / "queue" / ".inflight"
+        inflight.mkdir(parents=True)
+        claimed = inflight / "1000-message.wav"
+        with wave.open(str(claimed), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            audio.writeframes(b"\x00\x00" * 8000)
+        metadata = {"chat": FAMILY, "msgid": "synthetic", "media_type": "audio"}
+        Path(f"{claimed}.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+        button_send.finish_claim(
+            {"path": claimed, "meta": metadata, "played_at": 2_000_000_000}
+        )
+
+        archived = self.root / "queue" / ".played" / claimed.name
+        self.assertTrue(archived.is_file())
+        archived_metadata = json.loads(
+            Path(f"{archived}.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(archived_metadata["chat"], FAMILY)
+        self.assertEqual(archived_metadata["msgid"], "synthetic")
+        self.assertEqual(archived_metadata["played_at"], 2_000_000_000)
 
     def test_cards_block_default_when_reader_or_card_state_is_unsafe(self):
         self.add_grandma()

@@ -39,6 +39,16 @@ or `media download`. Ordinary videos are supported. Circular-note playback
 therefore remains unavailable until the pinned client gains that classification
 and download support, and must not be claimed from poller tests alone.
 
+After successful playback, the private WAV and routing sidecar move into
+`queue/.played`. The dashboard shows up to 20 metadata records from the last 14
+days, newest first. Playable media is further bounded to the 10 newest files and
+128 MiB; a retained record whose media was pruned remains visible as
+unavailable. Requeueing copies one retained WAV back into the durable queue,
+publishes its original routing sidecar before the WAV, and records an idempotency
+marker so repeated or concurrent requests cannot create duplicate playable
+entries. This covers voice notes and ordinary video soundtracks only; it does
+not add circular video-note support.
+
 ## Setup services
 
 | Unit | Role |

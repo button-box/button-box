@@ -60,3 +60,38 @@ test("polls preserve typed number and API validation failure is retryable inline
   expect(h.submit.disabled).toBe(false);
   expect(h.calls).toHaveLength(1);
 });
+
+test("recently played renders safe state and queues once from an explicit click", async () => {
+  const h = harness();
+  vm.runInContext("loadActivity = async () => {};", h.context);
+  const list = vm.runInContext(`activityMessageList([{
+    sender: "Family member", chat: "Family group", ts: 1000, dur: 3,
+    media_kind: "video_soundtrack", available: true, queued: false, token: "opaque-token"
+  }], "played")`, h.context);
+  const row = list.children[0];
+  const title = row.children[0].children[0];
+  const audio = row.children[1];
+  const button = row.children[2].children[0];
+
+  expect(title.textContent).toBe("Video soundtrack · Family member · Family group");
+  expect(audio.src).toBe("/audio/opaque-token?played=1");
+  expect(button.textContent).toBe("Add to queue");
+  await button.handlers.click();
+  expect(button.disabled).toBe(true);
+  expect(h.calls.at(-1).url).toBe("/api/requeue?f=opaque-token");
+  expect(h.calls.at(-1).options.method).toBe("POST");
+});
+
+test("recently played disables missing and already queued media", () => {
+  const h = harness();
+  const list = vm.runInContext(`activityMessageList([
+    {sender:"A", chat:"Group", ts:1000, dur:1, media_kind:"voice_message", available:false, queued:false, token:"missing"},
+    {sender:"B", chat:"Group", ts:1001, dur:1, media_kind:"voice_message", available:true, queued:true, token:"queued"}
+  ], "played")`, h.context);
+
+  expect(list.children[0].children[1].src).toBe(undefined);
+  expect(list.children[0].children[2].children[0].textContent).toBe("Unavailable");
+  expect(list.children[0].children[2].children[0].disabled).toBe(true);
+  expect(list.children[1].children[2].children[0].textContent).toBe("In queue");
+  expect(list.children[1].children[2].children[0].disabled).toBe(true);
+});

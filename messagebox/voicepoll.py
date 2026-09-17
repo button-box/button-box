@@ -236,6 +236,7 @@ def queue_message(message, source_path):
                 "chat": message["ChatJID"],
                 "msgid": message["MsgID"],
                 "sender_jid": message.get("SenderJID"),
+                "media_type": media_type,
             }, f, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())

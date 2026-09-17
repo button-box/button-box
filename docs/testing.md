@@ -14,6 +14,20 @@ required.
 Synthetic tests cover routing, onboarding, redaction, pairing, NFC, and recovery
 contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
+## Regression test matrix
+
+Matrix case IDs are permanent. Add new cases with a new descriptive ID; do not
+renumber or reuse an existing ID.
+
+Every confirmed product bug must add a matrix case or explicitly update an
+existing case and its regression test before the fix is complete. If automation
+is impossible, record the reason in the pull request and keep a precise manual
+assertion in this matrix.
+
+| Case ID | Regression | Synthetic setup and expected result | Software evidence | Separate physical assertion |
+| --- | --- | --- | --- | --- |
+| `BB-RQ-001` | Caregiver requeues recently played media | Archive synthetic voice audio and an ordinary video soundtrack after playback. The dashboard returns safe newest-first metadata and an opaque handle. Repeated and concurrent Add to queue requests create one durable playable WAV with its original routing sidecar; restart preserves the record and queued state. Missing or policy-pruned media stays visible but unavailable. | `tests/test_played_history.py::PlayedHistoryTests`, `tests/test_dashboard_queue_hold.py::DashboardQueueHoldTests::test_recently_played_is_newest_first_safe_and_requeues_once`, and the recently-played cases in `tests/onboarding-ui.test.js` | On a test box at the exact candidate revision, play a synthetic voice note and an ordinary video soundtrack from two allowed test chats. Confirm newest-first labels and played times, requeue each, refresh and restart before playback, then verify exactly one playback in original order and that reply routing remains bound to the original chat. Confirm a deliberately pruned fixture is unavailable. Do not treat circular video notes as supported. |
+
 ## Physical test scenarios
 
 Use a spare Raspberry Pi 4 with a freshly imaged test microSD card. Confirm it

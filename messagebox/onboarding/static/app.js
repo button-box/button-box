@@ -902,7 +902,7 @@ function activityMessageList(items, kind) {
   const container = document.createElement("div");
   container.className = "activity-list";
   if (!items.length) {
-    container.textContent = kind === "queue" ? "Nothing waiting." : "Empty.";
+    container.textContent = kind === "queue" ? "Nothing waiting." : kind === "played" ? "Nothing played recently." : "Empty.";
     return container;
   }
   for (const item of items) {
@@ -910,25 +910,33 @@ function activityMessageList(items, kind) {
     row.className = "activity-row";
     const copy = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = `${item.sender} · ${item.chat}`;
+    const mediaLabel = kind === "played" ? item.media_kind === "video_soundtrack" ? "Video soundtrack · " : "Voice message · " : "";
+    title.textContent = `${mediaLabel}${item.sender} · ${item.chat}`;
     const meta = document.createElement("span");
-    meta.textContent = `${new Date(item.ts * 1000).toLocaleString()} · ${formatDuration(item.dur)}`;
+    const timeLabel = kind === "played" ? "Played " : "";
+    meta.textContent = `${timeLabel}${new Date(item.ts * 1000).toLocaleString()} · ${formatDuration(item.dur)}`;
     copy.append(title, meta);
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "none";
-    const query = kind === "hold" ? "?hold=1" : kind === "trash" ? "?trash=1" : "";
-    audio.src = `/audio/${encodeURIComponent(item.token)}${query}`;
+    const query = kind === "played" ? "?played=1" : kind === "hold" ? "?hold=1" : kind === "trash" ? "?trash=1" : "";
+    if (kind !== "played" || item.available) audio.src = `/audio/${encodeURIComponent(item.token)}${query}`;
     const actions = document.createElement("div");
     actions.className = "button-row";
     const operations = kind === "queue" ? [["hold", "Hold"], ["delete", "Trash"]]
-      : kind === "hold" ? [["resume", "Reinstate"]] : [["reinstate", "Reinstate"]];
+      : kind === "hold" ? [["resume", "Reinstate"]]
+        : kind === "played" ? [["requeue", item.queued ? "In queue" : item.available ? "Add to queue" : "Unavailable"]]
+          : [["reinstate", "Reinstate"]];
     for (const [operation, label] of operations) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "secondary compact";
       button.textContent = label;
-      button.addEventListener("click", () => moveMessage(operation, item.token));
+      button.disabled = kind === "played" && (item.queued || !item.available);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        await moveMessage(operation, item.token);
+      });
       actions.append(button);
     }
     row.append(copy, audio, actions);
@@ -966,6 +974,7 @@ async function loadActivity() {
     }));
     if (!data.interactions.length) timeline.textContent = "No activity yet. Events will appear here as you use Button Box.";
     document.getElementById("activity-queue").replaceChildren(activityMessageList(data.queue, "queue"));
+    document.getElementById("activity-played").replaceChildren(activityMessageList(data.recently_played, "played"));
     document.getElementById("activity-hold").replaceChildren(activityMessageList(data.hold, "hold"));
     document.getElementById("activity-trash").replaceChildren(activityMessageList(data.trash, "trash"));
   } catch (error) {

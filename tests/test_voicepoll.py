@@ -250,6 +250,7 @@ class MediaQueueTests(unittest.TestCase):
                 "chat": GROUP,
                 "msgid": "synthetic-video",
                 "sender_jid": PERSON,
+                "media_type": "video",
             },
         )
         self.assertEqual(list(self.queue.glob("*.part")), [])
