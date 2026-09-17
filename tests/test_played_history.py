@@ -23,7 +23,7 @@ class PlayedHistoryTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def message(self, name, *, size=8000):
+    def message(self, name, *, size=8000, chat="120363000001@g.us"):
         path = self.queue / name
         with wave.open(str(path), "wb") as audio:
             audio.setnchannels(1)
@@ -34,7 +34,7 @@ class PlayedHistoryTests(unittest.TestCase):
             json.dumps(
                 {
                     "version": 1,
-                    "chat": "120363000001@g.us",
+                    "chat": chat,
                     "msgid": name,
                     "sender_jid": "15551234567@s.whatsapp.net",
                     "media_type": "audio",
@@ -192,10 +192,85 @@ class PlayedHistoryTests(unittest.TestCase):
 
         self.assertEqual(
             recent_reply_recipient(self.queue, allowed, now=2001),
-            "120363000001@g.us",
+            ("route", "120363000001@g.us"),
         )
-        self.assertIsNone(recent_reply_recipient(self.queue, set(), now=2001))
-        self.assertIsNone(recent_reply_recipient(self.queue, allowed, now=5601))
+        self.assertEqual(
+            recent_reply_recipient(self.queue, set(), now=2001),
+            ("blocked", None),
+        )
+        self.assertEqual(
+            recent_reply_recipient(self.queue, allowed, now=5601),
+            ("fallback", None),
+        )
+        self.assertEqual(
+            recent_reply_recipient(self.queue / "empty", allowed, now=2001),
+            ("fallback", None),
+        )
+
+    def test_active_newest_replay_remains_the_recent_route_in_every_queue_state(self):
+        older_chat = "120363000001@g.us"
+        newest_chat = "120363000002@g.us"
+        archive_played_file(
+            self.queue,
+            self.message("1000-older.wav", chat=older_chat),
+            played_at=1000,
+        )
+        newest = archive_played_file(
+            self.queue,
+            self.message("2000-newest.wav", chat=newest_chat),
+            played_at=2000,
+        )
+        self.assertEqual(requeue_played_file(self.queue, newest.name, now=2001), "queued")
+        replay = next(self.queue.glob("*.wav"))
+        replay_metadata = Path(f"{replay}.json")
+        allowed = {older_chat, newest_chat}
+
+        for state in ("queue", ".inflight", ".hold", ".trash"):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    recent_reply_recipient(self.queue, allowed, now=2001),
+                    ("route", newest_chat),
+                )
+                self.assertEqual(list_played_history(self.queue, now=2001)[0]["file"], "1000-older.wav")
+            if state != ".trash":
+                next_state = {
+                    "queue": ".inflight",
+                    ".inflight": ".hold",
+                    ".hold": ".trash",
+                }[state]
+                destination = self.queue / next_state
+                destination.mkdir(exist_ok=True)
+                moved = destination / replay.name
+                moved_metadata = Path(f"{moved}.json")
+                replay.replace(moved)
+                replay_metadata.replace(moved_metadata)
+                replay, replay_metadata = moved, moved_metadata
+
+    def test_invalid_or_removed_newest_route_never_selects_an_older_sender(self):
+        allowed_chat = "120363000001@g.us"
+        for newest_chat in ("120363000002@g.us", "not-a-chat"):
+            with self.subTest(newest_chat=newest_chat), tempfile.TemporaryDirectory() as directory:
+                queue = Path(directory) / "queue"
+                queue.mkdir()
+                archive_played_file(
+                    queue,
+                    self.message("1000-older.wav", chat=allowed_chat),
+                    played_at=1000,
+                )
+                # The helper creates in self.queue, so move this synthetic newest
+                # source into the isolated queue before archiving it.
+                source = self.message("2000-newest.wav", chat=newest_chat)
+                source_metadata = Path(f"{source}.json")
+                isolated_source = queue / source.name
+                isolated_metadata = Path(f"{isolated_source}.json")
+                source.replace(isolated_source)
+                source_metadata.replace(isolated_metadata)
+                archive_played_file(queue, isolated_source, played_at=2000)
+
+                self.assertEqual(
+                    recent_reply_recipient(queue, {allowed_chat}, now=2001),
+                    ("blocked", None),
+                )
 
 
 if __name__ == "__main__":

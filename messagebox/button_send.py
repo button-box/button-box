@@ -336,20 +336,52 @@ def claim_fresh_card_intent():
     return "claimed", claimed
 
 
+def nfc_idle_routing_is_safe(contacts):
+    """Reject recent/default routing while fitted NFC state is unsafe."""
+    if not any(contact["card_uids"] for contact in contacts.values()):
+        return True
+    try:
+        if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
+            log("recipient unavailable: NFC reader health is stale")
+            return False
+    except OSError:
+        log("recipient unavailable: NFC reader health is unavailable")
+        return False
+    if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
+        log("recipient unavailable: unrecognized card presentation")
+        return False
+    return True
+
+
 def recording_recipient_context():
     """Prefer the exact recently played sender, then the configured default."""
     try:
-        contacts = ContactStore(CONTACTS_FILE)
-        document = contacts.load()
-        recipient = recent_reply_recipient(QUEUE_DIR, document["contacts"])
-        if recipient is not None:
-            return {
-                "contact": {"jid": recipient, **document["contacts"][recipient]},
-                "via_card": False,
-                "via_recent_reply": True,
-            }
+        document = ContactStore(CONTACTS_FILE).load()
     except (ContactError, OSError):
-        pass
+        return None
+    contacts = document["contacts"]
+    # A presentation that arrives after the initial press check still owns the
+    # interaction. Invalid or unsafe card state must never fall through to a
+    # recent sender.
+    if Path(NFC_SELECTION_FILE).exists():
+        return current_recipient_context(claim=True)
+    if not nfc_idle_routing_is_safe(contacts):
+        return None
+
+    route_state, recipient = recent_reply_recipient(QUEUE_DIR, contacts)
+    if Path(NFC_SELECTION_FILE).exists():
+        return current_recipient_context(claim=True)
+    if not nfc_idle_routing_is_safe(contacts):
+        return None
+    if route_state == "route":
+        return {
+            "contact": {"jid": recipient, **contacts[recipient]},
+            "via_card": False,
+            "via_recent_reply": True,
+        }
+    if route_state == "blocked":
+        log("recipient unavailable: recent reply route is no longer valid")
+        return None
     return current_recipient_context(claim=True)
 
 
@@ -1360,7 +1392,7 @@ def run_guided_once(settings=None):
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
-        context = current_recipient_context(claim=True)
+        context = recording_recipient_context()
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )

@@ -239,7 +239,12 @@ def archive_played_file(
     return destination
 
 
-def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> list[dict]:
+def list_played_history(
+    queue_dir: str | Path,
+    *,
+    now: float | None = None,
+    include_active: bool = False,
+) -> list[dict]:
     """Return private history records newest-first without exposing them directly."""
     queue = Path(queue_dir)
     directory = played_dir(queue)
@@ -261,7 +266,8 @@ def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> l
             except ValueError:
                 continue
             metadata = _read_json(metadata_path)
-            if _active_replay(queue, metadata):
+            active = _active_replay(queue, metadata)
+            if active and not include_active:
                 continue
             played_at = _record_time(metadata_path, metadata)
             records.append(
@@ -269,7 +275,7 @@ def list_played_history(queue_dir: str | Path, *, now: float | None = None) -> l
                     "file": name,
                     "played_at": played_at,
                     "available": (directory / name).is_file(),
-                    "queued": False,
+                    "queued": active,
                     "metadata": metadata,
                 }
             )
@@ -282,17 +288,19 @@ def recent_reply_recipient(
     *,
     now: float | None = None,
     max_age: float = RECENT_REPLY_SECONDS,
-) -> str | None:
-    """Return the exact route of the newest recently played inbound message."""
+) -> tuple[str, str | None]:
+    """Classify the exact route of the newest retained played message."""
     current = time.time() if now is None else now
-    records = list_played_history(queue_dir, now=current)
+    records = list_played_history(queue_dir, now=current, include_active=True)
     if not records:
-        return None
+        return "fallback", None
     latest = records[0]
-    chat = latest["metadata"].get("chat")
     if current - latest["played_at"] > max_age:
-        return None
-    return chat if isinstance(chat, str) and chat in set(allowed_jids) else None
+        return "fallback", None
+    chat = latest["metadata"].get("chat")
+    if not isinstance(chat, str) or chat not in set(allowed_jids):
+        return "blocked", None
+    return "route", chat
 
 
 def read_played_file(
