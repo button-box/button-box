@@ -14,7 +14,7 @@ root access they require.
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
 | `messagebox-poller.service` | Queue voice notes and ordinary video soundtracks from configured contacts |
-| `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
+| `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
 
