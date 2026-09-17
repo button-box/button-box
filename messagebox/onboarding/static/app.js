@@ -1029,7 +1029,7 @@ function activityMessageList(items, kind) {
         : kind === "played" ? [["requeue", item.queued ? "In queue" : item.available ? "Add to queue" : "Unavailable"]]
           : [["reinstate", "Reinstate"]];
     for (const [operation, label] of operations) {
-      const button = acceptanceControl("button", "BB-ACT-02");
+      const button = acceptanceControl("button", kind === "played" ? "BB-RQ-001" : "BB-ACT-02");
       button.type = "button";
       button.className = "secondary compact";
       button.textContent = label;

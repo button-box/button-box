@@ -42,12 +42,18 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-NFC-01 | UI | Waiting, back, skip, retry, and unavailable states remain coherent. |
 | BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. |
 | BB-NFC-03 | PHYSICAL | A real tag pairs, debounces, re-presents, reassigns, unpairs, and persists. |
+| BB-NFC-04 | TEST+PHYSICAL | A fresh card selection takes priority over queued playback and recent replies in both recording modes; stale, unknown, and raced selections never route to another recipient. |
 | BB-VOICE-01 | UI+LOG | One authorized voice note is received and queued once. |
 | BB-VOICE-02 | ACOUSTIC | Arrival signal is distinct and matches settings/quiet hours. |
 | BB-VOICE-03 | PHYSICAL | One press plays the intended queued note. |
 | BB-VOICE-04 | PHYSICAL+UI | Record, stop, listen back, confirm, and send reach only the intended chat. |
+| BB-VOICE-05 | TEST+PHYSICAL+LOG | Consecutive authorized messages remain in order while continuous sync stays connected during downloads and recipient refresh. |
+| BB-VIDEO-01 | TEST+PHYSICAL+ACOUSTIC | An ordinary video with audio plays its soundtrack in queue order; unsupported or silent media does not block later messages. Circular video notes are not supported. |
+| BB-RQ-001 | TEST+UI+PHYSICAL | Requeue retained voice and ordinary-video audio after existing messages with exact original chat labels and one replay per request. Active replays stay hidden from history until playback; restart, hold, trash, expiry, and pruning preserve identity and prevent duplicate playback. See the detailed replay sequence in [testing.md](testing.md). |
+| BB-REPLY-01 | TEST+PHYSICAL+UI | In both recording modes, a standalone recording replies to the newest played chat within one hour, even if that message is requeued. An unavailable recent route blocks; expiry returns to the explicit default. NFC and queued guided replies keep their exact routes. |
 | BB-AUDIO-01 | ACOUSTIC | Press acknowledgement is audible at the intended listening position. |
 | BB-AUDIO-02 | UI+ACOUSTIC | Ringtone preview plays the selected sound. |
+| BB-AUDIO-03 | TEST+PHYSICAL+ACOUSTIC | Startup and recording-ready cues are audible, first words are captured, and a new press interrupts the three-second send cue without being swallowed. |
 | BB-SET-01 | UI+API | Unchanged save succeeds without unintended changes. |
 | BB-SET-02 | UI+API | Valid change persists; original value restores; stale revision fails safely. |
 | BB-ACT-01 | UI+API | Content-free counters, timeline, queue, hold, and trash render accurately. |
@@ -56,6 +62,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-PERSIST-01 | UI+API | Browser reload preserves recipient, settings, and correct route. |
 | BB-PERSIST-02 | API+LOG | Targeted service restart preserves state and returns healthy. |
 | BB-PERSIST-03 | PHYSICAL+API+LOG | Cold reboot restores services, state, ring, and one message route. |
+| BB-UPDATE-01 | TEST+API+LOG | The bounded update and rollback preserve configuration, contacts, identity, queues, permissions, and the exact prior boot selector and active services. Both setup and runtime mode migration are covered. |
 | BB-LAYOUT-01 | UI | Desktop controls are visible, labeled, and usable. |
 | BB-LAYOUT-02 | UI | Narrow mobile layout scrolls and exposes every active control. |
 | BB-RECOVERY-01 | UI+API | API outage shows a clear error and clears it automatically after recovery. |
