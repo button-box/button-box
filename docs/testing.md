@@ -47,7 +47,10 @@ For installation and consumer onboarding, test:
 - Initial default selection, switching the default among allowed recipients,
   protection from removing the current default, no-card routing after a switch,
   defer/resume, and recipient-manager recovery
-- New voice note, physical playback, guided reply review, and accepted send
+- New voice note and ordinary video with speech, physical playback, guided reply
+  review, and accepted send. Confirm a no-audio video is skipped and the next
+  valid message still plays. Circular instant video notes remain an explicit
+  unsupported case with the pinned wacli 0.17.1 client.
 - Zero-tag Skip, person and group pairing, multiple tags per recipient,
   explicit reassignment, remove-after-beep behavior, Retry/Skip when the reader
   is unavailable, and the distinct read/success tones

@@ -13,7 +13,7 @@ root access they require.
 | Unit | Role |
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
-| `messagebox-poller.service` | Queue voice messages from configured contacts |
+| `messagebox-poller.service` | Queue voice notes and ordinary video soundtracks from configured contacts |
 | `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
@@ -21,6 +21,23 @@ root access they require.
 One exact default recipient is stored with the private contact allow-list. A
 recognized NFC selection overrides that default; otherwise the default is used.
 No default, an unknown card, or invalid routing state fails closed.
+
+The poller accepts wacli media types `audio` and `video`, converts the first
+audio track to the same mono 48 kHz WAV queue format, and retains the exact
+originating chat and sender in the existing private routing sidecar. Ordinary
+videos are bounded by `MSGBOX_VIDEO_MAX_BYTES` and
+`MSGBOX_VIDEO_MAX_DURATION_S`. A download failure is retried; missing audio,
+invalid media, or a configured-limit rejection is recorded and skipped so later
+messages can continue in order. Routine service output reports only generic
+processing status and elapsed time; identifiers and routing details remain in
+the restricted routing sidecars and structured event log.
+
+The pinned wacli 0.17.1 client does not expose WhatsApp circular instant video
+notes. Those notes use the separate WhatsApp `ptvMessage` field, while that
+release only extracts `videoMessage`; no media metadata reaches `messages list`
+or `media download`. Ordinary videos are supported. Circular-note playback
+therefore remains unavailable until the pinned client gains that classification
+and download support, and must not be claimed from poller tests alone.
 
 ## Setup services
 
