@@ -7,10 +7,14 @@ function harness(fail = false) {
   const calls = [];
   const handlers = {};
   const element = () => ({
-    hidden: false, disabled: false, textContent: "", children: [], dataset: {}, handlers: {},
+    hidden: false, disabled: false, textContent: "", children: [], dataset: {}, attributes: {}, handlers: {},
     addEventListener(name, fn) { this.handlers[name] = fn; },
     append(...items) { this.children.push(...items); },
-    replaceChildren(...items) { this.children = items; }, focus() {},
+    replaceChildren(...items) { this.children = items; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    focus() { this.focused = true; },
     querySelector(selector) {
       for (const child of this.children) {
         if (selector.startsWith(".") && child.className === selector.slice(1)) return child;
@@ -46,11 +50,75 @@ function harness(fail = false) {
   return { context, node, calls, form, submit, handlers };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 test("navigation refetches server state after setup-to-runtime handoff", async () => {
   const h = harness();
   vm.runInContext('let refreshed = false; loadState = async () => { refreshed = true; };', h.context);
   await h.handlers.hashchange();
   expect(vm.runInContext("refreshed", h.context)).toBe(true);
+});
+
+test("pairing submit exposes pending state and restores its control after success or rejection", async () => {
+  const h = harness();
+  const form = h.node("whatsapp-form");
+  const button = h.node("start-whatsapp-pairing");
+  const phone = h.node("whatsapp-phone");
+  button.type = "submit";
+  button.textContent = "Get pairing code";
+  form.children = [button];
+  phone.value = "+15555550123";
+
+  const success = deferred();
+  h.context.fetch = async (url, options) => {
+    h.calls.push({ url, options });
+    return success.promise;
+  };
+  const successRequest = form.handlers.submit({ preventDefault() {}, currentTarget: form });
+
+  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-busy")).toBe("true");
+  expect(button.textContent).toBe("Working…");
+  expect(h.calls.map(call => call.url)).toEqual(["/whatsapp/pair/start"]);
+
+  success.resolve({
+    ok: true,
+    status: 200,
+    headers: { get: () => "application/json" },
+    json: async () => ({ mode: "SETUP", phase: "WHATSAPP_PENDING", whatsapp: { status: "starting" } }),
+  });
+  await successRequest;
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute("aria-busy")).toBe(null);
+  expect(button.textContent).toBe("Get pairing code");
+
+  const rejection = deferred();
+  h.context.fetch = async (url, options) => {
+    h.calls.push({ url, options });
+    return rejection.promise;
+  };
+  const rejectedRequest = form.handlers.submit({ preventDefault() {}, currentTarget: form });
+  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-busy")).toBe("true");
+  expect(button.textContent).toBe("Working…");
+
+  rejection.resolve({
+    ok: false,
+    status: 409,
+    headers: { get: () => "application/json" },
+    json: async () => ({ error: "Pairing already in progress" }),
+  });
+  await rejectedRequest;
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute("aria-busy")).toBe(null);
+  expect(button.textContent).toBe("Get pairing code");
+  expect(h.node("page-error").textContent).toBe("Pairing already in progress");
+  expect(phone.focused).toBe(true);
+  expect(h.calls.map(call => call.url)).toEqual(["/whatsapp/pair/start", "/whatsapp/pair/start"]);
 });
 
 test("inline allow uses existing API without cancel, default change, or automatic assignment", async () => {
