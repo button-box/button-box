@@ -7,6 +7,9 @@ release artifact.
 
 ## Manufacturer preparation
 
+Assign the verified physical inventory ID using [dashboard support identity](dashboard-identity.md).
+It is optional for operation; unassigned boxes show **Not assigned** in the support footer.
+
 1. In Raspberry Pi Imager, install Raspberry Pi OS Lite 64-bit based on Debian
    13. Enable SSH and create a non-root sudo-capable administrator. Set the
    hostname to the box's zero-padded number, such as `button-box-001`, and use

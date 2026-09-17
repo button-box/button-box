@@ -47,6 +47,7 @@ function showView(name) {
   if (lastView !== name) {
     lastView = name;
     document.querySelector(`#${name}-view h1`)?.focus({ preventScroll: true });
+    window.scrollTo?.({ top: 0, behavior: "instant" });
   }
 }
 
@@ -808,9 +809,14 @@ function renderSetup(state) {
 
 function renderHome(state) {
   const progress = setupProgress(state);
-  const ready = [progress.wifi, progress.whatsapp, progress.recipient, progress.first_message]
-    .every((status) => status === "complete");
+  const runtimeRunning = state.mode === "RUNTIME" && state.health?.runtime === "running";
+  const ready = runtimeRunning
+    && [progress.wifi, progress.whatsapp, progress.recipient, progress.first_message]
+      .every((status) => status === "complete");
   document.getElementById("home-attention").hidden = ready;
+  document.getElementById("home-summary").textContent = ready && state.mode === "RUNTIME"
+    ? "Connected and set up for voice messages. Say hello to someone you love."
+    : "A few small steps to bring your people closer. Pick up where you left off.";
   document.getElementById("home-wifi").textContent = progress.wifi === "complete"
     ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
     : "Needs attention";
@@ -818,6 +824,28 @@ function renderHome(state) {
   document.getElementById("home-runtime").textContent = state.mode === "RUNTIME"
     ? (ready ? "Ready" : "Needs attention")
     : "Setup in progress";
+  for (const [id, complete] of [
+    ["home-wifi", progress.wifi === "complete"],
+    ["home-whatsapp", progress.whatsapp === "complete"],
+    ["home-runtime", ready && state.mode === "RUNTIME"],
+  ]) {
+    const tile = document.getElementById(id).parentElement;
+    tile.classList.toggle("good", complete);
+    tile.classList.toggle("attention", !complete);
+  }
+}
+
+function renderIdentity(state) {
+  const id = typeof state.box_id === "string" && /^BOX-[1-9][0-9]{0,8}$/.test(state.box_id)
+    ? state.box_id : null;
+  const label = document.getElementById("box-id");
+  const button = document.getElementById("copy-box-id");
+  if (label.textContent !== (id || "Not assigned")) {
+    button.textContent = "Copy";
+    document.getElementById("box-id-status").textContent = "";
+  }
+  label.textContent = id || "Not assigned";
+  button.disabled = !id;
 }
 
 function populateSettings(payload) {
@@ -977,7 +1005,9 @@ async function loadAdvanced() {
   const health = document.getElementById("advanced-health");
   health.replaceChildren();
   const runtime = document.createElement("div"); runtime.className = "status-card";
-  runtime.innerHTML = `<span>Runtime</span><strong>${currentState?.mode === "RUNTIME" ? "Running" : "Setup mode"}</strong>`;
+  const runtimeStatus = currentState?.mode !== "RUNTIME" ? "Setup mode"
+    : currentState.health?.runtime === "running" ? "Running" : "Needs attention";
+  runtime.innerHTML = `<span>Runtime</span><strong>${runtimeStatus}</strong>`;
   const version = document.createElement("div"); version.className = "status-card";
   const versionLabel = document.createElement("span"); versionLabel.textContent = "Software";
   const versionValue = document.createElement("strong"); versionValue.textContent = currentState?.health?.software_version || "Installed";
@@ -1068,16 +1098,19 @@ async function ringNow() {
   }
   try {
     await request("/api/ring", { method: "POST" });
-    status.textContent = "Ring requested.";
+    status.textContent = "Ringtone requested. Listen for it when the box is idle.";
   } catch (error) {
     status.textContent = error.message;
   }
 }
 
 async function route() {
+  renderIdentity(currentState);
   const routeName = location.hash.slice(1) || "home";
+  const navRoute = ["continue", "whatsapp", "recipient-picker", "recipients"].includes(routeName)
+    ? (currentState.mode === "RUNTIME" ? "advanced" : "setup") : routeName;
   document.querySelectorAll("[data-route]").forEach((link) => {
-    link.setAttribute("aria-current", link.dataset.route === routeName ? "page" : "false");
+    link.setAttribute("aria-current", link.dataset.route === navRoute ? "page" : "false");
   });
   window.clearTimeout(pollTimer);
   window.clearTimeout(nfcPollTimer);
@@ -1329,6 +1362,16 @@ document.getElementById("preview-ringtone").addEventListener("click", async () =
   }
 });
 document.getElementById("ring-now").addEventListener("click", ringNow);
+document.getElementById("copy-box-id").addEventListener("click", () => {
+  const button = document.getElementById("copy-box-id");
+  if (button.disabled) return;
+  return copyText(document.getElementById("box-id").textContent, button,
+    document.getElementById("box-id-status"), "Box ID copied.");
+});
+document.getElementById("skip-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  document.getElementById("main").focus();
+});
 document.getElementById("listener-form").addEventListener("submit", saveListener);
 document.getElementById("wifi-change-form").addEventListener("submit", changeWifi);
 document.querySelectorAll('[name="new_wifi_security"]').forEach((radio) => {
