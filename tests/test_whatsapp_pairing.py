@@ -276,11 +276,23 @@ class WhatsAppPairingTests(unittest.TestCase):
         engine._set_state(
             "ready", phone_hint="WhatsApp number ending in 0123", eligible_count=0
         )
+        engine._resume_sync()
+        self.assertFalse(engine.sync_pause_path.exists())
+        pause_observations = []
+
+        def observe_pause(arguments, **kwargs):
+            if "sync" in arguments:
+                pause_observations.append(engine.sync_pause_path.exists())
+            return runner(arguments, **kwargs)
+
+        engine.run = observe_pause
 
         refreshed = engine.recipient_list(refresh=True)
 
         self.assertEqual(refreshed["recipients"][0]["label"], "+15551234567")
         self.assertNotIn("@s.whatsapp.net", json.dumps(refreshed))
+        self.assertEqual(pause_observations, [True])
+        self.assertFalse(engine.sync_pause_path.exists())
         commands = [call[0] for call in runner.calls]
         self.assertTrue(any("--refresh-groups" in command for command in commands))
         refresh_command = next(command for command in commands if "--refresh-groups" in command)
@@ -288,10 +300,14 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(refresh_command[refresh_command.index("--max-messages") + 1], "1000")
         preserved = self.candidates.read_bytes()
 
-        engine.run = WacliRunner(sync_ok=False)
+        runner = WacliRunner(sync_ok=False)
+        pause_observations.clear()
+        engine.run = observe_pause
         with self.assertRaisesRegex(PairingError, "recipient_refresh_failed"):
             engine.recipient_list(refresh=True)
         self.assertEqual(self.candidates.read_bytes(), preserved)
+        self.assertEqual(pause_observations, [True])
+        self.assertFalse(engine.sync_pause_path.exists())
 
     def test_recipient_list_excludes_the_linked_whatsapp_account(self):
         recipient_setup = RecipientSetup(
