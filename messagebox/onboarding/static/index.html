@@ -18,11 +18,11 @@
     </header>
 
     <nav class="primary-nav" aria-label="Button Box">
-      <a href="#home" data-route="home">Home</a>
-      <a href="#setup" data-route="setup">Setup</a>
-      <a href="#settings" data-route="settings">Settings</a>
-      <a href="#activity" data-route="activity">Activity</a>
-      <a href="#advanced" data-route="advanced">Advanced</a>
+      <a id="nav-home" href="#home" data-route="home">Home</a>
+      <a id="nav-setup" href="#setup" data-route="setup">Setup</a>
+      <a id="nav-settings" href="#settings" data-route="settings">Settings</a>
+      <a id="nav-activity" href="#activity" data-route="activity">Activity</a>
+      <a id="nav-advanced" href="#advanced" data-route="advanced">Advanced</a>
     </nav>
 
     <main id="main" tabindex="-1">
@@ -38,7 +38,7 @@
       <div id="home-attention" class="notice" hidden>
         <strong>Setup needs attention</strong>
         <span id="home-attention-copy">Finish the required tasks before Button Box is ready.</span>
-        <a class="button" href="#setup">Continue setup</a>
+        <a id="home-continue-setup" class="button" href="#setup">Continue setup</a>
       </div>
       <div class="status-grid" aria-live="polite">
         <div class="status-card"><span>Wi-Fi</span><strong id="home-wifi">Checking…</strong></div>
@@ -47,9 +47,9 @@
       </div>
       <h2>Configure Button Box</h2>
       <div class="shortcut-grid">
-        <a href="#settings" class="shortcut"><strong>Button and recording</strong><span>Choose tap and review or press and hold.</span></a>
-        <a href="#settings" class="shortcut"><strong>Sounds and quiet hours</strong><span>Ringtone, volume, lamp, and schedule.</span></a>
-        <a href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and NFC.</span></a>
+        <a id="home-button-settings" href="#settings" class="shortcut"><strong>Button and recording</strong><span>Choose tap and review or press and hold.</span></a>
+        <a id="home-sound-settings" href="#settings" class="shortcut"><strong>Sounds and quiet hours</strong><span>Ringtone, volume, lamp, and schedule.</span></a>
+        <a id="home-connections-setup" href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and NFC.</span></a>
       </div>
     </section>
 
@@ -71,13 +71,13 @@
         <h2>Button and recording</h2>
         <fieldset class="stacked-choices">
           <legend>Button behavior</legend>
-          <label class="choice-card"><input type="radio" name="recording_mode" value="tap_review"><span><strong>Tap and review</strong><small>Press to start, press to stop, listen back, then press to send. Unsent recordings are warned about and deleted.</small></span></label>
-          <label class="choice-card"><input type="radio" name="recording_mode" value="hold_release"><span><strong>Press and hold</strong><small>Short press plays a waiting message. Hold about 0.7 seconds to record; releasing sends immediately without review.</small></span></label>
+          <label class="choice-card"><input id="recording-mode-tap-review" type="radio" name="recording_mode" value="tap_review"><span><strong>Tap and review</strong><small>Press to start, press to stop, listen back, then press to send. Unsent recordings are warned about and deleted.</small></span></label>
+          <label class="choice-card"><input id="recording-mode-hold-release" type="radio" name="recording_mode" value="hold_release"><span><strong>Press and hold</strong><small>Short press plays a waiting message. Hold about 0.7 seconds to record; releasing sends immediately without review.</small></span></label>
         </fieldset>
         <fieldset>
           <legend>After listening</legend>
-          <label class="choice"><input type="radio" name="after_listening" value="play_only"> Play only</label>
-          <label class="choice"><input type="radio" name="after_listening" value="invite_reply"> Invite a reply</label>
+          <label class="choice"><input id="after-listening-play-only" type="radio" name="after_listening" value="play_only"> Play only</label>
+          <label class="choice"><input id="after-listening-invite-reply" type="radio" name="after_listening" value="invite_reply"> Invite a reply</label>
         </fieldset>
         <label for="max-recording">Maximum message length</label>
         <select id="max-recording" name="max_recording_seconds"><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option></select>
@@ -105,7 +105,7 @@
 
         <h2>NFC</h2>
         <label class="choice"><input id="nfc-beep" name="nfc_confirmation_beep" type="checkbox"> Beep when an NFC card is detected or confirmed</label>
-        <button type="submit">Save settings</button>
+        <button id="save-settings" type="submit">Save settings</button>
         <p id="settings-status" class="status" role="status" aria-live="polite"></p>
       </form>
     </section>
@@ -129,8 +129,8 @@
       <div id="advanced-health" class="status-grid"></div>
       <h2>Connections and people</h2>
       <div class="shortcut-grid">
-        <a href="#setup" class="shortcut"><strong>Wi-Fi and WhatsApp</strong><span>Reconnect, relink, or continue setup.</span></a>
-        <a href="#setup" class="shortcut"><strong>Recipients and NFC cards</strong><span>Add, remove, select, pair, reassign, or unpair.</span></a>
+        <a id="advanced-connections-setup" href="#setup" class="shortcut"><strong>Wi-Fi and WhatsApp</strong><span>Reconnect, relink, or continue setup.</span></a>
+        <a id="advanced-recipients-setup" href="#setup" class="shortcut"><strong>Recipients and NFC cards</strong><span>Add, remove, select, pair, reassign, or unpair.</span></a>
       </div>
       <div class="button-row">
         <button type="button" id="manage-whatsapp" class="secondary">Manage WhatsApp</button>
@@ -143,13 +143,13 @@
           <input id="new-wifi-name" maxlength="32" autocomplete="off" required>
           <fieldset>
             <legend>Network security</legend>
-            <label class="choice"><input type="radio" name="new_wifi_security" value="protected" checked> Password protected</label>
-            <label class="choice"><input type="radio" name="new_wifi_security" value="open"> Open network</label>
+            <label class="choice"><input id="new-wifi-security-protected" type="radio" name="new_wifi_security" value="protected" checked> Password protected</label>
+            <label class="choice"><input id="new-wifi-security-open" type="radio" name="new_wifi_security" value="open"> Open network</label>
           </fieldset>
           <label for="new-wifi-password">New Wi-Fi password</label>
           <input id="new-wifi-password" type="password" minlength="8" maxlength="63" autocomplete="off" required>
           <div class="notice"><strong>The old Wi-Fi is kept during checks</strong><span>Button Box tests association, address, DNS, and internet access. If the new network fails, it restores the old one. If recovery also fails, the protected setup hotspot returns.</span></div>
-          <button type="submit">Change Wi-Fi</button>
+          <button id="change-wifi-submit" type="submit">Change Wi-Fi</button>
           <p id="wifi-change-status" class="status" role="status" aria-live="polite"></p>
         </form>
       </details>
@@ -162,7 +162,7 @@
         <input id="listener-name" maxlength="80" required>
         <label for="listener-clip">Optional listened sound path</label>
         <input id="listener-clip" autocomplete="off">
-        <button type="submit">Save listener profile</button>
+        <button id="save-listener-profile" type="submit">Save listener profile</button>
         <p id="listener-status" class="field-help" role="status" aria-live="polite"></p>
       </form>
       <p class="field-help">GPIO pins, audio devices, microphone gain, retry timing, and service internals remain operator-only.</p>
@@ -182,8 +182,8 @@
         <input id="ssid" name="ssid" required maxlength="32" autocomplete="off">
         <fieldset>
           <legend>Network security</legend>
-          <label class="choice"><input type="radio" name="security" value="protected" checked> Password protected</label>
-          <label class="choice"><input type="radio" name="security" value="open"> Open network</label>
+          <label class="choice"><input id="wifi-security-protected" type="radio" name="security" value="protected" checked> Password protected</label>
+          <label class="choice"><input id="wifi-security-open" type="radio" name="security" value="open"> Open network</label>
         </fieldset>
         <div id="password-field">
           <label for="wifi-password">Wi-Fi password</label>
@@ -208,7 +208,7 @@
       <h1 id="checking-title" tabindex="-1">Checking the internet</h1>
       <p class="lede">Your box joined Wi-Fi. Now it is confirming a secure internet connection.</p>
       <p class="status" role="status">Connected to Wi-Fi, checking internet...</p>
-      <button type="button" data-recheck>Check again</button>
+      <button id="checking-recheck" type="button" data-recheck>Check again</button>
     </section>
 
     <section class="card" id="whatsapp-view" aria-labelledby="whatsapp-title" hidden>
@@ -219,7 +219,7 @@
         <label for="whatsapp-phone">WhatsApp number (+ and country code)</label>
         <input id="whatsapp-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" value="+" placeholder="+1 415 555 0123" pattern="\+[1-9][0-9 \-]{7,18}" title="Start with +, then enter the country code and phone number" required aria-describedby="phone-help">
         <p class="field-help" id="phone-help">Start with +, then the country code and number. For example, +14155550123. Do not enter a local-only number.</p>
-        <button type="submit">Get pairing code</button>
+        <button id="start-whatsapp-pairing" type="submit">Get pairing code</button>
       </form>
     </section>
 
@@ -269,7 +269,7 @@
         <p><strong>Link a different account?</strong></p>
         <p>This logs out the current WhatsApp account and removes its private device store, recipients, NFC mappings, listener profiles, and voice-test state before a new link can begin.</p>
         <div class="button-row">
-          <button type="submit" class="danger-button">Log out and continue</button>
+          <button id="confirm-whatsapp-unlink" type="submit" class="danger-button">Log out and continue</button>
           <button type="button" id="keep-account" class="secondary">Keep this account</button>
         </div>
       </form>
@@ -292,7 +292,7 @@
           <label for="manual-default-name">Name <span class="optional">optional</span></label>
           <input id="manual-default-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
           <p id="manual-default-help" class="field-help">Include + and the country code.</p>
-          <button type="submit">Choose this number</button>
+          <button id="choose-manual-default" type="submit">Choose this number</button>
         </form>
       </div>
       <div class="button-row">
@@ -349,7 +349,7 @@
           <label for="manual-allow-name">Name <span class="optional">optional</span></label>
           <input id="manual-allow-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
           <p id="manual-allow-help" class="field-help">Include + and the country code. This will not change the default recipient.</p>
-          <button type="submit">Allow this number</button>
+          <button id="allow-manual-recipient" type="submit">Allow this number</button>
         </form>
       </div>
       <h2 class="section-title">Available from WhatsApp</h2>
@@ -449,7 +449,7 @@
       <button type="button" id="failure-recheck" data-recheck hidden>Check again</button>
       <button type="button" id="try-again">Choose a network</button>
       <form action="/wifi/change" method="post" class="compact-form" id="change-network" hidden>
-        <button type="submit" class="secondary">Remove this network and start over</button>
+        <button id="reset-failed-network" type="submit" class="secondary">Remove this network and start over</button>
       </form>
     </section>
 

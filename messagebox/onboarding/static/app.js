@@ -39,6 +39,12 @@ let runtimePairingGeneration = 0;
 let currentState = null;
 let currentSettings = null;
 
+function acceptanceControl(tag, ...caseIds) {
+  const control = document.createElement(tag);
+  control.dataset.acceptanceCase = caseIds.join(" ");
+  return control;
+}
+
 function showView(name) {
   for (const view of views) {
     const element = document.getElementById(`${view}-view`);
@@ -112,7 +118,7 @@ async function scanNetworks() {
     }
     status.textContent = `${data.networks.length} network${data.networks.length === 1 ? "" : "s"} found`;
     for (const network of data.networks) {
-      const button = document.createElement("button");
+      const button = acceptanceControl("button", "BB-WIFI-01");
       button.type = "button";
       button.className = "network";
       button.setAttribute("role", "listitem");
@@ -312,7 +318,13 @@ function recipientRow(recipient, actions = []) {
     const controls = document.createElement("div");
     controls.className = "recipient-actions";
     actions.forEach(({ action, label }) => {
-    const button = document.createElement("button");
+    const caseIds = {
+      "pair-card": ["BB-NFC-03"],
+      "make-default": ["BB-RECIP-07"],
+      remove: ["BB-RECIP-09", "BB-RECIP-10"],
+      allow: ["BB-RECIP-05"],
+    }[action] || ["BB-RECIP-01"];
+    const button = acceptanceControl("button", ...caseIds);
     button.type = "button";
     button.className = action === "remove" ? "danger-button compact" : "compact";
     button.textContent = label;
@@ -632,7 +644,7 @@ function scheduleNfcPoll(active = true) {
 
 function nfcRecipientRow(recipient) {
   const row = recipientRow(recipient);
-  const button = document.createElement("button");
+  const button = acceptanceControl("button", "BB-NFC-03");
   button.type = "button";
   button.className = "compact";
   button.textContent = "Choose";
@@ -827,7 +839,7 @@ function applyState(state) {
 function taskStatus(label, status, route = "#continue") {
   const item = document.createElement("li");
   item.className = "task-row";
-  const link = document.createElement("a");
+  const link = acceptanceControl("a", "BB-SETUP-01");
   link.href = route;
   link.textContent = label;
   const badge = document.createElement("span");
@@ -1016,7 +1028,7 @@ function activityMessageList(items, kind) {
         : kind === "played" ? [["requeue", item.queued ? "In queue" : item.available ? "Add to queue" : "Unavailable"]]
           : [["reinstate", "Reinstate"]];
     for (const [operation, label] of operations) {
-      const button = document.createElement("button");
+      const button = acceptanceControl("button", "BB-ACT-02");
       button.type = "button";
       button.className = "secondary compact";
       button.textContent = label;
@@ -1094,14 +1106,14 @@ async function loadAdvanced() {
       const name = document.createElement("strong"); name.textContent = profile.name;
       const meta = document.createElement("span"); meta.textContent = profile.listened_clip ? "Custom listened sound" : "Default listened sound";
       const actions = document.createElement("div"); actions.className = "button-row";
-      const edit = document.createElement("button"); edit.type = "button"; edit.className = "secondary compact"; edit.textContent = "Edit";
+      const edit = acceptanceControl("button", "BB-ADV-01"); edit.type = "button"; edit.className = "secondary compact"; edit.textContent = "Edit";
       edit.addEventListener("click", () => {
         document.getElementById("listener-jid").value = jid;
         document.getElementById("listener-name").value = profile.name;
         document.getElementById("listener-clip").value = profile.listened_clip || "";
         document.getElementById("listener-name").focus();
       });
-      const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger-button compact"; remove.textContent = "Remove";
+      const remove = acceptanceControl("button", "BB-ADV-01"); remove.type = "button"; remove.className = "danger-button compact"; remove.textContent = "Remove";
       remove.addEventListener("click", () => mutateListener({ action: "remove", jid }));
       actions.append(edit, remove);
       row.append(name, meta, actions); return row;

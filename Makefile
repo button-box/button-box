@@ -5,7 +5,7 @@ test:
 	bun test tests/*.test.js
 
 syntax:
-	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/install/audio_config.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py
+	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/dev/validate_acceptance_run.py scripts/install/audio_config.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py
 	for file in scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh; do sh -n "$$file"; done
 	sh -n scripts/messageboxctl
 	bash -n messagebox/syncloop.sh
