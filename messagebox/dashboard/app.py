@@ -254,17 +254,16 @@ def preview_ringtone(ringtone_id):
     if not RINGTONE_PREVIEW_LOCK.acquire(blocking=False):
         raise SettingsError("Button Box audio is busy")
 
-    def play():
-        try:
-            subprocess.run(
-                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
-                check=False,
-                timeout=30,
-            )
-        finally:
-            RINGTONE_PREVIEW_LOCK.release()
-
-    threading.Thread(target=play, daemon=True).start()
+    try:
+        subprocess.run(
+            ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SettingsError("Button Box audio could not play") from exc
+    finally:
+        RINGTONE_PREVIEW_LOCK.release()
 
 
 def log_event(**ev):
@@ -1192,7 +1191,7 @@ class Handler(BaseHTTPRequestHandler):
                 preview_ringtone(payload["ringtone_id"])
             except SettingsError as exc:
                 return self._send(409, json.dumps({"ok": False, "error": str(exc)}))
-            return self._send(202, json.dumps({"ok": True}))
+            return self._send(200, json.dumps({"ok": True}))
         if url.path in {"/whatsapp/pair/start", "/whatsapp/pair/cancel", "/whatsapp/unlink"}:
             payload = self._form_body()
             if payload is None:

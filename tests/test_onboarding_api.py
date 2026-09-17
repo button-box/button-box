@@ -1,10 +1,13 @@
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest import mock
+
+from unittest.mock import patch
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
@@ -333,6 +336,37 @@ class OnboardingAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_ringtone_preview_reports_speaker_success_and_failure(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        request = {"ringtone_id": "ding_dong"}
+        headers = {"Origin": f"http://{HOST}"}
+        with patch(
+            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
+        ), patch("messagebox.onboarding.app.subprocess.run") as run:
+            response = self.client.json(
+                "POST", "/api/ringtone-preview", request, headers=headers
+            )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(run.call_args.kwargs["check"])
+
+        with patch(
+            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
+        ), patch(
+            "messagebox.onboarding.app.subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, ["aplay"]),
+        ):
+            response = self.client.json(
+                "POST", "/api/ringtone-preview", request, headers=headers
+            )
+
+        self.assertEqual(response["status"], "503 Service Unavailable")
+        self.assertEqual(
+            json.loads(response["body"])["error"],
+            "Button Box audio could not play",
+        )
 
     def home_pairing_client(
         self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
