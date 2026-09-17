@@ -18,6 +18,7 @@ ONBOARDING_CONFIG_DIR=/etc/messagebox-onboarding
 ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
+DEVELOPMENT_ADMIN=${MESSAGEBOX_DEVELOPMENT_ADMIN:-}
 PACKAGE_PYTHON="__init__.py button_send.py contacts.py guided_reply.py listened_receipts.py
 make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
@@ -32,6 +33,13 @@ case "$SSH_TARGET" in
   '') ;;
   -*|*[!A-Za-z0-9._@-]*)
     echo "Invalid SSH target supplied for completion instructions." >&2
+    exit 2
+    ;;
+esac
+case "$DEVELOPMENT_ADMIN" in
+  '') ;;
+  root|messagebox|*[!A-Za-z0-9_-]*|[!a-z_]*|-*)
+    echo "Invalid development administrator." >&2
     exit 2
     ;;
 esac
@@ -55,6 +63,8 @@ for path in \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
   scripts/install/audio_config.py \
+  scripts/install/development-sudo-bootstrap.sh \
+  scripts/install/development-sudo-rollback.sh \
   scripts/install/messagebox-mode-migrate.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
@@ -239,6 +249,20 @@ else
     --create-home \
     --shell /usr/sbin/nologin \
     "$ONBOARDING_USER"
+fi
+
+if [ -n "$DEVELOPMENT_ADMIN" ]; then
+  sudo install -o root -g root -m 0755 \
+    "$REPO_DIR/scripts/install/development-sudo-bootstrap.sh" \
+    /usr/local/sbin/messagebox-development-sudo-bootstrap
+  sudo install -o root -g root -m 0755 \
+    "$REPO_DIR/scripts/install/development-sudo-rollback.sh" \
+    /usr/local/sbin/messagebox-development-sudo-rollback
+  DEVELOPMENT_BACKUP_ID=setup-$(date -u +%Y%m%dT%H%M%SZ)
+  sudo /usr/local/sbin/messagebox-development-sudo-bootstrap \
+    --development-only \
+    --operator "$DEVELOPMENT_ADMIN" \
+    --backup-id "$DEVELOPMENT_BACKUP_ID"
 fi
 
 echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
