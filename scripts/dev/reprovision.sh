@@ -100,36 +100,169 @@ exec 8>/run/lock/messagebox-init-wifi-onboarding.lock
 flock -n 8 || { echo "Wi-Fi initialization is running." >&2; exit 1; }
 exec 9>/run/lock/messagebox-comitup-install.lock
 flock -n 9 || { echo "Comitup installation is running." >&2; exit 1; }
+python3 - <<'PY'
+import fcntl
+import os
+import shutil
+import stat
+import subprocess
+import sys
 
-units="messagebox.target messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-reset.service messagebox-onboarding-home.service messagebox-onboarding-nfc.service messagebox-onboarding-complete.service messagebox-whatsapp-pairing.service comitup-web.service comitup.service"
-systemctl stop $units 2>/dev/null || true
-systemctl disable messagebox-wifi-reset.service comitup.service 2>/dev/null || true
-for unit in $units; do
-  state=$(systemctl is-active "$unit" 2>/dev/null || true)
-  case "$state" in
-    active|activating|deactivating)
-      echo "Could not stop $unit ($state)." >&2
-      exit 1
-      ;;
-  esac
-done
+service_unit = "messagebox-mode-reconcile.service"
+path_unit = "messagebox-mode-reconcile.path"
+load_state = subprocess.run(
+    ["systemctl", "show", "--property=LoadState", "--value", service_unit],
+    check=False,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout.strip()
+selector_artifacts = (
+    "/usr/local/lib/systemd/system-generators/messagebox-mode-generator",
+    "/etc/systemd/system/messagebox-mode-reconcile.service",
+    "/etc/systemd/system/messagebox-mode-reconcile.path",
+)
+artifacts_present = tuple(os.path.lexists(path) for path in selector_artifacts)
+if load_state == "loaded" and all(artifacts_present):
+    selector_installed = True
+elif load_state in {"", "not-found"} and not any(
+    artifacts_present
+):
+    selector_installed = False
+else:
+    raise SystemExit("The boot-mode selector is partially installed or unavailable.")
 
-nft delete table inet messagebox_onboarding 2>/dev/null || true
-rm -f \
-  /etc/messagebox-onboarding/enabled \
-  /etc/messagebox-onboarding/configured \
-  /etc/messagebox-onboarding/config.json \
-  /etc/comitup.conf \
-  /etc/comitup.conf.tmp \
-  /var/lib/comitup/dhcpleaseinfo
-rm -rf \
-  /var/lib/messagebox-onboarding \
-  /var/lib/messagebox/outbox \
-  /var/lib/messagebox/whatsapp-pairing \
-  /var/lib/messagebox/wacli \
-  /run/messagebox-whatsapp-pairing \
-  /run/messagebox-onboarding-nfc
-systemctl reset-failed $units 2>/dev/null || true
+def stop_worker():
+    stopped = subprocess.run(["systemctl", "stop", service_unit], check=False)
+    state = subprocess.run(
+        ["systemctl", "is-active", service_unit],
+        check=False,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    if stopped.returncode != 0 or state in {"active", "activating", "deactivating"}:
+        raise RuntimeError(f"Could not quiesce {service_unit} ({state or 'unknown'}).")
+
+lock_fd = None
+try:
+    if selector_installed:
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open("/run/lock/messagebox-mode-transition.lock", flags, 0o600)
+        metadata = os.fstat(lock_fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise RuntimeError("Mode transition lock is unavailable or unsafe.")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("A mode transition is running.") from exc
+
+        path_active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", path_unit], check=False
+        ).returncode == 0
+        if path_active:
+            stopped = subprocess.run(["systemctl", "stop", path_unit], check=False)
+            still_active = subprocess.run(
+                ["systemctl", "is-active", "--quiet", path_unit], check=False
+            ).returncode == 0
+            if stopped.returncode != 0 or still_active:
+                raise RuntimeError("Could not quiesce the mode reconciliation path.")
+
+        # An active worker either held the lock and made the acquisition fail,
+        # or is still waiting. Stop it only after this cleanup owns the lock.
+        stop_worker()
+        try:
+            os.unlink("/run/messagebox-mode-reconcile.pending")
+        except FileNotFoundError:
+            pass
+        run_directory = os.open(
+            "/run", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        try:
+            os.fsync(run_directory)
+        finally:
+            os.close(run_directory)
+
+    units = (
+        "messagebox.target",
+        "messagebox-button.service",
+        "messagebox-sync.service",
+        "messagebox-poller.service",
+        "messagebox-dash.service",
+        "messagebox-nfc.service",
+        "messagebox-wifi-reset.service",
+        "messagebox-wifi-change.path",
+        "messagebox-wifi-change.service",
+        "messagebox-onboarding-home.service",
+        "messagebox-onboarding-button.service",
+        "messagebox-onboarding-voice-gate.service",
+        "messagebox-onboarding-voice.path",
+        "messagebox-onboarding-voice.target",
+        "messagebox-onboarding-nfc.service",
+        "messagebox-onboarding-complete.service",
+        "messagebox-onboarding-complete.path",
+        "messagebox-whatsapp-pairing.service",
+        "comitup-web.service",
+        "comitup.service",
+    )
+    subprocess.run(["systemctl", "stop", *units], check=False)
+    subprocess.run(
+        ["systemctl", "disable", "messagebox-wifi-reset.service", "comitup.service"],
+        check=False,
+    )
+    for unit in units:
+        state = subprocess.run(
+            ["systemctl", "is-active", unit],
+            check=False,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        if state in {"active", "activating", "deactivating"}:
+            raise RuntimeError(f"Could not stop {unit} ({state}).")
+
+    subprocess.run(
+        ["nft", "delete", "table", "inet", "messagebox_onboarding"], check=False
+    )
+    for path in (
+        "/etc/messagebox-onboarding/enabled",
+        "/etc/messagebox-onboarding/configured",
+        "/etc/messagebox-onboarding/config.json",
+        "/etc/comitup.conf",
+        "/etc/comitup.conf.tmp",
+        "/var/lib/comitup/dhcpleaseinfo",
+    ):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    for path in (
+        "/var/lib/messagebox-onboarding",
+        "/var/lib/messagebox/outbox",
+        "/var/lib/messagebox/whatsapp-pairing",
+        "/var/lib/messagebox/wacli",
+        "/run/messagebox-whatsapp-pairing",
+        "/run/messagebox-onboarding-nfc",
+    ):
+        try:
+            metadata = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    subprocess.run(["systemctl", "reset-failed", *units], check=False)
+except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    if lock_fd is not None:
+        os.close(lock_fd)
+PY
 REMOTE
 
 echo "Deploying the current working tree..."

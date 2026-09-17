@@ -14,17 +14,27 @@ INSTALL_LOCK=/run/lock/messagebox-comitup-install.lock
 DBUS_POLICY=/usr/share/dbus-1/system.d/comitup-dbus.conf
 DBUS_DIVERT=/usr/share/dbus-1/system.d/comitup-dbus.conf.distrib
 TMP_DIR=
+ONBOARDING_ARMED=0
+ONBOARDING_MARKER_SHA=
+MODE_SELECTOR_INSTALLED=0
+MODE_MIGRATION_PARTIAL=0
 
 die() {
   echo "$*" >&2
   exit 1
 }
 
+disable_comitup_unless_selected() {
+  if [ "$ONBOARDING_ARMED" -eq 0 ]; then
+    sudo systemctl disable comitup.service 2>/dev/null || true
+  fi
+}
+
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
   sudo systemctl stop comitup-web.service messagebox-onboarding-home.service messagebox-whatsapp-pairing.service comitup.service 2>/dev/null || true
-  sudo systemctl disable comitup.service 2>/dev/null || true
+  disable_comitup_unless_selected
   [ -z "$TMP_DIR" ] || sudo rm -rf -- "$TMP_DIR"
   exit "$status"
 }
@@ -40,7 +50,33 @@ flock -n 9 || die "Another Comitup installation is running."
 
 [ "$#" -eq 0 ] || die "Usage: $0"
 
-sudo test ! -e /etc/messagebox-onboarding/enabled || die "Refusing to modify explicitly armed onboarding."
+if sudo test -e /etc/messagebox-onboarding/enabled || \
+   sudo test -L /etc/messagebox-onboarding/enabled; then
+  ONBOARDING_ARMED=1
+  [ "${MSGBOX_MODE_MIGRATION_PENDING:-0}" = 1 ] || \
+    die "Refusing to modify explicitly armed onboarding outside selector migration."
+  ONBOARDING_MARKER_SHA=$(sudo sha256sum /etc/messagebox-onboarding/enabled | cut -d' ' -f1)
+fi
+if sudo test -x /usr/local/lib/systemd/system-generators/messagebox-mode-generator && \
+   sudo test ! -L /usr/local/lib/systemd/system-generators/messagebox-mode-generator && \
+   sudo test ! -e /etc/systemd/system/multi-user.target.wants/comitup.service && \
+   sudo test ! -e /etc/systemd/system/multi-user.target.wants/messagebox.target; then
+  MODE_SELECTOR_INSTALLED=1
+elif [ "$ONBOARDING_ARMED" -eq 1 ]; then
+  [ "$(sudo readlink /etc/systemd/system/multi-user.target.wants/comitup.service)" = "/usr/lib/systemd/system/comitup.service" ] || \
+    die "Legacy Comitup enablement is unavailable or unsafe."
+  if sudo test -e /etc/systemd/system/multi-user.target.wants/messagebox.target || \
+     sudo test -L /etc/systemd/system/multi-user.target.wants/messagebox.target; then
+    [ "$(sudo readlink /etc/systemd/system/multi-user.target.wants/messagebox.target)" = "/etc/systemd/system/messagebox.target" ] || \
+      die "Legacy runtime enablement is unavailable or unsafe."
+  else
+    MODE_MIGRATION_PARTIAL=1
+  fi
+fi
+if [ "$MODE_SELECTOR_INSTALLED" -eq 1 ] || \
+   sudo test -x /usr/local/lib/systemd/system-generators/messagebox-mode-generator; then
+  MODE_MIGRATION_PARTIAL=1
+fi
 TMP_DIR=$(mktemp -d /tmp/messagebox-comitup.XXXXXX)
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -82,7 +118,7 @@ sudo install -o root -g root -m 0644 "$DROPIN_SOURCE" \
   /etc/systemd/system/comitup.service.d/messagebox.conf
 sudo systemctl daemon-reload
 sudo systemctl stop comitup-web.service messagebox-onboarding-home.service messagebox-whatsapp-pairing.service comitup.service 2>/dev/null || true
-sudo systemctl disable comitup.service 2>/dev/null || true
+disable_comitup_unless_selected
 
 divert_owner=$(sudo dpkg-divert --listpackage "$DBUS_POLICY" 2>/dev/null || true)
 case "$divert_owner" in
@@ -92,6 +128,12 @@ case "$divert_owner" in
 esac
 sudo install -o root -g root -m 0644 "$DBUS_SOURCE" "$DBUS_POLICY"
 
+if [ "$MODE_MIGRATION_PARTIAL" -eq 1 ] && {
+   [ "$(dpkg-query -W -f='${Version}' comitup 2>/dev/null || true)" != "$COMITUP_VERSION" ] ||
+   [ "$(dpkg-query -W -f='${Version}' python3-networkmanager 2>/dev/null || true)" != "$NETWORKMANAGER_VERSION" ];
+}; then
+  die "Cannot update Comitup during a partial or completed mode migration."
+fi
 if [ "$(dpkg-query -W -f='${Version}' comitup 2>/dev/null || true)" != "$COMITUP_VERSION" ] || \
    [ "$(dpkg-query -W -f='${Version}' python3-networkmanager 2>/dev/null || true)" != "$NETWORKMANAGER_VERSION" ]; then
   curl -fL --proto '=https' --tlsv1.2 "$COMITUP_URL" -o "$TMP_DIR/comitup.deb"
@@ -107,16 +149,22 @@ fi
 sudo busctl call org.freedesktop.DBus /org/freedesktop/DBus \
   org.freedesktop.DBus ReloadConfig
 sudo systemctl stop comitup-web.service messagebox-onboarding-home.service messagebox-whatsapp-pairing.service comitup.service 2>/dev/null || true
-sudo systemctl disable comitup.service 2>/dev/null || true
+disable_comitup_unless_selected
 
 [ "$(dpkg-query -W -f='${Version}' comitup)" = "$COMITUP_VERSION" ] || die "Unexpected Comitup version."
 [ "$(dpkg-query -W -f='${Version}' python3-networkmanager)" = "$NETWORKMANAGER_VERSION" ] || die "Unexpected python3-networkmanager version."
 systemctl is-active --quiet comitup.service && die "comitup.service unexpectedly started."
 systemctl is-active --quiet comitup-web.service && die "comitup-web.service unexpectedly started."
-[ ! -e /etc/messagebox-onboarding/enabled ] || die "Onboarding was unexpectedly armed."
+if [ "$ONBOARDING_ARMED" -eq 1 ]; then
+  sudo test -e /etc/messagebox-onboarding/enabled || die "Onboarding marker changed during install."
+  [ "$(sudo sha256sum /etc/messagebox-onboarding/enabled | cut -d' ' -f1)" = "$ONBOARDING_MARKER_SHA" ] || \
+    die "Onboarding marker changed during install."
+else
+  sudo test ! -e /etc/messagebox-onboarding/enabled || die "Onboarding marker changed during install."
+fi
 
 trap - EXIT HUP INT TERM
 sudo rm -rf -- "$TMP_DIR"
 TMP_DIR=
 
-echo "Installed Comitup $COMITUP_VERSION; onboarding remains disabled and inactive."
+echo "Installed Comitup $COMITUP_VERSION; service remains inactive."

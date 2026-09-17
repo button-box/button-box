@@ -36,6 +36,28 @@ No default, an unknown card, or invalid routing state fails closed.
 | `messagebox-onboarding-voice.path` | Watch for the private fixed voice-proof request |
 | `messagebox-onboarding-voice-gate.service` | Validate the request and default before activating hardware |
 | `messagebox-onboarding-voice.target` | Run sync, polling, and the guided setup button without the normal runtime target |
+| `messagebox-mode-reconcile.path` | Reconcile current process state after the onboarding marker changes or an interrupted transition |
+
+## Boot-mode selection
+
+The root-owned `/etc/messagebox-onboarding/enabled` marker is the only
+persistent mode authority. At every manager start and daemon reload,
+`messagebox-mode-generator` validates that marker without following links and
+generates one ephemeral `multi-user.target` dependency: Comitup when the marker
+contains the trusted setup value, or `messagebox.target` when the marker is
+absent. An unsafe marker fails closed and selects neither mode. Neither
+entrypoint is persistently enabled under `multi-user.target`.
+
+Completion and intentional Wi-Fi reset share one transition lock. Each actor
+records a transient reconciliation request before its first side effect, then
+commits its mode with one atomic marker unlink or replacement. The reconciler
+waits for the actor lock, reads the marker, stops the opposite entrypoint and
+starts the selected entrypoint. It never deletes Wi-Fi profiles, rewrites
+recipients, or repeats another transition side effect. The path watcher observes
+only atomic marker creation and unlink, so unrelated onboarding configuration
+writes cannot change process mode. Its `/run` request is consumed once
+before convergence, so a command failure is bounded and a later actor or marker
+event can request a fresh attempt.
 
 During the voice proof, Comitup continues to own connectivity and the
 setup portal while the shared sync and poller services run. The normal
@@ -56,7 +78,8 @@ one-tag/one-recipient transaction; tags are never written.
 
 Skip or Done creates a fixed, content-free completion request. The root gate
 validates the completed recipient state and default, enables the button, sync,
-poller, canonical dashboard, and NFC reader, removes the setup gate, stops
+poller, canonical dashboard, and NFC reader under `messagebox.target`, removes
+the setup gate, reloads the boot selector, stops
 Comitup, restarts Avahi, and starts `messagebox.target`. Comitup publishes mDNS
 records during setup; stopping it can remove the hostname's IPv4 record after
 a collision with Avahi's own registration. Restarting Avahi after Comitup exits

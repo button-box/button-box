@@ -10,17 +10,19 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from enum import Enum
 from pathlib import Path
 
 from messagebox.onboarding.paths import (
+    MODE_RECONCILE_PENDING_PATH,
+    MODE_TRANSITION_LOCK_PATH,
     ONBOARDING_COMPLETION_REQUEST_PATH,
     ONBOARDING_CONFIGURED_PATH,
     ONBOARDING_ENABLED_PATH,
     ONBOARDING_STATE_PATH,
 )
+from messagebox.onboarding.mode import queue_reconcile, transition_lock, write_setup_marker
 from messagebox.onboarding.state import StateStore
 
 
@@ -47,7 +49,6 @@ RUNTIME_UNITS = (
 SETUP_UNITS = (
     "messagebox-wifi-reset.service",
     "messagebox-onboarding-complete.path",
-    "comitup.service",
 )
 ONBOARDING_START_UNITS = (
     "messagebox-onboarding-voice.path",
@@ -112,47 +113,6 @@ def wait_for_hold(
         sleeper(min(poll_seconds, remaining))
 
 
-def _atomic_write(path, content, *, mode, preserve_owner=False, owner=None):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if owner is None and preserve_owner:
-        try:
-            info = path.lstat()
-            owner = (info.st_uid, info.st_gid)
-        except FileNotFoundError:
-            pass
-
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "wb", dir=path.parent, prefix=f".{path.name}-", delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            os.fchmod(handle.fileno(), mode)
-            if owner is not None:
-                try:
-                    os.fchown(handle.fileno(), *owner)
-                except PermissionError:
-                    # Off-device callers may not be able to restore foreign ownership.
-                    pass
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        temporary = None
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-
-
 def list_infrastructure_wifi_profiles(runner):
     """Return UUIDs for Wi-Fi infrastructure profiles, excluding AP profiles."""
 
@@ -193,6 +153,8 @@ def perform_reset(
     completion_request_path=ONBOARDING_COMPLETION_REQUEST_PATH,
     state_clock=time.time,
     enable_units=True,
+    lock_path=MODE_TRANSITION_LOCK_PATH,
+    pending_path=MODE_RECONCILE_PENDING_PATH,
 ):
     """Perform the confirmed reset transaction and restart Wi-Fi onboarding."""
 
@@ -203,21 +165,26 @@ def perform_reset(
     state_path = Path(state_path)
     state_directory = state_path.parent.stat()
     state_owner = (state_directory.st_uid, state_directory.st_gid)
-    if enable_units:
-        _run(runner, ["systemctl", "enable", *SETUP_UNITS])
-    _atomic_write(enabled_path, b"enabled\n", mode=0o600, preserve_owner=True)
-    _run(runner, ["systemctl", "stop", *RUNTIME_UNITS])
-    _run(runner, ["systemctl", "stop", *ONBOARDING_UNITS])
-    _run(runner, ["rm", "-f", "--", "/var/lib/comitup/dhcpleaseinfo"])
-    StateStore(state_path, clock=state_clock, owner=state_owner).reset(recreate=True)
-    Path(completion_request_path).unlink(missing_ok=True)
+    with transition_lock(lock_path):
+        queue_reconcile(run=runner, pending_path=pending_path, reason="reset")
+        if enable_units:
+            _run(runner, ["systemctl", "enable", *SETUP_UNITS])
+        # Runtime is stopped before the marker commit. An interrupted actor is
+        # repaired by the prequeued reconciler while the marker is absent.
+        _run(runner, ["systemctl", "stop", *RUNTIME_UNITS])
+        write_setup_marker(enabled_path)
+        _run(runner, ["systemctl", "daemon-reload"])
+        _run(runner, ["systemctl", "stop", *ONBOARDING_UNITS])
+        _run(runner, ["rm", "-f", "--", "/var/lib/comitup/dhcpleaseinfo"])
+        StateStore(state_path, clock=state_clock, owner=state_owner).reset(recreate=True)
+        Path(completion_request_path).unlink(missing_ok=True)
 
-    for uuid in list_infrastructure_wifi_profiles(runner):
-        _run(runner, ["nmcli", "connection", "delete", "uuid", uuid])
+        for uuid in list_infrastructure_wifi_profiles(runner):
+            _run(runner, ["nmcli", "connection", "delete", "uuid", uuid])
 
-    _run(runner, ["nmcli", "radio", "wifi", "on"])
-    # During the boot-button service this is queued until that service exits.
-    _run(runner, ["systemctl", "--no-block", "start", *ONBOARDING_START_UNITS])
+        _run(runner, ["nmcli", "radio", "wifi", "on"])
+        # During the boot-button service this is queued until that service exits.
+        _run(runner, ["systemctl", "--no-block", "start", *ONBOARDING_START_UNITS])
 
 
 def reset_if_held(
@@ -233,6 +200,8 @@ def reset_if_held(
     state_clock=time.time,
     hold_seconds=HOLD_SECONDS,
     poll_seconds=POLL_SECONDS,
+    lock_path=MODE_TRANSITION_LOCK_PATH,
+    pending_path=MODE_RECONCILE_PENDING_PATH,
 ):
     """Check the gesture and perform a reset only after a continuous hold."""
 
@@ -252,6 +221,8 @@ def reset_if_held(
         state_path=state_path,
         completion_request_path=completion_request_path,
         state_clock=state_clock,
+        lock_path=lock_path,
+        pending_path=pending_path,
     )
     return ResetStatus.RESET_COMPLETE
 
@@ -276,6 +247,8 @@ def main(
     stdout=None,
     stderr=None,
     force=False,
+    lock_path=MODE_TRANSITION_LOCK_PATH,
+    pending_path=MODE_RECONCILE_PENDING_PATH,
 ):
     """Run the root-only production reset check and return a process status."""
 
@@ -297,6 +270,8 @@ def main(
                 enabled_path=enabled_path,
                 configured_path=configured_path,
                 state_path=state_path,
+                lock_path=lock_path,
+                pending_path=pending_path,
             )
         except Exception:
             print("Wi-Fi reset failed; onboarding may need a manual restart.", file=stderr)
@@ -321,6 +296,8 @@ def main(
             enabled_path=enabled_path,
             configured_path=configured_path,
             state_path=state_path,
+            lock_path=lock_path,
+            pending_path=pending_path,
         )
     except Exception:
         print("Wi-Fi reset failed; onboarding may need a manual restart.", file=stderr)

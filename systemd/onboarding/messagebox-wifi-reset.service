@@ -8,9 +8,12 @@ Conflicts=shutdown.target
 Type=oneshot
 User=root
 Group=root
-WorkingDirectory=/opt/messagebox
+RuntimeDirectory=messagebox-wifi-reset
+RuntimeDirectoryMode=0700
+WorkingDirectory=/run/messagebox-wifi-reset
 ExecStart=/usr/bin/python3 -m messagebox.onboarding.reset
 EnvironmentFile=-/etc/messagebox/env
+Environment=PYTHONPATH=/opt/messagebox
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 Environment=HOME=/var/lib/messagebox-onboarding
 TimeoutStartSec=2min

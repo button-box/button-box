@@ -25,6 +25,8 @@ def installed_paths(root):
             paths[relative] = "/etc/systemd/system/" + source.name
         elif source.name == "messagebox.tmpfiles.conf":
             paths[relative] = "/etc/tmpfiles.d/messagebox.conf"
+        elif source.name == "messagebox-mode-generator":
+            paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
     for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent"):
@@ -33,6 +35,7 @@ def installed_paths(root):
     paths.update({
         "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
         "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
+        "scripts/install/messagebox-mode-migrate.py": "/usr/lib/messagebox/messagebox-mode-migrate.py",
         "scripts/messageboxctl": "/usr/local/bin/messageboxctl",
         "scripts/commands/messagebox-contact": "/usr/local/bin/messagebox-contact",
         "scripts/commands/messagebox-comitup-state": "/usr/local/sbin/messagebox-comitup-state",

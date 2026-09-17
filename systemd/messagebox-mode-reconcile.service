@@ -1,0 +1,11 @@
+[Unit]
+Description=Converge Button Box process state to the selected mode
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/opt/messagebox
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.mode
+TimeoutStartSec=infinity
