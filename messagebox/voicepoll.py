@@ -20,7 +20,6 @@ from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import STATE_DIR
 
 POLL_S = float(os.environ.get("MSGBOX_POLL_S", "3"))
-LOCK_WAIT = os.environ.get("MSGBOX_LOCK_WAIT", "60s")
 QUEUE_DIR = str(DEFAULT_QUEUE_DIR)
 EVENTS_FILE = str(STATE_DIR / "events.jsonl")
 WACLI_BIN = "/usr/local/bin/wacli"
@@ -103,6 +102,7 @@ def log_event(**ev):
 EQ_FILTER = os.environ.get("MSGBOX_EQ_FILTER",
     "highpass=f=150,treble=g=6:f=3000,loudnorm=I=-16:TP=-1.5")
 STATE_FILE = str(STATE_DIR / "seen.json")
+_last_queue_ms = 0
 
 
 def wacli(*args):
@@ -123,6 +123,13 @@ def save_seen(seen):
     with open(tmp, "w") as f:
         json.dump(sorted(seen), f)
     os.replace(tmp, STATE_FILE)
+
+
+def next_queue_ms():
+    """Return a strictly increasing millisecond queue prefix."""
+    global _last_queue_ms
+    _last_queue_ms = max(int(time.time() * 1000), _last_queue_ms + 1)
+    return _last_queue_ms
 
 
 def audio_duration(path):
@@ -174,9 +181,13 @@ def safe_unlink(path):
 
 
 def download_path(message):
+    os.makedirs(QUEUE_DIR, exist_ok=True)
+    output_path = os.path.join(
+        QUEUE_DIR, f".media-{os.getpid()}-{time.time_ns()}.part"
+    )
     result = wacli(
-        "media", "download", "--chat", message["ChatJID"], "--id", message["MsgID"],
-        "--lock-wait", LOCK_WAIT, "--json",
+        "--read-only", "media", "download", "--chat", message["ChatJID"],
+        "--id", message["MsgID"], "--output", output_path, "--json",
     )
     payload = {}
     try:
@@ -185,8 +196,9 @@ def download_path(message):
     except (AttributeError, TypeError, ValueError):
         path = None
     if result.returncode != 0 or payload.get("success") is not True or not path:
+        safe_unlink(output_path)
         return None
-    return path
+    return output_path
 
 
 def queue_message(message, source_path):
@@ -201,7 +213,7 @@ def queue_message(message, source_path):
 
     os.makedirs(QUEUE_DIR, exist_ok=True)
     # Millisecond prefix keeps the queue sorted oldest-first.
-    qwav = os.path.join(QUEUE_DIR, f"{int(time.time() * 1000)}-{message['MsgID']}.wav")
+    qwav = os.path.join(QUEUE_DIR, f"{next_queue_ms()}-{message['MsgID']}.wav")
     qtmp = qwav + ".part"
     qmeta = qwav + ".json"
     qmeta_tmp = qmeta + ".part"
@@ -270,20 +282,23 @@ def process_message(message, seen):
         print("DOWNLOAD FAILED", flush=True)
         seen.discard(message_id)  # Transient download failures retry next cycle.
         save_seen(seen)
-        return
+        return False
     print(f"DOWNLOAD ok in {time.time() - started:.1f}s", flush=True)
     try:
-        queued_path, duration = queue_message(message, path)
-    except MediaRejected as exc:
-        print(f"SKIPPED media: {exc}", flush=True)
-        log_event(type="receive_skipped", msgid=message_id, reason=str(exc))
-        return
-    except Exception:
-        seen.discard(message_id)
-        save_seen(seen)
-        print("RETRY media: queue failure", flush=True)
-        log_event(type="receive_retry", msgid=message_id, reason="queue failure")
-        return
+        try:
+            queued_path, duration = queue_message(message, path)
+        except MediaRejected as exc:
+            print(f"SKIPPED media: {exc}", flush=True)
+            log_event(type="receive_skipped", msgid=message_id, reason=str(exc))
+            return False
+        except Exception:
+            seen.discard(message_id)
+            save_seen(seen)
+            print("RETRY media: queue failure", flush=True)
+            log_event(type="receive_retry", msgid=message_id, reason="queue failure")
+            return False
+    finally:
+        safe_unlink(path)
 
     log_event(
         type="received",
@@ -295,6 +310,28 @@ def process_message(message, seen):
         dur=duration,
     )
     print(f"QUEUED media total={time.time() - started:.1f}s", flush=True)
+    return True
+
+
+def poll_once(seen, authorizations):
+    """Queue every unseen authorized playable message, oldest first."""
+    result = wacli(
+        "--read-only", "messages", "list", "--limit", "10", "--json", "--full"
+    )
+    data = json.loads(result.stdout or "{}")
+    messages = (data.get("data") or {}).get("messages") or []
+    queued_count = 0
+    for message in reversed(messages):
+        if message["MsgID"] in seen or message.get("FromMe"):
+            continue
+        if not message_is_authorized(message, authorizations):
+            continue
+        media_type = str(message.get("MediaType") or "").strip().lower()
+        if media_type not in PLAYABLE_MEDIA_TYPES:
+            continue
+        if process_message(message, seen):
+            queued_count += 1
+    return queued_count
 
 
 def main():
@@ -305,18 +342,7 @@ def main():
             authorizations = load_contact_authorizations()
             # A normal listing initializes wacli.db even before an account is
             # linked, making the empty pairing destination look occupied.
-            r = wacli("--read-only", "messages", "list", "--limit", "10", "--json", "--full")
-            data = json.loads(r.stdout or "{}")
-            msgs = (data.get("data") or {}).get("messages") or []
-            for m in reversed(msgs):  # oldest first (R9)
-                if m["MsgID"] in seen or m.get("FromMe"):
-                    continue
-                if not message_is_authorized(m, authorizations):
-                    continue
-                media_type = str(m.get("MediaType") or "").strip().lower()
-                if media_type not in PLAYABLE_MEDIA_TYPES:
-                    continue
-                process_message(m, seen)
+            poll_once(seen, authorizations)
         except Exception:
             print("poll error: processing failed", flush=True)
         time.sleep(POLL_S)
