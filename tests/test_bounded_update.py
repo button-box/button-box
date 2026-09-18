@@ -17,9 +17,15 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/install/bounded_update.py"
 MIGRATION = ROOT / "scripts/install/messagebox-mode-migrate.py"
 GENERATOR = ROOT / "systemd/messagebox-mode-generator"
+RELEASE_MANIFEST_SCRIPT = ROOT / "scripts/dev/release-manifest.py"
 SPEC = importlib.util.spec_from_file_location("bounded_update", SCRIPT)
 bounded_update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bounded_update)
+MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "release_manifest_for_update_tests", RELEASE_MANIFEST_SCRIPT
+)
+release_manifest = importlib.util.module_from_spec(MANIFEST_SPEC)
+MANIFEST_SPEC.loader.exec_module(release_manifest)
 
 
 def sha256(path):
@@ -50,6 +56,7 @@ class Systemctl:
         self.states["messagebox-mode-reconcile.path"]["enabled"] = "disabled"
         self.commands = []
         self.started = []
+        self.ever_activated = []
         self.fail_start_once = None
         self.fail_operation_once = None
 
@@ -95,6 +102,7 @@ class Systemctl:
         if command[:3] == ["systemctl", "enable", "--now"]:
             unit = command[3]
             self.states[unit] = {"active": "active", "enabled": "enabled"}
+            self.ever_activated.append(unit)
             link = self.fixture.legacy / unit
             link.unlink(missing_ok=True)
             link.symlink_to(f"/etc/systemd/system/{unit}")
@@ -103,6 +111,19 @@ class Systemctl:
             for unit in command[2:]:
                 self.states[unit]["active"] = "inactive"
             return subprocess.CompletedProcess(command, 0)
+        if command[:3] == [
+            "systemctl",
+            "--job-mode=ignore-dependencies",
+            "start",
+        ]:
+            unit = command[3]
+            if self.fail_start_once == unit:
+                self.fail_start_once = None
+                raise subprocess.CalledProcessError(1, command)
+            self.states[unit]["active"] = "active"
+            self.started.append(unit)
+            self.ever_activated.append(unit)
+            return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "start"]:
             units = command[2:]
             if self.fail_start_once and self.fail_start_once in units:
@@ -110,6 +131,13 @@ class Systemctl:
                 raise subprocess.CalledProcessError(1, command)
             for unit in units:
                 self.states[unit]["active"] = "active"
+                self.ever_activated.append(unit)
+                if unit == "messagebox.target":
+                    self.states["messagebox-button.service"]["active"] = "active"
+                    self.ever_activated.append("messagebox-button.service")
+                elif unit == "comitup.service":
+                    self.states["comitup-web.service"]["active"] = "active"
+                    self.ever_activated.append("comitup-web.service")
             self.started.extend(units)
             return subprocess.CompletedProcess(command, 0)
         if command[:2] in (["systemctl", "enable"], ["systemctl", "disable"]):
@@ -159,7 +187,7 @@ class Fixture:
         self.legacy = self.root / "etc/systemd/system/multi-user.target.wants"
         self.generated = self.root / "run/systemd/generator/multi-user.target.wants"
         self.generator = self.root / bounded_update.MODE_GENERATOR.removeprefix("/")
-        self.sample = self.root / "opt/messagebox/messagebox/sample.py"
+        self.sample = self.root / "opt/messagebox/messagebox/__init__.py"
         self.metadata = self.root / bounded_update.RELEASE_METADATA.removeprefix("/")
         self.private_files = [
             self.root / "etc/messagebox/env",
@@ -193,27 +221,27 @@ class Fixture:
             path.write_text(f"private fixture {index}\n")
         self.private_hashes = {path: sha256(path) for path in self.private_files}
 
-        files = {
-            "messagebox/sample.py": b"VALUE = 'new'\n",
-            "scripts/install/messagebox-mode-migrate.py": MIGRATION.read_bytes(),
-            "systemd/messagebox-mode-generator": GENERATOR.read_bytes(),
-            "systemd/messagebox-mode-reconcile.path": (
-                ROOT / "systemd/messagebox-mode-reconcile.path"
-            ).read_bytes(),
-        }
+        canonical_paths = release_manifest.installed_paths(ROOT)
         entries = []
-        for source, content in files.items():
+        for source, installed in sorted(canonical_paths.items()):
+            content = (ROOT / source).read_bytes()
+            if source == "messagebox/__init__.py":
+                content = b'"""Synthetic updated package."""\n'
             path = self.source / source
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
-            path.chmod(0o755 if source == "systemd/messagebox-mode-generator" else 0o644)
+            path.chmod(stat.S_IMODE((ROOT / source).stat().st_mode))
             entries.append(
                 {
                     "source": source,
-                    "installed": bounded_update._expected_target(source),
+                    "installed": installed,
                     "sha256": sha256(path),
                 }
             )
+        manifest_tool = self.source / "scripts/dev/release-manifest.py"
+        manifest_tool.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(RELEASE_MANIFEST_SCRIPT, manifest_tool)
+        manifest_tool.chmod(0o644)
         self.manifest_data = {
             "version": "0.1.0-test.1",
             "commit": "a" * 40,
@@ -274,7 +302,9 @@ class BoundedUpdateTests(unittest.TestCase):
                     run=fixture.systemctl,
                 )
 
-                self.assertEqual(fixture.sample.read_text(), "VALUE = 'new'\n")
+                self.assertEqual(
+                    fixture.sample.read_text(), '"""Synthetic updated package."""\n'
+                )
                 self.assertEqual(stat.S_IMODE(fixture.generator.stat().st_mode), 0o755)
                 self.assertEqual(
                     json.loads(fixture.metadata.read_text())["commit"], "a" * 40
@@ -293,6 +323,23 @@ class BoundedUpdateTests(unittest.TestCase):
                 self.assertEqual(
                     set(fixture.systemctl.started), expected_active
                 )
+                self.assertEqual(
+                    set(fixture.systemctl.ever_activated),
+                    expected_active | {"messagebox-mode-reconcile.path"},
+                )
+                direct_start_commands = [
+                    command
+                    for command in fixture.systemctl.commands
+                    if "start" in command
+                ]
+                self.assertTrue(direct_start_commands)
+                self.assertTrue(
+                    all(
+                        command[1:3]
+                        == ["--job-mode=ignore-dependencies", "start"]
+                        for command in direct_start_commands
+                    )
+                )
                 self.assertTrue(
                     (fixture.legacy / "messagebox-mode-reconcile.path").is_symlink()
                 )
@@ -305,6 +352,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 fixture.assert_private_unchanged(self)
 
                 fixture.systemctl.started.clear()
+                fixture.systemctl.ever_activated.clear()
                 bounded_update.rollback(
                     fixture.backup,
                     root=fixture.root,
@@ -312,6 +360,9 @@ class BoundedUpdateTests(unittest.TestCase):
                 )
                 fixture.assert_original_state(self)
                 self.assertEqual(set(fixture.systemctl.started), expected_active)
+                self.assertEqual(
+                    set(fixture.systemctl.ever_activated), expected_active
+                )
 
     def test_failure_after_install_rolls_back_files_links_and_units(self):
         for mode in ("runtime", "setup"):
@@ -368,7 +419,14 @@ class BoundedUpdateTests(unittest.TestCase):
                 fixture.assert_original_state(self)
 
     def test_hash_path_and_migration_checks_precede_mutation(self):
-        cases = ("hash", "path", "generator-mode", "legacy-link")
+        cases = (
+            "hash",
+            "path",
+            "partial",
+            "generator-mode",
+            "staging-mode",
+            "legacy-link",
+        )
         for problem in cases:
             with self.subTest(problem=problem), tempfile.TemporaryDirectory() as directory:
                 fixture = Fixture(directory)
@@ -378,8 +436,13 @@ class BoundedUpdateTests(unittest.TestCase):
                 elif problem == "path":
                     fixture.manifest_data["files"][0]["installed"] = "/etc/unsafe.conf"
                     fixture.write_manifest()
+                elif problem == "partial":
+                    fixture.manifest_data["files"].pop()
+                    fixture.write_manifest()
                 elif problem == "generator-mode":
                     (fixture.source / "systemd/messagebox-mode-generator").chmod(0o644)
+                elif problem == "staging-mode":
+                    fixture.source.chmod(0o775)
                 else:
                     link = fixture.legacy / "comitup.service"
                     link.symlink_to("/tmp/untrusted.service")
@@ -400,6 +463,35 @@ class BoundedUpdateTests(unittest.TestCase):
                     if command[1] not in {"is-active", "is-enabled"}
                 ]
                 self.assertEqual(mutating, [])
+
+    def test_outer_lock_rejects_overlapping_apply_and_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            with bounded_update._update_lock(fixture.root):
+                with self.assertRaisesRegex(
+                    bounded_update.UpdateError,
+                    "another bounded update operation is active",
+                ):
+                    bounded_update.apply(
+                        fixture.source,
+                        fixture.manifest,
+                        fixture.backup,
+                        root=fixture.root,
+                        run=fixture.systemctl,
+                    )
+                with self.assertRaisesRegex(
+                    bounded_update.UpdateError,
+                    "another bounded update operation is active",
+                ):
+                    bounded_update.rollback(
+                        fixture.backup,
+                        root=fixture.root,
+                        run=fixture.systemctl,
+                    )
+
+            self.assertFalse(fixture.backup.exists())
+            self.assertEqual(fixture.systemctl.commands, [])
+            fixture.assert_original_state(self)
 
 
 if __name__ == "__main__":

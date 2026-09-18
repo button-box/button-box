@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -27,6 +29,7 @@ SELECTOR_PATHS = (
 )
 MODE_GENERATOR = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
 MODE_MIGRATION = "/usr/lib/messagebox/messagebox-mode-migrate.py"
+UPDATE_LOCK = "/run/lock/messagebox-bounded-update.lock"
 BACKUP_FORMAT = 1
 
 UNITS = (
@@ -53,6 +56,31 @@ UNITS = (
     "messagebox-onboarding-voice.target",
     "messagebox-whatsapp-pairing.service",
     "messagebox-wifi-reset.service",
+)
+START_ORDER = (
+    "messagebox-audio-detect.service",
+    "messagebox-sync.service",
+    "messagebox-poller.service",
+    "messagebox-nfc.service",
+    "messagebox-dash.service",
+    "messagebox-button.service",
+    "comitup.service",
+    "messagebox-whatsapp-pairing.service",
+    "messagebox-onboarding-nfc.service",
+    "comitup-web.service",
+    "messagebox-onboarding-home.service",
+    "messagebox-onboarding-button.service",
+    "messagebox-onboarding-voice-gate.service",
+    "messagebox-onboarding-voice.target",
+    "messagebox-onboarding-complete.service",
+    "messagebox-wifi-reset.service",
+    "messagebox-wifi-change.service",
+    "messagebox-mode-reconcile.service",
+    "messagebox-onboarding-complete.path",
+    "messagebox-onboarding-voice.path",
+    "messagebox-wifi-change.path",
+    "messagebox-mode-reconcile.path",
+    "messagebox.target",
 )
 
 EXPLICIT_TARGETS = {
@@ -193,6 +221,43 @@ def _check_absolute_parents(path):
             raise UpdateError("backup path has an unsafe parent")
 
 
+def _validate_staged_file(path, source_root, trusted_uid):
+    source_root = Path(source_root)
+    path = Path(path)
+    try:
+        relative = path.relative_to(source_root)
+    except ValueError as exc:
+        raise UpdateError("release input is outside the staged source") from exc
+    current = source_root
+    directories = [source_root]
+    for part in relative.parts[:-1]:
+        current /= part
+        directories.append(current)
+    for directory in directories:
+        try:
+            metadata = directory.lstat()
+        except FileNotFoundError as exc:
+            raise UpdateError("release source is incomplete") from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != trusted_uid
+            or metadata.st_mode & 0o022
+        ):
+            raise UpdateError("release source directory is not trusted")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise UpdateError("release source is incomplete") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != trusted_uid
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o022
+    ):
+        raise UpdateError("release source file is not trusted")
+    return metadata
+
+
 def _load_module(name, path):
     loader = importlib.machinery.SourceFileLoader(name, str(path))
     specification = importlib.util.spec_from_loader(loader.name, loader)
@@ -201,9 +266,44 @@ def _load_module(name, path):
     return module
 
 
+@contextlib.contextmanager
+def _update_lock(root):
+    root = Path(root)
+    trusted_uid = 0 if root == Path("/") else os.geteuid()
+    path = _rooted(root, UPDATE_LOCK)
+    _check_parents(path, root)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise UpdateError("bounded update lock is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != trusted_uid
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise UpdateError("bounded update lock is unsafe")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise UpdateError("another bounded update operation is active") from exc
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def load_candidate(source_root, manifest_path, root):
     source_root = Path(source_root).resolve()
-    manifest_path = Path(manifest_path)
+    manifest_path = Path(manifest_path).absolute()
+    trusted_uid = 0 if Path(root) == Path("/") else os.geteuid()
+    _validate_staged_file(manifest_path, source_root, trusted_uid)
+    canonical_script = source_root / "scripts/dev/release-manifest.py"
+    _validate_staged_file(canonical_script, source_root, trusted_uid)
     try:
         manifest_bytes = manifest_path.read_bytes()
         manifest = json.loads(manifest_bytes)
@@ -244,13 +344,7 @@ def load_candidate(source_root, manifest_path, root):
         if len(expected_hash) != 64 or any(c not in "0123456789abcdef" for c in expected_hash):
             raise UpdateError("release manifest contains an invalid hash")
         source_path = source_root.joinpath(*source_pure.parts)
-        try:
-            source_path.relative_to(source_root)
-            metadata = source_path.lstat()
-        except (FileNotFoundError, ValueError) as exc:
-            raise UpdateError("release source is incomplete") from exc
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise UpdateError("release source contains an unsafe file")
+        _validate_staged_file(source_path, source_root, trusted_uid)
         if _sha256(source_path) != expected_hash:
             raise UpdateError("release source hash does not match the manifest")
         destination = _rooted(root, target)
@@ -273,6 +367,12 @@ def load_candidate(source_root, manifest_path, root):
         )
         sources.add(source)
         targets.add(target)
+    canonical = _load_module(
+        "messagebox_bounded_update_release_manifest", canonical_script
+    ).installed_paths(source_root)
+    declared = {entry["source"]: entry["target"] for entry in entries}
+    if declared != canonical:
+        raise UpdateError("release manifest is not the complete installed release")
     if MODE_GENERATOR not in targets or MODE_MIGRATION not in targets:
         raise UpdateError("release manifest lacks the checked mode migration inputs")
 
@@ -284,7 +384,6 @@ def load_candidate(source_root, manifest_path, root):
         migration = _load_module(
             "messagebox_bounded_update_migration_check", migration_entry["source_path"]
         )
-        trusted_uid = 0 if Path(root) == Path("/") else Path(root).stat().st_uid
         migration.check(
             generator_entry["source_path"],
             marker=_rooted(root, MODE_MARKER),
@@ -454,10 +553,16 @@ def _restore_enabled(states, run):
             _run(["systemctl", "mask", "--runtime", unit], run, check=True)
 
 
-def _restore_active(states, run):
-    active = [unit for unit in UNITS if states[unit]["active"] == "active"]
-    if active:
-        _run(["systemctl", "start", *active], run, check=True)
+def _restore_active(states, run, *, also_active=()):
+    if set(START_ORDER) != set(UNITS) or len(START_ORDER) != len(UNITS):
+        raise UpdateError("managed unit start order is incomplete")
+    for unit in START_ORDER:
+        if states[unit]["active"] == "active" and unit not in also_active:
+            _run(
+                ["systemctl", "--job-mode=ignore-dependencies", "start", unit],
+                run,
+                check=True,
+            )
 
 
 def _verify_active(states, run, *, also_active=()):
@@ -582,10 +687,7 @@ def _restore_record(record, path, backup_dir):
     )
 
 
-def rollback(backup_dir, *, root=Path("/"), run=subprocess.run):
-    root = Path(root).resolve()
-    if root == Path("/") and os.geteuid() != 0:
-        raise UpdateError("bounded rollback requires root")
+def _rollback_locked(backup_dir, *, root, run):
     backup_dir = Path(backup_dir)
     _check_absolute_parents(backup_dir)
     try:
@@ -622,10 +724,15 @@ def rollback(backup_dir, *, root=Path("/"), run=subprocess.run):
     return state
 
 
-def apply(source_root, manifest_path, backup_dir, *, root=Path("/"), run=subprocess.run):
+def rollback(backup_dir, *, root=Path("/"), run=subprocess.run):
     root = Path(root).resolve()
     if root == Path("/") and os.geteuid() != 0:
-        raise UpdateError("bounded update requires root")
+        raise UpdateError("bounded rollback requires root")
+    with _update_lock(root):
+        return _rollback_locked(backup_dir, root=root, run=run)
+
+
+def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
     manifest, entries, manifest_hash = load_candidate(source_root, manifest_path, root)
     states = _unit_states(run)
     create_backup(backup_dir, root, entries, states)
@@ -669,17 +776,29 @@ def apply(source_root, manifest_path, backup_dir, *, root=Path("/"), run=subproc
                 raise UpdateError("installed file hash does not match the manifest")
             if stat.S_IMODE(entry["destination"].stat().st_mode) != entry["mode"]:
                 raise UpdateError("installed file mode does not match policy")
-        _restore_active(states, run)
+        _restore_active(
+            states, run, also_active={"messagebox-mode-reconcile.path"}
+        )
         _verify_active(states, run, also_active={"messagebox-mode-reconcile.path"})
     except BaseException as update_error:
         try:
-            rollback(backup_dir, root=root, run=run)
+            _rollback_locked(backup_dir, root=root, run=run)
         except BaseException as rollback_error:
             raise UpdateError(
                 f"update failed and automatic rollback also failed: {rollback_error}"
             ) from update_error
         raise UpdateError("update failed; the recorded state was restored") from update_error
     return manifest
+
+
+def apply(source_root, manifest_path, backup_dir, *, root=Path("/"), run=subprocess.run):
+    root = Path(root).resolve()
+    if root == Path("/") and os.geteuid() != 0:
+        raise UpdateError("bounded update requires root")
+    with _update_lock(root):
+        return _apply_locked(
+            source_root, manifest_path, backup_dir, root=root, run=run
+        )
 
 
 def main(arguments=None):

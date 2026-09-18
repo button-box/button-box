@@ -24,6 +24,21 @@ generated private media. Keep the manifest next to that extracted tree on the
 device. Its `commit`, `version`, file paths, and SHA-256 hashes are the inputs
 to the update. Verify any outer archive checksum before extraction.
 
+Extract into a new root-owned staging directory. The source root, manifest,
+every source file, and every directory between them must be owned by root and
+must not be writable by group or other users. Preserve the generator's `0755`
+mode. For an archive whose contents are rooted directly at the source tree:
+
+```sh
+sudo install -d -o root -g root -m 0700 /var/lib/button-box-update/RELEASE
+sudo tar --extract --gzip --no-same-owner \
+  --file button-box-release.tar.gz \
+  --directory /var/lib/button-box-update/RELEASE
+```
+
+The updater refuses user-owned or writable staging. This matters because the
+checked migration loads the staged generator as root.
+
 The updater validates every source path, destination, hash, duplicate, existing
 destination type, and the staged boot-mode migration before it stops a unit or
 writes an installed file. The allowlist is deliberately narrower than the
@@ -37,9 +52,9 @@ Choose a new backup directory under the device's root-only backup area, then
 run from the extracted source tree:
 
 ```sh
-sudo python3 scripts/install/bounded_update.py apply \
-  --source-root "$PWD" \
-  --manifest "$PWD/release-manifest.json" \
+sudo python3 /var/lib/button-box-update/RELEASE/scripts/install/bounded_update.py apply \
+  --source-root /var/lib/button-box-update/RELEASE \
+  --manifest /var/lib/button-box-update/RELEASE/release-manifest.json \
   --backup-dir /var/backups/button-box/RELEASE-UTC_TIMESTAMP
 ```
 
@@ -54,9 +69,17 @@ The boot-mode generator is installed as executable. The checked migration
 removes the legacy mode links and enables the reconciliation path without
 changing the setup marker. Only units that were active before the update are
 started again, apart from the reconciliation path intentionally activated by
-the migration. A failure after the first runtime mutation automatically uses
-the new backup to restore the prior files, selector links, enablement, and
+the migration. Recorded units start individually in a fixed dependency order
+with systemd dependency expansion suppressed, so restoring an active target
+cannot briefly start an inactive component. The updater then verifies the exact
+intended active set. A failure after the first runtime mutation automatically
+uses the new backup to restore the prior files, selector links, enablement, and
 active units.
+
+Apply and rollback share one nonblocking, root-owned update lock. A concurrent
+operator command fails before inspecting or changing release state, and an
+automatic rollback keeps the original apply operation's lock for the entire
+recovery.
 
 On success, `/opt/messagebox/release.json` records the manifest's version,
 exact commit, and manifest SHA-256. Compare that file with the retained release
@@ -69,7 +92,7 @@ messaging, network, or cold-reboot acceptance.
 Keep the backup directory unchanged. To restore it deliberately:
 
 ```sh
-sudo python3 scripts/install/bounded_update.py rollback \
+sudo python3 /var/lib/button-box-update/RELEASE/scripts/install/bounded_update.py rollback \
   --backup-dir /var/backups/button-box/RELEASE-UTC_TIMESTAMP
 ```
 
