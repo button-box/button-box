@@ -125,6 +125,11 @@ guesses the default while mapped-card state is unsafe. Do not continue with
 Before deployment, run the [physical test scenarios](testing.md#physical-test-scenarios)
 on a spare device.
 
+For an existing box, use the [manifest-bounded update and rollback
+procedure](bounded-updates.md). The fresh-install setup and provisioning paths
+also manage accounts, packages, configuration, and service enablement, so they
+are not an in-place release update.
+
 ## Boot-mode recovery
 
 Use these checks only after stopping Button Box runtime and setup services.
