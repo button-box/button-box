@@ -1,5 +1,11 @@
 # Button Box
 
+![Illustrated Button Box with a glowing blue button and family portraits](assets/readme-hero.webp)
+
+> **[Join the Button Box WhatsApp community →](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t)**
+>
+> Meet other builders, share progress, and help shape the project.
+
 **Button Box is a screen-free way for kids to send and receive WhatsApp voice
 messages with family on their own.**
 
@@ -9,7 +15,6 @@ approved person or group. Incoming replies wait on the box until the child
 presses the button to listen.
 
 [Visit button.box](https://button.box/) ·
-[Join the WhatsApp community](https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t) ·
 [Report an issue](https://github.com/button-box/button-box/issues) ·
 [Testing and regression matrix](docs/testing.md)
 
