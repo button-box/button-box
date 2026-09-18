@@ -12,7 +12,7 @@
 | EG STARTS 100 mm illuminated arcade button, blue | $11 | [Amazon](https://www.amazon.com/dp/B072JLSH34) |
 | VGBUY 750-piece M2.5 screw, nut, and washer kit | $10 | [Amazon](https://www.amazon.com/dp/B0FJ1XN2XP) |
 | HiLetgo PN532 NFC/RFID V3 module kit | $9 | [Amazon](https://www.amazon.com/dp/B01I1J17LC) |
-| Or Waveshare PN532 NFC HAT | Varies | Direct Pi 4 header connection; no separate NFC soldering |
+| Or [Waveshare PN532 NFC HAT](https://www.amazon.com/dp/B0CKXZ4WJK) | Varies | Direct Pi 4 header connection; no separate NFC soldering |
 | **Approx. total** | **$150** | |
 
 The parts above are the reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
