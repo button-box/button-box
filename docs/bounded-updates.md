@@ -101,3 +101,9 @@ managed units. It restores files that existed, removes candidate files that
 were previously absent, restores the marker and mode links, reloads systemd,
 then restores recorded enablement and active units. It rejects paths and unit
 names outside its fixed rollback allowlist.
+
+A lost power supply or forced process termination can prevent automatic
+rollback from running. Keep the original staging tree and completed backup;
+after access is restored, run the explicit rollback command before retrying an
+interrupted update. Verify installed hashes, boot selection and service state
+again. An interrupted process is not a successful installation.

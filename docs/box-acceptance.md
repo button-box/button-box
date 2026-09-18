@@ -14,6 +14,7 @@ This is the canonical, reusable definition of the checks required before a box i
 
 | ID | Required evidence | Expected result |
 |---|---|---|
+| BB-BUILD-01 | PHYSICAL | The recorded unit identity and final parts match the assembled box. The enclosure closes, components stay retained, cables remain intact with clearance and strain relief, and the specified power supply is used. |
 | BB-HOME-01 | UI+API | Home reports Wi-Fi, WhatsApp, and runtime truthfully. |
 | BB-HOME-02 | UI+LOG+ACOUSTIC | Ring control records one request and produces the selected signal. |
 | BB-SETUP-01 | UI | Required and optional setup tasks render and navigate correctly. |
