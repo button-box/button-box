@@ -13,12 +13,13 @@ presses the button to listen.
 [Report an issue](https://github.com/button-box/button-box/issues) ·
 [Testing and regression matrix](docs/testing.md)
 
-## Versioned development release
+## Latest release
 
-[v0.1.0-rc.3](https://github.com/button-box/button-box/releases/tag/v0.1.0-rc.3)
-improves playback, replies and startup recovery. The source prerelease includes
+[v0.1.0](https://github.com/button-box/button-box/releases/tag/v0.1.0)
+includes voice messaging, video audio, recipient routing, the caregiver dashboard
+and startup recovery. Tested on Raspberry Pi 4. The source release includes
 a bounded updater, an installed-code manifest and checksums. Read the
-[release notes and verification limits](docs/releases/v0.1.0-rc.3.md) before
+[release notes](docs/releases/v0.1.0.md) before
 installation. Each assembled unit requires its own physical acceptance run
 before delivery.
 
