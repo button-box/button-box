@@ -102,6 +102,16 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertTrue(warning)
         self.assertEqual(recovered, saved)
 
+    def test_time_zone_offset_gives_guidance_without_changing_saved_settings(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        initial, _warning = store.load()
+        with self.assertRaisesRegex(SettingsError, "Europe/Lisbon.*UTC\\+2"):
+            store.update(self.candidate(initial, timezone="UTC+2"), 0)
+        current, _warning = store.load()
+        self.assertEqual(current, initial)
+        saved = store.update(self.candidate(initial, timezone="Europe/Lisbon"), 0)
+        self.assertEqual(saved["timezone"], "Europe/Lisbon")
+
     def test_invalid_candidate_does_not_change_document(self):
         store = SettingsStore(self.path, environ={"TZ": "UTC"})
         initial, _warning = store.load()
