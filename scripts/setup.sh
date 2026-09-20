@@ -28,6 +28,7 @@ onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.p
 onboarding/completion.py onboarding/mode.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
 STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/index.html onboarding/static/styles.css"
+DASHBOARD_STATIC_ASSETS="dashboard/static/apple-touch-icon.png"
 GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
 
 case "$SSH_TARGET" in
@@ -57,7 +58,7 @@ if [ "$(id -u)" -eq 0 ]; then
   exit 1
 fi
 
-for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON $STATIC_ASSETS; do
+for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON $STATIC_ASSETS $DASHBOARD_STATIC_ASSETS; do
   if [ ! -r "$REPO_DIR/messagebox/$name" ]; then
     echo "Missing repository file: messagebox/$name" >&2
     exit 1
@@ -282,6 +283,7 @@ sudo install -d -o root -g root -m 0755 \
   "$APP_DIR/dev" \
   "$PACKAGE_DIR" \
   "$PACKAGE_DIR/dashboard" \
+  "$PACKAGE_DIR/dashboard/static" \
   "$PACKAGE_DIR/onboarding" \
   "$PACKAGE_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
@@ -306,7 +308,7 @@ for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/messagebox/$name" "$PACKAGE_DIR/$name"
 done
-for name in $STATIC_ASSETS; do
+for name in $STATIC_ASSETS $DASHBOARD_STATIC_ASSETS; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/messagebox/$name" "$PACKAGE_DIR/$name"
 done

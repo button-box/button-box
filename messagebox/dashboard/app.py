@@ -100,6 +100,7 @@ TAILSCALE_HOST_SETTING = os.environ.get("MSGBOX_TAILSCALE_HOST", "")
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 QUEUE_ACTION_LOCK = threading.Lock()
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parents[1] / "onboarding" / "static"
+DASHBOARD_ICON_DIR = Path(__file__).resolve().parent / "static"
 DASHBOARD_STATIC = {
     "/": (
         DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes(),
@@ -116,6 +117,10 @@ DASHBOARD_STATIC = {
     "/static/clipboard.js": (
         DASHBOARD_STATIC_DIR.joinpath("clipboard.js").read_bytes(),
         "text/javascript; charset=utf-8",
+    ),
+    "/static/apple-touch-icon.png": (
+        DASHBOARD_ICON_DIR.joinpath("apple-touch-icon.png").read_bytes(),
+        "image/png",
     ),
 }
 RINGTONE_PREVIEW_LOCK = threading.Lock()

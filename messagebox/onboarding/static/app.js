@@ -1356,7 +1356,7 @@ function copyTestReport() {
 function downloadTestReport() {
   if (!latestTestReport) return;
   const blob = new Blob([JSON.stringify(latestTestReport.report, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
+  const link = acceptanceControl("a", "BB-TEST-01");
   link.href = URL.createObjectURL(blob);
   link.download = `button-box-report-${latestTestReport.report.report_id}.json`;
   link.click();

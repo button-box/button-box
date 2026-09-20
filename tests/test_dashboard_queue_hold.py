@@ -337,6 +337,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
             "/": "text/html; charset=utf-8",
             "/static/app.js": "text/javascript; charset=utf-8",
             "/static/styles.css": "text/css; charset=utf-8",
+            "/static/apple-touch-icon.png": "image/png",
         }
 
         for path, expected_type in expected_types.items():
@@ -356,6 +357,14 @@ class DashboardQueueHoldTests(unittest.TestCase):
                 self.assertEqual(response["code"], 200)
                 self.assertTrue(response["body"])
                 self.assertEqual(response["ctype"], expected_type)
+
+    def test_dashboard_html_links_apple_touch_icon(self):
+        html = dashboard.DASHBOARD_STATIC["/"][0].decode("utf-8")
+
+        self.assertIn(
+            '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">',
+            html,
+        )
 
     def test_test_report_requires_explicit_matching_marker(self):
         handler = dashboard.Handler.__new__(dashboard.Handler)

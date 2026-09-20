@@ -117,6 +117,7 @@ esac
         self.assertNotIn("scripts/dev/dashboard-preview.py", staged_paths)
         self.assertIn("messagebox/wifi_change.py", staged_paths)
         self.assertNotIn("messagebox/dashboard/static/app.js", staged_paths)
+        self.assertIn("messagebox/dashboard/static/apple-touch-icon.png", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
         self.assertIn("messagebox/test_report.py", staged_paths)
         self.assertIn("messagebox/test_runner.py", staged_paths)

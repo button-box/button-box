@@ -111,6 +111,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/wifi_change.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \
+  "$REPO_DIR/./messagebox/dashboard/static/apple-touch-icon.png" \
   "$REPO_DIR/./messagebox/onboarding/__init__.py" \
   "$REPO_DIR/./messagebox/onboarding/app.py" \
   "$REPO_DIR/./messagebox/onboarding/activity.py" \
