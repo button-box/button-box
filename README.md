@@ -190,6 +190,13 @@ In Imager:
 > Writing an operating-system image erases the selected card. Confirm its
 > physical identity, capacity, and partitions before continuing.
 
+> [!IMPORTANT]
+> Imager remembers customisation from previous runs, including the Wi-Fi network
+> name and password, and pre-fills them. When re-flashing after a Pi that failed
+> to appear, retype the Wi-Fi name rather than accepting the remembered value: a
+> typo carries forward silently, and the retained setting is most likely to bite
+> exactly when you are trying to correct it.
+
 Insert the verified card into the powered-off Pi, connect temporary networking,
 and power it on.
 
@@ -415,6 +422,26 @@ reporting success or opening a pull request.
 Confirm that the Pi and computer are on a compatible network. Try the hostname
 you set in Imager. If necessary, inspect your router's device list rather than
 guessing a fixed IP address.
+
+Distinguish "not on the network" from "name not resolving" before changing
+anything. A Pi with a mistyped Wi-Fi name boots perfectly — solid red LED,
+flickering green, filesystem resized — and simply never joins. Scan your subnet
+for a Raspberry Pi MAC prefix (`dc:a6:32`, `e4:5f:01`, `b8:27:eb`):
+
+```sh
+arp -a | grep -iE 'dc:a6:32|e4:5f:01|b8:27:eb'
+```
+
+If nothing answers, the Pi is not on the network and the Wi-Fi settings are the
+place to look.
+
+You can check those settings **before first boot**. Raspberry Pi Imager writes
+them to the card's FAT boot partition as cloud-init files — `user-data`,
+`network-config` and `meta-data`, with `ds=nocloud` and
+`cfg80211.ieee80211_regdom=<CC>` in `cmdline.txt` — all readable from any
+computer. After first boot they are consumed, and the live configuration lives on
+the ext4 root partition, which macOS and Windows cannot read; at that point
+re-flashing is the practical fix.
 
 ### SSH says `Permission denied (publickey)`
 
