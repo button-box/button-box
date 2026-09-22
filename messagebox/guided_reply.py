@@ -146,6 +146,7 @@ class RecordingResult:
     path: str | None
     duration: float
     meaningful: bool
+    stopped_by_press: bool = False
 
 
 class EnergyVAD:
@@ -432,6 +433,8 @@ class GuidedSession:
         incoming_path: str | None = None,
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
+        replay_for_review: bool = True,
+        send_on_stop: bool = False,
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
@@ -448,8 +451,24 @@ class GuidedSession:
                 self.io.delete(recording.path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
-        approved = self.io.play_review_for_approval(recording.path)
-        self.event("guided_review_approved" if approved else "guided_review_played", session_id=session_id, duration=recording.duration)
+        if send_on_stop and recording.stopped_by_press:
+            # Ending the recording deliberately is the same intent as sending
+            # it.  Letting it end by itself is not, and falls through below.
+            approved = True
+            self.event(
+                "guided_stop_press_sent", session_id=session_id, duration=recording.duration
+            )
+        elif replay_for_review:
+            approved = self.io.play_review_for_approval(recording.path)
+            self.event(
+                "guided_review_approved" if approved else "guided_review_played",
+                session_id=session_id,
+                duration=recording.duration,
+            )
+        else:
+            # The send prompt below becomes the only approval window.
+            approved = False
+            self.event("guided_review_skipped", session_id=session_id, duration=recording.duration)
         if not approved:
             self.io.play_ordinary(send_prompt_path)
             approved = self.io.wait_for_approval(10.0)
