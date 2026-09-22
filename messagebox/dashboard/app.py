@@ -1121,7 +1121,13 @@ class Handler(BaseHTTPRequestHandler):
             if length < 0 or length > limit:
                 raise ValueError
             text = self.rfile.read(length).decode("utf-8")
-            pairs = urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=True)
+            # strict_parsing rejects an empty string, but an empty body is how
+            # the endpoints that take no fields are called.
+            pairs = (
+                urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=True)
+                if text
+                else []
+            )
             if len({key for key, _value in pairs}) != len(pairs):
                 raise ValueError
             return dict(pairs)
