@@ -411,6 +411,7 @@ def create_app(
         ("index.html", "text/html; charset=utf-8"),
         ("app.js", "text/javascript; charset=utf-8"),
         ("clipboard.js", "text/javascript; charset=utf-8"),
+        ("countries.js", "text/javascript; charset=utf-8"),
         ("styles.css", "text/css; charset=utf-8"),
     ):
         static_files[name] = (STATIC_DIR.joinpath(name).read_bytes(), content_type)
@@ -789,7 +790,7 @@ def create_app(
                     b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
-            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/styles.css"}:
+            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/countries.js", "/static/styles.css"}:
                 name = path.rsplit("/", 1)[-1]
                 body, content_type = static_files[name]
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)

@@ -16,6 +16,7 @@ SETTINGS_DIR = Path("/var/lib/messagebox-settings")
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 CONTACTS_FILE = STATE_DIR / "contacts.json"
+DISMISSED_CHATS_FILE = STATE_DIR / "dismissed-chats.json"
 NFC_SELECTION_FILE = RUNTIME_DIR / "nfc-selection.json"
 NFC_ENROLLMENT_FILE = RUNTIME_DIR / "nfc-enrollment.json"
 NFC_ANNOUNCEMENT_FILE = RUNTIME_DIR / "nfc-announcement.json"

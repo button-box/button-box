@@ -397,3 +397,124 @@ html { scroll-padding-bottom: 6rem; }
   #home-view .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #home-view .status-card { grid-template-columns: 1fr; }
 }
+
+dialog#add-contact-dialog {
+  border: 2px solid #111;
+  border-radius: 14px;
+  padding: 1.25rem;
+  max-width: 24rem;
+  width: calc(100% - 2rem);
+  background: #fdfcf8;
+  color: inherit;
+}
+
+dialog#add-contact-dialog::backdrop {
+  background: rgba(17, 17, 17, 0.45);
+}
+
+dialog#add-contact-dialog h2 {
+  margin-top: 0;
+}
+
+dialog#add-contact-dialog select,
+dialog#add-contact-dialog input {
+  width: 100%;
+}
+
+.combo {
+  position: relative;
+}
+
+.combo > [role="listbox"] {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 13rem;
+  overflow-y: auto;
+  background: #fff;
+  border: 2px solid #111;
+  border-radius: 10px;
+}
+
+.combo > [role="listbox"] > [role="option"] {
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.combo > [role="listbox"] > [aria-selected="true"],
+.combo > [role="listbox"] > [role="option"]:hover {
+  background: #cfe0ff;
+}
+
+.combo > [role="listbox"] > [role="option"] .combo-dial {
+  opacity: 0.65;
+}
+
+#add-contact-dialog fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: center;
+}
+
+#add-contact-dialog fieldset legend {
+  float: none;
+  width: 100%;
+}
+
+#add-contact-dialog fieldset .choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* .section-title and .field-help both carry negative margins so a heading sits
+   tight above a form field. Here the help text is a sentence, not a field. */
+#people-view .section-title {
+  margin-bottom: 0;
+}
+
+#people-view .section-title + .field-help {
+  margin-top: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+
+/* Recipients view: one primary action up top, suggestions below the list,
+   rare card repairs last and visually separated. */
+#people-view .people-primary {
+  margin: 1.25rem 0 0.5rem;
+}
+
+#people-view .people-section {
+  margin-top: 2rem;
+}
+
+#people-view .people-footer {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1.25rem;
+}
+
+#people-view .people-section .button-row {
+  margin-top: 0.9rem;
+}
+
+#people-view #people-show-hidden {
+  margin-top: 0.75rem;
+}
+
+#people-view .people-footer .field-help:last-child {
+  margin-top: 1rem;
+  margin-bottom: 0;
+}
+
+.combo > [role="listbox"] > .combo-pinned-end {
+  border-bottom: 2px solid var(--line);
+}
