@@ -37,8 +37,8 @@ class SwitchPinsTests(unittest.TestCase):
             self.assertEqual(nfc._switch_pins(), [])
 
     def test_parses_comma_separated_pins(self):
-        with mock.patch.dict(nfc.os.environ, {"MSGBOX_SWITCH_PINS": "5,6,12,13,19"}):
-            self.assertEqual(nfc._switch_pins(), [5, 6, 12, 13, 19])
+        with mock.patch.dict(nfc.os.environ, {"MSGBOX_SWITCH_PINS": "5,12,13,19"}):
+            self.assertEqual(nfc._switch_pins(), [5, 12, 13, 19])
 
     def test_invalid_pin_raises(self):
         with mock.patch.dict(nfc.os.environ, {"MSGBOX_SWITCH_PINS": "5,x"}):

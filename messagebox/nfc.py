@@ -81,10 +81,11 @@ class PN532I2CReader:
 
 
 class SwitchReader:
-    """A single-pole, N-position rotary/toggle switch as a card substitute.
+    """An N-position rotary switch as a card substitute.
 
     Each position closes to a dedicated GPIO (pull-up, active-low), common
-    wired to GND. Exactly one active line reports a synthetic UID for that
+    wired to GND; a multi-pole switch uses only the grounded pole. Exactly one
+    active line reports a synthetic UID for that
     position through the same NfcRuntime/NfcRouter pipeline PN532 cards use;
     zero or more than one active line reports "no card" (mid-rotation or a
     wiring fault), which NfcRuntime already debounces via the removal grace

@@ -15,7 +15,7 @@ root access they require.
 | `messagebox-button.service` | Record, play, and send voice messages |
 | `messagebox-poller.service` | Queue voice messages from configured contacts |
 | `messagebox-sync.service` | Keep the local WhatsApp store synchronized |
-| `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state (or, with `MSGBOX_NFC_TRANSPORT=switch`, read a 5-position rotary switch as a card substitute -- no PN532 reader required) |
+| `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state (or, with `MSGBOX_NFC_TRANSPORT=switch`, read a 4-position rotary switch as a card substitute -- no PN532 reader required) |
 | `messagebox-dash.service` | Serve the optional status and queue dashboard |
 | `messagebox-signal-poller.service` | Queue voice messages from Signal contacts |
 | `messagebox-signal-rest.service` | Run the signal-cli-rest-api container (Signal channel backend) |

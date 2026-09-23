@@ -108,7 +108,10 @@ messagebox-contact remove 123456789@g.us
 
 `add` arms enrollment for the first NFC card for five minutes. Both
 `messagebox-nfc.service` and `messagebox-button.service` must be active, with
-`MSGBOX_NFC_DETECTION_BEEP` enabled. Use `--no-card` only when deliberately
+`MSGBOX_NFC_DETECTION_BEEP` enabled. With `MSGBOX_NFC_TRANSPORT=switch`, each
+switch position acts as a card: after `add`, turn the switch away from and back
+onto the intended position. Enroll every position, because an unenrolled
+position is an unknown card and blocks sending. Use `--no-card` only when deliberately
 adding a contact without a card:
 
 ```sh
@@ -145,7 +148,8 @@ runtime NFC daemon.
 ## Hardware and dashboard
 
 The hardware test checks network access, speaker, microphone, LED, button,
-PN532/card detection, and WhatsApp authentication. It does not send a message or
+PN532/card detection (or every recipient-switch position with
+`MSGBOX_NFC_TRANSPORT=switch`), and WhatsApp authentication. It does not send a message or
 display NFC IDs. Run it directly only in an interactive terminal as the
 `messagebox` service user:
 

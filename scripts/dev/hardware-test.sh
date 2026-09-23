@@ -31,6 +31,10 @@ NFC_RESET_PIN=${MSGBOX_NFC_RESET_PIN:-$(config_value MSGBOX_NFC_RESET_PIN)}
 NFC_RESET_PIN=${NFC_RESET_PIN:-D20}
 NFC_REQUEST_PIN=${MSGBOX_NFC_REQUEST_PIN:-$(config_value MSGBOX_NFC_REQUEST_PIN)}
 NFC_REQUEST_PIN=${NFC_REQUEST_PIN:-D16}
+NFC_TRANSPORT=${MSGBOX_NFC_TRANSPORT:-$(config_value MSGBOX_NFC_TRANSPORT)}
+NFC_TRANSPORT=${NFC_TRANSPORT:-i2c}
+SWITCH_PINS=${MSGBOX_SWITCH_PINS:-$(config_value MSGBOX_SWITCH_PINS)}
+SWITCH_PINS=${SWITCH_PINS:-5,12,13,19}
 NFC_VENV=/opt/messagebox/venv-nfc
 WACLI_STORE_DIR=/var/lib/messagebox/wacli
 export WACLI_STORE_DIR
@@ -199,13 +203,56 @@ else
   fail "No complete button press detected on GPIO$BUTTON_PIN"
 fi
 
-printf '\n6. NFC reader and card\n'
-printf 'After pressing Enter, hold one NFC card on the reader for up to 20 seconds.\n'
-continue_prompt
-if [ ! -x "$NFC_VENV/bin/python" ]; then
-  fail "NFC Python environment is missing at $NFC_VENV"
-elif NFC_RESET_PIN="$NFC_RESET_PIN" NFC_REQUEST_PIN="$NFC_REQUEST_PIN" \
-  "$NFC_VENV/bin/python" - <<'PY'
+if [ "$NFC_TRANSPORT" = switch ]; then
+  printf '\n6. Recipient switch\n'
+  printf 'After pressing Enter, turn the switch through every position within 30 seconds.\n'
+  continue_prompt
+  if SWITCH_PINS="$SWITCH_PINS" python3 - <<'PY'
+import os
+import time
+import _lgpio
+
+pins = [int(pin) for pin in os.environ["SWITCH_PINS"].split(",") if pin.strip()]
+if not pins:
+    raise SystemExit(1)
+chip = _lgpio._gpiochip_open(0)
+if chip < 0:
+    raise SystemExit(1)
+seen = set()
+try:
+    for pin in pins:
+        if _lgpio._gpio_claim_input(chip, 32, pin) != 0:  # pull-up
+            print(f"Could not claim GPIO{pin}; stop Message Box first if it is running.")
+            raise SystemExit(1)
+    deadline = time.monotonic() + 30
+    while len(seen) < len(pins) and time.monotonic() < deadline:
+        # A position counts only when its line is the sole active one, as in
+        # messagebox.nfc.SwitchReader.
+        active = [pin for pin in pins if _lgpio._gpio_read(chip, pin) == 0]
+        if len(active) == 1 and active[0] not in seen:
+            seen.add(active[0])
+            print(f"Position {pins.index(active[0]) + 1} of {len(pins)} detected (GPIO{active[0]}).")
+        time.sleep(0.05)
+finally:
+    _lgpio._gpiochip_close(chip)
+missing = [f"GPIO{pin}" for pin in pins if pin not in seen]
+if missing:
+    print("Not detected: " + ", ".join(missing))
+    raise SystemExit(1)
+PY
+  then
+    pass "Recipient switch"
+  else
+    fail "Not every recipient switch position was detected on GPIO $SWITCH_PINS"
+  fi
+else
+  printf '\n6. NFC reader and card\n'
+  printf 'After pressing Enter, hold one NFC card on the reader for up to 20 seconds.\n'
+  continue_prompt
+  if [ ! -x "$NFC_VENV/bin/python" ]; then
+    fail "NFC Python environment is missing at $NFC_VENV"
+  elif NFC_RESET_PIN="$NFC_RESET_PIN" NFC_REQUEST_PIN="$NFC_REQUEST_PIN" \
+    "$NFC_VENV/bin/python" - <<'PY'
 import os
 
 import board
@@ -220,10 +267,11 @@ pn532.SAM_configuration()
 uid = pn532.read_passive_target(timeout=20)
 raise SystemExit(0 if uid is not None else 1)
 PY
-then
-  pass "PN532 reader and NFC card"
-else
-  fail "PN532 initialized but no card was read"
+  then
+    pass "PN532 reader and NFC card"
+  else
+    fail "PN532 initialized but no card was read"
+  fi
 fi
 
 printf '\n7. WhatsApp client\n'

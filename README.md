@@ -135,6 +135,12 @@ The default public GPIO configuration is:
 | PN532 request | D16 |
 | PN532 data | I²C |
 
+Instead of a PN532 reader, a 4-position rotary switch can select recipients.
+Set `MSGBOX_NFC_TRANSPORT=switch` in `/etc/messagebox/env`, wire the switch
+common to GND and its positions to BCM GPIO 5, 12, 13, and 19
+(`MSGBOX_SWITCH_PINS`). On a multi-pole switch such as a 2P4T, use one pole's
+common and that same pole's four contacts only.
+
 > [!CAUTION]
 > A verified community wiring diagram is not in the repository yet. The pin
 > list above is a software configuration reference, not a complete wiring
@@ -341,7 +347,8 @@ The interactive test checks:
 - microphone and playback
 - button LED
 - record button
-- PN532 reader and an NFC card
+- PN532 reader and an NFC card, or every recipient-switch position when
+  `MSGBOX_NFC_TRANSPORT=switch`
 - WhatsApp authentication
 
 It does not send a WhatsApp message or reveal NFC identifiers.
