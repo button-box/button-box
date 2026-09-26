@@ -564,6 +564,53 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertEqual(state["phone_hint"], "WhatsApp number ending in 0123")
         self.assertFalse(recovered.backup.exists())
 
+    def test_restart_adopts_terminal_linked_store_without_pausing_sync(self):
+        # Terminal onboarding links wacli directly and leaves this state idle.
+        self.engine()
+        self.live_store.mkdir()
+        self.engine()._pause_sync()
+
+        recovered = self.engine(runner=WacliRunner(), recover=True)
+
+        state = recovered.public_state()
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(state["phone_hint"], "WhatsApp number ending in 0123")
+        self.assertFalse(recovered.sync_pause_path.exists())
+        with self.assertRaisesRegex(PairingError, "unlink_current_account_first"):
+            recovered.start("+14155550123")
+
+    def test_restart_keeps_sync_paused_when_idle_store_is_not_proven(self):
+        cases = {
+            "unauthenticated": (WacliRunner(authenticated=False), False),
+            "staged_attempt": (WacliRunner(), True),
+        }
+        for name, (runner, staged) in cases.items():
+            with self.subTest(case=name):
+                self.tearDown()
+                self.setUp()
+                engine = self.engine()
+                self.live_store.mkdir()
+                if staged:
+                    engine.stage.mkdir(mode=0o700)
+                with mock.patch.object(
+                    PairingEngine, "_recover_interrupted_attempt", return_value=None
+                ):
+                    recovered = self.engine(runner=runner, recover=True)
+                self.assertEqual(recovered.public_state()["status"], "idle")
+                self.assertTrue(recovered.sync_pause_path.exists())
+
+    def test_restart_keeps_sync_paused_when_auth_status_fails(self):
+        self.engine()
+        self.live_store.mkdir()
+
+        def failing(arguments, **kwargs):
+            return SimpleNamespace(returncode=1, stdout="", stderr="locked")
+
+        recovered = self.engine(runner=failing, recover=True)
+
+        self.assertEqual(recovered.public_state()["status"], "idle")
+        self.assertTrue(recovered.sync_pause_path.exists())
+
     def test_worker_restart_rolls_back_interrupted_empty_store_move(self):
         engine = self.engine()
         engine._set_state("verifying")
