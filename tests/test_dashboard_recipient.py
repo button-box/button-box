@@ -19,6 +19,7 @@ class DashboardContactTests(unittest.TestCase):
             name: getattr(dashboard, name)
             for name in (
                 "CONTACTS_FILE",
+                "NFC_SELECTION_FILE",
                 "EVENTS_FILE",
                 "QUEUE_DIR",
                 "HOLD_DIR",
@@ -28,6 +29,7 @@ class DashboardContactTests(unittest.TestCase):
             )
         }
         dashboard.CONTACTS_FILE = root / "contacts.json"
+        dashboard.NFC_SELECTION_FILE = root / "nfc-selection.json"
         dashboard.EVENTS_FILE = str(root / "events.jsonl")
         dashboard.QUEUE_DIR = str(root / "queue")
         dashboard.HOLD_DIR = str(root / "queue" / ".hold")
@@ -282,6 +284,33 @@ class DashboardContactTests(unittest.TestCase):
 
         self.assertIsNone(dashboard.contacts_store().resolve_card(private_uid))
         self.assertEqual(dashboard.contacts_store().allowed_jids(), (group,))
+
+    def test_presented_card_unpairs_with_an_empty_form_body(self):
+        """The endpoint takes no fields, so the UI posts an empty body."""
+        from messagebox.nfc_state import SelectionStore
+
+        direct = "15550001@s.whatsapp.net"
+        uid = bytes(range(4))
+        discovered = [{"jid": direct, "label": "Grandma", "kind": "person"}]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.post("/api/contacts", {"action": "add", "jid": direct, "label": "Grandma"})
+        store = dashboard.contacts_store()
+        store.assign_card(direct, uid)
+        SelectionStore(dashboard.NFC_SELECTION_FILE).select(
+            uid, direct, store.public_view()["revision"]
+        )
+
+        code, _body = self.post_form("/nfc/unpair-presented", {})
+
+        self.assertEqual(code, 200)
+        after = dashboard.contacts_store()
+        self.assertIsNone(after.resolve_card(uid))
+        self.assertEqual(after.allowed_jids(), (direct,), "the person is kept")
+
+    def test_empty_form_body_reaches_the_endpoint_rather_than_the_parser(self):
+        code, body = self.post_form("/nfc/unpair-presented", {})
+        self.assertEqual(code, 409)
+        self.assertIn("Present a paired NFC card", body["error"])
 
     def test_add_rejects_malformed_and_undiscovered_jids(self):
         discovered = [
