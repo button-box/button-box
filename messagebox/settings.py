@@ -16,7 +16,7 @@ from messagebox.runtime_paths import APP_DIR, SETTINGS_FILE
 
 
 SCHEMA_VERSION = 1
-RECORDING_MODES = frozenset({"tap_review", "hold_release"})
+RECORDING_MODES = frozenset({"tap_review", "tap_send", "hold_release"})
 AFTER_LISTENING = frozenset({"play_only", "invite_reply"})
 MAX_RECORDING_SECONDS = frozenset({30, 60, 120})
 RINGTONES = {
