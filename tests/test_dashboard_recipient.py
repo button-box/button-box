@@ -19,6 +19,8 @@ class DashboardContactTests(unittest.TestCase):
             name: getattr(dashboard, name)
             for name in (
                 "CONTACTS_FILE",
+                "DISMISSED_CHATS_FILE",
+                "NFC_SELECTION_FILE",
                 "EVENTS_FILE",
                 "QUEUE_DIR",
                 "HOLD_DIR",
@@ -28,6 +30,8 @@ class DashboardContactTests(unittest.TestCase):
             )
         }
         dashboard.CONTACTS_FILE = root / "contacts.json"
+        dashboard.DISMISSED_CHATS_FILE = root / "dismissed-chats.json"
+        dashboard.NFC_SELECTION_FILE = root / "nfc-selection.json"
         dashboard.EVENTS_FILE = str(root / "events.jsonl")
         dashboard.QUEUE_DIR = str(root / "queue")
         dashboard.HOLD_DIR = str(root / "queue" / ".hold")
@@ -282,6 +286,208 @@ class DashboardContactTests(unittest.TestCase):
 
         self.assertIsNone(dashboard.contacts_store().resolve_card(private_uid))
         self.assertEqual(dashboard.contacts_store().allowed_jids(), (group,))
+
+    def test_dismissed_chats_are_flagged_and_can_be_restored(self):
+        """A caregiver can hide a chat they will never message, such as the box's own."""
+        own = "14152309027@s.whatsapp.net"
+        other = "15550001@s.whatsapp.net"
+        discovered = [
+            {"jid": own, "label": own, "kind": "person"},
+            {"jid": other, "label": "Grandma", "kind": "person"},
+        ]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.assertEqual(
+                self.post("/api/contacts", {"action": "dismiss", "jid": own})[0], 200
+            )
+            _code, view = self.get("/api/contacts")
+            flags = {chat["jid"]: chat["dismissed"] for chat in view["discovered"]}
+            self.assertTrue(flags[own])
+            self.assertFalse(flags[other])
+
+            self.assertEqual(
+                self.post("/api/contacts", {"action": "restore", "jid": own})[0], 200
+            )
+            _code, restored = self.get("/api/contacts")
+            self.assertFalse(
+                {chat["jid"]: chat["dismissed"] for chat in restored["discovered"]}[own]
+            )
+
+    def test_dismissing_never_removes_a_configured_contact(self):
+        direct = "15550001@s.whatsapp.net"
+        discovered = [{"jid": direct, "label": "Grandma", "kind": "person"}]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.post("/api/contacts", {"action": "add", "jid": direct, "label": "Grandma"})
+            self.post("/api/contacts", {"action": "dismiss", "jid": direct})
+            _code, view = self.get("/api/contacts")
+
+        self.assertEqual(dashboard.contacts_store().allowed_jids(), (direct,))
+        entry = next(c for c in view["discovered"] if c["jid"] == direct)
+        self.assertTrue(entry["configured"])
+        self.assertFalse(entry["dismissed"], "a configured contact is never hidden")
+
+    def test_add_accepts_a_phone_number_instead_of_a_raw_jid(self):
+        direct = "15550001@s.whatsapp.net"
+        group = "120363000001@g.us"
+        discovered = [
+            {"jid": direct, "label": "Grandma", "kind": "person"},
+            {"jid": group, "label": "Family", "kind": "group"},
+        ]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            # a caregiver types the number as they would read it aloud
+            self.assertEqual(
+                self.post(
+                    "/api/contacts",
+                    {"action": "add", "kind": "person", "phone": "+1 555 0001", "label": "Grandma"},
+                )[0],
+                200,
+            )
+            self.assertEqual(
+                self.post(
+                    "/api/contacts",
+                    {"action": "add", "kind": "group", "phone": "120363000001", "label": "Family"},
+                )[0],
+                200,
+            )
+        self.assertEqual(
+            sorted(dashboard.contacts_store().allowed_jids()), sorted([direct, group])
+        )
+
+    def test_a_typed_number_does_not_have_to_be_a_discovered_chat(self):
+        """The setup flow's add_phone accepts any number; this must match it."""
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=[]):
+            code, _body = self.post(
+                "/api/contacts",
+                {"action": "add", "kind": "person", "phone": "+49 151 12345678", "label": "Oma"},
+            )
+        self.assertEqual(code, 200)
+        self.assertEqual(
+            dashboard.contacts_store().allowed_jids(), ("4915112345678@s.whatsapp.net",)
+        )
+
+    def test_a_jid_from_the_discovered_list_must_still_be_discovered(self):
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=[]):
+            code, _body = self.post(
+                "/api/contacts",
+                {"action": "add", "jid": "15559999@s.whatsapp.net", "label": "Stranger"},
+            )
+        self.assertEqual(code, 400)
+        self.assertEqual(dashboard.contacts_store().allowed_jids(), ())
+
+    def test_add_rejects_a_missing_or_unknown_kind(self):
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=[]):
+            for payload in (
+                {"action": "add", "phone": "15550001", "label": "Grandma"},
+                {"action": "add", "kind": "robot", "phone": "15550001", "label": "Grandma"},
+                {"action": "add", "kind": "person", "phone": "", "label": "Grandma"},
+            ):
+                with self.subTest(payload=payload):
+                    self.assertEqual(self.post("/api/contacts", payload)[0], 400)
+        self.assertEqual(dashboard.contacts_store().allowed_jids(), ())
+
+    def test_unnamed_discovered_chats_never_render_a_raw_jid(self):
+        direct = "15550001@s.whatsapp.net"
+        group = "120363000001@g.us"
+        discovered = [
+            {"jid": direct, "label": direct, "kind": "person"},
+            {"jid": group, "label": group, "kind": "group"},
+        ]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            code, view = self.get("/api/contacts")
+
+        self.assertEqual(code, 200)
+        labels = {chat["label"] for chat in view["discovered"]}
+        self.assertEqual(labels, {"+15550001", "Unnamed group"})
+        for chat in view["discovered"]:
+            self.assertNotIn("@", chat["label"])
+
+    def test_rename_preserves_identity_cards_and_default(self):
+        """BB-RECIP-11: renaming changes only the label."""
+        direct = "15550001@s.whatsapp.net"
+        discovered = [{"jid": direct, "label": "Grandma", "kind": "person"}]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.post("/api/contacts", {"action": "add", "jid": direct, "label": "Grandma"})
+        store = dashboard.contacts_store()
+        store.assign_card(direct, bytes(range(4)))
+        store.choose_default_recipient(direct)
+
+        self.assertEqual(
+            self.post(
+                "/api/contacts",
+                {"action": "rename", "jid": direct, "label": "Oma"},
+            )[0],
+            200,
+        )
+
+        code, view = self.get("/api/contacts")
+        self.assertEqual(code, 200)
+        self.assertEqual(view["contacts"][direct]["label"], "Oma")
+        self.assertEqual(view["contacts"][direct]["card_count"], 1)
+        self.assertEqual(view["default_recipient"], direct)
+        self.assertEqual(dashboard.contacts_store().allowed_jids(), (direct,))
+
+    def test_default_recipient_can_move_between_configured_contacts(self):
+        """BB-RECIP-07: the default can change, unlike during onboarding."""
+        first = "15550001@s.whatsapp.net"
+        second = "15550002@s.whatsapp.net"
+        discovered = [
+            {"jid": first, "label": "Grandma", "kind": "person"},
+            {"jid": second, "label": "Papa", "kind": "person"},
+        ]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.post("/api/contacts", {"action": "add", "jid": first, "label": "Grandma"})
+            self.post("/api/contacts", {"action": "add", "jid": second, "label": "Papa"})
+
+        self.assertEqual(
+            self.post("/api/contacts", {"action": "default", "jid": first})[0], 200
+        )
+        self.assertEqual(self.get("/api/contacts")[1]["default_recipient"], first)
+
+        # set_default_recipient would refuse this; choose_ must not.
+        self.assertEqual(
+            self.post("/api/contacts", {"action": "default", "jid": second})[0], 200
+        )
+        self.assertEqual(self.get("/api/contacts")[1]["default_recipient"], second)
+        self.assertEqual(
+            sorted(dashboard.contacts_store().allowed_jids()), sorted([first, second])
+        )
+
+    def test_rename_and_default_reject_unknown_contacts(self):
+        for payload in (
+            {"action": "rename", "jid": "15559999@s.whatsapp.net", "label": "Nobody"},
+            {"action": "default", "jid": "15559999@s.whatsapp.net"},
+        ):
+            with self.subTest(action=payload["action"]):
+                code, body = self.post("/api/contacts", payload)
+                self.assertEqual(code, 400)
+                self.assertFalse(body["ok"])
+        self.assertIsNone(self.get("/api/contacts")[1]["default_recipient"])
+
+    def test_presented_card_unpairs_with_an_empty_form_body(self):
+        """The endpoint takes no fields, so the UI posts an empty body."""
+        from messagebox.nfc_state import SelectionStore
+
+        direct = "15550001@s.whatsapp.net"
+        uid = bytes(range(4))
+        discovered = [{"jid": direct, "label": "Grandma", "kind": "person"}]
+        with patch.object(dashboard, "discover_whatsapp_chats", return_value=discovered):
+            self.post("/api/contacts", {"action": "add", "jid": direct, "label": "Grandma"})
+        store = dashboard.contacts_store()
+        store.assign_card(direct, uid)
+        SelectionStore(dashboard.NFC_SELECTION_FILE).select(
+            uid, direct, store.public_view()["revision"]
+        )
+
+        code, _body = self.post_form("/nfc/unpair-presented", {})
+
+        self.assertEqual(code, 200)
+        after = dashboard.contacts_store()
+        self.assertIsNone(after.resolve_card(uid))
+        self.assertEqual(after.allowed_jids(), (direct,), "the person is kept")
+
+    def test_empty_form_body_reaches_the_endpoint_rather_than_the_parser(self):
+        code, body = self.post_form("/nfc/unpair-presented", {})
+        self.assertEqual(code, 409)
+        self.assertIn("Present a paired NFC card", body["error"])
 
     def test_add_rejects_malformed_and_undiscovered_jids(self):
         discovered = [

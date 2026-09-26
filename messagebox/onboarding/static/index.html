@@ -7,6 +7,7 @@
   <title>Button Box</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/clipboard.js" defer></script>
+  <script src="/static/countries.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -130,11 +131,10 @@
       <h2>Connections and people</h2>
       <div class="shortcut-grid">
         <a id="advanced-connections-setup" href="#setup" class="shortcut"><strong>Wi-Fi and WhatsApp</strong><span>Reconnect, relink, or continue setup.</span></a>
-        <a id="advanced-recipients-setup" href="#setup" class="shortcut"><strong>Recipients and NFC cards</strong><span>Add, remove, select, pair, reassign, or unpair.</span></a>
+        <a id="advanced-recipients-setup" href="#people" class="shortcut"><strong>Recipients and NFC cards</strong><span>See who Button Box can send to, their cards, and the default.</span></a>
       </div>
       <div class="button-row">
         <button type="button" id="manage-whatsapp" class="secondary">Manage WhatsApp</button>
-        <button type="button" id="manage-recipients" class="secondary">Manage recipients</button>
       </div>
       <details class="settings-detail">
         <summary>Change Wi-Fi network</summary>
@@ -335,6 +335,44 @@
       <button type="button" id="open-recipient-manager">Manage recipients</button>
     </section>
 
+    <section class="card" id="people-view" aria-labelledby="people-title" hidden>
+      <p class="eyebrow">Connections and people</p>
+      <h1 id="people-title" tabindex="-1">Recipients and NFC cards</h1>
+      <p class="lede">Everyone Button Box can send to, and the cards paired to them. Messages sent without a card go to the default recipient.</p>
+
+      <div class="people-primary">
+        <button type="button" id="people-add-open">Add a contact</button>
+      </div>
+      <p id="people-status" class="field-help" role="status" aria-live="polite"></p>
+      <button type="button" id="people-cancel-pairing" class="text-button" hidden>Cancel card pairing</button>
+
+      <ul id="people-list" class="recipient-list"></ul>
+      <div id="people-empty" class="notice" hidden>
+        <strong>Nobody is set up yet</strong>
+        <span>Add a contact above, then pair a card to them.</span>
+      </div>
+
+      <section id="people-suggestions" class="people-section" hidden>
+        <h2 class="section-title">Suggestions from WhatsApp</h2>
+        <p class="field-help">People who have messaged this Button Box but are not set up yet.</p>
+        <ul id="people-discovered" class="recipient-list"></ul>
+        <div id="people-discovered-empty" class="notice" hidden>
+          <strong>Nothing to suggest</strong>
+          <span>Everyone who has messaged this Button Box is either set up or dismissed.</span>
+        </div>
+        <button type="button" id="people-show-hidden" class="text-button" hidden></button>
+      </section>
+
+      <section class="people-section people-footer">
+        <h2 class="section-title">Card maintenance</h2>
+        <p class="field-help">Hold a card on Button Box, then press Unpair. Whichever card it is reading is the one that gets unpaired, so the wrong one cannot be removed by mistake. The person and their other cards are kept.</p>
+        <div class="button-row">
+          <button type="button" id="people-unpair-card" class="secondary">Unpair the card on the reader</button>
+        </div>
+        <p class="field-help"><a id="people-setup" href="#setup">Open the full setup flow</a></p>
+      </section>
+    </section>
+
     <section class="card" id="recipient-manager-view" aria-labelledby="recipient-manager-title" hidden>
       <p class="eyebrow success">Messaging ready</p>
       <h1 id="recipient-manager-title" tabindex="-1">Recipients</h1>
@@ -465,6 +503,41 @@
       <a id="owner-community" class="button community" href="https://chat.whatsapp.com/FJ8LYL79k8zEMfoiyPjLPb?mode=gi_t" target="_blank" rel="noopener noreferrer">Join the owner community <span class="sr-only">(opens WhatsApp in a new tab)</span></a>
     </footer>
   </main>
+
+  <dialog id="add-contact-dialog" aria-labelledby="add-contact-title">
+    <form id="people-add-form" class="compact-form">
+      <h2 id="add-contact-title">Add a contact</h2>
+      <fieldset>
+        <legend>Who is this?</legend>
+        <label class="choice"><input id="people-kind-person" type="radio" name="people_kind" value="person" checked> Person</label>
+        <label class="choice"><input id="people-kind-group" type="radio" name="people_kind" value="group"> Group</label>
+      </fieldset>
+      <div id="people-person-fields">
+        <label for="people-country-search">Country</label>
+        <div class="combo">
+          <input id="people-country-search" type="text" role="combobox" aria-expanded="false" aria-controls="people-country-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search countries">
+          <div id="people-country-list" role="listbox" aria-label="Countries" hidden></div>
+        </div>
+        <input id="people-country" type="hidden" value="US">
+        <label for="people-add-id">Phone number</label>
+        <input id="people-add-id" inputmode="tel" autocomplete="tel-national" placeholder="(650) 695-7627">
+        <p id="people-add-preview" class="field-help"></p>
+      </div>
+      <div id="people-group-fields" hidden>
+        <label for="people-group-id">Group ID</label>
+        <input id="people-group-id" inputmode="numeric" autocomplete="off" placeholder="120363000000000000">
+        <p class="field-help">The numeric group ID, digits only. Button Box must already be in the group.</p>
+      </div>
+      <label for="people-add-name">Name <span class="optional">optional</span></label>
+      <input id="people-add-name" type="text" maxlength="80" autocomplete="name" placeholder="Oma">
+      <p id="people-add-help" class="field-help">Any WhatsApp number. Button Box cannot check it exists until the first message is sent.</p>
+      <p id="people-add-error" class="status" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button id="people-add-submit" type="submit">Add</button>
+        <button type="button" id="people-add-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
   </div>
 </body>
 </html>
