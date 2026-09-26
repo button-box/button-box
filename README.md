@@ -57,7 +57,7 @@ For repeatable release and per-unit verification, use the
 | Board | Current status | What to expect |
 | --- | --- | --- |
 | **Raspberry Pi 4B** | Recommended for a first build | The public installation path has been physically exercised through Wi-Fi and WhatsApp readiness. |
-| **Raspberry Pi Zero 2 W** | Supported device target; public installation gap | It needs an OTG USB hub for the USB microphone and speaker. On current `main`, provisioning stops at the Pi-4-only Comitup installer, so the fresh-card community path still needs validation. |
+| **Raspberry Pi Zero 2 W** | Community-tested on one unit | It needs an OTG USB hub for the USB microphone and speaker. One fresh-card build has completed terminal onboarding (Path A), send, reply, playback, NFC routing, and reboot. Browser Wi-Fi onboarding (Path B) has not been validated on this board. |
 
 Do not bypass a board-safety check on a working device. If you want to help
 finish the Zero 2 W path, please join the community or open a focused pull
@@ -261,10 +261,9 @@ exit
 ## Step 6 — Install Button Box
 
 > [!IMPORTANT]
-> Continue with the automated public installer on Raspberry Pi 4B. On current
-> `main`, the install stops on Pi Zero 2 W because `scripts/install/comitup.sh`
-> is explicitly validated only on Pi 4. Zero 2 W runtime support remains, but
-> its fresh-card installation path needs a tested repository change.
+> The installer's board check accepts Raspberry Pi 4B and Raspberry Pi Zero 2 W
+> and refuses other boards. The Zero 2 W fresh-card path has not yet been
+> physically validated end to end; report what you tested.
 
 From the repository root on your computer:
 
@@ -405,7 +404,7 @@ on the physical device.
 | --- | --- | --- |
 | Device runtime | **Experimental** | Recording, sending, receiving, playback, fail-closed recipient routing, and NFC support exist. |
 | Raspberry Pi 4B | **Supported** | A brand-new-card installation has been physically completed through Wi-Fi and WhatsApp onboarding. |
-| Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
+| Raspberry Pi Zero 2 W | **Community-tested** | One fresh-card build has completed terminal onboarding, send, reply, playback, NFC routing, and reboot. Browser Wi-Fi onboarding has not been validated on this board. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
 | Recipient and NFC browser onboarding | **Experimental** | Repository coverage is included; fresh-Pi NFC and final activation acceptance are still required. |
 | Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
@@ -459,11 +458,11 @@ or with `ssh -i`.
 On macOS, confirm that `rsync --version` reports modern GNU rsync and rerun
 provisioning with Homebrew first in `PATH`.
 
-### The installer says Comitup is validated only on Raspberry Pi 4
+### The installer says Comitup is validated only on Raspberry Pi 4 and Raspberry Pi Zero 2 W
 
-You are installing on a different Pi model. This is the current public Zero 2 W
-installation gap described above. Do not edit out the model check on a working
-device; follow or help with the clean-install validation work instead.
+You are installing on a Pi model without a validated installation path. Do not
+edit out the model check on a working device; follow or help with the
+clean-install validation work instead.
 
 ### The setup hotspot does not appear
 
