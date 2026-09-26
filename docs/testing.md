@@ -30,6 +30,73 @@ assertion in this matrix.
 | `BB-RQ-001` | Caregiver requeues recently played media | Archive synthetic voice audio and an ordinary video soundtrack after playback. The dashboard returns safe newest-first metadata and an opaque handle. Each replay appends after existing waiting messages using a fresh queue identity while preserving its original history identity, exact sender/chat display identity, and routing sidecar. An active replay is absent from Recently played until it is played again, including while held or in trash. Repeated and concurrent requests create one playable WAV; claim, release, recovery, hold, trash, and replay scans observe complete transitions. Restart preserves real queued state, while interrupted publication or archive commits recover without a phantom duplicate. Expired, missing or policy-pruned media cannot stream or requeue. | `tests/test_played_history.py::PlayedHistoryTests`, `tests/test_dashboard_queue_hold.py::DashboardQueueHoldTests::test_recently_played_is_newest_first_safe_and_requeues_once`, `tests/test_dashboard_queue_hold.py::DashboardQueueHoldTests::test_dashboard_move_waits_for_replay_history_transition`, and the recently-played cases in `tests/onboarding-ui.test.js` | On a test box at the exact candidate revision, leave two synthetic messages waiting, then requeue a retained voice note and ordinary video soundtrack. Confirm both append in request order with the original sender/chat labels and disappear from Recently played while queued, held or in trash. Refresh and restart before playback, then verify exactly one playback each, that each returns to Recently played only after playback, and that reply routing remains bound to the original chats. Confirm a deliberately expired or pruned fixture cannot stream or requeue. Do not treat circular video notes as supported. |
 | `BB-RT-001` | Recent-sender routing cannot drift during replay or bypass NFC | Archive an older message from sender A and a newer message from sender B. Requeue B and move it through queue, in-flight, hold, and trash; B remains the recent route even while hidden from Recently played. A removed or invalid fresh B route blocks instead of choosing A or the default. With no card or claimed inbound, standalone hold-release and tap-review sessions use fresh B; a fresh card still wins, and unknown-card or unhealthy-reader state blocks. No/expired history alone permits the configured default. | `tests/test_played_history.py::PlayedHistoryTests::test_active_newest_replay_remains_the_recent_route_in_every_queue_state`, `tests/test_played_history.py::PlayedHistoryTests::test_invalid_or_removed_newest_route_never_selects_an_older_sender`, and the recent-routing cases in `tests/test_button_routing.py` | On the exact candidate revision, play messages from two test chats, requeue the newer one, and exercise both recording modes. Verify replies stay bound to the newer chat through refresh/restart/hold/trash, a fresh NFC choice overrides it, and removed-contact, unknown-card, and unavailable-reader states block without sending to an older/default chat. |
 
+## Dedicated test rig
+
+Stage One is an opt-in evidence and reproduction layer. It does not run Codex on
+the Pi, modify code, deploy builds, or open pull requests automatically. Keep a
+separate Pi and microSD card for this role; do not enable it on a household box.
+
+After provisioning the exact test Pi, enable reporting by repeating its short
+hostname explicitly:
+
+```sh
+hostname -s
+sudo messagebox-test enable --device button-box-003
+```
+
+The command refuses a name that does not match the current device. Once enabled,
+the onboarding portal and dashboard show a **Report problem** panel. The tester
+can add a short, non-identifying observation, create the report, and either copy
+its Markdown or download its JSON. The collector emits only allowlisted state,
+service status, hardware-presence booleans, the boot ID, the installed Git
+revision, and the current guided-run result. It does not read messages, audio,
+contacts, credentials, network identifiers, NFC card IDs, or raw logs. Do not
+put names, phone numbers, message text, or other customer information in the
+optional note.
+
+Disable the panel with:
+
+```sh
+sudo messagebox-test disable
+```
+
+### Guided daily scenarios
+
+Start a run before the attended physical test:
+
+```sh
+sudo messagebox-test start smoke
+sudo messagebox-test start hardware
+sudo messagebox-test start onboarding
+sudo messagebox-test start message-loop
+sudo messagebox-test start full
+```
+
+The command prints the exact `record` commands for its scenario. Record each
+observable gate as `pass`, `fail`, or `skip`, then finish the run:
+
+```sh
+sudo messagebox-test record message-received pass
+sudo messagebox-test record message-played fail
+sudo messagebox-test finish
+```
+
+`finish` succeeds only when every step passed or was explicitly skipped; any
+failure or pending step returns a non-zero exit status. A report preserves the
+partial transition—for example, received `true`, played `false`, replied
+`false`—without including who sent the message or its content.
+
+For a terminal-only bundle, run:
+
+```sh
+messagebox-test report --surface onboarding
+messagebox-test report --surface dashboard --json
+```
+
+Attach the sanitized bundle to the GitHub issue or paste the Markdown into a
+Codex task. Reproduce on the test rig and keep fixes on a branch until review;
+production and household devices remain outside this workflow.
+
 ## Physical test scenarios
 
 Use a spare Raspberry Pi 4 with a freshly imaged test microSD card. Confirm it
@@ -40,6 +107,9 @@ For installation and consumer onboarding, test:
 - Clean installation and manufacturer handoff
 - Wi-Fi success, failure, and recovery
 - WhatsApp pairing and interruption
+- From the WhatsApp-ready view, choose a recipient and wait at least 3.5 seconds
+  (more than two 1.5-second poll cycles); the recipient chooser must remain open.
+  Record this as `recipient-chooser-stable` before selecting a recipient.
 - Empty-account recipient discovery and manual refresh
 - Manual international-number selection and allow-listing, including invalid
   formats, duplicates, and default preservation when merely adding a recipient
