@@ -65,8 +65,13 @@ request with the board and physical checks you performed.
 
 ### Parts with purchase links
 
-Choose one Pi, its matching power supply, and the shared parts below. We are not
-affiliated with these retailers.
+Two versions exist — pick the parts list that matches your enclosure:
+the [US parts list](#us-parts-list) or the [European parts list](#european-parts-list).
+We are not affiliated with these retailers.
+
+#### US parts list
+
+Choose one Pi, its matching power supply, and the shared parts below.
 
 - **Raspberry Pi Zero 2 W:** [official product and reseller page](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/?variant=raspberry-pi-zero-2-w)
 - **Or Raspberry Pi 4B:** [PiShop.US](https://www.pishop.us/product/raspberry-pi-4-model-b-1gb/), [Vilros](https://vilros.com/products/raspberry-pi-4-model-b-1), or [CanaKit](https://www.canakit.com/raspberry-pi-4.html)
@@ -79,6 +84,27 @@ affiliated with these retailers.
 - **NFC reader:** The original NFC build uses the [HiLetgo PN532 NFC/RFID module kit](https://www.amazon.com/dp/B01I1J17LC) and needs soldering. If you do not want to solder, use a Waveshare PN532 NFC HAT instead.
 - **Optional M2.5 screws, nuts, and washers:** [Amazon](https://www.amazon.com/dp/B0FJ1XN2XP) — useful for mounting the Pi or NFC board inside a custom enclosure; not required for a shoebox prototype
 
+The US reference-parts list is approximately **$150 before the enclosure,
+Zero 2 W adapters, NFC tokens, shipping, and taxes**. Retailer prices and
+availability change.
+
+This is our current US reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The Original / US printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
+
+#### European parts list
+
+For the [EU S8 enclosure](hardware/enclosure/README.md) (EL001 speaker).
+Full parts list: [EU BOM](hardware/enclosure/eu-el001/BOM.md).
+
+- **Raspberry Pi 4 Model B (1 GB)**
+- **32 GB microSD card**
+- **HOTUT USB conference mic**
+- **EL-001 USB soundbar**
+- **EU USB mains supply** — 15 W USB-C recommended
+- **EG STARTS 100 mm illuminated arcade button, blue:** [Amazon](https://www.amazon.com/dp/B072JLSH34)
+- **Waveshare PN532 NFC HAT**
+- **Full-size NFC cards**
+- **Mounting fasteners, hook-up wire, and PLA feedstock** for the printed enclosure
+
 You will also need:
 
 - **NFC cards or tokens:** [Adafruit 13.56 MHz Classic 1K card](https://www.adafruit.com/product/359), which Adafruit states is tested with PN532 readers
@@ -88,12 +114,6 @@ You will also need:
 - **An enclosure:** use a [printable enclosure](hardware/enclosure/README.md) — available in US and European versions, each with its own parts list — a shoebox, or another sturdy, non-conductive container.
 - **A computer with internet access** for preparing and provisioning the Pi
 - **A new, dedicated phone number for the Button Box WhatsApp account.** Add a line or eSIM through your mobile provider, activate it in the WhatsApp mobile app on a phone, and then link Button Box as a companion device.
-
-The current reference-parts list is approximately **$150 before the enclosure,
-Zero 2 W adapters, NFC tokens, shipping, and taxes**. Retailer prices and
-availability change.
-
-This is our current reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
 
 ### What the build takes
 
