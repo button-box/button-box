@@ -85,7 +85,7 @@ You will also need:
 - **Hook-up wire and insulated connectors:** [0.25-inch arcade-button wire pairs](https://www.adafruit.com/product/3838) and an [assorted 2.8/4.8/6.3 mm spade-connector kit](https://www.adafruit.com/product/4748) are examples; confirm the terminal sizes on your button before ordering
 - **A microSD-card reader that fits your computer:** [USB-C example](https://www.adafruit.com/product/5212) or [USB-A example](https://www.adafruit.com/product/939)
 - **For Pi Zero 2 W, a suitable OTG USB hub**, powered if your selected audio devices require it. This [micro-USB OTG mini hub](https://www.adafruit.com/product/2991) is an example only; it has not yet been physically validated with the reference microphone and speaker.
-- **An enclosure:** use the [printable prototype enclosure](hardware/enclosure/README.md), a shoebox, or another sturdy, non-conductive container.
+- **An enclosure:** use a [printable enclosure](hardware/enclosure/README.md) — available in US and European versions, each with its own parts list — a shoebox, or another sturdy, non-conductive container.
 - **A computer with internet access** for preparing and provisioning the Pi
 - **A new, dedicated phone number for the Button Box WhatsApp account.** Add a line or eSIM through your mobile provider, activate it in the WhatsApp mobile app on a phone, and then link Button Box as a companion device.
 
@@ -589,3 +589,4 @@ hardware, software, and audio remain subject to their own licenses and terms.
 Button Box uses [wacli](https://github.com/openclaw/wacli) and
 [Comitup](https://github.com/davesteele/comitup). It is not affiliated with or
 endorsed by WhatsApp or Meta.
+--- sha: f40a0195ab57e6bc33c950bdb755f7ea276145e4 ---
