@@ -1,17 +1,15 @@
 # Button Box enclosure
 
-For the European EL001 speaker, use the [EU S8 enclosure](eu-el001/README.md), with editable STEP/source and matching print meshes.
+## Print files
 
-The original STL files below form the earlier two-part prototype enclosure:
-
-- [Top](button-box-enclosure-top.stl)
-- [Bottom](button-box-enclosure-bottom.stl)
+- 🇪🇺 **European — EU S8 (EL001 speaker):** [base-print.stl](eu-el001/exports/base-print.stl) · [lid-print.stl](eu-el001/exports/lid-print.stl) — [all exports](eu-el001/exports) · [details, STEP source and rebuild](eu-el001/README.md)
+- 🇺🇸 **Original / US — two-part prototype:** [Top](button-box-enclosure-top.stl) · [Bottom](button-box-enclosure-bottom.stl)
 
 The meshes share a 192 mm by 120 mm footprint when interpreted in millimeters.
 The top is approximately 74.5 mm tall and the bottom is approximately 20.5 mm
 tall.
 
-Measured from `button-box-enclosure-top.stl`, for checking parts before printing:
+Measured from `button-box-enclosure-top.stl` (original / US), for checking parts before printing:
 
 - Button opening approximately 87-93 mm across, centred 43 mm from the middle
   along the long axis
