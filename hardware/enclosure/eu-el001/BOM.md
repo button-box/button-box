@@ -3,7 +3,7 @@
 Reference parts list for the **European EU S8 enclosure** (EL001 speaker).
 Print files: [base-print.stl](exports/base-print.stl) · [lid-print.stl](exports/lid-print.stl).
 
-Prices checked 27 Sep 2026; retailers change stock and pricing.
+Prices checked 27 Sep 2026; retailers change stock and pricing. We don't endorse any retailer.
 
 | # | Part | Qty | Buy | Notes |
 | --- | --- | --- | --- | --- |
