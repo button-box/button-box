@@ -339,7 +339,7 @@ class WhatsAppPairingTests(unittest.TestCase):
         self.assertTrue(any("--refresh-groups" in command for command in commands))
         refresh_command = next(command for command in commands if "--refresh-groups" in command)
         self.assertIn("--max-messages", refresh_command)
-        self.assertEqual(refresh_command[refresh_command.index("--max-messages") + 1], "1000")
+        self.assertEqual(refresh_command[refresh_command.index("--max-messages") + 1], "0")
         preserved = self.candidates.read_bytes()
 
         runner = WacliRunner(sync_ok=False)
