@@ -2,6 +2,8 @@
 
 ## BOM
 
+Two build versions exist: the **US reference build** below (pairs with the [Original / US enclosure](enclosure/README.md)), and the **EU build** ([EU BOM](enclosure/eu-el001/BOM.md), pairs with the [EU S8 enclosure](enclosure/README.md)).
+
 | Item | Approx. price | Sources |
 | --- | ---: | --- |
 | Raspberry Pi 4 Model B, 1 GB RAM | $40 | [PiShop.US](https://www.pishop.us/product/raspberry-pi-4-model-b-1gb/), [Vilros](https://vilros.com/products/raspberry-pi-4-model-b-1), [CanaKit](https://www.canakit.com/raspberry-pi-4.html) |
@@ -172,3 +174,4 @@ The prototype Button Box enclosure has two printable parts:
 - [Bottom](enclosure/button-box-enclosure-bottom.stl)
 
 See the [enclosure notes](enclosure/README.md) for dimensions.
+--- sha: e7db09144e54df7cedc67581782deb3ab0f056a4 ---
