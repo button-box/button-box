@@ -325,6 +325,13 @@ class WhatsAppPairingTests(unittest.TestCase):
         def observe_pause(arguments, **kwargs):
             if "sync" in arguments:
                 pause_observations.append(engine.sync_pause_path.exists())
+                # wacli applies this cap to all stored messages, not just the
+                # messages received during this refresh. Model existing history.
+                cap = int(arguments[arguments.index("--max-messages") + 1])
+                if cap and cap <= 1200:
+                    return SimpleNamespace(returncode=1, stdout="{}", stderr="message cap")
+                self.assertEqual(kwargs["timeout"], 25)
+                self.assertEqual(kwargs["env"]["WACLI_SYNC_MAX_DB_SIZE"], "2GB")
             return runner(arguments, **kwargs)
 
         engine.run = observe_pause
