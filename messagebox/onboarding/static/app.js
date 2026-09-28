@@ -18,6 +18,7 @@ const views = [
   "voice-test",
   "voice-success",
   "recipient-manager",
+  "people",
   "nfc",
   "nfc-choose",
   "nfc-mapped",
@@ -34,6 +35,9 @@ let recipientsData = null;
 let managerOpen = false;
 let nfcData = null;
 let nfcPollTimer = null;
+let peoplePairing = null;
+let peopleShowHidden = false;
+let peoplePollTimer = null;
 let runtimePairing = null;
 let runtimePairingGeneration = 0;
 let currentState = null;
@@ -447,6 +451,575 @@ function renderRecipientManager(data) {
     )),
   );
   document.getElementById("manager-empty").hidden = available.length !== 0;
+}
+
+function personRow(person, isDefault) {
+  const row = document.createElement("li");
+  row.className = "recipient-row";
+  const copy = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = person.label;
+  const meta = document.createElement("span");
+  meta.className = "recipient-secondary";
+  const cards = person.card_count
+    ? `${person.card_count} card${person.card_count === 1 ? "" : "s"}`
+    : "no card";
+  meta.textContent = isDefault
+    ? `${person.kind} \u00b7 default \u00b7 ${cards}`
+    : `${person.kind} \u00b7 ${cards}`;
+  copy.append(name, meta);
+  row.append(copy);
+  const controls = document.createElement("div");
+  controls.className = "recipient-actions";
+  const rename = acceptanceControl("button", "BB-RECIP-11");
+  rename.type = "button";
+  rename.className = "compact";
+  rename.textContent = "Rename";
+  rename.addEventListener("click", () => beginPersonRename(row, person));
+  controls.append(rename);
+  const pair = acceptanceControl("button", "BB-NFC-03");
+  pair.type = "button";
+  pair.className = "compact";
+  pair.textContent = person.card_count ? "Pair another card" : "Pair card";
+  pair.disabled = Boolean(peoplePairing?.pending);
+  pair.addEventListener("click", () => beginPersonCardPairing(pair, person));
+  controls.append(pair);
+  if (!isDefault) {
+    const makeDefault = acceptanceControl("button", "BB-RECIP-07");
+    makeDefault.type = "button";
+    makeDefault.className = "secondary compact";
+    makeDefault.textContent = "Make default";
+    makeDefault.addEventListener("click", () => personAction(makeDefault, {
+      action: "default",
+      jid: person.jid,
+    }));
+    controls.append(makeDefault);
+  }
+  row.append(controls);
+  return row;
+}
+
+async function personAction(button, payload) {
+  const status = document.getElementById("people-status");
+  button.disabled = true;
+  status.textContent = "Saving\u2026";
+  try {
+    await request("/api/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await loadPeople();
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+function beginPersonRename(row, person) {
+  if (row.querySelector(".recipient-rename")) return;
+  const form = document.createElement("form");
+  form.className = "recipient-rename";
+  const label = document.createElement("label");
+  label.textContent = "Name";
+  const input = document.createElement("input");
+  input.name = "name";
+  input.type = "text";
+  input.maxLength = 80;
+  input.value = person.label;
+  label.append(input);
+  const controls = document.createElement("div");
+  controls.className = "button-row";
+  const save = acceptanceControl("button", "BB-RECIP-11");
+  save.type = "submit";
+  save.className = "compact";
+  save.textContent = "Save";
+  const cancel = acceptanceControl("button", "BB-RECIP-11");
+  cancel.type = "button";
+  cancel.className = "secondary compact";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => form.remove());
+  controls.append(save, cancel);
+  form.append(label, controls);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    personAction(save, { action: "rename", jid: person.jid, label: input.value });
+  });
+  row.append(form);
+  input.focus();
+}
+
+function countryFlag(code) {
+  // Regional indicator symbols: 'A' (65) maps to U+1F1E6.
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+}
+
+function countryList() {
+  return window.BUTTON_BOX_COUNTRIES || [];
+}
+
+let countryChoice = "US";
+let countryHighlight = 0;
+
+function selectedCountry() {
+  return countryList().find((entry) => entry[0] === countryChoice)
+    || ["US", "United States", "1", [10], { 10: [[3, 3, 4], "($1) $2-$3"] }];
+}
+
+function countryDisplay([code, name, dial]) {
+  return `${countryFlag(code)}  ${name}  +${dial}`;
+}
+
+// Countries this household reaches most often, kept above the alphabet.
+const PINNED_COUNTRIES = ["US", "GB", "DE", "PT", "AU"];
+
+function countryMatches(query) {
+  const needle = query.trim().toLowerCase();
+  const all = countryList();
+  const digits = needle.replace(/\D/g, "");
+  const hits = (entry) => {
+    if (!needle) return true;
+    const name = entry[1].toLowerCase();
+    return name.includes(needle)
+      || entry[0].toLowerCase() === needle
+      || (digits && entry[2].startsWith(digits));
+  };
+  const pinned = PINNED_COUNTRIES
+    .map((code) => all.find((entry) => entry[0] === code))
+    .filter((entry) => entry && hits(entry));
+  const isPinned = new Set(pinned.map((entry) => entry[0]));
+  const starts = [];
+  const contains = [];
+  for (const entry of all) {
+    if (isPinned.has(entry[0]) || !hits(entry)) continue;
+    const name = entry[1].toLowerCase();
+    if (!needle || name.startsWith(needle) || (digits && entry[2].startsWith(digits))) {
+      starts.push(entry);
+    } else {
+      contains.push(entry);
+    }
+  }
+  return { list: pinned.concat(starts, contains).slice(0, 60), pinned: pinned.length };
+}
+
+function renderCountryOptions(query) {
+  const list = document.getElementById("people-country-list");
+  const { list: matches, pinned } = countryMatches(query);
+  countryHighlight = Math.min(countryHighlight, Math.max(matches.length - 1, 0));
+  list.replaceChildren(...matches.map((entry, index) => {
+    const item = document.createElement("div");
+    item.setAttribute("role", "option");
+    item.dataset.code = entry[0];
+    item.setAttribute("aria-selected", String(index === countryHighlight));
+    // A rule under the last pinned country, without an extra node that would
+    // break the keyboard index into this list.
+    if (pinned && index === pinned - 1 && matches.length > pinned) {
+      item.classList.add("combo-pinned-end");
+    }
+    item.textContent = `${countryFlag(entry[0])}  ${entry[1]}  `;
+    const dial = document.createElement("span");
+    dial.className = "combo-dial";
+    dial.textContent = `+${entry[2]}`;
+    item.append(dial);
+    item.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      chooseCountry(entry[0]);
+    });
+    return item;
+  }));
+  list.hidden = matches.length === 0;
+  document.getElementById("people-country-search")
+    .setAttribute("aria-expanded", String(!list.hidden));
+  return matches;
+}
+
+function closeCountryList() {
+  const list = document.getElementById("people-country-list");
+  list.hidden = true;
+  document.getElementById("people-country-search").setAttribute("aria-expanded", "false");
+}
+
+function chooseCountry(code) {
+  countryChoice = code;
+  document.getElementById("people-country").value = code;
+  document.getElementById("people-country-search").value = countryDisplay(selectedCountry());
+  closeCountryList();
+  renderNumberPreview();
+}
+
+function populateCountries() {
+  const region = (navigator.language || "").split("-")[1];
+  const known = countryList().some((entry) => entry[0] === region);
+  chooseCountry(known ? region : "US");
+}
+
+function nationalDigits(value) {
+  return (value || "").replace(/\D/g, "");
+}
+
+function applyTemplate(template, parts) {
+  return template.replace(/\$(\d)/g, (_match, index) => parts[Number(index) - 1] || "");
+}
+
+const leadingPatterns = new Map();
+
+function leadingMatches(pattern, digits) {
+  if (!pattern) return true;
+  let expression = leadingPatterns.get(pattern);
+  if (!expression) {
+    expression = new RegExp(`^(?:${pattern})`);
+    leadingPatterns.set(pattern, expression);
+  }
+  return expression.test(digits);
+}
+
+function absorb(lows, highs, length) {
+  const sizes = lows.slice();
+  let slack = length - sizes.reduce((total, size) => total + size, 0);
+  if (slack < 0) return null;
+  for (let index = sizes.length - 1; index >= 0 && slack > 0; index -= 1) {
+    const take = Math.min(highs[index] - lows[index], slack);
+    sizes[index] += take;
+    slack -= take;
+  }
+  return slack === 0 ? sizes : null;
+}
+
+function formatFor(entry, digits) {
+  const formats = entry[4] || [];
+  // libphonenumber picks the first format whose leading digits match and whose
+  // groups fit; that is what keeps a mobile off a landline pattern.
+  for (const [lows, highs, template, leading] of formats) {
+    if (!leadingMatches(leading, digits)) continue;
+    const sizes = absorb(lows, highs, digits.length);
+    if (sizes) return [sizes, template];
+  }
+  // Still being typed: group by the shape the finished number will use.
+  for (const [lows, , template, leading] of formats) {
+    if (leadingMatches(leading, digits)) return [lows, template];
+  }
+  return null;
+}
+
+function formatNational(entry, digits) {
+  const chosen = formatFor(entry, digits);
+  if (!chosen) return digits.replace(/(\d{3})(?=\d)/g, "$1 ");
+  const [groups, template] = chosen;
+  const parts = [];
+  let index = 0;
+  for (const size of groups) {
+    if (index >= digits.length) break;
+    parts.push(digits.slice(index, index + size));
+    index += size;
+  }
+  let text = applyTemplate(template, parts).replace(/[\s\-().]+$/, "");
+  if (index < digits.length) text += ` ${digits.slice(index)}`;
+  return text;
+}
+
+function placeholderFor(entry) {
+  const example = entry[5] || "";
+  if (!example) return `Number without +${entry[2]}`;
+  return formatNational(entry, example);
+}
+
+function nationalProblem(entry, digits) {
+  if (!digits) return "Enter a phone number.";
+  const lengths = entry[3] || [];
+  if (lengths.length && !lengths.includes(digits.length)) {
+    const low = Math.min(...lengths);
+    const high = Math.max(...lengths);
+    const expected = low === high ? `${low} digits` : `${low} to ${high} digits`;
+    return `${entry[1]} numbers have ${expected}; that is ${digits.length}.`;
+  }
+  if (digits.length < 4 || digits.length > 15) {
+    return "That does not look like a phone number.";
+  }
+  return "";
+}
+
+function peopleAddKind() {
+  return document.querySelector('[name="people_kind"]:checked').value;
+}
+
+function renderPeopleAddKind() {
+  const group = peopleAddKind() === "group";
+  document.getElementById("people-person-fields").hidden = group;
+  document.getElementById("people-group-fields").hidden = !group;
+  document.getElementById("people-add-name").placeholder = group ? "Family" : "Oma";
+  document.getElementById("people-add-help").textContent = group
+    ? "Button Box must already be in the group and have seen a message in it."
+    : "Any WhatsApp number. Button Box cannot check it exists until the first message is sent.";
+  renderNumberPreview();
+}
+
+function renderNumberPreview() {
+  if (peopleAddKind() === "group") return;
+  const country = selectedCountry();
+  const field = document.getElementById("people-add-id");
+  field.placeholder = placeholderFor(country);
+  const digits = nationalDigits(field.value);
+  field.value = formatNational(country, digits);
+  const preview = document.getElementById("people-add-preview");
+  const problem = nationalProblem(country, digits);
+  preview.textContent = digits
+    ? (problem || `Will be saved as +${country[2]} ${formatNational(country, digits)}`)
+    : "";
+}
+
+function openAddContact() {
+  populateCountries();
+  document.getElementById("people-add-error").textContent = "";
+  renderPeopleAddKind();
+  document.getElementById("add-contact-dialog").showModal();
+}
+
+async function submitPeopleAdd(event) {
+  event.preventDefault();
+  const error = document.getElementById("people-add-error");
+  const submit = document.getElementById("people-add-submit");
+  const group = peopleAddKind() === "group";
+  const name = document.getElementById("people-add-name").value.trim();
+  let phone;
+  if (group) {
+    phone = nationalDigits(document.getElementById("people-group-id").value);
+    if (!phone) {
+      error.textContent = "Enter the group ID.";
+      return;
+    }
+  } else {
+    const country = selectedCountry();
+    const digits = nationalDigits(document.getElementById("people-add-id").value);
+    const problem = nationalProblem(country, digits);
+    if (problem) {
+      error.textContent = problem;
+      return;
+    }
+    phone = country[2] + digits;
+  }
+  submit.disabled = true;
+  error.textContent = "Adding\u2026";
+  try {
+    await request("/api/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add",
+        kind: group ? "group" : "person",
+        phone,
+        label: name || (group ? "Group" : `+${phone}`),
+      }),
+    });
+    document.getElementById("add-contact-dialog").close();
+    document.getElementById("people-add-id").value = "";
+    document.getElementById("people-group-id").value = "";
+    document.getElementById("people-add-name").value = "";
+    await loadPeople();
+  } catch (requestError) {
+    error.textContent = /discovered/i.test(requestError.message)
+      ? (group
+        ? "Button Box has not seen that group yet. Send a message in it, then try again."
+        : requestError.message)
+      : requestError.message;
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+document.getElementById("people-add-form").addEventListener("submit", submitPeopleAdd);
+document.getElementById("people-add-open").addEventListener("click", openAddContact);
+document.getElementById("people-unpair-card").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const status = document.getElementById("people-status");
+  button.disabled = true;
+  status.textContent = "Reading the card\u2026";
+  try {
+    // The box unpairs whichever card it is currently reading, so nothing here
+    // identifies a card and the wrong one cannot be removed.
+    await formRequest("/nfc/unpair-presented");
+    await loadPeople();
+    status.textContent = "That card is unpaired.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+document.getElementById("people-show-hidden").addEventListener("click", () => {
+  peopleShowHidden = !peopleShowHidden;
+  loadPeople();
+});
+document.getElementById("people-add-cancel").addEventListener("click", () => {
+  document.getElementById("add-contact-dialog").close();
+});
+const countrySearch = document.getElementById("people-country-search");
+countrySearch.addEventListener("input", () => {
+  countryHighlight = 0;
+  renderCountryOptions(countrySearch.value);
+});
+function openCountryList() {
+  // Select everything so typing replaces the country rather than editing it
+  // into nonsense. focus alone is not enough: the click that follows would
+  // place a caret and drop the selection.
+  countrySearch.select();
+  countryHighlight = 0;
+  renderCountryOptions("");
+}
+
+countrySearch.addEventListener("focus", openCountryList);
+countrySearch.addEventListener("click", openCountryList);
+countrySearch.addEventListener("blur", () => {
+  // Restore the chosen country: a half-typed query is not a selection.
+  countrySearch.value = countryDisplay(selectedCountry());
+  closeCountryList();
+});
+countrySearch.addEventListener("keydown", (event) => {
+  const list = document.getElementById("people-country-list");
+  if (event.key === "Escape") {
+    closeCountryList();
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const count = list.children.length;
+    if (!count) return;
+    countryHighlight = (countryHighlight + (event.key === "ArrowDown" ? 1 : count - 1)) % count;
+    renderCountryOptions(countrySearch.value);
+    list.children[countryHighlight]?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (event.key === "Enter" && !list.hidden) {
+    event.preventDefault();
+    const code = list.children[countryHighlight]?.dataset.code;
+    if (code) chooseCountry(code);
+  }
+});
+document.getElementById("people-add-id").addEventListener("input", renderNumberPreview);
+for (const id of ["people-kind-person", "people-kind-group"]) {
+  document.getElementById(id).addEventListener("change", renderPeopleAddKind);
+}
+
+async function loadPeople() {
+  const status = document.getElementById("people-status");
+  // Show the view before awaiting, so a failed load reports the reason here
+  // instead of leaving the caller on the previous page with no explanation.
+  showView("people");
+  status.textContent = "Loading\u2026";
+  try {
+    const data = await request("/api/contacts");
+    const people = Object.entries(data.contacts || {})
+      .map(([jid, contact]) => ({ jid, ...contact }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    document.getElementById("people-list").replaceChildren(
+      ...people.map((person) => personRow(person, person.jid === data.default_recipient)),
+    );
+    document.getElementById("people-empty").hidden = people.length !== 0;
+    const configured = new Set(people.map((person) => person.jid));
+    const all = (data.discovered || []).filter((chat) => !configured.has(chat.jid));
+    const available = all.filter((chat) => !chat.dismissed);
+    const hiddenChats = all.filter((chat) => chat.dismissed);
+    const shown = peopleShowHidden ? all : available;
+    document.getElementById("people-discovered").replaceChildren(
+      ...shown.map((chat) => discoveredRow(chat)),
+    );
+    // Hide the whole section when there is genuinely nothing to suggest, so an
+    // empty heading never sits above an empty notice.
+    document.getElementById("people-suggestions").hidden = all.length === 0;
+    document.getElementById("people-discovered-empty").hidden = shown.length !== 0;
+    const toggle = document.getElementById("people-show-hidden");
+    toggle.hidden = hiddenChats.length === 0;
+    toggle.textContent = peopleShowHidden
+      ? "Hide dismissed chats"
+      : `Show ${hiddenChats.length} dismissed`;
+    if (!peoplePairing) status.textContent = "";
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function discoveredRow(chat) {
+  const hidden = Boolean(chat.dismissed);
+  const row = document.createElement("li");
+  row.className = "recipient-row";
+  const copy = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = chat.label;
+  const meta = document.createElement("span");
+  meta.className = "recipient-secondary";
+  meta.textContent = chat.kind;
+  copy.append(name, meta);
+  row.append(copy);
+  const controls = document.createElement("div");
+  controls.className = "recipient-actions";
+  const allow = acceptanceControl("button", "BB-RECIP-05");
+  allow.type = "button";
+  allow.className = "compact";
+  allow.textContent = "Add";
+  allow.addEventListener("click", () => personAction(allow, {
+    action: "add",
+    jid: chat.jid,
+    label: chat.label,
+  }));
+  controls.append(allow);
+  const toggle = acceptanceControl("button", "BB-RECIP-05");
+  toggle.type = "button";
+  toggle.className = hidden ? "secondary compact" : "compact";
+  toggle.textContent = hidden ? "Unhide" : "Not this one";
+  toggle.addEventListener("click", () => personAction(toggle, {
+    action: hidden ? "restore" : "dismiss",
+    jid: chat.jid,
+  }));
+  controls.append(toggle);
+  row.append(controls);
+  return row;
+}
+
+async function beginPersonCardPairing(button, person) {
+  if (peoplePairing?.pending) return;
+  const status = document.getElementById("people-status");
+  button.disabled = true;
+  peoplePairing = { jid: person.jid, label: person.label, pending: true };
+  status.textContent = `Starting card pairing for ${person.label}\u2026`;
+  try {
+    const result = await formRequest("/nfc/enroll", { jid: person.jid });
+    if (!result.attempt) throw new Error("Pairing was not confirmed. Try again.");
+    peoplePairing.attempt = result.attempt;
+    document.getElementById("people-cancel-pairing").hidden = false;
+    status.textContent = `Hold a card over Button Box for ${person.label}. You have two minutes.`;
+    pollPersonCard();
+  } catch (error) {
+    peoplePairing = null;
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+async function pollPersonCard() {
+  window.clearTimeout(peoplePollTimer);
+  if (!peoplePairing?.attempt) return;
+  const status = document.getElementById("people-status");
+  const label = peoplePairing.label;
+  try {
+    const state = await request(
+      `/api/nfc-runtime?attempt=${encodeURIComponent(peoplePairing.attempt)}`,
+    );
+    if (state.status === "waiting") {
+      status.textContent = state.healthy
+        ? `Hold a card over Button Box for ${label}. Waiting for a scan\u2026`
+        : "Waiting for the NFC reader. Check its connection if this continues.";
+      peoplePollTimer = window.setTimeout(() => pollPersonCard(), 800);
+      return;
+    }
+    peoplePairing = null;
+    document.getElementById("people-cancel-pairing").hidden = true;
+    await loadPeople();
+    status.textContent = state.status === "success"
+      ? `Card linked to ${label}.`
+      : "Pairing ended without confirmation. Try pairing the card again.";
+  } catch (_error) {
+    status.textContent = "Cannot check pairing. Reconnecting\u2026";
+    peoplePollTimer = window.setTimeout(() => pollPersonCard(), 2000);
+  }
 }
 
 async function loadRecipients({ refresh = false, manager = false } = {}) {
@@ -1189,7 +1762,7 @@ async function ringNow() {
 async function route() {
   renderIdentity(currentState);
   const routeName = location.hash.slice(1) || "home";
-  const navRoute = ["continue", "whatsapp", "recipient-picker", "recipients"].includes(routeName)
+  const navRoute = ["continue", "whatsapp", "recipient-picker", "recipients", "people"].includes(routeName)
     ? (currentState.mode === "RUNTIME" ? "advanced" : "setup") : routeName;
   document.querySelectorAll("[data-route]").forEach((link) => {
     link.setAttribute("aria-current", link.dataset.route === navRoute ? "page" : "false");
@@ -1206,6 +1779,10 @@ async function route() {
     } else {
       applyWhatsAppState(currentState, { manage: true });
     }
+    return;
+  }
+  if (routeName === "people") {
+    await loadPeople();
     return;
   }
   if (routeName === "recipient-picker") {
@@ -1470,11 +2047,21 @@ document.querySelectorAll('[name="new_wifi_security"]').forEach((radio) => {
     if (!protectedNetwork) password.value = "";
   });
 });
+document.getElementById("people-cancel-pairing").addEventListener("click", async () => {
+  window.clearTimeout(peoplePollTimer);
+  const status = document.getElementById("people-status");
+  peoplePairing = null;
+  document.getElementById("people-cancel-pairing").hidden = true;
+  try {
+    await formRequest("/nfc/cancel-runtime");
+    status.textContent = "Card pairing cancelled.";
+  } catch (error) {
+    status.textContent = error.message;
+  }
+  await loadPeople();
+});
 document.getElementById("manage-whatsapp").addEventListener("click", () => {
   location.hash = "whatsapp";
-});
-document.getElementById("manage-recipients").addEventListener("click", async () => {
-  location.hash = "recipients";
 });
 window.addEventListener("hashchange", () => {
   // Completion replaces the setup server with runtime. A cached HOME state

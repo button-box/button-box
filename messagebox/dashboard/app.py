@@ -13,7 +13,7 @@ Endpoints:
   GET  /api/data       stats + queue + hold + trash as JSON
   GET  /api/contacts   contact settings + WhatsApp chat discovery as JSON
   GET  /audio/<f>      stream a WAV (?hold=1 or ?trash=1)
-  POST /api/contacts   add or remove a contact
+  POST /api/contacts   add, remove, rename, or set the default contact
   POST /api/listeners  add, update, or remove a listener profile
   POST /api/wacli-receipt      authenticated WhatsApp played-receipt webhook
   POST /api/ring       request an on-demand ringtone
@@ -24,6 +24,7 @@ Endpoints:
 """
 import json
 import fcntl
+import re
 import os
 import secrets
 import socket
@@ -41,7 +42,8 @@ from messagebox.contacts import ContactError, ContactStore, validate_contact
 from messagebox.identity import read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
-from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
+from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, DISMISSED_CHATS_FILE
+from messagebox.runtime_paths import OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import NFC_HEALTH_FILE, NFC_SELECTION_FILE, RUNTIME_DIR, STATE_DIR
 from messagebox.listened_receipts import (
@@ -107,6 +109,10 @@ DASHBOARD_STATIC = {
     ),
     "/static/clipboard.js": (
         DASHBOARD_STATIC_DIR.joinpath("clipboard.js").read_bytes(),
+        "text/javascript; charset=utf-8",
+    ),
+    "/static/countries.js": (
+        DASHBOARD_STATIC_DIR.joinpath("countries.js").read_bytes(),
         "text/javascript; charset=utf-8",
     ),
 }
@@ -342,6 +348,52 @@ def discover_whatsapp_chats():
     return sorted(chats.values(), key=lambda chat: chat["label"].casefold())
 
 
+def dismissed_chats():
+    """JIDs a caregiver hid from discovery, such as the box's own chat."""
+    try:
+        with open(DISMISSED_CHATS_FILE, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+        return set()
+    jids = document.get("jids") if isinstance(document, dict) else None
+    return {jid for jid in jids if isinstance(jid, str)} if isinstance(jids, list) else set()
+
+
+def write_dismissed_chats(jids):
+    path = Path(DISMISSED_CHATS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {"version": 1, "jids": sorted(jids)}
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(document, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def readable_chat_label(label, jid, kind):
+    """Never surface a raw JID; WhatsApp leaves some chats unnamed."""
+    if label and label != jid:
+        return label
+    if kind == "group":
+        return "Unnamed group"
+    local = jid.split("@", 1)[0].split(":", 1)[0]
+    return f"+{local}" if local.isdigit() else "Unknown contact"
+
+
+def build_contact_jid(payload):
+    """Build a chat JID from a caregiver-facing number, never asked for raw."""
+    digits = re.sub(r"\D", "", str(payload.get("phone") or ""))
+    if not digits:
+        raise ValueError("a phone number or group id is required")
+    kind = payload.get("kind")
+    if kind == "group":
+        return f"{digits}@g.us"
+    if kind == "person":
+        return f"{digits}@s.whatsapp.net"
+    raise ValueError("contact kind is invalid")
+
+
 def contact_settings(refresh=False):
     public = contacts_store().public_view()
     discovery_error = None
@@ -367,6 +419,13 @@ def contact_settings(refresh=False):
         chat["configured"] = True
     for chat in discovered.values():
         chat.setdefault("configured", False)
+        if not chat["configured"]:
+            chat["label"] = readable_chat_label(
+                chat.get("label"), chat["jid"], chat.get("kind")
+            )
+    hidden = dismissed_chats()
+    for chat in discovered.values():
+        chat["dismissed"] = chat["jid"] in hidden and not chat["configured"]
     public["discovered"] = sorted(
         discovered.values(), key=lambda chat: chat["label"].casefold()
     )
@@ -1121,7 +1180,13 @@ class Handler(BaseHTTPRequestHandler):
             if length < 0 or length > limit:
                 raise ValueError
             text = self.rfile.read(length).decode("utf-8")
-            pairs = urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=True)
+            # strict_parsing rejects an empty string, but an empty body is how
+            # the endpoints that take no fields are called.
+            pairs = (
+                urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=True)
+                if text
+                else []
+            )
             if len({key for key, _value in pairs}) != len(pairs):
                 raise ValueError
             return dict(pairs)
@@ -1339,9 +1404,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 if url.path == "/nfc/enroll":
-                    if set(payload) != {"token"}:
+                    if set(payload) == {"jid"}:
+                        # Runtime path: pair a card to an already configured
+                        # contact straight from the contact store, so it does
+                        # not depend on a live onboarding pairing session.
+                        candidate = contacts_store().contact(payload["jid"])
+                        if candidate is None:
+                            raise NfcError("contact does not exist")
+                    elif set(payload) == {"token"}:
+                        candidate = pairing_engine().recipients.configured_candidate(payload["token"])
+                    else:
                         raise NfcError("recipient token is invalid")
-                    candidate = pairing_engine().recipients.configured_candidate(payload["token"])
                     enrollment = nfc_router().begin_enrollment(
                         label=candidate["label"],
                         jid=candidate["jid"],
@@ -1444,16 +1517,42 @@ class Handler(BaseHTTPRequestHandler):
                 jid = payload.get("jid")
                 store = contacts_store()
                 if action == "add":
+                    # A jid comes from the discovered list, so it must still be
+                    # there.  A typed number does not: the setup flow's
+                    # add_phone accepts any number, and the dashboard matches it
+                    # rather than being stricter than the rest of the product.
+                    typed = not jid
+                    if typed:
+                        jid = build_contact_jid(payload)
                     candidate = validate_contact(jid, payload.get("label"))
-                    discovered = {chat["jid"] for chat in discover_whatsapp_chats()}
-                    if candidate["jid"] not in discovered:
-                        raise ContactError("contact must be a discovered WhatsApp chat")
+                    if not typed:
+                        discovered = {chat["jid"] for chat in discover_whatsapp_chats()}
+                        if candidate["jid"] not in discovered:
+                            raise ContactError("contact must be a discovered WhatsApp chat")
                     store.add_contact(candidate["jid"], candidate["label"])
                     event_type = "dash_contact_added"
                 elif action == "remove":
                     if not store.remove_contact(jid):
                         raise ContactError("contact does not exist")
                     event_type = "dash_contact_removed"
+                elif action in {"dismiss", "restore"}:
+                    canonical = validate_contact(jid, "x")["jid"]
+                    hidden = dismissed_chats()
+                    if action == "dismiss":
+                        hidden.add(canonical)
+                    else:
+                        hidden.discard(canonical)
+                    write_dismissed_chats(hidden)
+                    event_type = f"dash_chat_{action}ed"
+                elif action == "rename":
+                    # The store preserves routing and card mappings.
+                    store.rename_contact(jid, payload.get("label"))
+                    event_type = "dash_contact_renamed"
+                elif action == "default":
+                    # choose_ rather than set_, which refuses to replace an
+                    # existing default and only serves first-run onboarding.
+                    store.choose_default_recipient(jid)
+                    event_type = "dash_default_recipient_changed"
                 else:
                     raise ValueError("contact action is invalid")
             except (
