@@ -441,33 +441,42 @@ def _run(command, run, **kwargs):
 
 
 def _unit_states(run):
-    states = {}
-    for unit in UNITS:
-        active = _run(
-            ["systemctl", "is-active", unit],
-            run,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        enabled = _run(
-            ["systemctl", "is-enabled", unit],
-            run,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        if active not in {"active", "inactive", "failed"}:
-            raise UpdateError("a managed unit has an unsupported active state")
-        known_enabled = ENABLED_STATES | DISABLED_STATES | PASSIVE_ENABLED_STATES | {
-            "enabled-runtime",
-            "masked",
-            "masked-runtime",
-        }
-        if enabled not in known_enabled:
-            raise UpdateError("a managed unit has an unsupported enabled state")
-        states[unit] = {"active": active, "enabled": enabled}
-    return states
+    deadline = time.monotonic() + 15
+    while True:
+        states = {}
+        transitioning = False
+        for unit in UNITS:
+            active = _run(
+                ["systemctl", "is-active", unit],
+                run,
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            enabled = _run(
+                ["systemctl", "is-enabled", unit],
+                run,
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if active in {"activating", "deactivating", "reloading"}:
+                transitioning = True
+            elif active not in {"active", "inactive", "failed"}:
+                raise UpdateError("a managed unit has an unsupported active state")
+            known_enabled = ENABLED_STATES | DISABLED_STATES | PASSIVE_ENABLED_STATES | {
+                "enabled-runtime",
+                "masked",
+                "masked-runtime",
+            }
+            if enabled not in known_enabled:
+                raise UpdateError("a managed unit has an unsupported enabled state")
+            states[unit] = {"active": active, "enabled": enabled}
+        if not transitioning:
+            return states
+        if time.monotonic() >= deadline:
+            raise UpdateError("a managed unit did not finish changing state")
+        time.sleep(0.5)
 
 
 def create_backup(backup_dir, root, entries, unit_states):

@@ -285,6 +285,23 @@ class Fixture:
 
 
 class BoundedUpdateTests(unittest.TestCase):
+    def test_unit_snapshot_waits_for_transient_systemd_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory, "setup")
+            transient = True
+
+            def run(command, **kwargs):
+                nonlocal transient
+                if command == ["systemctl", "is-active", "comitup-web.service"] and transient:
+                    transient = False
+                    return subprocess.CompletedProcess(command, 3, "activating\n")
+                return fixture.systemctl(command, **kwargs)
+
+            with mock.patch.object(bounded_update.time, "sleep") as sleep:
+                states = bounded_update._unit_states(run)
+            self.assertEqual(states, fixture.systemctl.states)
+            sleep.assert_called_once_with(0.5)
+
     def test_apply_and_rollback_restore_both_boot_modes(self):
         for mode in ("runtime", "setup"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:

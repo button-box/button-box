@@ -1,7 +1,8 @@
 # Manifest-bounded updates
 
 During restart, Wi-Fi setup can briefly switch between its hotspot and home
-services. The updater waits for the recorded service state to remain stable
+services. The updater waits for those services to finish transitioning and for
+the recorded service state to remain stable
 before accepting the update; if it does not settle, it rolls back.
 
 Use the bounded updater for a reviewed application release on an existing
