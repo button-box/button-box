@@ -27,8 +27,10 @@ const views = [
   "failed",
 ];
 const activePairingStates = new Set(["starting", "code_pending", "bootstrapping", "verifying"]);
+const mainRoutes = new Set(["home", "setup", "settings", "activity", "advanced"]);
 let pollTimer = null;
 let loadingState = false;
+let refreshAfterLoad = false;
 let lastView = "";
 let recipientsData = null;
 let managerOpen = false;
@@ -38,6 +40,8 @@ let runtimePairing = null;
 let runtimePairingGeneration = 0;
 let currentState = null;
 let currentSettings = null;
+let scanningNetworks = false;
+let networkScanAttempted = false;
 
 function acceptanceControl(tag, ...caseIds) {
   const control = document.createElement(tag);
@@ -106,8 +110,16 @@ function selectNetwork(network) {
 }
 
 async function scanNetworks() {
+  if (scanningNetworks) return;
+  scanningNetworks = true;
+  networkScanAttempted = true;
   const status = document.getElementById("scan-status");
   const list = document.getElementById("networks");
+  const scanAgain = document.getElementById("scan-again");
+  const indicator = document.getElementById("work-indicator");
+  scanAgain.disabled = true;
+  indicator.hidden = false;
+  document.getElementById("work-indicator-text").textContent = "Searching for nearby Wi-Fi…";
   status.textContent = "Scanning for networks...";
   list.replaceChildren();
   try {
@@ -134,6 +146,11 @@ async function scanNetworks() {
     }
   } catch (error) {
     status.textContent = "Scanning is unavailable. Enter the Wi-Fi name below.";
+  } finally {
+    scanningNetworks = false;
+    scanAgain.disabled = false;
+    indicator.hidden = true;
+    document.getElementById("work-indicator-text").textContent = "";
   }
 }
 
@@ -809,7 +826,7 @@ function applyState(state) {
   switch (state.phase) {
     case "WIFI_SELECT":
       showView("wifi");
-      if (!document.getElementById("networks").children.length) scanNetworks();
+      if (!networkScanAttempted) scanNetworks();
       break;
     case "WIFI_CONNECTING":
       showView("checking");
@@ -878,6 +895,12 @@ function renderSetup(state) {
     taskStatus("Pair NFC cards", progress.nfc, activeSetup ? "#continue" : "#advanced"),
     taskStatus("Personalize button, sounds, and quiet hours", "optional", "#settings"),
   );
+}
+
+function showMainRoute(name) {
+  showView(name);
+  if (currentState?.mode && name === "setup") renderSetup(currentState);
+  if (currentState?.mode && name === "home") renderHome(currentState);
 }
 
 function renderHome(state) {
@@ -1223,18 +1246,18 @@ async function route() {
     applyState(currentState);
     return;
   }
-  const canonical = new Set(["home", "setup", "settings", "activity", "advanced"]);
-  const selected = canonical.has(routeName) ? routeName : "home";
-  showView(selected);
-  if (selected === "home") renderHome(currentState);
-  if (selected === "setup") renderSetup(currentState);
+  const selected = mainRoutes.has(routeName) ? routeName : "home";
+  showMainRoute(selected);
   if (selected === "settings") await loadSettings();
   if (selected === "activity") await loadActivity();
   if (selected === "advanced") await loadAdvanced();
 }
 
 async function loadState() {
-  if (loadingState) return;
+  if (loadingState) {
+    refreshAfterLoad = true;
+    return;
+  }
   loadingState = true;
   try {
     currentState = await request("/api/state");
@@ -1246,6 +1269,10 @@ async function loadState() {
     pollTimer = window.setTimeout(loadState, 1500);
   } finally {
     loadingState = false;
+    if (refreshAfterLoad) {
+      refreshAfterLoad = false;
+      loadState();
+    }
   }
 }
 
@@ -1476,9 +1503,20 @@ document.getElementById("manage-whatsapp").addEventListener("click", () => {
 document.getElementById("manage-recipients").addEventListener("click", async () => {
   location.hash = "recipients";
 });
+document.querySelectorAll(".primary-nav a").forEach((link) => {
+  link.addEventListener("click", () => {
+    showMainRoute(link.dataset.route);
+    document.querySelectorAll("[data-route]").forEach((item) => {
+      item.setAttribute("aria-current", item === link ? "page" : "false");
+    });
+    if (location.hash === `#${link.dataset.route}`) loadState();
+  });
+});
 window.addEventListener("hashchange", () => {
   // Completion replaces the setup server with runtime. A cached HOME state
   // must not keep navigation (including Activity) stuck in the old mode.
+  const requested = location.hash.slice(1);
+  if (mainRoutes.has(requested)) showMainRoute(requested);
   loadState();
 });
 loadState();

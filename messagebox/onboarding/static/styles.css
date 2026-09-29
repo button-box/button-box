@@ -93,6 +93,35 @@ main { min-width: 0; }
 }
 .primary-nav a[aria-current="page"] { background: var(--action); border-color: var(--line); color: var(--action-text); }
 
+.work-indicator {
+  position: fixed;
+  z-index: 21;
+  right: 1rem;
+  bottom: calc(5rem + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  max-width: calc(100vw - 2rem);
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 0.65rem 0.9rem;
+  background: var(--surface);
+  box-shadow: 3px 3px 0 var(--line);
+  font-size: 0.85rem;
+  font-weight: 800;
+  pointer-events: none;
+}
+.work-spinner {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--action);
+  border-radius: 50%;
+  animation: work-spin 0.8s linear infinite;
+}
+@keyframes work-spin { to { transform: rotate(360deg); } }
+
 .eyebrow {
   margin: 0 0 1rem;
   color: var(--muted);
@@ -348,6 +377,7 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
   .brand { grid-column: 1 / -1; }
   .primary-nav { position: sticky; top: 1.5rem; align-self: start; display: grid; grid-template-columns: 1fr; gap: 0.5rem; border: 0; padding: 0; background: transparent; }
   .primary-nav a { justify-content: start; padding: 0.8rem 1rem; font-size: 0.95rem; }
+  .work-indicator { bottom: 1rem; }
   .shortcut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 

@@ -25,6 +25,11 @@
       <a id="nav-advanced" href="#advanced" data-route="advanced">Advanced</a>
     </nav>
 
+    <div id="work-indicator" class="work-indicator" role="status" aria-live="polite" hidden>
+      <span class="work-spinner" aria-hidden="true"></span>
+      <span id="work-indicator-text"></span>
+    </div>
+
     <main id="main" tabindex="-1">
     <section class="card" id="home-view" aria-labelledby="home-title">
       <div class="home-hero">
@@ -58,7 +63,7 @@
       <h1 id="setup-title" tabindex="-1">Set up Button Box</h1>
       <p class="lede">Complete required tasks in any order available. Every completed task is saved.</p>
       <h2 class="section-title">Required</h2>
-      <ol class="task-list" id="required-tasks"></ol>
+      <ol class="task-list" id="required-tasks"><li class="task-row" role="status">Checking setup tasks…</li></ol>
       <h2 class="section-title">Optional</h2>
       <ol class="task-list" id="optional-tasks"></ol>
     </section>
