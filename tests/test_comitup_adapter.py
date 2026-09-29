@@ -1,5 +1,7 @@
 import logging
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from messagebox.onboarding.comitup_adapter import (
@@ -50,6 +52,41 @@ class FakeBus:
 
 
 class ComitupAdapterTests(unittest.TestCase):
+    def test_request_threads_serialize_the_shared_dbus_proxy(self):
+        entered = threading.Event()
+        release = threading.Event()
+        attempted = threading.Event()
+        state_entered = threading.Event()
+
+        class BlockingBackend(FakeBackend):
+            def access_points(self):
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError("test did not release scan")
+                return []
+
+            def state(self):
+                state_entered.set()
+                return self.snapshot
+
+        adapter = ComitupAdapter(backend=BlockingBackend())
+
+        def check_state():
+            attempted.set()
+            return adapter.get_stable_state()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            scan = pool.submit(adapter.scan_networks)
+            try:
+                self.assertTrue(entered.wait(1))
+                state = pool.submit(check_state)
+                self.assertTrue(attempted.wait(1))
+                self.assertFalse(state_entered.wait(0.05))
+            finally:
+                release.set()
+            self.assertEqual(scan.result(timeout=1), [])
+            self.assertEqual(state.result(timeout=1), "HOTSPOT")
+
     def test_bus_uses_exact_service_path_and_interface(self):
         backend = FakeBackend()
         proxy = FakeProxy(backend)
