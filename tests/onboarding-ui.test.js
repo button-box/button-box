@@ -2,7 +2,7 @@ const { expect, test } = require("bun:test");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function harness(fail = false) {
+function harness(fail = false, stateRequest = null) {
   const nodes = new Map();
   const calls = [];
   const handlers = {};
@@ -26,16 +26,19 @@ function harness(fail = false) {
     },
   });
   const node = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  const routes = ["home", "setup", "settings", "activity", "advanced"];
+  for (const route of routes) node(`nav-${route}`).dataset.route = route;
   const view = { status: "choose", mapped_count: 2, recipients: [] };
   const context = vm.createContext({
-    document: { getElementById: node, querySelector: () => null, querySelectorAll: () => [], createElement: element },
+    document: { getElementById: node, querySelector: () => null, querySelectorAll: selector => selector === ".primary-nav a" ? routes.map(route => node(`nav-${route}`)) : [], createElement: element },
     window: { addEventListener(name, fn) { handlers[name] = fn; }, clearTimeout() {}, setTimeout() { return 1; } },
+    location: { hash: "#home" },
     URLSearchParams, FormData: class {
       constructor(form) { this.form = form; }
       get(key) { return this.form[key]; }
     },
     fetch: async (url, options) => {
-      if (url === "/api/state") return new Promise(() => {});
+      if (url === "/api/state") return stateRequest || new Promise(() => {});
       calls.push({ url, options });
       return { ok: !fail, status: fail ? 409 : 200, headers: { get: () => "application/json" }, json: async () => fail ? { error: "Number not allowed" } : url === "/api/nfc" ? view : { recipients: [] } };
     },
@@ -59,8 +62,89 @@ function deferred() {
 test("navigation refetches server state after setup-to-runtime handoff", async () => {
   const h = harness();
   vm.runInContext('let refreshed = false; loadState = async () => { refreshed = true; };', h.context);
+  h.context.location.hash = "#setup";
   await h.handlers.hashchange();
   expect(vm.runInContext("refreshed", h.context)).toBe(true);
+  expect(h.node("setup-view").hidden).toBe(false);
+  expect(h.node("home-view").hidden).toBe(true);
+});
+
+test("tapping the current tab restores its view without waiting for state", async () => {
+  const h = harness();
+  h.context.location.hash = "#setup";
+  h.node("setup-view").hidden = true;
+  vm.runInContext('currentState = {mode: "HOME", phase: "WHATSAPP_PENDING"}', h.context);
+  vm.runInContext('loadState = async () => new Promise(() => {});', h.context);
+  h.node("nav-setup").handlers.click();
+  expect(h.node("setup-view").hidden).toBe(false);
+  expect(h.node("required-tasks").children).toHaveLength(4);
+});
+
+test("navigation during a pending state request refetches after it settles", async () => {
+  const pending = deferred();
+  const h = harness(false, pending.promise);
+  let routed = 0;
+  vm.runInContext("route = async () => {}", h.context);
+  h.context.fetch = async (url) => {
+    if (url === "/api/state") routed += 1;
+    return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ mode: "HOME" }) };
+  };
+  h.context.location.hash = "#setup";
+  vm.runInContext('currentState = {mode: "HOME", phase: "WHATSAPP_PENDING"}', h.context);
+  h.handlers.hashchange();
+  expect(h.node("setup-view").hidden).toBe(false);
+  expect(h.node("required-tasks").children).toHaveLength(4);
+  pending.resolve({ ok: true, headers: { get: () => "application/json" }, json: async () => ({ mode: "HOME" }) });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(routed).toBe(1);
+});
+
+test("slow Wi-Fi scan does not trigger duplicate scans during navigation", async () => {
+  const h = harness();
+  const pending = deferred();
+  h.context.fetch = (url) => {
+    h.calls.push({ url });
+    return pending.promise;
+  };
+  const scan = vm.runInContext("scanNetworks()", h.context);
+  expect(h.node("scan-again").disabled).toBe(true);
+  expect(h.node("work-indicator").hidden).toBe(false);
+  expect(h.node("work-indicator-text").textContent).toBe("Searching for nearby Wi-Fi…");
+  vm.runInContext('applyState({mode: "HOTSPOT", phase: "WIFI_SELECT"})', h.context);
+  expect(h.calls.map(call => call.url)).toEqual(["/api/networks"]);
+  vm.runInContext('showView("home")', h.context);
+  expect(h.node("work-indicator").hidden).toBe(false);
+
+  pending.resolve({
+    ok: true, status: 200,
+    headers: { get: () => "application/json" },
+    json: async () => ({ networks: [] }),
+  });
+  await scan;
+  expect(h.node("scan-again").disabled).toBe(false);
+  expect(h.node("work-indicator").hidden).toBe(true);
+  expect(h.node("work-indicator-text").textContent).toBe("");
+  vm.runInContext('applyState({mode: "HOTSPOT", phase: "WIFI_SELECT"})', h.context);
+  expect(h.calls.map(call => call.url)).toEqual(["/api/networks"]);
+
+  h.context.fetch = async (url) => {
+    h.calls.push({ url });
+    return {
+      ok: true, status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ networks: [] }),
+    };
+  };
+  await h.node("scan-again").handlers.click();
+  expect(h.calls.map(call => call.url)).toEqual(["/api/networks", "/api/networks"]);
+});
+
+test("Wi-Fi work indicator clears when a scan fails", async () => {
+  const h = harness();
+  h.context.fetch = async () => { throw new Error("Offline"); };
+  await vm.runInContext("scanNetworks()", h.context);
+  expect(h.node("work-indicator").hidden).toBe(true);
+  expect(h.node("scan-status").textContent).toContain("unavailable");
 });
 
 test("pairing submit exposes pending state and restores its control after success or rejection", async () => {

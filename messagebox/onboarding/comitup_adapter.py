@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from collections.abc import Mapping
 
 
@@ -23,6 +24,7 @@ class ComitupAdapter:
             raise ValueError("provide either bus or backend, not both")
         self._bus = bus
         self._backend = backend
+        self._lock = threading.RLock()
 
     def _service(self):
         if self._backend is not None:
@@ -44,18 +46,20 @@ class ComitupAdapter:
         return self._backend
 
     def _call(self, method_name, *args):
-        try:
-            service = self._service()
-            get_dbus_method = getattr(service, "get_dbus_method", None)
-            if callable(get_dbus_method):
-                method = service.get_dbus_method(method_name, INTERFACE)
-            else:
-                method = getattr(service, method_name)
-            return method(*args)
-        except ComitupError:
-            raise
-        except Exception:
-            raise ComitupError(f"Comitup {method_name} failed") from None
+        # Request threads must not concurrently use the shared D-Bus proxy.
+        with self._lock:
+            try:
+                service = self._service()
+                get_dbus_method = getattr(service, "get_dbus_method", None)
+                if callable(get_dbus_method):
+                    method = service.get_dbus_method(method_name, INTERFACE)
+                else:
+                    method = getattr(service, method_name)
+                return method(*args)
+            except ComitupError:
+                raise
+            except Exception:
+                raise ComitupError(f"Comitup {method_name} failed") from None
 
     def scan_networks(self):
         """Return safe AP records, ignoring malformed records from D-Bus."""
@@ -114,7 +118,8 @@ class ComitupAdapter:
         self._call("connect", ssid, password)
 
     def delete_active_connection_once(self):
-        state = self.get_stable_state()
-        if state == "HOTSPOT":
-            raise ComitupError("cannot delete a connection in HOTSPOT state")
-        self._call("delete_connection")
+        with self._lock:
+            state = self.get_stable_state()
+            if state == "HOTSPOT":
+                raise ComitupError("cannot delete a connection in HOTSPOT state")
+            self._call("delete_connection")

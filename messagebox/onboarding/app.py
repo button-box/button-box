@@ -403,8 +403,8 @@ def create_app(
 
     if selected_mode == "HOTSPOT":
         store.reconcile_hotspot()
-    else:
-        reconcile_home()
+    # Home connectivity checks belong to /api/state, not application startup:
+    # the page and static files must load even while internet checks are slow.
 
     static_files = {}
     for name, content_type in (

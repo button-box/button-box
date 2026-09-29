@@ -2,7 +2,9 @@ import io
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest import mock
@@ -389,6 +391,35 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(failed["status"], "503 Service Unavailable")
         self.assertEqual(retried["status"], "200 OK")
         self.assertEqual(run.call_count, 2)
+
+    def test_ringtone_preview_rejects_concurrent_playback(self):
+        ringtone = Path(self.directory.name) / "ringtone.wav"
+        ringtone.touch()
+        entered, release = threading.Event(), threading.Event()
+
+        def play(*_args, **_kwargs):
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError("test did not release audio")
+
+        def preview():
+            return self.client.json(
+                "POST", "/api/ringtone-preview", {"ringtone_id": "ding_dong"},
+                headers={"Origin": f"http://{HOST}"},
+            )
+
+        with patch(
+            "messagebox.onboarding.app.ringtone_path", return_value=ringtone
+        ), patch("messagebox.onboarding.app.subprocess.run", side_effect=play) as run:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                first = pool.submit(preview)
+                try:
+                    self.assertTrue(entered.wait(1))
+                    self.assertEqual(preview()["status"], "409 Conflict")
+                finally:
+                    release.set()
+                self.assertEqual(first.result(timeout=1)["status"], "200 OK")
+        self.assertEqual(run.call_count, 1)
 
     def home_pairing_client(
         self, whatsapp=None, nfc=None, completion_request=None, tailscale_host=None
@@ -815,7 +846,7 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(adapter.calls, [("delete",)])
         self.assertEqual(home_store.load()["phase"], "WIFI_ASSOCIATED")
 
-    def test_home_startup_and_state_request_prove_connectivity_then_pending(self):
+    def test_home_page_loads_before_state_request_proves_connectivity(self):
         home_path = Path(self.directory.name) / "home.json"
         home_store = StateStore(home_path, clock=self.clock)
         home_store.initialize()
@@ -831,13 +862,17 @@ class OnboardingAPITests(unittest.TestCase):
             whatsapp_client=FakeWhatsApp(),
             clock=self.clock,
         )
-        self.assertEqual(home_store.load()["phase"], "WHATSAPP_PENDING")
-        self.assertEqual(set(home_store.load()["proofs"]), PROOFS)
+        self.assertEqual(home_store.load()["phase"], "WIFI_CONNECTING")
         self.assertEqual(adapter.calls, [])
-        self.assertEqual(checker.calls, 1)
+        self.assertEqual(checker.calls, 0)
         client = WSGIHarness(application)
+        for path in ("/", "/static/app.js", "/static/styles.css"):
+            self.assertEqual(client.request("GET", path)["status"], "200 OK")
+        self.assertEqual(checker.calls, 0)
         response = client.request("GET", "/api/state")
         self.assertEqual(json.loads(response["body"])["phase"], "WHATSAPP_PENDING")
+        self.assertEqual(set(home_store.load()["proofs"]), PROOFS)
+        self.assertEqual(checker.calls, 1)
         self.assertEqual(adapter.calls, [])
 
     def test_whatsapp_start_is_public_in_home_mode_and_validates_phone(self):
