@@ -93,6 +93,22 @@ not add circular video-note support.
 | `messagebox-onboarding-voice.target` | Run sync, polling, and the guided setup button without the normal runtime target |
 | `messagebox-mode-reconcile.path` | Reconcile current process state after the onboarding marker changes or an interrupted transition |
 
+Both setup portals use Gunicorn 23's `gthread` worker: one process, four request
+threads and at most 64 accepted connections. Its selector waits for request
+bytes before assigning a thread, so browsers' speculative empty connections
+cannot occupy the application's request slots. The previous direct-to-browser
+`sync` worker could wait on one empty socket and block unrelated pages and
+state requests until that socket closed. Adding more sync workers only moved
+that limit; it did not remove the blocking behavior.
+
+The four request threads also let pages and state requests proceed while a
+bounded Wi-Fi or pairing operation is waiting. Comitup proxy calls are
+serialized inside the adapter; state and settings retain their file locks and
+atomic writes. Ringtone preview uses the single process's nonblocking speaker
+lock. Connectivity proof runs on state requests, not application construction,
+so external network checks cannot prevent the HTML or static assets loading.
+This is a private LAN/hotspot portal, not a public Internet endpoint.
+
 ## Boot-mode selection
 
 The root-owned `/etc/messagebox-onboarding/enabled` marker is the only

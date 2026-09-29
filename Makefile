@@ -1,7 +1,7 @@
 .PHONY: test syntax lint lint-python lint-shell lint-frontend check
 
 test:
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+	PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with gunicorn==23.0.0 python3 -m unittest discover -s tests -v
 	bun test tests/*.test.js
 
 syntax:
