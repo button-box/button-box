@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
 
@@ -569,10 +570,20 @@ def _verify_active(states, run, *, also_active=()):
     expected = {
         unit for unit in UNITS if states[unit]["active"] == "active"
     } | set(also_active)
-    current = _unit_states(run)
-    actual = {unit for unit in UNITS if current[unit]["active"] == "active"}
-    if actual != expected:
-        raise UpdateError("managed active unit state does not match the recorded state")
+    deadline = time.monotonic() + 15
+    stable = False
+    while True:
+        current = _unit_states(run)
+        actual = {unit for unit in UNITS if current[unit]["active"] == "active"}
+        if actual == expected:
+            if stable:
+                return
+            stable = True
+        else:
+            stable = False
+        if time.monotonic() >= deadline:
+            raise UpdateError("managed active unit state does not match the recorded state")
+        time.sleep(0.5)
 
 
 def _verify_enabled(states, run):

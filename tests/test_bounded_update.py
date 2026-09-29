@@ -386,6 +386,42 @@ class BoundedUpdateTests(unittest.TestCase):
                     )
                 fixture.assert_original_state(self)
 
+    def test_active_verification_waits_for_setup_service_conflict_to_settle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory, "setup")
+            expected = fixture.systemctl.states
+            transient = copy.deepcopy(expected)
+            transient["messagebox-onboarding-home.service"]["active"] = "inactive"
+            transient["comitup-web.service"]["active"] = "active"
+            with (
+                mock.patch.object(
+                    bounded_update, "_unit_states",
+                    side_effect=[transient, expected, expected],
+                ) as read_states,
+                mock.patch.object(bounded_update.time, "sleep") as sleep,
+            ):
+                bounded_update._verify_active(expected, fixture.systemctl)
+            self.assertEqual(read_states.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+
+    def test_active_verification_rejects_a_persistent_setup_conflict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory, "setup")
+            expected = fixture.systemctl.states
+            transient = copy.deepcopy(expected)
+            transient["messagebox-onboarding-home.service"]["active"] = "inactive"
+            transient["comitup-web.service"]["active"] = "active"
+            with (
+                mock.patch.object(bounded_update, "_unit_states", return_value=transient),
+                mock.patch.object(bounded_update.time, "monotonic", side_effect=[0, 16]),
+                mock.patch.object(bounded_update.time, "sleep") as sleep,
+            ):
+                with self.assertRaisesRegex(
+                    bounded_update.UpdateError, "active unit state"
+                ):
+                    bounded_update._verify_active(expected, fixture.systemctl)
+            sleep.assert_not_called()
+
     def test_each_transaction_prefix_automatically_rolls_back(self):
         cases = ("stop", "install", "daemon-reload", "enable")
         original_install = bounded_update._atomic_install

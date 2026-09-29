@@ -1,5 +1,9 @@
 # Manifest-bounded updates
 
+During restart, Wi-Fi setup can briefly switch between its hotspot and home
+services. The updater waits for the recorded service state to remain stable
+before accepting the update; if it does not settle, it rolls back.
+
 Use the bounded updater for a reviewed application release on an existing
 Button Box. It installs only paths named by the release manifest, preserves the
 current boot mode, records the installed release identity, and retains a local
