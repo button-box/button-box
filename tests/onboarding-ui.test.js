@@ -7,6 +7,7 @@ function harness(fail = false, stateRequest = null) {
   const calls = [];
   const handlers = {};
   const element = () => ({
+    classList: { toggle() {} }, parentElement: { classList: { toggle() {} } },
     hidden: false, disabled: false, textContent: "", children: [], dataset: {}, attributes: {}, handlers: {},
     addEventListener(name, fn) { this.handlers[name] = fn; },
     append(...items) { this.children.push(...items); },
@@ -30,9 +31,9 @@ function harness(fail = false, stateRequest = null) {
   for (const route of routes) node(`nav-${route}`).dataset.route = route;
   const view = { status: "choose", mapped_count: 2, recipients: [] };
   const context = vm.createContext({
-    document: { getElementById: node, querySelector: () => null, querySelectorAll: selector => selector === ".primary-nav a" ? routes.map(route => node(`nav-${route}`)) : [], createElement: element },
+    document: { getElementById: node, querySelector: () => null, querySelectorAll: selector => selector === ".primary-nav a" ? routes.map(route => node(`nav-${route}`)) : [], createElement: element, createTextNode: text => ({ textContent: text }) },
     window: { addEventListener(name, fn) { handlers[name] = fn; }, clearTimeout() {}, setTimeout() { return 1; } },
-    location: { hash: "#home" },
+    location: { hash: "#home", replace(hash) { this.hash = hash; } },
     URLSearchParams, FormData: class {
       constructor(form) { this.form = form; }
       get(key) { return this.form[key]; }
@@ -290,4 +291,125 @@ test("recipient rename submits the opaque token and new display name", async () 
   expect(h.calls[0].options.body.get("token")).toBe("recipient-token-0001");
   expect(h.calls[0].options.body.get("name")).toBe("Renamed person");
   expect(h.node("manager-status").textContent).toBe("Name saved.");
+});
+
+const cloudState = { mode: "RUNTIME", transport: "cloud", setup: {
+  wifi: "complete", whatsapp: "complete", recipient: "attention", first_message: "attention", nfc: "optional",
+}, health: { runtime: "running" } };
+
+function setCloudState(h) {
+  vm.runInContext(`currentState = ${JSON.stringify(cloudState)}`, h.context);
+}
+
+test("Cloud Setup routes account, people, NFC and settings to the service while Wi-Fi stays local", () => {
+  const h = harness();
+  setCloudState(h);
+  vm.runInContext("renderSetup(currentState)", h.context);
+  const required = h.node("required-tasks").children.map(row => row.children[0].href);
+  const optional = h.node("optional-tasks").children.map(row => row.children[0].href);
+  expect(required).toEqual(["#advanced", "https://button.box/dashboard", "https://button.box/dashboard", "#activity"]);
+  expect(optional).toEqual(["https://button.box/dashboard", "https://button.box/dashboard"]);
+  vm.runInContext('currentState.transport = "wacli"; renderSetup(currentState)', h.context);
+  expect(h.node("required-tasks").children.map(row => row.children[0].href)).toEqual(["#advanced", "#whatsapp", "#advanced", "#activity"]);
+  expect(h.node("optional-tasks").children.map(row => row.children[0].href)).toEqual(["#advanced", "#settings"]);
+});
+
+test("stale Cloud hashes and retained account buttons cannot open or request standalone management", async () => {
+  const h = harness();
+  setCloudState(h);
+  for (const hash of ["#whatsapp", "#recipients", "#recipient-picker"]) {
+    h.context.location.hash = hash;
+    await vm.runInContext("route()", h.context);
+    expect(h.context.location.hash).toBe("#setup");
+    expect(h.node("setup-view").hidden).toBe(false);
+    expect(h.node("ready-view").hidden).toBe(true);
+    expect(h.node("recipient-manager-view").hidden).toBe(true);
+  }
+  await h.node("manage-whatsapp").handlers.click();
+  await vm.runInContext("route()", h.context);
+  await h.node("manage-recipients").handlers.click();
+  await vm.runInContext("route()", h.context);
+  await expect(vm.runInContext('formRequest("/whatsapp/unlink", {confirm:"unlink"})', h.context)).rejects.toThrow("Button Box Cloud");
+  expect(h.calls).toHaveLength(0);
+});
+
+test("Cloud Advanced hides standalone controls, keeps local Wi-Fi and skips contact discovery", async () => {
+  const h = harness();
+  setCloudState(h);
+  h.context.location.hash = "#advanced";
+  await vm.runInContext("route()", h.context);
+  for (const id of ["manage-whatsapp", "manage-recipients", "listener-form"]) expect(h.node(id).hidden).toBe(true);
+  expect(h.node("advanced-cloud-management").hidden).toBe(false);
+  expect(h.node("wifi-change-form").hidden).toBe(false);
+  expect(h.node("advanced-connections-label").textContent).toBe("WhatsApp connection");
+  expect(h.node("advanced-connections-copy").textContent).toContain("Button Box Cloud");
+  for (const id of ["advanced-connections-setup", "advanced-recipients-setup"]) expect(h.node(id).href).toBe("https://button.box/dashboard");
+  expect(h.calls).toHaveLength(0);
+  vm.runInContext('currentState.transport = "wacli"', h.context);
+  await vm.runInContext("loadAdvanced()", h.context);
+  expect(h.calls.map(call => call.url)).toEqual(["/api/contacts"]);
+  expect(h.node("manage-whatsapp").hidden).toBe(false);
+  expect(h.node("listener-form").hidden).toBe(false);
+  expect(h.node("advanced-cloud-management").hidden).toBe(true);
+  expect(h.node("advanced-recipients-setup").href).toBe("#setup");
+  expect(h.node("advanced-connections-label").textContent).toBe("Wi-Fi and WhatsApp");
+  expect(h.node("advanced-connections-copy").textContent).toBe("Reconnect, relink, or continue setup.");
+});
+
+test("late standalone status cannot overwrite Cloud state or query its recipients", async () => {
+  const h = harness();
+  const pending = deferred();
+  h.context.fetch = (url) => { h.calls.push({ url }); return pending.promise; };
+  vm.runInContext('currentState = {mode:"RUNTIME", transport:"wacli"}', h.context);
+  const loading = vm.runInContext("loadRuntimeWhatsApp()", h.context);
+  setCloudState(h);
+  pending.resolve({ ok: true, headers: { get: () => "application/json" }, json: async () => ({status:"ready", phone_hint:"Synthetic account", eligible_count:2}) });
+  await loading;
+  expect(vm.runInContext("currentState.transport", h.context)).toBe("cloud");
+  expect(h.node("linked-account").textContent).toBe("");
+  expect(h.calls.map(call => call.url)).toEqual(["/api/whatsapp"]);
+  await vm.runInContext("loadRuntimeWhatsApp()", h.context);
+  expect(h.calls).toHaveLength(1);
+});
+
+test("late standalone recipient and listener responses never render after Cloud state arrives", async () => {
+  for (const operation of ["loadRecipients({manager:true})", "loadAdvanced()"] ) {
+    const h = harness();
+    const pending = deferred();
+    h.context.fetch = (url) => { h.calls.push({ url }); return pending.promise; };
+    vm.runInContext('currentState = {mode:"RUNTIME", transport:"wacli"}', h.context);
+    const loading = vm.runInContext(operation, h.context);
+    setCloudState(h);
+    vm.runInContext('showMainRoute("advanced")', h.context);
+    pending.resolve({ ok: true, headers: { get: () => "application/json" }, json: async () => ({ recipients: [{label:"Synthetic person", configured:true}], listeners:{synthetic:{name:"Synthetic listener"}} }) });
+    await loading;
+    expect(h.node("configured-recipient-list").children).toHaveLength(0);
+    expect(h.node("listener-profiles").textContent).toContain("Button Box Cloud");
+    expect(h.node("listener-profiles").children).toHaveLength(0);
+  }
+});
+
+test("Cloud local Settings navigation still loads and renders normal device settings", async () => {
+  const h = harness();
+  setCloudState(h);
+  const settings = {
+    recording_mode: "hold_release", after_listening: "play_only", max_recording_seconds: 60,
+    ringtone_id: "default", master_volume_percent: 30, arrival_signal: "ring",
+    quiet_hours: {enabled:false, start:"22:00", end:"07:00"}, timezone: "UTC", nfc_confirmation_beep: true,
+  };
+  h.context.document.querySelector = selector => selector.startsWith("[name=") ? h.node(selector) : null;
+  h.context.fetch = async (url) => {
+    h.calls.push({url});
+    return {ok:true, headers:{get:()=>"application/json"}, json:async()=>({settings, attention:false})};
+  };
+  h.context.location.hash = "#settings";
+  await h.node("nav-settings").handlers.click();
+  expect(h.node("settings-view").hidden).toBe(false);
+  await vm.runInContext("route()", h.context);
+  expect(h.context.location.hash).toBe("#settings");
+  expect(h.node("settings-view").hidden).toBe(false);
+  expect(h.node("setup-view").hidden).toBe(true);
+  expect(h.node("master-volume").value).toBe("30");
+  expect(h.node("settings-status").textContent).toBe("");
+  expect(h.calls.map(call=>call.url)).toEqual(["/api/settings"]);
 });
