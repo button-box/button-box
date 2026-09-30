@@ -13,7 +13,8 @@ gpiozero.LED = object
 with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
 from messagebox.contacts import ContactStore  # noqa: E402
-from messagebox.nfc_state import AnnouncementStore, SelectionStore  # noqa: E402
+from messagebox.nfc import Announcer, NfcRuntime  # noqa: E402
+from messagebox.nfc_state import AnnouncementStore, EnrollmentStore, NfcRouter, SelectionStore  # noqa: E402
 
 
 GRANDMA = "15551234567@s.whatsapp.net"
@@ -224,6 +225,57 @@ class ButtonRoutingTests(unittest.TestCase):
         safe_default = button_send.current_recipient_context(claim=True)
         self.assertEqual(safe_default["contact"]["jid"], GRANDMA)
         self.assertFalse(safe_default["via_card"])
+
+    def test_held_unknown_blocks_default_and_recent_after_announcement_is_consumed(self):
+        self.add_grandma()
+        self.contacts.assign_card(GRANDMA, CARD)
+        self.add_family()
+        self.mark_nfc_healthy()
+        selection = SelectionStore(self.selection_path, clock=lambda: 1000)
+        router = NfcRouter(self.contacts, selection, EnrollmentStore(self.root / "enrollment.json"), self.announcements)
+        reader = NfcRuntime(router, Announcer(self.announcements))
+        self.assertEqual(reader.observe("04:00:00:01", 0).action, "unknown")
+        self.announcements.take()
+        self.assertIsNone(reader.observe("04:00:00:01", 1))
+        self.assertIsNone(self.announcements.pending_action())
+        with mock.patch.object(button_send, "recent_reply_recipient", side_effect=AssertionError("recent route inspected")):
+            self.assertIsNone(button_send.current_recipient_context(claim=True))
+            self.assertIsNone(button_send.recording_recipient_context())
+            self.assertIsNone(reader.observe(None, 1.1))
+            self.assertIsNone(button_send.recording_recipient_context())
+        self.assertEqual(reader.observe(None, 2).action, "removed")
+        self.assertFalse(selection.unknown_present())
+        restored = button_send.recording_recipient_context()
+        self.assertEqual(restored["contact"]["jid"], GRANDMA)
+        self.assertFalse(restored["via_card"])
+
+    def test_zero_tag_setup_keeps_default_independent_of_unknown_reader_marker(self):
+        self.add_grandma()
+        SelectionStore(self.selection_path).block_unknown()
+        default = button_send.recording_recipient_context()
+        self.assertEqual(default["contact"]["jid"], GRANDMA)
+        self.assertFalse(default["via_card"])
+
+    def test_unknown_marker_malformed_or_unavailable_never_permits_fallback(self):
+        self.add_grandma()
+        self.contacts.assign_card(GRANDMA, CARD)
+        self.mark_nfc_healthy()
+        selection = SelectionStore(self.selection_path)
+        selection.unknown_path.write_text("malformed marker")
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.clear_unknown()
+        selection.unknown_path.symlink_to(self.root / "missing-unknown-target")
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.clear_unknown()
+        selection.unknown_path.mkdir()
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.unknown_path.rmdir()
+        with mock.patch.object(button_send.SelectionStore, "unknown_present", side_effect=PermissionError("unavailable")):
+            self.assertIsNone(button_send.current_recipient_context(claim=True))
+            self.assertIsNone(button_send.recording_recipient_context())
 
     def test_short_legacy_press_plays_without_resolving_or_claiming(self):
         button_send.button = types.SimpleNamespace(is_pressed=False)

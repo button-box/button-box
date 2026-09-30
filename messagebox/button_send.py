@@ -35,7 +35,7 @@ from messagebox.guided_reply import (
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
-from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
+from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, active_selection, claim_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
@@ -315,6 +315,9 @@ def current_recipient_context(*, claim=False):
             except OSError:
                 log("recipient unavailable: NFC reader health is unavailable")
                 return None
+            if SelectionStore(NFC_SELECTION_FILE).unknown_present():
+                log("recipient unavailable: unrecognized card presentation")
+                return None
             resolver = claim_selection if claim else active_selection
             selection_existed = Path(NFC_SELECTION_FILE).exists()
             context = resolver(
@@ -381,8 +384,11 @@ def nfc_idle_routing_is_safe(contacts):
         if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
             log("recipient unavailable: NFC reader health is stale")
             return False
+        if SelectionStore(NFC_SELECTION_FILE).unknown_present():
+            log("recipient unavailable: unrecognized card presentation")
+            return False
     except OSError:
-        log("recipient unavailable: NFC reader health is unavailable")
+        log("recipient unavailable: NFC reader state is unavailable")
         return False
     if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
         log("recipient unavailable: unrecognized card presentation")
