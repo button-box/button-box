@@ -41,7 +41,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-RECIP-10 | TEST+UI | Removing the default is rejected safely. |
 | BB-RECIP-11 | TEST+UI+API | Naming or renaming a recipient preserves chat identity, default selection, and NFC mappings; names persist after reload. |
 | BB-NFC-01 | UI | Waiting, back, skip, retry, and unavailable states remain coherent. |
-| BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. |
+| BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. A held unknown tag still blocks default/recent routing after its announcement is consumed; removal grace or a known tag restores normal routing. |
 | BB-NFC-03 | PHYSICAL | A real tag pairs, debounces, re-presents, reassigns, unpairs, and persists. |
 | BB-NFC-04 | TEST+PHYSICAL | A fresh card selection takes priority over queued playback and recent replies in both recording modes; stale, unknown, and raced selections never route to another recipient. |
 | BB-VOICE-01 | UI+LOG | One authorized voice note is received and queued once. |
