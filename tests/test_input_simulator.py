@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -286,7 +287,7 @@ class InputSimulatorTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(nfc, name, root / name))
             stack.enter_context(mock.patch.object(simulator, "preflight"))
             original = simulator.Inputs
-            stack.enter_context(mock.patch.object(simulator, "Inputs", side_effect=lambda *args: original(*args, clock=lambda: clock[0])))
+            stack.enter_context(mock.patch.object(simulator, "Inputs", side_effect=lambda *args, **kwargs: original(*args, clock=lambda: clock[0], **kwargs)))
 
             def setup():
                 clock[0] += 1
@@ -296,7 +297,7 @@ class InputSimulatorTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(simulator.threading, "Thread"))
             stack.enter_context(mock.patch.object(simulator, "run_inputs", side_effect=lambda runtime, inputs, manifest: observed.append(inputs.started)))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-            simulator.execute(plan([{"at": 1, "type": "press"}, {"at": 1.2, "type": "release"}]), {}, False)
+            simulator.execute(plan([{"at": 1, "type": "press"}, {"at": 1.2, "type": "release"}]), {"recipients": []}, False)
             self.assertEqual(observed, [3])
 
     def test_authorized_subset_blocks_household_default_before_capture_or_presence(self):
@@ -376,6 +377,242 @@ class InputSimulatorTests(unittest.TestCase):
                 result.stdout = json.dumps({"authenticated": True, "linked_jid": OTHER})
                 self.assertNotEqual(simulator.account_hash(runtime), first)
                 self.assertEqual(status.call_count, 2)
+
+    @contextlib.contextmanager
+    def trace_runtime(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            contacts = ContactStore(root / "contacts.json")
+            contacts.add_contact(OTHER, "Private household label")
+            contacts.add_contact(JID, "Private test label")
+            contacts.assign_card(JID, CARD)
+            contacts.assign_card(JID, "04:B2:00:FF")
+            selection = SelectionStore(root / "selection.json")
+            announcements = AnnouncementStore(root / "announcements.json")
+            router = NfcRouter(contacts, selection, EnrollmentStore(root / "enrollment.json"), announcements)
+            reader = NfcRuntime(router, Announcer(announcements))
+            queue = root / "queue"
+            queue.mkdir()
+            health = root / "health"
+            health.touch()
+            for key, value in [("CONTACTS_FILE", str(contacts.path)), ("NFC_SELECTION_FILE", str(selection.path)),
+                               ("NFC_HEALTH_FILE", health), ("nfc_announcement_store", announcements),
+                               ("QUEUE_DIR", str(queue))]:
+                stack.enter_context(mock.patch.object(button_send, key, value))
+            stack.enter_context(mock.patch.object(button_send, "log"))
+            records = []
+            trace = simulator.InputTrace(button_send, {"recipients": [JID]}, emit=records.append)
+            yield reader, selection, announcements, trace, records
+
+    def test_trace_reports_real_repeat_claim_alternation_removal_and_staleness_without_probes(self):
+        with self.trace_runtime() as (reader, selection, announcements, trace, records):
+            clock = [0]
+            candidate = plan([
+                {"at": 1, "type": "nfc-present", "uid": CARD},
+                {"at": 1.2, "type": "nfc-repeat"},
+                {"at": 3, "type": "nfc-present", "uid": "04:B2:00:FF"},
+                {"at": 4, "type": "nfc-removed"},
+            ], 6)
+            inputs = simulator.Inputs(candidate, reader, mock.Mock(), clock=lambda: clock[0], trace=trace)
+            with mock.patch.object(button_send, "current_recipient_context") as route_probe, \
+                 mock.patch.object(reader.router, "active_contact") as status_probe:
+                inputs.tick()
+                clock[0] = 1
+                inputs.tick()
+                first = records[-1]
+                self.assertEqual(first["handler_action"], "selected")
+                self.assertTrue(first["handler_authorized_recipient"])
+                self.assertTrue(first["selection_present"])
+                clock[0] = 1.2
+                inputs.tick()
+                repeated = records[-1]
+                self.assertEqual(repeated["input_event"], "nfc-repeat")
+                self.assertFalse(repeated["handler_returned"])
+                self.assertEqual(repeated["selection_card_sha256"], first["selection_card_sha256"])
+                selection.claim()
+                clock[0] = 2
+                inputs.tick()
+                consumed = records[-1]
+                self.assertEqual(consumed["handler_action"], "refreshed")
+                self.assertFalse(consumed["handler_announce"])
+                self.assertFalse(consumed["selection_present"])
+                self.assertTrue(consumed["claimed_marker_present"])
+                self.assertTrue(selection.claimed_path.exists())
+                clock[0] = 3
+                inputs.tick()
+                alternate = records[-1]
+                self.assertEqual(alternate["handler_action"], "selected")
+                self.assertNotEqual(alternate["reader_card_sha256"], first["reader_card_sha256"])
+                self.assertEqual(alternate["handler_recipient_sha256"], first["handler_recipient_sha256"])
+                clock[0] = 3.9
+                inputs.tick()
+                clock[0] = 4
+                inputs.tick()
+                removal_sample = records[-1]
+                self.assertEqual(removal_sample["input_event"], "nfc-removed")
+                self.assertFalse(removal_sample["handler_returned"])
+                self.assertTrue(removal_sample["reader_present"])
+                clock[0] = 4.81
+                inputs.tick()
+                removed = records[-1]
+                self.assertEqual(removed["handler_action"], "removed")
+                self.assertFalse(removed["reader_present"])
+                self.assertTrue(removed["selection_present"])
+                document = json.loads(selection.path.read_text())
+                document["last_seen_at"] = time.time() - 31
+                selection.path.write_text(json.dumps(document))
+                clock[0] = 5
+                inputs.tick()
+                stale = records[-1]
+                self.assertFalse(stale["selection_within_ttl"])
+                self.assertGreater(stale["selection_age_seconds"], 30)
+                self.assertTrue(selection.path.exists())  # Observation never clears stale state.
+                route_probe.assert_not_called()
+                status_probe.assert_not_called()
+            encoded = json.dumps(records)
+            for private in (CARD, "04:B2:00:FF", JID, OTHER, "Private household label", "Private test label"):
+                self.assertNotIn(private, encoded)
+            self.assertEqual([record["sequence"] for record in records], list(range(1, len(records) + 1)))
+
+    def test_trace_uses_actual_authorized_unavailable_and_rejected_routing_returns(self):
+        with self.trace_runtime() as (reader, selection, announcements, trace, records):
+            reader.observe(CARD, 1)
+            with mock.patch.object(button_send.subprocess, "Popen") as capture, \
+                 mock.patch.object(button_send, "presence") as presence, \
+                 simulator.validated_routing(button_send, {"recipients": [JID]}, trace):
+                state, context = button_send.claim_fresh_card_intent()
+                self.assertEqual(state, "claimed")
+                allowed = records[-1]
+                self.assertEqual(allowed["claim_state"], "claimed")
+                self.assertEqual(allowed["guard_outcome"], "allowed")
+                self.assertTrue(allowed["authorized_recipient"])
+                self.assertTrue(allowed["via_card"])
+                with self.assertRaises(simulator.SimulationError):
+                    button_send.recording_recipient_context()  # Real household default after consumption.
+                rejected = records[-1]
+                self.assertEqual(rejected["guard_outcome"], "rejected")
+                self.assertFalse(rejected["authorized_recipient"])
+                reader.observe(UNKNOWN, 2)
+                self.assertIsNone(button_send.recording_recipient_context())
+                unavailable = records[-1]
+                self.assertEqual(unavailable["guard_outcome"], "unavailable")
+                self.assertFalse(unavailable["context_returned"])
+                self.assertIsNone(unavailable["authorized_recipient"])
+                with self.assertRaises(simulator.SimulationError):
+                    button_send.capture_guided_recording(OTHER)
+                self.assertEqual(records[-1]["source"], "capture_recipient_guard")
+                self.assertEqual(records[-1]["guard_outcome"], "rejected")
+                capture.assert_not_called()
+                presence.assert_not_called()
+            encoded = json.dumps(records)
+            for private in (CARD, UNKNOWN, JID, OTHER):
+                self.assertNotIn(private, encoded)
+
+    def test_trace_observes_unknown_latch_after_announcement_and_grace_removal(self):
+        with self.trace_runtime() as (reader, selection, announcements, trace, records):
+            clock = [0]
+            inputs = simulator.Inputs(plan([
+                {"at": 1, "type": "nfc-unknown", "uid": UNKNOWN},
+                {"at": 2, "type": "nfc-repeat"},
+                {"at": 3.8, "type": "nfc-removed"},
+            ], 5), reader, mock.Mock(), clock=lambda: clock[0], trace=trace)
+            clock[0] = 1
+            inputs.tick()
+            unknown = records[-1]
+            self.assertEqual(unknown["handler_action"], "unknown")
+            self.assertTrue(unknown["unknown_marker_present"])
+            self.assertFalse(unknown["selection_present"])
+            announcements.take()  # Actual notification consumption must not be mistaken for absence.
+            clock[0] = 2
+            inputs.tick()
+            repeated = records[-1]
+            self.assertEqual(repeated["input_event"], "nfc-repeat")
+            self.assertFalse(repeated["handler_returned"])
+            self.assertTrue(repeated["unknown_marker_present"])
+            self.assertFalse(repeated["announcement_present"])
+            with simulator.validated_routing(button_send, {"recipients": [JID]}, trace):
+                self.assertIsNone(button_send.recording_recipient_context())
+                self.assertEqual(records[-1]["guard_outcome"], "unavailable")
+                clock[0] = 3.7
+                inputs.tick()
+                clock[0] = 3.8
+                inputs.tick()
+                self.assertTrue(records[-1]["unknown_marker_present"])
+                self.assertTrue(records[-1]["reader_present"])
+                clock[0] = 4.6
+                inputs.tick()
+                removed = records[-1]
+                self.assertEqual(removed["handler_action"], "removed")
+                self.assertFalse(removed["unknown_marker_present"])
+                self.assertFalse(removed["reader_present"])
+                with self.assertRaises(simulator.SimulationError):
+                    button_send.recording_recipient_context()
+                self.assertEqual(records[-1]["guard_outcome"], "rejected")
+            self.assertNotIn(UNKNOWN, json.dumps(records))
+            self.assertNotIn(OTHER, json.dumps(records))
+
+    def test_trace_and_preflight_preserve_preexisting_dangling_unknown_marker(self):
+        with self.trace_runtime() as (reader, selection, announcements, trace, records):
+            selection.unknown_path.symlink_to(selection.path.parent / "missing")
+            self.assertTrue(simulator.trace_present(selection.unknown_path))
+            inputs = simulator.Inputs(plan([{ "at": 1, "type": "nfc-unknown", "uid": UNKNOWN},
+                                           {"at": 2, "type": "nfc-removed"}]), reader, mock.Mock(), trace=trace)
+            inputs.tick()
+            self.assertTrue(records[-1]["unknown_marker_present"])
+            self.assertTrue(selection.unknown_path.is_symlink())
+            root = selection.path.parent
+            runtime = types.SimpleNamespace(OUTBOX_DIR=root / "outbox", TEMP_DIR=root / "temp",
+                                            LISTENED_DIR=root / "receipts",
+                                            cloud_claim=types.SimpleNamespace(CLAIM_FILE=root / "claim"))
+            nfc = types.SimpleNamespace(NFC_SELECTION_FILE=selection.path,
+                                       NFC_ENROLLMENT_FILE=root / "enrollment.json",
+                                       NFC_ANNOUNCEMENT_FILE=announcements.path, NFC_HEALTH_FILE=root / "health")
+            (root / "health").unlink()
+            with mock.patch.object(simulator, "verify_routes"), \
+                 mock.patch.object(simulator.subprocess, "run", return_value=types.SimpleNamespace(returncode=3, stdout="inactive\n")):
+                with self.assertRaises(simulator.SimulationError):
+                    simulator.preflight(runtime, nfc, {})
+            self.assertTrue(selection.unknown_path.is_symlink())
+
+    def test_trace_file_never_reads_fifo_symlink_target_or_oversized_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "outside.json"
+            outside.write_text(json.dumps({"jid": OTHER, "uid": UNKNOWN}))
+            link = root / "linked-state"
+            link.symlink_to(outside)
+            pipe = root / "pipe-state"
+            os.mkfifo(pipe)
+            with mock.patch.object(simulator.os, "open") as opened:
+                self.assertEqual(simulator.trace_file(link), (True, None))
+                self.assertEqual(simulator.trace_file(pipe), (True, None))
+                opened.assert_not_called()
+            oversized = root / "oversized.json"
+            oversized.write_bytes(b" " * 16385)
+            self.assertEqual(simulator.trace_file(oversized), (True, None))
+            with mock.patch.object(simulator.os, "fstat", return_value=types.SimpleNamespace(st_mode=stat.S_IFIFO)), \
+                 mock.patch.object(simulator.os, "read") as read:
+                self.assertEqual(simulator.trace_file(outside), (True, None))
+                read.assert_not_called()
+
+    def test_trace_deduplicates_polling_and_marks_truncation_without_affecting_handlers(self):
+        with self.trace_runtime() as (reader, selection, announcements, trace, records):
+            clock = [0]
+            inputs = simulator.Inputs(plan([{ "at": 1, "type": "nfc-present", "uid": CARD},
+                                           {"at": 2, "type": "nfc-removed"}]),
+                                      reader, mock.Mock(), clock=lambda: clock[0], trace=trace)
+            inputs.tick()
+            clock[0] = 0.2
+            inputs.tick()
+            self.assertEqual(len(records), 1)
+            trace.count = 2048
+            clock[0] = 1
+            inputs.tick()
+            self.assertTrue(selection.path.exists())
+            self.assertTrue(trace.truncated)
+            self.assertEqual(records[-1], {"type": "input_trace", "status": "truncated"})
+            trace.route("recording_recipient_context", None)
+            self.assertEqual(len(records), 2)
 
     @contextlib.contextmanager
     def send_runtime(self, mode):

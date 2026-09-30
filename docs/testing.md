@@ -112,6 +112,33 @@ recorded/queued output, receipts, logs, unknown jobs and enrollment. A zero exit
 means the driver completed, not that every expected behavior, acoustic result
 or message delivery passed; collect those assertions separately.
 
+Execution also emits private `nfc_observation` and `route_observation` JSON
+records. These report actual `NfcRuntime.observe` return action/announce flags,
+reader state, selection/claimed/unknown markers, stored announcement action,
+and observed selection age/TTL status. Initial state and meaningful changes are
+included. A removal input sample and the later grace-completed `removed` result
+are separate records. A `refreshed` result does not prove that a consumed
+selection was re-armed; inspect selection presence and the claimed marker.
+Alternating cards have distinct card hashes even when they route to one person.
+
+Route records come only from the real application's routing/capture guard calls:
+`allowed`, `unavailable`, or `rejected`, with an authorized-recipient boolean.
+The observer never calls routing/status helpers to infer a choice or consume
+state. NFC-only rows therefore show stored effects; proving an actual outbound
+route rejection requires the appropriate normal simulated interaction. TTL
+status describes the observed timestamp, not a full route-authorization verdict.
+File snapshots are not transactional with concurrent application transitions.
+
+Trace identifiers use keyed SHA-256 hashes stable within one run, with a new
+unpublished key for each run. Raw cards, recipient/account/device identifiers,
+labels, clips and settings are omitted. Idle snapshot reads are limited to ten
+per second; unchanged snapshots are suppressed. Handler returns and explicit
+NFC events remain visible. Output stops at 2,048 records with an explicit
+truncation record; the completion summary reports record count and truncation.
+Truncation or missing route records means the trace cannot establish that case,
+even if the driver completed. Capture traces and run metadata privately; software
+trace evidence does not certify the physical reader, acoustic output or delivery.
+
 Focused contracts are in `tests/test_input_simulator.py`. The script is developer
 source, not an installed service or public endpoint. Review changes to the shared
 handler and this driver together before any authorized test deployment.
