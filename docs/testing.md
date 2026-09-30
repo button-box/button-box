@@ -17,6 +17,105 @@ required.
 Synthetic tests cover routing, onboarding, redaction, pairing, NFC, and recovery
 contracts. They do not replace physical Pi, phone, network, or hardware tests.
 
+## Developer simulated inputs
+
+`scripts/dev/simulate-inputs.py` validates a private timed plan by default. Importing
+it does not access hardware or application state. Example plan (use synthetic card
+IDs here; keep actual plans outside Git with permissions `0600`):
+
+```json
+{"duration": 5, "events": [
+  {"at": 1, "type": "press"},
+  {"at": 1.2, "type": "release"},
+  {"at": 2, "type": "nfc-present", "uid": "04:A1:00:FF"},
+  {"at": 3, "type": "nfc-repeat"},
+  {"at": 4, "type": "nfc-removed"}
+]}
+```
+
+Supported events are `press`, `release`, `nfc-present` (mapped card),
+`nfc-unknown` (unmapped card), `nfc-repeat` and `nfc-removed`. The interval between
+press and release is the hold duration. Events must increase, leave at least
+0.8 seconds before/after the sequence, and end released with no card present.
+Plans last 1–120 seconds and contain at most 256 events. Removal/repeat retain
+the normal NFC grace, refresh, unknown-card and one-shot selection semantics.
+
+```sh
+python3 scripts/dev/simulate-inputs.py /private/path/plan.json
+python3 scripts/dev/simulate-inputs.py /private/path/plan.json --execute \
+  --authorization /private/path/authorization.json --timeout 180 \
+  --scratch-state-root /private/path/empty-run-state
+```
+
+Execute only through the existing sole device owner in an already authorized
+test session, as the normal runtime user with the normal service environment
+(including detected audio devices). This command does not stop services, configure
+credentials or change transport. It requires the button, NFC and poller
+(`messagebox-poller.service`) services to be verified inactive. Receive the verified test audio first, then the
+sole owner stops the queue producer before simulation. It also requires no
+pending claim/enrollment/NFC state, and empty
+outbox, recording-temp and listened-receipt directories. Use an explicitly provided
+`--scratch-state-root` when production has retained work: it must be a separate,
+empty, `0700` directory owned by the runtime user. Only outbox, recording-temp and
+listened-receipt paths change; contacts, settings, incoming queue, account and
+transport stay authoritative. The driver never copies, moves or deletes household
+jobs. Scratch output is retained; use a fresh root per run. Existing or unknown
+work in the selected paths fails closed and is retained. Resolve it through the ordinary owner/recovery
+workflow; do not delete it to make the driver run.
+
+The private `0600` authorization manifest contains exactly `transport` (`cloud`
+or `wacli`), `contacts_sha256`, `settings_sha256`, `account_sha256`, and
+`recipients` (the authorized test JIDs, a subset of authoritative contacts). The owner verifies
+the account and counterpart before creating it. Hash the exact contact file
+selected by that transport and `/var/lib/messagebox-settings/settings.json`.
+`account_sha256` hashes a compact JSON array: Cloud uses `[api_url, device_id]`
+from the existing validated identity; wacli uses `[resolved_store_path, linked_jid]`
+from the normal runtime's bounded `wacli --read-only --json auth status` lookup.
+The driver caches this proof until the local identity/store fingerprint changes;
+it never creates credentials or starts sync. The owner still verifies the actual
+account and counterpart independently. All queued audio routes must be authorized.
+Planned mapped cards must belong to an authorized test contact. Validation wrappers
+call the normal routing functions unchanged and reject an unauthorized returned
+route before recording/presence; guided capture has the same recipient guard.
+Hashes, account identity and queued routes are rechecked before each interaction
+and before sending.
+Neither the manifest nor the plan belongs in a repository or public report.
+
+Execution replaces only button input/status lamp hardware, uses the application's
+shared confirmed-press handler and `NfcRuntime.observe`, and keeps recording,
+playback, authorization, queue transitions and routing real. It does not run
+startup recovery or the permanent sender thread. Ordinary wacli recording
+presence and playback reactions remain real for the verified test recipients.
+Approved audio remains in the outbox unless `--send-generated` is explicitly
+added; that option sends only work generated after the empty-outbox preflight,
+using the normal transport functions, with no automatic retry. It checks durable final
+state rather than treating a handled return value as send success: failed,
+uncertain or quarantined recordings fail. Private JSON outcomes use hashed job
+keys and distinguish Cloud queued/waiting/accepted/provider-delivered progress
+from independently verified counterpart delivery. Neither a queued upload nor
+an accepted transport operation is an account delivery pass. NFC enrollment,
+unpairing, account identity, physical switches/readers/lamp, and delivered or
+acoustically correct audio are separate assertions.
+
+Budget `--timeout` for the full configured workflow, including recording,
+playback, review/approval and transport completion. Its 1–300 second limit
+supervises the whole process group, including audio/presence children; ending
+the input timeline alone does not interrupt an active handler. Timing starts after
+audio setup. Collapsed button transitions, events more than 50 ms late, or an
+incomplete schedule fail rather than silently skipping inputs. Successful private
+JSON output includes planned/processed counts and maximum scheduling lateness. Timeout, handler
+error, uncertain send or unverifiable cleanup is a failure. A timeout can leave
+claimed queue/audio/outbox or NFC artifacts: the owner must reconcile them and
+restore the saved service state before retrying. Normal completion clears only
+the simulator's newly created selection/announcement/health files. It preserves
+recorded/queued output, receipts, logs, unknown jobs and enrollment. A zero exit
+means the driver completed, not that every expected behavior, acoustic result
+or message delivery passed; collect those assertions separately.
+
+Focused contracts are in `tests/test_input_simulator.py`. The script is developer
+source, not an installed service or public endpoint. Review changes to the shared
+handler and this driver together before any authorized test deployment.
+
 ## Regression test matrix
 
 Matrix case IDs are permanent. Add new cases with a new descriptive ID; do not

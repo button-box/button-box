@@ -1724,6 +1724,37 @@ def claim_only_loop():
             time.sleep(POLL_S)
 
 
+def handle_confirmed_press(closed_at):
+    """Dispatch a debounced press through the normal routing and audio flow."""
+    if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
+        log_event("cloud_claim_button_pressed")
+        wait_for_stable_open()
+        return True
+    interaction_settings = caregiver_settings()
+    try:
+        if interaction_settings["recording_mode"] == "tap_review":
+            # The session starts from this press only after its release; it can
+            # never be carried into incoming audio, countdown, or recording.
+            acknowledge_guided_press("start_session")
+            wait_for_stable_open()
+            run_guided_once(interaction_settings)
+        else:
+            record_and_send_legacy(interaction_settings, pressed_at=closed_at)
+    except Exception as exc:
+        log(f"button flow error: {exc}")
+        log_event(
+            "button_flow_error",
+            recording_mode=interaction_settings["recording_mode"],
+            error=type(exc).__name__,
+        )
+        if not _guided_active:
+            beep("fail")
+        return False
+    finally:
+        refresh_led(force=True)
+    return True
+
+
 def main():
     global button, led, outbox_store, receipt_store
     try:
@@ -1809,31 +1840,7 @@ def main():
                 break
         if not solid:
             continue
-        if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
-            log_event("cloud_claim_button_pressed")
-            wait_for_stable_open()
-            continue
-        interaction_settings = caregiver_settings()
-        try:
-            if interaction_settings["recording_mode"] == "tap_review":
-                # The session starts from this press only after its release; it can
-                # never be carried into incoming audio, countdown, or recording.
-                acknowledge_guided_press("start_session")
-                wait_for_stable_open()
-                run_guided_once(interaction_settings)
-            else:
-                record_and_send_legacy(interaction_settings, pressed_at=closed_at)
-        except Exception as exc:
-            log(f"button flow error: {exc}")
-            log_event(
-                "button_flow_error",
-                recording_mode=interaction_settings["recording_mode"],
-                error=type(exc).__name__,
-            )
-            if not _guided_active:
-                beep("fail")
-        finally:
-            refresh_led(force=True)
+        handle_confirmed_press(closed_at)
 
 
 if __name__ == "__main__":
