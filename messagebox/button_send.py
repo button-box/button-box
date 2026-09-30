@@ -271,6 +271,15 @@ def legacy_outbox_files():
         return []
 
 
+def compatible_legacy_outbox_files():
+    mode = transport_mode()
+    return [
+        name
+        for name in legacy_outbox_files()
+        if legacy_job_transport(os.path.join(OUTBOX_DIR, name)) == mode
+    ]
+
+
 _recording = False
 _guided_active = False
 outbox_store = None
@@ -539,11 +548,19 @@ def ensure_nfc_confirmation(context):
     return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""))
 
 
+def legacy_job_metadata(path):
+    try:
+        with open(path + ".json", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        return metadata if isinstance(metadata, dict) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def legacy_job_recipient(path):
     """Use only the recipient snapshot bound at recording time."""
     try:
-        with open(path + ".json", encoding="utf-8") as handle:
-            recipient = json.load(handle).get("recipient")
+        recipient = (legacy_job_metadata(path) or {}).get("recipient")
         if (
             isinstance(recipient, str)
             and recipient
@@ -557,12 +574,29 @@ def legacy_job_recipient(path):
     return None
 
 
+def legacy_job_transport(path):
+    metadata = legacy_job_metadata(path)
+    if metadata is None:
+        return None
+    # Sidecars deployed before transport metadata existed belong to wacli.
+    transport = metadata.get("transport", "wacli")
+    return (
+        transport
+        if isinstance(transport, str) and transport in {"wacli", "business", "cloud"}
+        else None
+    )
+
+
 def bind_legacy_job_recipient(path, recipient):
     """Persist routing before the WAV becomes visible to the sender thread."""
     metadata_path = path + ".json"
     temporary_path = metadata_path + ".part"
     with open(temporary_path, "w", encoding="utf-8") as handle:
-        json.dump({"version": 1, "recipient": recipient}, handle, sort_keys=True)
+        json.dump(
+            {"version": 1, "recipient": recipient, "transport": transport_mode()},
+            handle,
+            sort_keys=True,
+        )
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary_path, metadata_path)
@@ -604,6 +638,9 @@ def send_legacy_outbox_file(fname):
     """Keep pre-feature durable WAV jobs working with the family-group target."""
     path = os.path.join(OUTBOX_DIR, fname)
     metadata_path = path + ".json"
+    if transport_mode() != "wacli" or legacy_job_transport(path) != "wacli":
+        log_event("send_blocked", flow="legacy", reason="transport")
+        return False
     recipient = legacy_job_recipient(path)
     if not recipient:
         log(f"legacy send blocked for {fname}: no bound recipient")
@@ -704,6 +741,10 @@ def stage_hold_release_business_job(fname):
     recipient. The source WAV is removed before the sender can complete the job.
     """
     path = os.path.join(OUTBOX_DIR, fname)
+    mode = transport_mode()
+    if mode not in {"business", "cloud"} or legacy_job_transport(path) != mode:
+        log_event("send_blocked", flow="hold_release", reason="transport")
+        return False
     recipient = legacy_job_recipient(path)
     if recipient is None:
         log_event("send_blocked", flow="hold_release", reason="missing_recipient")
@@ -736,6 +777,16 @@ def stage_hold_release_business_job(fname):
 
 def send_guided_job(job):
     """Send only to the recipient stored atomically with this approved audio."""
+    mode = transport_mode()
+    try:
+        durable_job = outbox_store.load(job.path)
+    except (AttributeError, OSError, ValueError, KeyError, json.JSONDecodeError):
+        log_event("send_blocked", flow=job.flow_kind, reason="metadata")
+        return False
+    if durable_job.message_id != job.message_id or durable_job.transport != mode:
+        log_event("send_blocked", flow=job.flow_kind, reason="transport")
+        return False
+    job = durable_job
     ogg = os.path.join(TEMP_DIR, f"guided-{uuid.uuid4().hex}.ogg")
     converted = subprocess.run(
         [
@@ -766,7 +817,7 @@ def send_guided_job(job):
         log(f"guided conversion failed {job.message_id}; retained for parent")
         return True
 
-    if transport_mode() == "cloud":
+    if mode == "cloud":
         try:
             target = cloud_runtime.recipient_id(job.recipient)
             client = CloudDeviceClient.from_environment()
@@ -802,7 +853,7 @@ def send_guided_job(job):
         log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
         return True
 
-    if transport_mode() == "business":
+    if mode == "business":
         try:
             if job.recipient not in ContactStore(CONTACTS_FILE).allowed_jids():
                 raise BusinessSendRejected("recipient is no longer approved")
@@ -877,7 +928,7 @@ def sender_loop():
         if transport_mode() in {"business", "cloud"}:
             staged = all(
                 stage_hold_release_business_job(filename)
-                for filename in legacy_outbox_files()
+                for filename in compatible_legacy_outbox_files()
             )
             if not staged:
                 time.sleep(5)
@@ -890,7 +941,7 @@ def sender_loop():
             failures += 1
             time.sleep(min(60, 5 * failures))
             continue
-        legacy = legacy_outbox_files()
+        legacy = compatible_legacy_outbox_files()
         if legacy:
             if send_legacy_outbox_file(legacy[0]):
                 failures = 0
@@ -1052,7 +1103,7 @@ def claim_oldest():
     for name in queued():
         source = Path(QUEUE_DIR) / name
         metadata = queue_metadata(source)
-        if transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+        if not inbound_audio_authorized(metadata):
             continue
         claimed = claim_inbox_file(QUEUE_DIR, source.name)
         return {"path": claimed, "meta": metadata}
@@ -1073,6 +1124,12 @@ def finish_claim(claim):
 
 def release_claim(claim):
     release_inbox_file(QUEUE_DIR, claim["path"])
+
+
+def inbound_audio_authorized(metadata):
+    if transport_mode() == "cloud":
+        return cloud_runtime.playable(metadata)
+    return not (isinstance(metadata, dict) and metadata.get("cloud") is True)
 
 
 def react_played(meta):
@@ -1420,9 +1477,13 @@ def play_next_legacy():
     names = queued()
     if not names:
         return
-    selected = next(((Path(QUEUE_DIR) / name, queue_metadata(Path(QUEUE_DIR) / name))
-                     for name in names if transport_mode() != "cloud" or
-                     cloud_runtime.playable(queue_metadata(Path(QUEUE_DIR) / name))), None)
+    selected = None
+    for name in names:
+        path = Path(QUEUE_DIR) / name
+        metadata = queue_metadata(path)
+        if inbound_audio_authorized(metadata):
+            selected = (path, metadata)
+            break
     if selected is None:
         return
     path, meta = selected
@@ -1571,7 +1632,7 @@ def run_guided_once(settings=None):
     if claim and (not recipient or not claim_recipient_allowed):
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
-            if transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+            if not inbound_audio_authorized(metadata):
                 release_claim(claim)
                 return
             play_audio_ordinary(claim["path"])
@@ -1601,7 +1662,7 @@ def run_guided_once(settings=None):
         # Catch a receipt that arrived after the idle loop saw this press. The
         # announcement finishes before the requested child interaction begins.
         play_pending_listened()
-        if claim and transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+        if claim and not inbound_audio_authorized(metadata):
             release_claim(claim)
             return
         outcome = session.run(
@@ -1692,13 +1753,13 @@ def main():
     if "--drain" in sys.argv:
         ok = True
         if transport_mode() in {"business", "cloud"}:
-            for filename in legacy_outbox_files():
+            for filename in compatible_legacy_outbox_files():
                 if not stage_hold_release_business_job(filename):
                     return 1
         for job in outbox_store.jobs():
             ok = send_guided_job(job) and ok
         if transport_mode() not in {"business", "cloud"}:
-            for filename in legacy_outbox_files():
+            for filename in compatible_legacy_outbox_files():
                 ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1
 
@@ -1722,7 +1783,7 @@ def main():
         f'after_listening={startup_settings["after_listening"]} '
         f"routing_mode={routing_mode()} "
         f"({len(queued())} queued, "
-        f"{len(outbox_store.jobs()) + len(legacy_outbox_files())} unsent)"
+        f"{len(outbox_store.jobs()) + len(compatible_legacy_outbox_files())} unsent)"
     )
     announce_runtime_ready()
 

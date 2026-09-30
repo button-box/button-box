@@ -78,13 +78,23 @@ from messagebox.wifi_change import request_change as request_wifi_change
 
 
 def _audio_authorized(path):
-    if os.environ.get("MSGBOX_TRANSPORT") != "cloud":
-        return True
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
     try:
         metadata = json.loads(Path(str(path) + ".json").read_text(encoding="utf-8"))
-        return cloud_runtime.playable(metadata)
-    except (OSError, ValueError, CloudDeviceError, CloudRuntimeError):
+    except FileNotFoundError:
+        return not cloud_mode
+    except (OSError, ValueError):
         return False
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("cloud") is True and not cloud_mode:
+        return False
+    if cloud_mode:
+        try:
+            return cloud_runtime.playable(metadata)
+        except (OSError, CloudDeviceError, CloudRuntimeError):
+            return False
+    return True
 
 BIND = os.environ.get("MSGBOX_DASH_BIND", "wlan0").strip()
 PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))

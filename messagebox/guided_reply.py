@@ -300,12 +300,18 @@ class OutboxJob:
     flow_kind: str
     duration: float
     state: str
+    transport: str
+
+
+OUTBOX_TRANSPORTS = {"wacli", "business", "cloud"}
 
 
 class OutboxStore:
     """Crash-aware jobs whose recipient is always persisted with the audio."""
 
-    def __init__(self, root: str, *, transport: str = "legacy"):
+    def __init__(self, root: str, *, transport: str = "wacli"):
+        if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
+            raise ValueError("unsupported outbox transport")
         self.root = Path(root)
         self.transport = transport
         self.root.mkdir(parents=True, exist_ok=True)
@@ -324,6 +330,8 @@ class OutboxStore:
         final_dir = self.root / f"{mid}.job"
         if final_dir.exists():
             existing = self.load(final_dir)
+            if existing.transport != self.transport:
+                raise ValueError("message id already bound to a different transport")
             if existing.recipient != recipient:
                 raise ValueError("message id already bound to a different recipient")
             return existing
@@ -353,6 +361,11 @@ class OutboxStore:
     def load(self, job_dir: Path) -> OutboxJob:
         with open(job_dir / "job.json", encoding="utf-8") as handle:
             data = json.load(handle)
+        # Jobs deployed before transport metadata existed were approved only
+        # for the standalone wacli path. Never infer a newer transport.
+        transport = data.get("transport", "wacli")
+        if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
+            raise ValueError("unsupported outbox transport")
         return OutboxJob(
             message_id=data["message_id"],
             path=job_dir,
@@ -361,6 +374,7 @@ class OutboxStore:
             flow_kind=data["flow_kind"],
             duration=float(data.get("duration") or 0),
             state=data.get("state", "pending"),
+            transport=transport,
         )
 
     def jobs(self, states: tuple[str, ...] = ("pending",)) -> list[OutboxJob]:
@@ -370,7 +384,7 @@ class OutboxStore:
                 job = self.load(path)
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 continue
-            if job.state in states:
+            if job.transport == self.transport and job.state in states:
                 rows.append(job)
         return rows
 

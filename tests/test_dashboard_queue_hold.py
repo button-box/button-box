@@ -306,6 +306,33 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(response["body"], archived.read_bytes())
         self.assertEqual(response["ctype"], "audio/wav")
 
+    def test_standalone_legacy_audio_without_sidecar_remains_streamable(self):
+        wav = self.make_message()
+        Path(f"{wav}.json").unlink()
+        token = self.token()
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=body, ctype=ctype
+        )
+
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"}):
+            handler.do_GET()
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(response["body"], wav.read_bytes())
+
+    def test_malformed_sidecar_fails_closed_in_standalone_mode(self):
+        wav = self.make_message()
+        Path(f"{wav}.json").write_text("[]", encoding="utf-8")
+
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"}):
+            self.assertFalse(dashboard._audio_authorized(wav))
+
     def test_cloud_mode_blocks_dashboard_stream_and_requeue_without_fresh_authorization(self):
         archived = self.archive_message(played_at=2_000_000_000)
         token = dashboard.build_data()["recently_played"][0]["token"]
@@ -323,6 +350,77 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(response["code"], 404)
         self.assertEqual(requeue["code"], 409)
         self.assertTrue(archived.exists())
+
+    def test_cloud_mode_serves_cloud_audio_with_fresh_authorization(self):
+        wav = self.make_message()
+        metadata_path = Path(f"{wav}.json")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.update(
+            {
+                "cloud": True,
+                "expires_at": 2_000_000_000,
+                "cloud_message_id": "synthetic-message",
+                "sender_id": "synthetic-person",
+            }
+        )
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        token = self.token()
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(
+            code=code, body=body, ctype=ctype
+        )
+
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(dashboard.cloud_runtime, "playable", return_value=True) as playable:
+            handler.do_GET()
+
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(response["body"], wav.read_bytes())
+        playable.assert_called_once_with(metadata)
+
+    def test_cloud_audio_stays_guarded_after_switch_to_noncloud_mode(self):
+        archived = self.archive_message(played_at=2_000_000_000)
+        metadata_path = Path(f"{archived}.json")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.update(
+            {
+                "cloud": True,
+                "cloud_message_id": "synthetic-message",
+                "sender_id": "synthetic-person",
+            }
+        )
+        token = dashboard.public_message_token("played", archived.name)
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}?played=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        with mock.patch.object(
+            dashboard.cloud_runtime, "playable", return_value=True
+        ) as playable:
+            for expires_at in (1_700_000_001, 2_000_000_000):
+                metadata["expires_at"] = expires_at
+                metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+                for transport in ("wacli", "business"):
+                    with self.subTest(transport=transport, expires_at=expires_at):
+                        response = {}
+                        handler._send = lambda code, body, ctype="application/json": response.update(
+                            code=code, body=body
+                        )
+                        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": transport}):
+                            handler.do_GET()
+                            requeue = self.post(f"/api/requeue?f={token}")
+
+                        self.assertEqual(response["code"], 404)
+                        self.assertEqual(requeue["code"], 409)
+                        self.assertTrue(archived.exists())
+
+        playable.assert_not_called()
 
     def test_expired_played_token_cannot_stream_or_requeue(self):
         archived = self.archive_message(played_at=100)

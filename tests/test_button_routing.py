@@ -144,6 +144,72 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(archived_metadata["msgid"], "synthetic")
         self.assertEqual(archived_metadata["played_at"], 2_000_000_000)
 
+    def test_standalone_mode_never_claims_cloud_marked_audio(self):
+        wav, sidecar = self.queue_incoming()
+        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+        metadata["cloud"] = True
+        sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}):
+            self.assertIsNone(button_send.claim_oldest())
+
+        self.assertTrue(wav.exists())
+        self.assertTrue(sidecar.exists())
+
+    def test_cloud_mode_claims_only_fresh_authorized_audio(self):
+        wav, _sidecar = self.queue_incoming()
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "playable", return_value=True) as playable:
+            claim = button_send.claim_oldest()
+
+        self.assertEqual(claim["path"].name, wav.name)
+        playable.assert_called_once_with(claim["meta"])
+
+    def test_legacy_play_skips_cloud_audio_and_plays_next_standalone_message(self):
+        cloud_wav, cloud_sidecar = self.queue_incoming("0001-cloud.wav")
+        cloud_metadata = json.loads(cloud_sidecar.read_text(encoding="utf-8"))
+        cloud_metadata["cloud"] = True
+        cloud_sidecar.write_text(json.dumps(cloud_metadata), encoding="utf-8")
+        standalone_wav, _ = self.queue_incoming("0002-standalone.wav")
+
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
+             mock.patch.object(button_send, "archive_played_file") as archive, \
+             mock.patch.object(button_send, "react_played"), \
+             mock.patch.object(button_send, "wait_for_stable_open"), \
+             mock.patch.object(button_send, "refresh_led"):
+            button_send.play_next_legacy()
+
+        self.assertEqual(Path(run.call_args.args[0][-1]), standalone_wav)
+        self.assertEqual(archive.call_args.args[1], standalone_wav)
+        self.assertTrue(cloud_wav.exists())
+        self.assertTrue(cloud_sidecar.exists())
+
+    def test_guided_recheck_releases_cloud_claim_after_mode_switch(self):
+        self.add_family()
+        claim = {
+            "path": self.queue_path / ".inflight" / "0001-cloud.wav",
+            "meta": {"chat": FAMILY, "cloud": True},
+        }
+        session = mock.Mock()
+        button_send.led = FakeLed()
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
+             mock.patch.object(button_send, "claim_oldest", return_value=claim), \
+             mock.patch.object(button_send, "GuidedSession", return_value=session), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "release_claim") as release, \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send, "queued", return_value=[]):
+            button_send.run_guided_once(
+                {"max_recording_seconds": 60, "after_listening": "play_only"}
+            )
+
+        release.assert_called_once_with(claim)
+        session.run.assert_not_called()
+
     def test_cards_block_default_when_reader_or_card_state_is_unsafe(self):
         self.add_grandma()
         self.contacts.assign_card(GRANDMA, CARD)

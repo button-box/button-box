@@ -49,10 +49,14 @@ class SendSuccessTests(unittest.TestCase):
                 self.assertEqual(path.exists(), code != 0)
 
     def test_guided_cue_only_after_success_and_outbox_completion(self):
-        job = types.SimpleNamespace(audio_path="sample.wav", recipient="family@g.us", message_id="local-test", flow_kind="reply", duration=2)
+        job = types.SimpleNamespace(
+            audio_path="sample.wav", recipient="family@g.us", message_id="local-test",
+            flow_kind="reply", duration=2, transport="wacli", path=Path("local-test.job"),
+        )
         for code, completion_error in ((1, None), (0, OSError("disk")), (0, None)):
             with self.subTest(code=code, completion_error=completion_error):
                 store = mock.Mock()
+                store.load.return_value = job
                 store.set_state.return_value = job
                 store.complete.side_effect = completion_error
                 results = [types.SimpleNamespace(returncode=0), types.SimpleNamespace(returncode=code, stdout="", stderr="")]

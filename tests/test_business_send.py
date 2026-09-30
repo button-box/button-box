@@ -135,7 +135,7 @@ class GuidedBusinessBoundaryTests(unittest.TestCase):
         root = Path(self.directory.name)
         source = root / "source.wav"
         source.write_bytes(b"synthetic-wav")
-        self.store = OutboxStore(str(root / "outbox"))
+        self.store = OutboxStore(str(root / "outbox"), transport="business")
         self.job = self.store.approve(
             str(source), "351900000001@s.whatsapp.net", "standalone", 1.0,
             message_id="local-job-0000001",
@@ -214,6 +214,34 @@ class GuidedBusinessBoundaryTests(unittest.TestCase):
         self.assertEqual(self.store.load(job.path).recipient, job.recipient)
         self.assertTrue(path.exists())
 
+    def test_hold_release_sidecar_binds_current_transport(self):
+        path = Path(button_send.OUTBOX_DIR) / "1700000000002-1.5.wav"
+        path.write_bytes(b"synthetic-held-audio")
+        button_send.bind_legacy_job_recipient(
+            str(path), "351900000001@s.whatsapp.net"
+        )
+        metadata = json.loads(Path(str(path) + ".json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["transport"], "business")
+
+    def test_pre_transport_hold_release_is_not_migrated_to_business(self):
+        path = Path(button_send.OUTBOX_DIR) / "1700000000003-1.5.wav"
+        path.write_bytes(b"synthetic-held-audio")
+        Path(str(path) + ".json").write_text(
+            json.dumps({"version": 1, "recipient": "351900000001@s.whatsapp.net"}),
+            encoding="utf-8",
+        )
+        eligible = Path(button_send.OUTBOX_DIR) / "1700000000004-1.5.wav"
+        eligible.write_bytes(b"synthetic-held-audio")
+        button_send.bind_legacy_job_recipient(
+            str(eligible), "351900000001@s.whatsapp.net"
+        )
+
+        self.assertNotIn(path.name, button_send.compatible_legacy_outbox_files())
+        self.assertIn(eligible.name, button_send.compatible_legacy_outbox_files())
+        self.assertFalse(button_send.stage_hold_release_business_job(path.name))
+        self.assertTrue(path.exists())
+        self.assertTrue(Path(str(path) + ".json").exists())
+
     def test_business_recording_does_not_call_legacy_presence(self):
         with mock.patch.object(button_send.subprocess, "Popen") as popen:
             button_send.presence("recording", "351900000001@s.whatsapp.net")
@@ -286,3 +314,30 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         self.assertEqual(self.store.jobs(states=("uncertain",))[0].message_id, self.job.message_id)
         self.assertTrue(button_send.send_success_notices.empty())
         self.client.send_voice.assert_called_once()
+
+
+class GuidedTransportIsolationTests(unittest.TestCase):
+    def test_direct_send_rechecks_durable_transport_before_conversion(self):
+        for approved, current in (("cloud", "wacli"), ("wacli", "cloud")):
+            with self.subTest(approved=approved, current=current), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source.wav"
+                source.write_bytes(b"synthetic-wav")
+                approved_store = OutboxStore(str(root / "outbox"), transport=approved)
+                job = approved_store.approve(
+                    str(source), "351900000001@s.whatsapp.net", "standalone", 1.0
+                )
+                current_store = OutboxStore(str(root / "outbox"), transport=current)
+                with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": current}), \
+                     mock.patch.object(button_send, "outbox_store", current_store), \
+                     mock.patch.object(button_send, "log_event") as event, \
+                     mock.patch.object(button_send.subprocess, "run") as run, \
+                     mock.patch.object(button_send.CloudDeviceClient, "from_environment") as cloud:
+                    self.assertFalse(button_send.send_guided_job(job))
+                run.assert_not_called()
+                cloud.assert_not_called()
+                event.assert_called_once_with(
+                    "send_blocked", flow="standalone", reason="transport"
+                )
+                self.assertEqual(approved_store.load(job.path).state, "pending")
+                self.assertTrue(job.audio_path.exists())

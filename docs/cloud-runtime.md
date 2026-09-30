@@ -3,6 +3,15 @@
 `MSGBOX_TRANSPORT=cloud` selects the authenticated Cloud API v1 device path. The
 default `wacli` path remains available. The transitional `business` adapter is
 retained for existing prototype installations and rollback.
+Queued outbound recordings remain bound to the transport that approved them.
+Changing transport preserves other-mode work without sending it; return to its
+original transport to resume eligible pending jobs. For compatibility with older
+standalone releases, missing transport metadata is treated as `wacli`. Older
+business/cloud builds also created untagged hold-release WAVs: inspect and
+preserve these before changing modes, and do not resume them until their
+original transport is established. Never infer it from the current mode. Cloud
+audio remains subject to cloud authorization and cannot be played through
+another connection mode.
 The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
@@ -67,6 +76,7 @@ behaviour, and synthetic cloud tests do not prove physical operation.
 | Settings | A permitted settings change reaches the local store and hardware; stale revisions are rejected. |
 | Expiry and deletion | Expired or deleted audio cannot play or reappear after reconnection; authorized cleanup removes retained copies. |
 | Failure and restart | Lost responses, duplicate inbox work and acknowledgment retries do not duplicate sends or playback; uncertain uploads remain recoverable. |
+| Connection-mode isolation | Pending recordings stay bound to the connection mode that approved them. Changing mode does not send them through another account or make retained cloud audio playable without cloud authorization; foreign-mode work remains preserved. |
 | Update and rollback | Setup and runtime updates preserve private state and recover the recorded service state; the previous compatible release can be restored. |
 | Cold reboot | The same unit restores its selected mode, identity, permissions and intended message route. |
 
