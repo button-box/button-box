@@ -47,6 +47,7 @@ CONTROL_CASES = {
     "save-settings": ["BB-SET-01", "BB-SET-02"],
     "advanced-connections-setup": ["BB-SETUP-01"],
     "advanced-recipients-setup": ["BB-SETUP-01"],
+    "advanced-cloud-dashboard": ["BB-SETUP-01"],
     "manage-whatsapp": ["BB-NAV-02", "BB-WA-01"],
     "manage-recipients": ["BB-NAV-03"],
     "new-wifi-name": ["BB-WIFI-04"],
