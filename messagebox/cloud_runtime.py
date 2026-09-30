@@ -708,6 +708,28 @@ class CloudRuntime:
             time.sleep(min(60, 2 * 2 ** min(failures, 5)) + random.random())
 
 
+def read_snapshot():
+    """Read fresh authorization without creating identity or contacting the service."""
+    snapshot = CloudRuntime(client=object(), state_path=STATE_FILE)._snapshot()
+    people = snapshot.get("people")
+    if (not isinstance(people, list) or len(people) > 100
+            or any(not isinstance(person, dict) or not _valid_id(person.get("id"))
+                   for person in people)):
+        raise CloudRuntimeError("cloud family list is invalid")
+    ids = {person["id"] for person in people}
+    if len(ids) != len(people):
+        raise CloudRuntimeError("cloud family list is invalid")
+    default = snapshot.get("default_recipient_id")
+    if default is not None and (not _valid_id(default) or default not in ids):
+        raise CloudRuntimeError("cloud default recipient is invalid")
+    entitlement = snapshot.get("entitlement")
+    if (not isinstance(entitlement, dict)
+            or any(type(entitlement.get(key)) is not bool for key in ("ingest", "deliver", "send"))
+            or (entitlement.get("until") is not None and not _valid_time(entitlement["until"]))):
+        raise CloudRuntimeError("cloud entitlement is invalid")
+    return snapshot
+
+
 def recipient_id(jid):
     return CloudRuntime().recipient_id(jid)
 
