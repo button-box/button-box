@@ -110,3 +110,9 @@ On a named box, verify early review approval for both standalone and reply
 flows, a held recording-stop press, a short bounce, no approval/cancellation,
 and exactly one outgoing voice note in the intended chat. Keep software tests
 and physical switch/audio/delivery evidence separate.
+
+## Cloud mode
+
+Run the [combined-release cloud acceptance checks](cloud-runtime.md#combined-release-acceptance)
+in addition to the existing standalone checks. Validate both modes on the exact
+candidate revision before accepting a combined release.

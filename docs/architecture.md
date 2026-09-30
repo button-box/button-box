@@ -14,7 +14,7 @@ root access they require.
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
 | `messagebox-poller.service` | Queue voice notes and ordinary video soundtracks from configured contacts |
-| `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized |
+| `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized in wacli mode |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
 
@@ -35,7 +35,20 @@ pinned client delegates them to the active sync connection immediately.
 Commands that require exclusive store access, such as recipient refresh, pause
 sync and retain their bounded lock wait.
 
-The poller accepts wacli media types `audio` and `video`, converts the first
+In the transitional Business transport, the same poller service reads an ordered
+Worker audio inbox, commits each WAV and route sidecar locally, then
+acknowledges its exact cursor. The wacli sync service skips startup in this
+mode. Business sends use keyed reservations; Cloud API played reactions are
+still pending.
+
+In cloud mode, the same physical runtime uses an authenticated device client.
+The service supplies scoped family membership, delivery permissions and bounded
+commands. The device owns recording, playback, NFC, durable local queues and
+command execution. Claiming requires both WhatsApp identity and a physical
+button press. Provider integration, accounts and billing live in the separate
+service. See [cloud runtime and acceptance](cloud-runtime.md).
+
+In the default transport, the poller accepts wacli media types `audio` and `video`, converts the first
 audio track to the same mono 48 kHz WAV queue format, and retains the exact
 originating chat and sender in the existing private routing sidecar. Ordinary
 videos are bounded by `MSGBOX_VIDEO_MAX_BYTES` and
@@ -59,7 +72,7 @@ and expires when that recording interaction completes or is abandoned. In
 hold-to-record mode, releasing before the hold threshold cancels the selected
 recording intent without playing the queue or saving a silent recording.
 
-After successful playback, the private WAV and routing sidecar move into
+In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14
 days, newest first. Playable media is further bounded to the 10 newest files and
 128 MiB; a retained record whose media was pruned remains visible as
