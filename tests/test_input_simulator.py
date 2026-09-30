@@ -225,6 +225,7 @@ class InputSimulatorTests(unittest.TestCase):
             runtime = types.SimpleNamespace(
                 CONTACTS_FILE=contacts_path, QUEUE_DIR=root, transport_mode=lambda: "wacli",
                 queued=lambda: [], queue_metadata=lambda path: {"chat": OTHER},
+                inbound_audio_authorized=lambda metadata: True,
             )
             manifest = {"transport": "wacli", "recipients": [JID], "account_sha256": "account",
                         "contacts_sha256": hashlib.sha256(contacts_path.read_bytes()).hexdigest(),
@@ -238,6 +239,160 @@ class InputSimulatorTests(unittest.TestCase):
                 settings_path.write_text('{"changed":true}')
                 with self.assertRaises(simulator.SimulationError):
                     simulator.verify_routes(runtime, manifest)
+
+    @contextlib.contextmanager
+    def mixed_queue_runtime(self, mode):
+        from messagebox import cloud_runtime, runtime_paths
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            queue = root / "queue"
+            queue.mkdir()
+            contacts = ContactStore(root / "contacts.json")
+            contacts.add_contact(JID, "Synthetic test")
+            contacts.add_contact(OTHER, "Synthetic other")
+            settings = root / "settings.json"
+            settings.write_text("{}")
+            for key, value in [("QUEUE_DIR", str(queue)), ("CONTACTS_FILE", str(contacts.path)),
+                               ("EVENTS_FILE", str(root / "events.jsonl"))]:
+                stack.enter_context(mock.patch.object(button_send, key, value))
+            stack.enter_context(mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": mode}))
+            stack.enter_context(mock.patch.object(runtime_paths, "SETTINGS_FILE", settings))
+            stack.enter_context(mock.patch.object(simulator, "account_hash", return_value="synthetic-account"))
+            now = 2_000_000_000
+            cloud = cloud_runtime.CloudRuntime(client=mock.Mock(), state_path=root / "cloud-state.json",
+                contacts_path=contacts.path, settings_path=settings, queue_dir=queue,
+                clock=lambda: now, monotonic=lambda: 100, boot_id="synthetic-boot")
+            cloud.state["snapshot"] = {"box_id": "synthetic-box-identifier", "server_time": now,
+                "verified_at": now, "verified_mono": 100, "boot_id": "synthetic-boot",
+                "entitlement": {"deliver": True}, "queue_hold": False, "retention_days": 30,
+                "people": [{"id": "synthetic-person"}]}
+            stack.enter_context(mock.patch.object(cloud_runtime, "CloudRuntime", return_value=cloud))
+            manifest = {"transport": mode, "recipients": [JID], "account_sha256": "synthetic-account",
+                "contacts_sha256": hashlib.sha256(contacts.path.read_bytes()).hexdigest(),
+                "settings_sha256": hashlib.sha256(settings.read_bytes()).hexdigest()}
+
+            def enqueue(name, jid, cloud=False, expired=False):
+                path = queue / name
+                path.write_bytes(b"synthetic retained audio")
+                metadata = {"chat": jid, "msgid": "synthetic-message"}
+                if cloud:
+                    metadata.update(cloud=True, sender_id="synthetic-person",
+                        cloud_message_id="synthetic-cloud-message", expires_at=now - 1 if expired else now + 3600)
+                Path(str(path) + ".json").write_text(json.dumps(metadata))
+                return path
+
+            yield queue, manifest, enqueue
+
+    def test_cloud_guard_preserves_six_legacy_items_and_unknown_metadata_using_real_gate(self):
+        with self.mixed_queue_runtime("cloud") as (queue, manifest, enqueue):
+            for index in range(6):
+                enqueue(f"{index:04}-legacy.wav", JID if index < 3 else OTHER)
+            enqueue("0006-expired-cloud.wav", OTHER, cloud=True, expired=True)
+            missing = queue / "0007-missing.wav"
+            missing.write_bytes(b"retained missing metadata")
+            malformed = queue / "0008-malformed.wav"
+            malformed.write_bytes(b"retained malformed metadata")
+            Path(str(malformed) + ".json").write_text("{malformed")
+            before = {path.name: path.read_bytes() for path in queue.iterdir()}
+            simulator.verify_routes(button_send, manifest)
+            records = []
+            trace = simulator.InputTrace(button_send, manifest, emit=records.append)
+            original = button_send.inbound_audio_authorized
+            with mock.patch.object(button_send, "claim_inbox_file") as claim, \
+                 mock.patch.object(button_send, "play_pending_listened"), \
+                 mock.patch.object(button_send.subprocess, "run") as playback, \
+                 simulator.validated_routing(button_send, manifest, trace):
+                self.assertIsNone(button_send.claim_oldest())
+                button_send.play_next_legacy()
+                claim.assert_not_called()
+                playback.assert_not_called()
+            self.assertIs(button_send.inbound_audio_authorized, original)
+            self.assertEqual({path.name: path.read_bytes() for path in queue.iterdir()}, before)
+            self.assertTrue(records)
+            self.assertTrue(all(record["production_playable"] is False for record in records))
+            self.assertTrue(all(record["guard_outcome"] == "unavailable" for record in records))
+            self.assertTrue(any(record["authorized_recipient"] is False for record in records))
+            self.assertNotIn(OTHER, json.dumps(records))
+            self.assertNotIn(JID, json.dumps(records))
+            self.assertNotIn("legacy.wav", json.dumps(records))
+
+    def test_mixed_mode_guard_restricts_actual_playable_routes_and_preserves_skipped_files(self):
+        for mode in ("cloud", "wacli"):
+            with self.subTest(mode=mode), self.mixed_queue_runtime(mode) as (queue, manifest, enqueue):
+                skipped = enqueue("0000-other-mode.wav", OTHER, cloud=mode != "cloud")
+                allowed = enqueue("0001-test.wav", JID, cloud=mode == "cloud")
+                simulator.verify_routes(button_send, manifest)
+                records = []
+                trace = simulator.InputTrace(button_send, manifest, emit=records.append)
+                with mock.patch.object(button_send, "claim_inbox_file", return_value=allowed) as claim, \
+                     simulator.validated_routing(button_send, manifest, trace):
+                    actual = button_send.claim_oldest()
+                    self.assertEqual(actual["meta"]["chat"], JID)
+                    claim.assert_called_once_with(button_send.QUEUE_DIR, allowed.name)
+                    self.assertEqual(records[0]["guard_outcome"], "unavailable")
+                    self.assertEqual(records[1]["guard_outcome"], "allowed")
+                self.assertTrue(skipped.exists())
+                self.assertTrue(Path(str(skipped) + ".json").exists())
+                foreign = enqueue("0002-foreign.wav", OTHER, cloud=mode == "cloud")
+                with self.assertRaises(simulator.SimulationError):
+                    simulator.verify_routes(button_send, manifest)
+                with simulator.validated_routing(button_send, manifest, trace), self.assertRaises(simulator.SimulationError):
+                    button_send.inbound_audio_authorized(button_send.queue_metadata(foreign))
+                self.assertEqual(records[-1]["guard_outcome"], "rejected")
+                self.assertTrue(records[-1]["production_playable"])
+                self.assertTrue(foreign.exists())
+
+    def test_faulty_true_gate_cannot_claim_or_play_cross_mode_audio_even_for_test_recipient(self):
+        for mode in ("cloud", "wacli"):
+            with self.subTest(mode=mode), self.mixed_queue_runtime(mode) as (queue, manifest, enqueue):
+                enqueue("0000-other-mode.wav", JID, cloud=mode != "cloud")
+                before = {path.name: path.read_bytes() for path in queue.iterdir()}
+                records = []
+                trace = simulator.InputTrace(button_send, manifest, emit=records.append)
+                with mock.patch.object(button_send, "inbound_audio_authorized", return_value=True), \
+                     mock.patch.object(button_send, "claim_inbox_file") as claim, \
+                     mock.patch.object(button_send, "play_pending_listened"), \
+                     mock.patch.object(button_send.subprocess, "run") as playback:
+                    with self.assertRaises(simulator.SimulationError):
+                        simulator.verify_routes(button_send, manifest)
+                    with simulator.validated_routing(button_send, manifest, trace):
+                        with self.assertRaises(simulator.SimulationError):
+                            button_send.claim_oldest()
+                        with self.assertRaises(simulator.SimulationError):
+                            button_send.play_next_legacy()
+                    claim.assert_not_called()
+                    playback.assert_not_called()
+                self.assertEqual({path.name: path.read_bytes() for path in queue.iterdir()}, before)
+                self.assertTrue(all(record["production_playable"] for record in records))
+                self.assertTrue(all(record["authorized_recipient"] for record in records))
+                self.assertTrue(all(record["transport_compatible"] is False for record in records))
+                self.assertTrue(all(record["guard_outcome"] == "rejected" for record in records))
+
+    def test_playable_missing_or_malformed_metadata_fails_before_claim_and_playback(self):
+        for sidecar in (None, "{malformed", "[]", '{"chat":null}'):
+            with self.subTest(sidecar=sidecar), self.mixed_queue_runtime("wacli") as (queue, manifest, enqueue):
+                path = queue / "0000-unknown.wav"
+                path.write_bytes(b"retained unknown audio")
+                if sidecar is not None:
+                    Path(str(path) + ".json").write_text(sidecar)
+                before = {entry.name: entry.read_bytes() for entry in queue.iterdir()}
+                with self.assertRaises(simulator.SimulationError):
+                    simulator.verify_routes(button_send, manifest)
+                records = []
+                trace = simulator.InputTrace(button_send, manifest, emit=records.append)
+                with mock.patch.object(button_send, "claim_inbox_file") as claim, \
+                     mock.patch.object(button_send, "play_pending_listened"), \
+                     mock.patch.object(button_send.subprocess, "run") as playback, \
+                     simulator.validated_routing(button_send, manifest, trace):
+                    with self.assertRaises(simulator.SimulationError):
+                        button_send.claim_oldest()
+                    with self.assertRaises(simulator.SimulationError):
+                        button_send.play_next_legacy()
+                    claim.assert_not_called()
+                    playback.assert_not_called()
+                self.assertEqual({entry.name: entry.read_bytes() for entry in queue.iterdir()}, before)
+                self.assertTrue(all(record["production_playable"] for record in records))
+                self.assertTrue(all(record["guard_outcome"] == "rejected" for record in records))
 
     def test_edge_started_debounce_observes_short_press_across_old_timeout_boundary(self):
         clock = [0]
