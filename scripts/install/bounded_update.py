@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
 
@@ -31,6 +32,10 @@ MODE_GENERATOR = "/usr/local/lib/systemd/system-generators/messagebox-mode-gener
 MODE_MIGRATION = "/usr/lib/messagebox/messagebox-mode-migrate.py"
 UPDATE_LOCK = "/run/lock/messagebox-bounded-update.lock"
 BACKUP_FORMAT = 1
+UNIT_SETTLE_TIMEOUT = 30.0
+UNIT_SETTLE_STABLE = 2.0
+UNIT_SETTLE_POLL = 0.5
+TRANSITIONAL_ACTIVE_STATES = {"activating", "deactivating", "reloading"}
 
 UNITS = (
     "messagebox.target",
@@ -439,32 +444,34 @@ def _run(command, run, **kwargs):
         raise UpdateError(f"command failed: {command[0]}") from exc
 
 
-def _unit_states(run):
+def _unit_states(run, *, allow_transitional=False, deadline=None):
+    def query(operation, unit):
+        options = {"check": False, "capture_output": True, "text": True}
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UpdateError(f"timed out reading managed unit state: {unit}")
+            options["timeout"] = remaining
+        return _run(["systemctl", operation, unit], run, **options).stdout.strip()
+
     states = {}
     for unit in UNITS:
-        active = _run(
-            ["systemctl", "is-active", unit],
-            run,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        enabled = _run(
-            ["systemctl", "is-enabled", unit],
-            run,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        if active not in {"active", "inactive", "failed"}:
-            raise UpdateError("a managed unit has an unsupported active state")
+        active = query("is-active", unit)
+        enabled = query("is-enabled", unit)
+        if active in TRANSITIONAL_ACTIVE_STATES and not allow_transitional:
+            raise UpdateError(f"managed unit is still transitioning: {unit} ({active})")
+        known_active = {"active", "inactive", "failed"}
+        if allow_transitional:
+            known_active |= TRANSITIONAL_ACTIVE_STATES
+        if active not in known_active:
+            raise UpdateError(f"managed unit has an unsupported active state: {unit}")
         known_enabled = ENABLED_STATES | DISABLED_STATES | PASSIVE_ENABLED_STATES | {
             "enabled-runtime",
             "masked",
             "masked-runtime",
         }
         if enabled not in known_enabled:
-            raise UpdateError("a managed unit has an unsupported enabled state")
+            raise UpdateError(f"managed unit has an unsupported enabled state: {unit}")
         states[unit] = {"active": active, "enabled": enabled}
     return states
 
@@ -533,7 +540,10 @@ def _atomic_install(source, destination, mode, *, uid=0, gid=0):
 
 
 def _stop_active(states, run):
-    active = [unit for unit in reversed(UNITS) if states[unit]["active"] == "active"]
+    active = [
+        unit for unit in reversed(UNITS)
+        if states[unit]["active"] in {"active"} | TRANSITIONAL_ACTIVE_STATES
+    ]
     if active:
         _run(["systemctl", "stop", *active], run, check=True)
 
@@ -556,7 +566,14 @@ def _restore_enabled(states, run):
 def _restore_active(states, run, *, also_active=()):
     if set(START_ORDER) != set(UNITS) or len(START_ORDER) != len(UNITS):
         raise UpdateError("managed unit start order is incomplete")
+    # ComItUp replaces portal jobs while moving HOTSPOT -> CONNECTED. It must
+    # own those starts; a simultaneous manual start can be canceled by it.
+    comitup_owns_portals = states["comitup.service"]["active"] == "active"
     for unit in START_ORDER:
+        if comitup_owns_portals and unit in {
+            "comitup-web.service", "messagebox-onboarding-home.service"
+        }:
+            continue
         if states[unit]["active"] == "active" and unit not in also_active:
             _run(
                 ["systemctl", "--job-mode=ignore-dependencies", "start", unit],
@@ -567,19 +584,53 @@ def _restore_active(states, run, *, also_active=()):
 
 def _verify_active(states, run, *, also_active=()):
     expected = {
-        unit for unit in UNITS if states[unit]["active"] == "active"
-    } | set(also_active)
-    current = _unit_states(run)
-    actual = {unit for unit in UNITS if current[unit]["active"] == "active"}
-    if actual != expected:
-        raise UpdateError("managed active unit state does not match the recorded state")
+        unit: "active" if unit in also_active else states[unit]["active"]
+        for unit in UNITS
+    }
+    deadline = time.monotonic() + UNIT_SETTLE_TIMEOUT
+    stable_since = None
+    differences = []
+    while True:
+        if time.monotonic() >= deadline:
+            detail = "; ".join(differences) or "the restored state did not remain stable"
+            raise UpdateError(f"managed unit state did not settle within {UNIT_SETTLE_TIMEOUT:g}s: {detail}")
+        current = _unit_states(run, allow_transitional=True, deadline=deadline)
+        differences = [
+            f"{unit} expected {expected[unit]}, observed {current[unit]['active']}"
+            for unit in UNITS if current[unit]["active"] != expected[unit]
+        ]
+        newly_failed = [
+            unit for unit in UNITS
+            if current[unit]["active"] == "failed" and expected[unit] != "failed"
+        ]
+        if newly_failed:
+            raise UpdateError("restored managed unit failed: " + ", ".join(newly_failed))
+        now = time.monotonic()
+        if now >= deadline:
+            detail = "; ".join(differences) or "verification finished after its deadline"
+            raise UpdateError(f"managed unit state did not settle within {UNIT_SETTLE_TIMEOUT:g}s: {detail}")
+        if differences:
+            stable_since = None
+        elif stable_since is None:
+            stable_since = now
+        elif now - stable_since >= UNIT_SETTLE_STABLE:
+            return
+        time.sleep(min(UNIT_SETTLE_POLL, max(0, deadline - now)))
 
 
 def _verify_enabled(states, run):
-    actual = _unit_states(run)
+    actual = _unit_states(
+        run, allow_transitional=True, deadline=time.monotonic() + UNIT_SETTLE_TIMEOUT
+    )
     for unit in UNITS:
         if actual[unit]["enabled"] != states[unit]["enabled"]:
-            raise UpdateError("managed enabled unit state does not match the recorded state")
+            raise UpdateError(f"managed enabled unit state does not match the recorded state: {unit}")
+
+
+def _failure_cause(error):
+    # Only updater-authored errors are safe to print; OS/library errors can
+    # contain private paths or subprocess output. The exception chain is kept.
+    return str(error) if isinstance(error, UpdateError) else type(error).__name__
 
 
 def _validate_backup_state(state, backup_dir, root):
@@ -712,7 +763,9 @@ def _rollback_locked(backup_dir, *, root, run):
         raise UpdateError("backup permissions or ownership are unsafe")
     records = _validate_backup_state(state, backup_dir, root)
 
-    current = _unit_states(run)
+    current = _unit_states(
+        run, allow_transitional=True, deadline=time.monotonic() + UNIT_SETTLE_TIMEOUT
+    )
     _stop_active(current, run)
     for record, path in records:
         _restore_record(record, path, backup_dir)
@@ -785,9 +838,12 @@ def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
             _rollback_locked(backup_dir, root=root, run=run)
         except BaseException as rollback_error:
             raise UpdateError(
-                f"update failed and automatic rollback also failed: {rollback_error}"
+                f"update failed ({_failure_cause(update_error)}); "
+                f"automatic rollback also failed: {_failure_cause(rollback_error)}"
             ) from update_error
-        raise UpdateError("update failed; the recorded state was restored") from update_error
+        raise UpdateError(
+            f"update failed ({_failure_cause(update_error)}); the recorded state was restored"
+        ) from update_error
     return manifest
 
 

@@ -71,8 +71,14 @@ changing the setup marker. Only units that were active before the update are
 started again, apart from the reconciliation path intentionally activated by
 the migration. Recorded units start individually in a fixed dependency order
 with systemd dependency expansion suppressed, so restoring an active target
-cannot briefly start an inactive component. The updater then verifies the exact
-intended active set. A failure after the first runtime mutation automatically
+cannot briefly start an inactive component. When ComItUp was active, it alone
+selects and starts its home-network or hotspot portal; the updater must not race
+its network-state transitions with a separate portal start. Restoration still
+verifies the exact recorded portal states. Restoration allows up to 30 seconds
+for setup services to settle, then requires the exact intended active states to
+remain stable for two seconds. A newly failed unit or a persistent mismatch
+fails verification; the initial pre-update snapshot still rejects transitions.
+A failure after the first runtime mutation automatically
 uses the new backup to restore the prior files, selector links, enablement, and
 active units.
 
