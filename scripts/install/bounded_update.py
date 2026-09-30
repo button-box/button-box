@@ -11,6 +11,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -31,11 +32,15 @@ SELECTOR_PATHS = (
 MODE_GENERATOR = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
 MODE_MIGRATION = "/usr/lib/messagebox/messagebox-mode-migrate.py"
 UPDATE_LOCK = "/run/lock/messagebox-bounded-update.lock"
-BACKUP_FORMAT = 1
+BACKUP_FORMAT = 2
 UNIT_SETTLE_TIMEOUT = 30.0
 UNIT_SETTLE_STABLE = 2.0
 UNIT_SETTLE_POLL = 0.5
 TRANSITIONAL_ACTIVE_STATES = {"activating", "deactivating", "reloading"}
+UNIT_NAME = re.compile(
+    r"(?:[A-Za-z0-9:_.@-]|\\x[0-9a-fA-F]{2})+"
+    r"\.(?:service|socket|device|mount|automount|swap|target|path|timer|slice|scope)\Z"
+)
 
 UNITS = (
     "messagebox.target",
@@ -476,7 +481,55 @@ def _unit_states(run, *, allow_transitional=False, deadline=None):
     return states
 
 
-def create_backup(backup_dir, root, entries, unit_states):
+def _valid_auxiliary_unit(unit):
+    return (
+        isinstance(unit, str)
+        and not unit.startswith("-")
+        and UNIT_NAME.fullmatch(unit) is not None
+        and unit not in UNITS
+    )
+
+
+def _active_auxiliary_units(states, run):
+    # ConsistsOf is systemd's reverse PartOf relation. Follow only units whose
+    # stop can propagate from an active managed unit. An inactive intermediate
+    # can still pass a stop to an active descendant.
+    pending = [unit for unit in UNITS if states[unit]["active"] == "active"]
+    seen = set(pending)
+    active = []
+    while pending:
+        unit = pending.pop(0)
+        result = _run(
+            ["systemctl", "show", "--property=ConsistsOf", "--value", unit],
+            run, check=True, capture_output=True, text=True,
+        )
+        if not isinstance(result.stdout, str):
+            raise UpdateError("cannot read auxiliary unit dependencies")
+        for dependent in result.stdout.split():
+            if dependent in seen:
+                continue
+            if dependent not in UNITS and not _valid_auxiliary_unit(dependent):
+                raise UpdateError("systemd returned an invalid auxiliary unit name")
+            seen.add(dependent)
+            if dependent in UNITS:
+                pending.append(dependent)
+                continue
+            result = _run(
+                ["systemctl", "is-active", dependent], run,
+                check=False, capture_output=True, text=True,
+            )
+            state = result.stdout.strip() if isinstance(result.stdout, str) else None
+            if state in TRANSITIONAL_ACTIVE_STATES:
+                raise UpdateError("auxiliary unit is still transitioning")
+            if state not in {"active", "inactive", "failed"}:
+                raise UpdateError("auxiliary unit has an unsupported active state")
+            if state == "active":
+                active.append(dependent)
+            pending.append(dependent)
+    return active
+
+
+def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=()):
     backup_dir = Path(backup_dir)
     _check_absolute_parents(backup_dir)
     if backup_dir.exists() or backup_dir.is_symlink():
@@ -505,7 +558,10 @@ def create_backup(backup_dir, root, entries, unit_states):
                 allow_symlink=absolute != MODE_MARKER,
             )
         )
-    state = {"format": BACKUP_FORMAT, "files": records, "units": unit_states}
+    state = {
+        "format": BACKUP_FORMAT, "files": records, "units": unit_states,
+        "auxiliary_units": list(auxiliary_units),
+    }
     state_path = backup_dir / "state.json"
     with open(state_path, "x", encoding="utf-8") as output:
         output.write(json.dumps(state, indent=2, sort_keys=True) + "\n")
@@ -582,7 +638,15 @@ def _restore_active(states, run, *, also_active=()):
             )
 
 
-def _verify_active(states, run, *, also_active=()):
+def _restore_auxiliary_active(auxiliary_units, run):
+    for unit in auxiliary_units:
+        _run(
+            ["systemctl", "--job-mode=ignore-dependencies", "start", unit],
+            run, check=True,
+        )
+
+
+def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
     expected = {
         unit: "active" if unit in also_active else states[unit]["active"]
         for unit in UNITS
@@ -605,6 +669,21 @@ def _verify_active(states, run, *, also_active=()):
         ]
         if newly_failed:
             raise UpdateError("restored managed unit failed: " + ", ".join(newly_failed))
+        for unit in auxiliary_units:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UpdateError("timed out reading auxiliary unit state")
+            result = _run(
+                ["systemctl", "is-active", unit], run,
+                check=False, capture_output=True, text=True, timeout=remaining,
+            )
+            observed = result.stdout.strip() if isinstance(result.stdout, str) else None
+            if observed == "failed":
+                raise UpdateError("restored auxiliary unit failed")
+            if observed not in {"active", "inactive"} | TRANSITIONAL_ACTIVE_STATES:
+                raise UpdateError("auxiliary unit has an unsupported active state")
+            if observed != "active":
+                differences.append("auxiliary unit is not active")
         now = time.monotonic()
         if now >= deadline:
             detail = "; ".join(differences) or "verification finished after its deadline"
@@ -634,7 +713,7 @@ def _failure_cause(error):
 
 
 def _validate_backup_state(state, backup_dir, root):
-    if not isinstance(state, dict) or state.get("format") != BACKUP_FORMAT:
+    if not isinstance(state, dict) or state.get("format") not in {1, BACKUP_FORMAT}:
         raise UpdateError("backup state has an unsupported format")
     if not isinstance(state.get("files"), list) or not isinstance(state.get("units"), dict):
         raise UpdateError("backup state is incomplete")
@@ -710,6 +789,17 @@ def _validate_backup_state(state, backup_dir, root):
             | {"enabled-runtime", "masked", "masked-runtime"}
         ):
             raise UpdateError("backup enabled unit state is invalid")
+    if state["format"] == 1:
+        if "auxiliary_units" in state:
+            raise UpdateError("version-one backup has unexpected auxiliary state")
+    else:
+        auxiliary = state.get("auxiliary_units")
+        if (
+            not isinstance(auxiliary, list)
+            or any(not _valid_auxiliary_unit(unit) for unit in auxiliary)
+            or len(set(auxiliary)) != len(auxiliary)
+        ):
+            raise UpdateError("backup auxiliary unit state is invalid")
     return records
 
 
@@ -762,6 +852,7 @@ def _rollback_locked(backup_dir, *, root, run):
     ):
         raise UpdateError("backup permissions or ownership are unsafe")
     records = _validate_backup_state(state, backup_dir, root)
+    auxiliary_units = state.get("auxiliary_units", ())
 
     current = _unit_states(
         run, allow_transitional=True, deadline=time.monotonic() + UNIT_SETTLE_TIMEOUT
@@ -772,8 +863,9 @@ def _rollback_locked(backup_dir, *, root, run):
     _run(["systemctl", "daemon-reload"], run, check=True)
     _restore_enabled(state["units"], run)
     _restore_active(state["units"], run)
+    _restore_auxiliary_active(auxiliary_units, run)
     _verify_enabled(state["units"], run)
-    _verify_active(state["units"], run)
+    _verify_active(state["units"], run, auxiliary_units=auxiliary_units)
     return state
 
 
@@ -788,7 +880,8 @@ def rollback(backup_dir, *, root=Path("/"), run=subprocess.run):
 def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
     manifest, entries, manifest_hash = load_candidate(source_root, manifest_path, root)
     states = _unit_states(run)
-    create_backup(backup_dir, root, entries, states)
+    auxiliary_units = _active_auxiliary_units(states, run)
+    create_backup(backup_dir, root, entries, states, auxiliary_units)
     try:
         _stop_active(states, run)
         generator_entry = next(item for item in entries if item["target"] == MODE_GENERATOR)
@@ -832,7 +925,11 @@ def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
         _restore_active(
             states, run, also_active={"messagebox-mode-reconcile.path"}
         )
-        _verify_active(states, run, also_active={"messagebox-mode-reconcile.path"})
+        _restore_auxiliary_active(auxiliary_units, run)
+        _verify_active(
+            states, run, also_active={"messagebox-mode-reconcile.path"},
+            auxiliary_units=auxiliary_units,
+        )
     except BaseException as update_error:
         try:
             _rollback_locked(backup_dir, root=root, run=run)

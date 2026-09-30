@@ -60,7 +60,12 @@ sudo python3 /var/lib/button-box-update/RELEASE/scripts/install/bounded_update.p
 
 The transaction records the prior bytes, permissions, ownership, boot-mode
 marker and legacy mode links, plus the enabled and active state of managed
-units. It does not copy `/etc/messagebox`, `/var/lib/messagebox`, or
+units. Before stopping them, it also records active external units in the
+reverse `PartOf` closure of active managed units. Their unit files and
+enablement remain outside the updater's rollback surface. An inactive external
+unit is not started. Version 2 backups include these active unit names; older
+version 1 backups remain readable but contain no such record. It does not copy
+`/etc/messagebox`, `/var/lib/messagebox`, or
 `/var/lib/messagebox-onboarding`; those configuration and private-state trees
 remain in place. Candidate program files and the boot selector are the bounded
 rollback surface.
@@ -69,7 +74,8 @@ The boot-mode generator is installed as executable. The checked migration
 removes the legacy mode links and enables the reconciliation path without
 changing the setup marker. Only units that were active before the update are
 started again, apart from the reconciliation path intentionally activated by
-the migration. Recorded units start individually in a fixed dependency order
+the migration. Managed units start individually in a fixed dependency order;
+recorded external units start afterward in their discovered order,
 with systemd dependency expansion suppressed, so restoring an active target
 cannot briefly start an inactive component. When ComItUp was active, it alone
 selects and starts its home-network or hotspot portal; the updater must not race
@@ -105,8 +111,9 @@ sudo python3 /var/lib/button-box-update/RELEASE/scripts/install/bounded_update.p
 Rollback validates the backup records and stored file hashes before stopping
 managed units. It restores files that existed, removes candidate files that
 were previously absent, restores the marker and mode links, reloads systemd,
-then restores recorded enablement and active units. It rejects paths and unit
-names outside its fixed rollback allowlist.
+then restores recorded enablement and active units, including any recorded
+external units. It rejects paths outside its fixed rollback allowlist and
+invalid or duplicate external unit names.
 
 A lost power supply or forced process termination can prevent automatic
 rollback from running. Keep the original staging tree and completed backup;

@@ -59,6 +59,7 @@ class Systemctl:
         self.ever_activated = []
         self.fail_start_once = None
         self.fail_operation_once = None
+        self.part_of = {}
         self.comitup_portal = "messagebox-onboarding-home.service" if fixture.mode == "setup" else None
 
     def _reload_generator(self):
@@ -97,6 +98,10 @@ class Systemctl:
             unit = command[2]
             value = self.states[unit]["enabled"]
             return subprocess.CompletedProcess(command, 0 if value == "enabled" else 1, value + "\n")
+        if command[:4] == ["systemctl", "show", "--property=ConsistsOf", "--value"]:
+            unit = command[4]
+            dependents = [name for name, parent in self.part_of.items() if parent == unit]
+            return subprocess.CompletedProcess(command, 0, " ".join(dependents) + "\n")
         if command == ["systemctl", "daemon-reload"]:
             self._reload_generator()
             return subprocess.CompletedProcess(command, 0)
@@ -109,8 +114,11 @@ class Systemctl:
             link.symlink_to(f"/etc/systemd/system/{unit}")
             return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "stop"]:
-            for unit in command[2:]:
+            stopped = list(command[2:])
+            for unit in stopped:
                 self.states[unit]["active"] = "inactive"
+                stopped.extend(name for name, parent in self.part_of.items()
+                               if parent == unit and name not in stopped)
             return subprocess.CompletedProcess(command, 0)
         if command[:3] == [
             "systemctl",
@@ -309,6 +317,188 @@ class BoundedUpdateTests(unittest.TestCase):
         patcher = mock.patch.object(bounded_update, "time", self.clock)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def add_auxiliary(self, fixture, *, active="active", nested=False):
+        unit = "example-analytics.service"
+        parent = "messagebox.target"
+        fixture.systemctl.part_of[unit] = parent
+        fixture.systemctl.states[unit] = {"active": active, "enabled": "enabled"}
+        if nested:
+            fixture.systemctl.part_of["example-metrics.service"] = unit
+            fixture.systemctl.states["example-metrics.service"] = {
+                "active": "active", "enabled": "static",
+            }
+        unit_file = fixture.root / "etc/systemd/system" / unit
+        unit_file.write_text("[Unit]\nPartOf=messagebox.target\n")
+        link = fixture.root / "etc/systemd/system/messagebox.target.wants" / unit
+        link.symlink_to(unit_file)
+        return unit, unit_file, link
+
+    def test_active_reverse_part_of_closure_restored_on_apply_and_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, unit_file, link = self.add_auxiliary(fixture, nested=True)
+            original = copy.deepcopy(fixture.systemctl.states)
+            original_file = unit_file.read_bytes()
+            original_link = os.readlink(link)
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            state = json.loads((fixture.backup / "state.json").read_text())
+            self.assertEqual(state["format"], 2)
+            self.assertEqual(state["auxiliary_units"],
+                             [unit, "example-metrics.service"])
+            self.assertEqual(fixture.systemctl.states[unit], original[unit])
+            self.assertEqual(fixture.systemctl.states["example-metrics.service"],
+                             original["example-metrics.service"])
+            self.assertEqual(unit_file.read_bytes(), original_file)
+            self.assertEqual(os.readlink(link), original_link)
+            self.assertFalse(any(command[1] in {"enable", "disable"} and unit in command
+                                 for command in fixture.systemctl.commands))
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states, original)
+            self.assertEqual(unit_file.read_bytes(), original_file)
+            self.assertEqual(os.readlink(link), original_link)
+
+    def test_inactive_auxiliary_is_never_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture, active="inactive")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(json.loads((fixture.backup / "state.json").read_text())
+                             ["auxiliary_units"], [])
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states[unit]["active"], "inactive")
+            self.assertNotIn(unit, fixture.systemctl.started)
+
+    def test_inactive_intermediate_still_discovers_active_descendant(self):
+        for managed in (False, True):
+            with self.subTest(managed=managed), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                unit, _, _ = self.add_auxiliary(fixture)
+                if managed:
+                    bridge = "messagebox-button.service"
+                else:
+                    bridge = "example-bridge.target"
+                    fixture.systemctl.states[bridge] = {
+                        "active": "inactive", "enabled": "static",
+                    }
+                fixture.systemctl.part_of[bridge] = "messagebox.target"
+                fixture.systemctl.part_of[unit] = bridge
+                fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+                state = json.loads((fixture.backup / "state.json").read_text())
+                self.assertEqual(state["auxiliary_units"], [unit])
+                self.assertEqual(fixture.systemctl.states[bridge]["active"], "inactive")
+                self.assertEqual(fixture.systemctl.states[unit]["active"], "active")
+                self.assertNotIn(bridge, fixture.systemctl.started)
+
+                bounded_update.rollback(fixture.backup, root=fixture.root,
+                                        run=fixture.systemctl)
+                fixture.assert_original_state(self)
+
+    def test_failed_apply_restores_active_auxiliary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture)
+            fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+            fixture.systemctl.fail_start_once = unit
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "recorded state was restored"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states[unit]["active"], "active")
+            fixture.assert_original_state(self)
+
+    def test_failed_auxiliary_verification_triggers_automatic_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture)
+            fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+            failed_once = False
+
+            def failed_health(command, **options):
+                nonlocal failed_once
+                if (command == ["systemctl", "is-active", unit]
+                        and unit in fixture.systemctl.started and not failed_once):
+                    failed_once = True
+                    return subprocess.CompletedProcess(command, 3, "failed\n")
+                return fixture.systemctl(command, **options)
+
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "recorded state was restored"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=failed_health)
+            self.assertTrue(failed_once)
+            fixture.assert_original_state(self)
+
+    def test_auxiliary_discovery_rejects_transition_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            self.add_auxiliary(fixture, active="activating")
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "auxiliary unit is still transitioning"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertFalse(fixture.backup.exists())
+            self.assertTrue(all(command[1] in {"show", "is-active", "is-enabled"}
+                                for command in fixture.systemctl.commands))
+
+    def test_auxiliary_discovery_rejects_invalid_name_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+
+            def invalid_relation(command, **options):
+                if command == ["systemctl", "show", "--property=ConsistsOf",
+                               "--value", "messagebox.target"]:
+                    return subprocess.CompletedProcess(command, 0, "--bad.service\n")
+                return fixture.systemctl(command, **options)
+
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "invalid auxiliary unit name"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=invalid_relation)
+            self.assertFalse(fixture.backup.exists())
+            self.assertTrue(all(command[1] in {"show", "is-active", "is-enabled"}
+                                for command in fixture.systemctl.commands))
+
+    def test_backup_rejects_invalid_auxiliary_names_before_mutation(self):
+        invalid = ("--bad.service", "bad/name.service", "bad service",
+                   "messagebox.target", "example-analytics.service", None, 7, {})
+        for name in invalid:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                unit, _, _ = self.add_auxiliary(fixture)
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+                state_path = fixture.backup / "state.json"
+                state = json.loads(state_path.read_text())
+                state["auxiliary_units"] = [unit, name] if name == unit else [name]
+                state_path.write_text(json.dumps(state))
+                fixture.systemctl.commands.clear()
+                with self.assertRaisesRegex(bounded_update.UpdateError,
+                                            "backup auxiliary unit state is invalid"):
+                    bounded_update.rollback(fixture.backup, root=fixture.root,
+                                            run=fixture.systemctl)
+                self.assertEqual(fixture.systemctl.commands, [])
+
+    def test_version_one_backup_remains_rollback_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            state_path = fixture.backup / "state.json"
+            state = json.loads(state_path.read_text())
+            state["format"] = 1
+            del state["auxiliary_units"]
+            state_path.write_text(json.dumps(state))
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            fixture.assert_original_state(self)
 
     def test_restored_setup_waits_through_inactive_and_transitional_bounces(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -659,7 +849,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 mutating = [
                     command
                     for command in fixture.systemctl.commands
-                    if command[1] not in {"is-active", "is-enabled"}
+                    if command[1] not in {"show", "is-active", "is-enabled"}
                 ]
                 self.assertEqual(mutating, [])
 
