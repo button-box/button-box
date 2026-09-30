@@ -905,6 +905,20 @@ function showMainRoute(name) {
 
 function renderHome(state) {
   const progress = setupProgress(state);
+  const cloudRuntime = state.mode === "RUNTIME" && state.transport === "cloud";
+  for (const [id, route] of [
+    ["home-continue-setup", "#setup"],
+    ["home-button-settings", "#settings"],
+    ["home-sound-settings", "#settings"],
+    ["home-connections-setup", "#setup"],
+  ]) {
+    document.getElementById(id).href = cloudRuntime ? "https://button.box/dashboard" : route;
+  }
+  document.getElementById("home-continue-setup").textContent = cloudRuntime
+    ? "Open Button Box Cloud" : "Continue setup";
+  document.getElementById("home-attention-copy").textContent = cloudRuntime
+    ? "Review your cloud connection and recipient, then verify a real message on your box."
+    : "Finish the required tasks before Button Box is ready.";
   const runtimeRunning = state.mode === "RUNTIME" && state.health?.runtime === "running";
   const ready = runtimeRunning
     && [progress.wifi, progress.whatsapp, progress.recipient, progress.first_message]
@@ -912,7 +926,9 @@ function renderHome(state) {
   document.getElementById("home-attention").hidden = ready;
   document.getElementById("home-summary").textContent = ready && state.mode === "RUNTIME"
     ? "Connected and set up for voice messages. Say hello to someone you love."
-    : "A few small steps to bring your people closer. Pick up where you left off.";
+    : (cloudRuntime
+      ? "Manage your connection and people in Button Box Cloud. Messaging on your box still needs verification."
+      : "A few small steps to bring your people closer. Pick up where you left off.");
   document.getElementById("home-wifi").textContent = progress.wifi === "complete"
     ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
     : "Needs attention";

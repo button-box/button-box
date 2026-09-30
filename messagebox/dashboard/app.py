@@ -195,14 +195,40 @@ def runtime_running():
 
 
 def runtime_state():
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
     contacts = {"contacts": {}}
-    try:
-        contacts = contacts_store().public_view()
-        recipient_ready = bool(contacts.get("default_recipient"))
-        recipient_count = len(contacts.get("contacts", {}))
-    except (ContactError, OSError):
-        recipient_ready = False
-        recipient_count = 0
+    recipient_ready = False
+    recipient_count = 0
+    whatsapp_connected = False
+    if cloud_mode:
+        try:
+            snapshot = cloud_runtime.read_snapshot()
+            people = snapshot["people"]
+            entitlement = snapshot["entitlement"]
+            until = entitlement.get("until")
+            whatsapp_connected = (
+                entitlement.get("send") is True and entitlement.get("deliver") is True
+                and (until is None or time.time() < until)
+            )
+            recipient_count = len(people)
+            recipient_ready = whatsapp_connected and any(
+                person["id"] == snapshot["default_recipient_id"] for person in people
+            )
+        except (OSError, CloudRuntimeError, KeyError, TypeError, ValueError):
+            whatsapp_connected = False
+            recipient_ready = False
+            recipient_count = 0
+        try:
+            contacts = ContactStore(cloud_runtime.CONTACTS_FILE).public_view()
+        except (ContactError, OSError):
+            pass
+    else:
+        try:
+            contacts = contacts_store().public_view()
+            recipient_ready = bool(contacts.get("default_recipient"))
+            recipient_count = len(contacts.get("contacts", {}))
+        except (ContactError, OSError):
+            pass
     wifi_connected = False
     network_name = None
     try:
@@ -227,28 +253,29 @@ def runtime_state():
                 network_name = candidate
         except (OSError, subprocess.SubprocessError):
             pass
-    whatsapp_connected = False
     first_message_ready = False
-    try:
-        recipient_state = RecipientSetup().public_state()
-        first_message_ready = recipient_state.get("status") == "complete"
-    except (OSError, RecipientError):
-        pass
-    try:
-        result = subprocess.run(
-            [WACLI_BIN, "--read-only", "--json", "auth", "status"],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=3,
-        )
-        status = json.loads(result.stdout) if result.returncode == 0 else {}
-
-        whatsapp_connected = whatsapp_authenticated(status)
-    except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
-        pass
+    if not cloud_mode:
+        try:
+            recipient_state = RecipientSetup().public_state()
+            first_message_ready = recipient_state.get("status") == "complete"
+        except (OSError, RecipientError):
+            pass
+        try:
+            result = subprocess.run(
+                [WACLI_BIN, "--read-only", "--json", "auth", "status"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=3,
+            )
+            status = json.loads(result.stdout) if result.returncode == 0 else {}
+            whatsapp_connected = whatsapp_authenticated(status)
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+            pass
+    # Standalone test-message proof cannot establish cloud message acceptance.
     return {
         "mode": "RUNTIME",
+        "transport": "cloud" if cloud_mode else os.environ.get("MSGBOX_TRANSPORT", "wacli"),
         "phase": "COMPLETE",
         "product": "Button Box",
         "box_id": read_box_id(),
@@ -1164,7 +1191,18 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
-            return self._send(200, *static)
+            body, content_type = static
+            if url.path == "/":
+                body = body.replace(
+                    b"__MESSAGEBOX_URL__", (self._trusted_origin() + "/").encode("ascii")
+                ).replace(
+                    b"__CLOUD_CONNECT_LINK__",
+                    (b'<p><a id="home-cloud-dashboard" class="button" '
+                     b'href="https://button.box/dashboard" target="_blank" '
+                     b'rel="noopener noreferrer">Manage Button Box Cloud</a></p>'
+                     if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else b""),
+                )
+            return self._send(200, body, content_type)
         if url.path == "/api/state":
             return self._send(200, json.dumps(runtime_state()))
         if url.path == "/api/settings":
