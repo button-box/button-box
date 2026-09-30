@@ -131,6 +131,29 @@ class SelectionStore:
     def claimed_path(self):
         return self.path.with_name(f".{self.path.name}.claimed")
 
+    @property
+    def unknown_path(self):
+        return self.path.with_name(f".{self.path.name}.unknown")
+
+    def unknown_present(self):
+        try:
+            self.unknown_path.lstat()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def block_unknown(self):
+        with self.locked():
+            # Publish the block before clearing a previously selected route.
+            if not self.unknown_present():
+                _atomic_json(self.unknown_path, {"version": 1, "state": "unknown"})
+            for path in (self.path, self.claimed_path):
+                path.unlink(missing_ok=True)
+
+    def clear_unknown(self):
+        with self.locked():
+            self.unknown_path.unlink(missing_ok=True)
+
     @contextmanager
     def locked(self):
         with _locked_path(self.path):
@@ -170,6 +193,7 @@ class SelectionStore:
                     "last_seen_at": now,
                 },
             )
+            self.unknown_path.unlink(missing_ok=True)
             return changed
 
     def claim(self, *, max_age=DEFAULT_SELECTION_TTL_S):
@@ -184,12 +208,15 @@ class SelectionStore:
             os.replace(self.path, self.claimed_path)
             return selection
 
-    def clear(self):
+    def clear(self, *, preserve_unknown=False):
         with self.locked():
-            self._clear_locked()
+            self._clear_locked(preserve_unknown=preserve_unknown)
 
-    def _clear_locked(self):
-        for path in (self.path, self.claimed_path):
+    def _clear_locked(self, *, preserve_unknown=False):
+        paths = (self.path, self.claimed_path)
+        if not preserve_unknown:
+            paths += (self.unknown_path,)
+        for path in paths:
             try:
                 path.unlink()
             except FileNotFoundError:
@@ -561,7 +588,7 @@ class NfcRouter:
         document = self.contacts.load()
         jid, contact = _contact_for_uid(document, uid)
         if contact is None:
-            self.selection.clear()
+            self.selection.block_unknown()
             return ScanResult("unknown", uid, None, new_presentation)
         public_contact = _public_contact(jid, contact)
         if len(document["contacts"]) < 2:
@@ -631,6 +658,7 @@ class NfcRouter:
         )
 
     def card_absent(self):
+        self.selection.clear_unknown()
         return ScanResult("removed")
 
     def active_contact(self, max_age=DEFAULT_SELECTION_TTL_S):
@@ -673,7 +701,7 @@ def _load_valid_selection(contacts, selection, *, max_age, consume):
         or jid != snapshot["jid"]
         or contact is None
     ):
-        selection.clear()
+        selection.clear(preserve_unknown=True)
         return None
     return {
         "uid": snapshot["uid"],
