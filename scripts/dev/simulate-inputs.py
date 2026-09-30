@@ -130,8 +130,23 @@ def verify_routes(runtime, manifest):
         raise SimulationError("authorized test routes must exist in the authoritative contacts")
     for name in runtime.queued():
         metadata = runtime.queue_metadata(Path(runtime.QUEUE_DIR) / name)
-        if not isinstance(metadata, dict) or metadata.get("chat") not in recipients:
-            raise SimulationError("queued audio has an unverified route; preserve it before testing")
+        check_inbound(runtime, manifest, metadata, runtime.inbound_audio_authorized(metadata))
+
+
+def check_inbound(runtime, manifest, metadata, playable, trace=None):
+    """Validate the real playback gate's result; never authorize a skipped item."""
+    mode = runtime.transport_mode()
+    cloud = isinstance(metadata, dict) and metadata.get("cloud") is True
+    compatible = mode == manifest["transport"] and cloud == (mode == "cloud")
+    if trace is not None:
+        trace.inbound(metadata, playable, compatible)
+    if mode != manifest["transport"]:
+        raise SimulationError("transport changed during simulated playback")
+    if playable and not compatible:
+        raise SimulationError("production playback gate admitted incompatible audio; preserve it")
+    if playable and (not isinstance(metadata, dict) or metadata.get("chat") not in manifest["recipients"]):
+        raise SimulationError("playable queued audio has an unverified route; preserve it before testing")
+    return playable
 
 
 def preflight(runtime, nfc, manifest):
@@ -285,6 +300,16 @@ class InputTrace:
                     "guard_outcome": "unavailable" if jid is None else ("allowed" if authorized else "rejected"),
                     "via_card": bool(context.get("via_card")) if context is not None else None,
                     "via_recent_reply": bool(context.get("via_recent_reply")) if context is not None else None})
+
+    def inbound(self, metadata, playable, compatible):
+        jid = metadata.get("chat") if isinstance(metadata, dict) else None
+        authorized = jid in self.allowed if isinstance(jid, str) else None
+        self.write({"type": "inbound_observation", "source": "inbound_audio_authorized",
+                    "production_playable": bool(playable), "transport_compatible": compatible,
+                    "recipient_sha256": self.identifier(jid, "recipient"),
+                    "authorized_recipient": authorized,
+                    "guard_outcome": "unavailable" if not playable else (
+                        "allowed" if compatible and authorized else "rejected")})
 
 
 class Inputs:
@@ -440,6 +465,7 @@ def validated_routing(runtime, manifest, trace=None):
     recording = runtime.recording_recipient_context
     claim = runtime.claim_fresh_card_intent
     capture = runtime.capture_guided_recording
+    inbound = runtime.inbound_audio_authorized
 
     def check(context, source, state=None):
         if trace is not None:
@@ -462,15 +488,20 @@ def validated_routing(runtime, manifest, trace=None):
             raise SimulationError("capture route is outside test authorization")
         return capture(recipient, *args, **kwargs)
 
+    def guarded_inbound(metadata):
+        return check_inbound(runtime, manifest, metadata, inbound(metadata), trace)
+
     runtime.recording_recipient_context = guarded_recording
     runtime.claim_fresh_card_intent = guarded_claim
     runtime.capture_guided_recording = guarded_capture
+    runtime.inbound_audio_authorized = guarded_inbound
     try:
         yield
     finally:
         runtime.recording_recipient_context = recording
         runtime.claim_fresh_card_intent = claim
         runtime.capture_guided_recording = capture
+        runtime.inbound_audio_authorized = inbound
 
 
 def run_inputs(runtime, inputs, manifest):
