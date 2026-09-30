@@ -1203,6 +1203,8 @@ class Handler(BaseHTTPRequestHandler):
                      if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else b""),
                 )
             return self._send(200, body, content_type)
+        if self._reject_cloud_management(url.path):
+            return
         if url.path == "/api/state":
             return self._send(200, json.dumps(runtime_state()))
         if url.path == "/api/settings":
@@ -1307,9 +1309,25 @@ class Handler(BaseHTTPRequestHandler):
         log_event(type="settings_updated", revision=document["revision"])
         return self._send(200, json.dumps({"ok": True, "settings": document, "attention": False}))
 
+    def _reject_cloud_management(self, path):
+        # These routes belong to the retained standalone account and contact store.
+        legacy = path in {
+            "/api/whatsapp", "/api/recipients", "/api/contacts", "/api/listeners",
+            "/api/nfc-runtime",
+        } or path.startswith(("/whatsapp/", "/recipients/", "/nfc/"))
+        if os.environ.get("MSGBOX_TRANSPORT") != "cloud" or not legacy:
+            return False
+        self._send(409, json.dumps({
+            "error": "Manage your connection and people in Button Box Cloud",
+            "management_url": "https://button.box/dashboard",
+        }))
+        return True
+
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
         if url.path != "/api/wacli-receipt" and not self._require_same_origin():
+            return
+        if self._reject_cloud_management(url.path):
             return
         if url.path == "/api/ringtone-preview":
             payload = self._json_body(1024)

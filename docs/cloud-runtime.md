@@ -17,7 +17,7 @@ link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
 
-In runtime cloud mode, the local Home page links to
+In runtime cloud mode, the local Home, Setup and Advanced pages link to
 `https://button.box/dashboard` for cloud connection, recipient and settings
 management. Its connection and default-recipient status come from the persisted
 cloud heartbeat, subject to the same boot, monotonic and wall/server-time checks
@@ -26,6 +26,11 @@ standalone WhatsApp pairing, contacts and test-message proof do not establish
 cloud readiness. The local page keeps first-message verification outstanding
 because it has no cloud-specific end-to-end acceptance record. The runtime link
 does not start a claim, change connection mode or reset the existing account.
+Wi-Fi recovery and device settings stay local. Stale standalone WhatsApp and
+recipient routes return to Setup; Advanced hides local account and listener controls.
+Local standalone account, contact and NFC management APIs reject Cloud-mode
+requests before reading or changing the retained standalone store. The normal
+local settings and message APIs retain their existing contracts.
 
 The poller accepts family audio only from a fresh authenticated heartbeat and
 the exact inbox message. It verifies the media hash before publishing a WAV,
