@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import hashlib
+import hmac
 import json
 import math
 import multiprocessing
 import os
 from pathlib import Path
 import signal
+import secrets
 import stat
 import subprocess
 import sys
@@ -133,6 +135,7 @@ def verify_routes(runtime, manifest):
 
 
 def preflight(runtime, nfc, manifest):
+    from messagebox.nfc_state import SelectionStore
     verify_routes(runtime, manifest)
     if os.environ.get("MSGBOX_CLAIM_ONLY") == "1" or runtime.cloud_claim.CLAIM_FILE.exists():
         raise SimulationError("claim confirmation cannot be simulated")
@@ -144,17 +147,153 @@ def preflight(runtime, nfc, manifest):
         path = Path(directory)
         if path.exists() and any(path.iterdir()):
             raise SimulationError("existing outbound or temporary work must remain untouched")
-    for path in (nfc.NFC_ENROLLMENT_FILE, nfc.NFC_SELECTION_FILE, nfc.NFC_ANNOUNCEMENT_FILE, nfc.NFC_HEALTH_FILE):
-        if Path(path).exists():
+    for path in (nfc.NFC_ENROLLMENT_FILE, nfc.NFC_SELECTION_FILE, nfc.NFC_ANNOUNCEMENT_FILE, nfc.NFC_HEALTH_FILE,
+                 SelectionStore(nfc.NFC_SELECTION_FILE).unknown_path):
+        if trace_present(path) is not False:
             raise SimulationError("existing NFC state must remain untouched")
+
+
+def trace_present(path):
+    try:
+        Path(path).lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
+def trace_file(path):
+    """Read only bounded regular-file snapshots without following links or pipes."""
+    try:
+        metadata = Path(path).lstat()
+    except FileNotFoundError:
+        return False, None
+    except OSError:
+        return None, None
+    if not stat.S_ISREG(metadata.st_mode):
+        return True, None
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return True, None
+        raw = os.read(descriptor, 16385)
+        document = json.loads(raw) if len(raw) <= 16384 else None
+        return True, document if isinstance(document, dict) else None
+    except (OSError, ValueError):
+        return True, None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def safe_action(value):
+    return value if isinstance(value, str) and value in {"selected", "recognized", "refreshed", "unknown", "removed", "enrolled", "invalid"} else None
+
+
+class InputTrace:
+    """Private observations of actual results/files; no additional route resolution."""
+
+    def __init__(self, runtime, manifest, emit=None):
+        self.runtime, self.allowed = runtime, set(manifest["recipients"])
+        self.key = secrets.token_bytes(32)
+        self.emit = emit or self.print_record
+        self.lock = threading.Lock()
+        self.count = 0
+        self.truncated = False
+        self.last_probe = None
+        self.previous = None
+
+    @staticmethod
+    def print_record(record):
+        sys.stdout.write(json.dumps(record, sort_keys=True) + "\n")
+        sys.stdout.flush()
+
+    def identifier(self, value, kind):
+        if not isinstance(value, str):
+            return None
+        if kind == "card":
+            from messagebox.nfc_state import normalize_uid
+            try:
+                value = normalize_uid(value)
+            except ValueError:
+                return None
+        return hmac.new(self.key, (kind + ":" + value).encode(), hashlib.sha256).hexdigest()
+
+    def write(self, record):
+        with self.lock:
+            if self.count >= 2048:
+                if not self.truncated:
+                    self.truncated = True
+                    self.emit({"type": "input_trace", "status": "truncated"})
+                return
+            self.count += 1
+            self.emit({"sequence": self.count, **record})
+
+    def observe(self, inputs, result, now, event=None):
+        if event is None and result is None and self.last_probe is not None and now - self.last_probe < 0.1:
+            return
+        self.last_probe = now
+        router = inputs.nfc.router
+        selection_present, selection = trace_file(router.selection.path)
+        claimed_present = trace_present(router.selection.claimed_path)
+        unknown_present = trace_present(router.selection.unknown_path)
+        announcement_present, announcement = trace_file(router.announcements.path)
+        announced_claimed, claimed_announcement = trace_file(router.announcements.claimed_path)
+        announcement = announcement or claimed_announcement or {}
+        selection = selection or {}
+        age = router.selection.clock() - selection["last_seen_at"] if type(selection.get("last_seen_at")) in (int, float) else None
+        within_ttl = (age is not None and math.isfinite(age)
+                      and -5 <= age <= self.runtime.NFC_SELECTION_TTL_S)
+        selected_jid = selection.get("jid")
+        selected_card = self.identifier(selection.get("uid"), "card")
+        stored_action = safe_action(announcement.get("action"))
+        state = {"reader_present": inputs.nfc.uid is not None,
+                 "reader_card_sha256": self.identifier(inputs.nfc.uid, "card"),
+                 "selection_present": selection_present, "selection_parseable": bool(selection),
+                 "claimed_marker_present": claimed_present, "unknown_marker_present": unknown_present,
+                 "selection_within_ttl": within_ttl,
+                 "selection_card_sha256": selected_card,
+                 "selection_recipient_sha256": self.identifier(selected_jid, "recipient"),
+                 "selection_authorized_recipient": selected_jid in self.allowed if isinstance(selected_jid, str) else None,
+                 "announcement_present": announcement_present,
+                 "announcement_claimed_marker_present": announced_claimed,
+                 "announcement_stored_action": stored_action}
+        changed = state != self.previous
+        if event is None and result is None and not changed:
+            return
+        self.previous = state
+        contact_jid = result.contact.get("jid") if result is not None and result.contact is not None else None
+        self.write({"type": "nfc_observation", "elapsed_seconds": round(now - inputs.started, 4),
+                    "input_event": event, "event_index": inputs.index if event is not None else None,
+                    "handler_returned": result is not None,
+                    "handler_action": safe_action(result.action) if result is not None else None,
+                    "handler_announce": bool(result.announce) if result is not None else None,
+                    "handler_recipient_sha256": self.identifier(contact_jid, "recipient"),
+                    "handler_authorized_recipient": contact_jid in self.allowed if contact_jid is not None else None,
+                    "selection_age_seconds": round(age, 4) if age is not None and math.isfinite(age) else None,
+                    "state_changed": changed, **state})
+
+    def route(self, source, context, state=None):
+        jid = context["contact"]["jid"] if context is not None else None
+        authorized = jid in self.allowed if jid is not None else None
+        self.write({"type": "route_observation", "source": source, "claim_state": state,
+                    "context_returned": context is not None,
+                    "recipient_sha256": self.identifier(jid, "recipient"),
+                    "authorized_recipient": authorized,
+                    "guard_outcome": "unavailable" if jid is None else ("allowed" if authorized else "rejected"),
+                    "via_card": bool(context.get("via_card")) if context is not None else None,
+                    "via_recent_reply": bool(context.get("via_recent_reply")) if context is not None else None})
 
 
 class Inputs:
     """Only input state changes; application handlers own every resulting action."""
 
-    def __init__(self, plan, nfc_runtime, health, clock=time.monotonic):
+    def __init__(self, plan, nfc_runtime, health, clock=time.monotonic, trace=None):
         self.plan, self.nfc, self.health, self.clock = plan, nfc_runtime, health, clock
         self.started = clock()
+        self.trace = trace
         self.index = 0
         self.is_pressed = False
         self.pressed_at = None
@@ -188,8 +327,12 @@ class Inputs:
             elif kind == "nfc-removed":
                 self.uid = None
             # Repeated samples use the same production refresh/debounce path.
-            self.nfc.observe(self.uid, now)
-        self.nfc.observe(self.uid, now)
+            result = self.nfc.observe(self.uid, now)
+            if self.trace is not None:
+                self.trace.observe(self, result, now, kind if kind.startswith("nfc-") else None)
+        result = self.nfc.observe(self.uid, now)
+        if self.trace is not None:
+            self.trace.observe(self, result, now)
         if self.last_health is None or now - self.last_health >= 2:
             self.health()
             self.last_health = now
@@ -292,25 +435,29 @@ def use_scratch_state(runtime, root):
 
 
 @contextmanager
-def validated_routing(runtime, manifest):
+def validated_routing(runtime, manifest, trace=None):
     """Validate actual production decisions without selecting a replacement route."""
     recording = runtime.recording_recipient_context
     claim = runtime.claim_fresh_card_intent
     capture = runtime.capture_guided_recording
 
-    def check(context):
+    def check(context, source, state=None):
+        if trace is not None:
+            trace.route(source, context, state)
         if context is not None and context["contact"]["jid"] not in manifest["recipients"]:
             raise SimulationError("application selected an unauthorized test route")
         return context
 
     def guarded_recording():
-        return check(recording())
+        return check(recording(), "recording_recipient_context")
 
     def guarded_claim():
         state, context = claim()
-        return state, check(context)
+        return state, check(context, "claim_fresh_card_intent", state)
 
     def guarded_capture(recipient, *args, **kwargs):
+        if trace is not None:
+            trace.route("capture_recipient_guard", {"contact": {"jid": recipient}})
         if recipient not in manifest["recipients"]:
             raise SimulationError("capture route is outside test authorization")
         return capture(recipient, *args, **kwargs)
@@ -348,7 +495,7 @@ def run_inputs(runtime, inputs, manifest):
 def execute(plan, manifest, send, scratch=None):
     from messagebox import button_send as runtime, nfc
     from messagebox.contacts import ContactStore
-    from messagebox.nfc_state import normalize_uid
+    from messagebox.nfc_state import normalize_uid, SelectionStore
     if scratch is not None:
         use_scratch_state(runtime, scratch)
     preflight(runtime, nfc, manifest)
@@ -368,24 +515,27 @@ def execute(plan, manifest, send, scratch=None):
     runtime.make_beeps()
     runtime.validate_prompts()
     runtime.apply_master_volume()
-    inputs = Inputs(plan, nfc.NfcRuntime(nfc.router(announcement), nfc.Announcer(announcement)), nfc.mark_healthy)
+    trace = InputTrace(runtime, manifest)
+    inputs = Inputs(plan, nfc.NfcRuntime(nfc.router(announcement), nfc.Announcer(announcement)), nfc.mark_healthy, trace=trace)
     runtime.button = inputs
     stop = threading.Event()
     scheduler = threading.Thread(target=inputs.run, args=(stop,), daemon=True)
     scheduler.start()
     try:
-        with validated_routing(runtime, manifest):
+        with validated_routing(runtime, manifest, trace):
             run_inputs(runtime, inputs, manifest)
         if send:
             send_generated(runtime, manifest)
         print(json.dumps({"type": "input_simulation", "status": "completed",
                           "events_planned": len(plan["events"]), "events_processed": inputs.index,
                           "max_event_lateness_seconds": round(inputs.max_lateness, 4),
-                          "delivery_acceptance": "unverified"}, sort_keys=True), flush=True)
+                          "delivery_acceptance": "unverified", "trace_records": trace.count,
+                          "trace_truncated": trace.truncated}, sort_keys=True), flush=True)
     finally:
         stop.set()
         scheduler.join(timeout=2)
-        for path in (nfc.NFC_SELECTION_FILE, nfc.NFC_ANNOUNCEMENT_FILE, nfc.NFC_HEALTH_FILE):
+        for path in (nfc.NFC_SELECTION_FILE, nfc.NFC_ANNOUNCEMENT_FILE, nfc.NFC_HEALTH_FILE,
+                     SelectionStore(nfc.NFC_SELECTION_FILE).unknown_path):
             Path(path).unlink(missing_ok=True)
 
 
