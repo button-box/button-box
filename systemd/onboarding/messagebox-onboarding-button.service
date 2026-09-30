@@ -4,6 +4,7 @@ After=network-online.target sound.target messagebox-audio-detect.service
 Requires=messagebox-audio-detect.service
 Wants=network-online.target
 PartOf=messagebox-onboarding-voice.target
+PartOf=comitup.service
 Conflicts=messagebox-button.service
 
 [Service]
@@ -25,6 +26,7 @@ Environment=PYTHONPATH=/opt/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 Environment=MSGBOX_GUIDED_REPLY=1
+Environment=MSGBOX_CLAIM_ONLY=1
 Environment=MSGBOX_AUTO_RECORD_AFTER_INCOMING=1
 SupplementaryGroups=gpio audio messagebox-settings
 UMask=0077

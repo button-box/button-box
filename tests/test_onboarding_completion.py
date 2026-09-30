@@ -214,6 +214,26 @@ class CompletionTests(unittest.TestCase):
             {"version": 1, "complete": True},
         )
 
+    @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
+    def test_cloud_handoff_requires_verified_claim_without_legacy_recipients(self, _geteuid):
+        request_completion(self.request, transport="cloud")
+        client = mock.Mock()
+        client.claim.return_value = {"claimed": False}
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+            with self.assertRaisesRegex(RuntimeError, "cloud claim is incomplete"):
+                self.complete(request_path=self.request, enabled_path=self.enabled,
+                              contacts_path=self.root / "absent.json", cloud_client=client,
+                              run=self.command_runner, sleep=lambda _: None)
+            self.assertTrue(self.enabled.exists())
+            client.claim.return_value = {"claimed": True}
+            result = self.complete(request_path=self.request, enabled_path=self.enabled,
+                                   contacts_path=self.root / "absent.json", cloud_client=client,
+                                   run=self.command_runner, sleep=lambda _: None)
+        self.assertEqual(result, {"has_cards": False})
+        self.assertFalse(self.enabled.exists())
+        self.assertFalse(self.request.exists())
+        self.assertEqual(client.claim.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

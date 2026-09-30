@@ -141,7 +141,12 @@ def _require_retained(
     now: float,
 ) -> Path:
     metadata_path = Path(f"{directory / name}.json")
-    if not metadata or _record_time(metadata_path, metadata) < now - RETENTION_SECONDS:
+    if metadata.get("cloud") is True:
+        expiry = metadata.get("expires_at")
+        if (type(expiry) not in (int, float) or not math.isfinite(expiry)
+                or now < 1_700_000_000 or now >= expiry):
+            raise FileNotFoundError(directory / name)
+    elif not metadata or _record_time(metadata_path, metadata) < now - RETENTION_SECONDS:
         metadata_path.unlink(missing_ok=True)
         (directory / name).unlink(missing_ok=True)
         raise FileNotFoundError(directory / name)
@@ -167,13 +172,19 @@ def _prune_locked(
     records.sort(key=lambda item: item[0], reverse=True)
 
     retained = []
+    local_index = 0
     for index, (played_at, metadata_path) in enumerate(records):
         wav_path = Path(os.fspath(metadata_path)[:-5])
-        if index >= metadata_limit or played_at < now - retention_seconds:
+        metadata = _read_json(metadata_path)
+        if metadata.get("cloud") is True:
+            # Cloud expiry is deleted only by the poller after a trusted server time.
+            continue
+        if local_index >= metadata_limit or played_at < now - retention_seconds:
             metadata_path.unlink(missing_ok=True)
             wav_path.unlink(missing_ok=True)
         else:
             retained.append((played_at, wav_path))
+        local_index += 1
 
     media_bytes = 0
     media_count = 0

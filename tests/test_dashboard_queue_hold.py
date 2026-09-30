@@ -306,6 +306,24 @@ class DashboardQueueHoldTests(unittest.TestCase):
         self.assertEqual(response["body"], archived.read_bytes())
         self.assertEqual(response["ctype"], "audio/wav")
 
+    def test_cloud_mode_blocks_dashboard_stream_and_requeue_without_fresh_authorization(self):
+        archived = self.archive_message(played_at=2_000_000_000)
+        token = dashboard.build_data()["recently_played"][0]["token"]
+        handler = dashboard.Handler.__new__(dashboard.Handler)
+        handler.path = f"/audio/{token}?played=1"
+        handler.headers = {"Host": "button-box.local"}
+        handler.client_address = ("192.168.1.20", 12345)
+        handler.local_host = "button-box.local"
+        response = {}
+        handler._send = lambda code, body, ctype="application/json": response.update(code=code, body=body)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(dashboard.cloud_runtime, "playable", return_value=False):
+            handler.do_GET()
+            requeue = self.post(f"/api/requeue?f={token}")
+        self.assertEqual(response["code"], 404)
+        self.assertEqual(requeue["code"], 409)
+        self.assertTrue(archived.exists())
+
     def test_expired_played_token_cannot_stream_or_requeue(self):
         archived = self.archive_message(played_at=100)
         token = dashboard.public_message_token("played", archived.name)

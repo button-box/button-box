@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from messagebox.identity import read_box_id
+from messagebox.cloud_claim import CloudClaim, CloudClaimError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
@@ -328,6 +329,7 @@ def create_app(
     adapter=None,
     connectivity_checker=None,
     whatsapp_client=None,
+    cloud_claim=None,
     nfc_client=None,
     caregiver_settings=None,
     completion_request=request_completion,
@@ -366,6 +368,14 @@ def create_app(
     comitup = adapter or ComitupAdapter()
     checker = connectivity_checker or ConnectivityChecker()
     whatsapp = whatsapp_client or WhatsAppPairingClient()
+    cloud = cloud_claim
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+
+    def claim_client():
+        nonlocal cloud
+        if cloud is None:
+            cloud = CloudClaim()
+        return cloud
     nfc = nfc_client or NfcOnboardingClient()
     settings = caregiver_settings or SettingsStore()
 
@@ -409,6 +419,8 @@ def create_app(
     static_files = {}
     for name, content_type in (
         ("index.html", "text/html; charset=utf-8"),
+        ("cloud-connect.html", "text/html; charset=utf-8"),
+        ("cloud-connect.js", "text/javascript; charset=utf-8"),
         ("app.js", "text/javascript; charset=utf-8"),
         ("clipboard.js", "text/javascript; charset=utf-8"),
         ("styles.css", "text/css; charset=utf-8"),
@@ -788,8 +800,50 @@ def create_app(
                 body = body.replace(
                     b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
+                body = body.replace(
+                    b"__CLOUD_CONNECT_LINK__",
+                    (b'<p><a class="button" href="/cloud-connect">Connect your box to WhatsApp</a></p>'
+                     if cloud_mode and selected_mode == "HOME" else b""),
+                )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
-            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/styles.css"}:
+            if method == "GET" and path == "/cloud-connect" and cloud_mode and selected_mode == "HOME":
+                body, content_type = static_files["cloud-connect.html"]
+                return Response(body, headers=[("Content-Type", content_type)])(start_response)
+            if method == "GET" and path == "/api/cloud-claim" and cloud_mode and selected_mode == "HOME":
+                try:
+                    return _json_response(claim_client().status())(start_response)
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "GET" and path == "/api/cloud-claim/qr" and cloud_mode and selected_mode == "HOME":
+                try:
+                    body = claim_client().qr_svg()
+                except CloudClaimError as exc:
+                    raise RequestError("404 Not Found", str(exc)) from exc
+                return Response(body, headers=[("Content-Type", "image/svg+xml; charset=utf-8")])(start_response)
+            if method == "POST" and path == "/api/cloud-claim/start" and cloud_mode and selected_mode == "HOME":
+                _require_same_origin(environ, expected_origin)
+                if store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+                    raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+                try:
+                    return _json_response(claim_client().start())(start_response)
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "POST" and path == "/onboarding/complete" and cloud_mode:
+                _require_same_origin(environ, expected_origin)
+                if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+                    raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+                document = _form(environ, body_limit)
+                if document != {"intent": "done"}:
+                    raise RequestError("400 Bad Request", "Invalid completion request")
+                try:
+                    claim_state = claim_client().status()
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+                if claim_state.get("status") != "claimed":
+                    raise RequestError("409 Conflict", "Cloud claim is incomplete")
+                completion_request(transport="cloud")
+                return _json_response({"status": "complete"}, "202 Accepted")(start_response)
+            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/cloud-connect.js", "/static/styles.css"}:
                 name = path.rsplit("/", 1)[-1]
                 body, content_type = static_files[name]
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
@@ -1107,6 +1161,9 @@ def create_app(
 
             if path in {
                 "/api/state",
+                "/api/cloud-claim",
+                "/api/cloud-claim/start",
+                "/api/cloud-claim/qr",
                 "/api/settings",
                 "/api/ringtone-preview",
                 "/api/networks",
@@ -1152,6 +1209,9 @@ def create_app(
 def _allowed_methods(path):
     return {
         "/api/state": "GET",
+        "/api/cloud-claim": "GET",
+        "/api/cloud-claim/start": "POST",
+        "/api/cloud-claim/qr": "GET",
         "/api/settings": "GET, PUT",
         "/api/ringtone-preview": "POST",
         "/api/networks": "GET",

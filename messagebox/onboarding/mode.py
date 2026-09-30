@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import grp
 import os
+import pwd
 import stat
 import subprocess
 import tempfile
@@ -16,6 +18,7 @@ from messagebox.onboarding.paths import (
     MODE_RECONCILE_PENDING_PATH,
     MODE_TRANSITION_LOCK_PATH,
     ONBOARDING_ENABLED_PATH,
+    ONBOARDING_CONFIGURED_PATH,
 )
 
 
@@ -263,10 +266,140 @@ def reconcile(
     return mode
 
 
-def main():
+def _read_private_env(path, *, trusted_uid, allowed_gid):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ModeError("transport configuration is unavailable or unsafe") from exc
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != trusted_uid
+                or stat.S_IMODE(info.st_mode) not in {0o600, 0o640}
+                or (stat.S_IMODE(info.st_mode) == 0o640 and info.st_gid != allowed_gid)
+                or info.st_size > 32768):
+            raise ModeError("transport configuration is unsafe")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            content = handle.read(32769)
+        if len(content) > 32768 or b"\x00" in content:
+            raise ModeError("transport configuration is invalid")
+        matches = [line.rstrip(b"\r\n") for line in content.splitlines(keepends=True)
+                   if line.startswith(b"MSGBOX_TRANSPORT=")]
+        if len(matches) != 1 or matches[0] not in {b"MSGBOX_TRANSPORT=business", b"MSGBOX_TRANSPORT=cloud"}:
+            raise ModeError("transport configuration is not ready for cloud claim")
+        return content, info, matches[0].split(b"=", 1)[1]
+    finally:
+        os.close(descriptor)
+
+
+def _replace_private_env(path, content, info):
+    path = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=f".{path.name}.",
+                                         delete=False) as handle:
+            temporary = Path(handle.name)
+            os.fchown(handle.fileno(), info.st_uid, info.st_gid)
+            os.fchmod(handle.fileno(), stat.S_IMODE(info.st_mode))
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        _fsync_directory(path.parent)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def enter_cloud_claim(
+    *,
+    env_path="/etc/messagebox/env",
+    configured_path=ONBOARDING_CONFIGURED_PATH,
+    enabled_path=ONBOARDING_ENABLED_PATH,
+    cloud_dir="/var/lib/messagebox-cloud",
+    lock_path=MODE_TRANSITION_LOCK_PATH,
+    pending_path=MODE_RECONCILE_PENDING_PATH,
+    run=subprocess.run,
+    trusted_uid=0,
+    env_gid=None,
+    service_uid=None,
+    settings_gid=None,
+    required_cloud_mode=0o2770,
+):
+    """Enter cloud claim on a configured box without changing Wi-Fi or data."""
+    if os.geteuid() != 0:
+        raise ModeError("cloud claim transition requires root")
+    if env_gid is None:
+        env_gid = grp.getgrnam("messagebox").gr_gid
+    if service_uid is None:
+        service_uid = pwd.getpwnam("messagebox").pw_uid
+    if settings_gid is None:
+        settings_gid = grp.getgrnam("messagebox-settings").gr_gid
+    with transition_lock(lock_path, trusted_uid=trusted_uid):
+        configured = Path(configured_path).lstat()
+        if (not stat.S_ISREG(configured.st_mode) or configured.st_uid != trusted_uid
+                or configured.st_nlink != 1 or stat.S_IMODE(configured.st_mode) != 0o640
+                or Path(configured_path).read_bytes() != b"configured\n"):
+            raise ModeError("Wi-Fi onboarding is not safely configured")
+        cloud_info = Path(cloud_dir).lstat()
+        if (not stat.S_ISDIR(cloud_info.st_mode)
+                or stat.S_IMODE(cloud_info.st_mode) != required_cloud_mode
+                or (cloud_info.st_uid, cloud_info.st_gid) != (service_uid, settings_gid)):
+            raise ModeError("cloud directory owner or permissions are invalid")
+        original, info, transport = _read_private_env(env_path, trusted_uid=trusted_uid,
+                                                       allowed_gid=env_gid)
+        mode = read_mode(enabled_path, trusted_uid=trusted_uid)
+        if mode is Mode.SETUP:
+            if transport != b"cloud":
+                raise ModeError("setup mode has a different transport")
+            queue_reconcile(run=run, pending_path=pending_path, reason="transition")
+            run(["systemctl", "start", "comitup.service"], check=True, timeout=30)
+            return Mode.SETUP
+        replacement = b"".join(
+            line.replace(b"MSGBOX_TRANSPORT=business", b"MSGBOX_TRANSPORT=cloud", 1)
+            if line.rstrip(b"\r\n") == b"MSGBOX_TRANSPORT=business" else line
+            for line in original.splitlines(keepends=True)
+        )
+        queue_reconcile(run=run, pending_path=pending_path, reason="transition")
+        config_changed = replacement != original
+        marker_written = False
+        try:
+            if config_changed:
+                _replace_private_env(env_path, replacement, info)
+            run(["systemctl", "stop", "messagebox.target"], check=True, timeout=30)
+            write_setup_marker(enabled_path)
+            marker_written = True
+            run(["systemctl", "daemon-reload"], check=True, timeout=30)
+            run(["systemctl", "start", "comitup.service"], check=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                # Atomic marker replacement may have committed before its
+                # directory fsync failed, so inspect the authority on rollback.
+                if marker_written or read_mode(enabled_path, trusted_uid=trusted_uid) is Mode.SETUP:
+                    remove_setup_marker(enabled_path)
+                if config_changed:
+                    if Path(env_path).read_bytes() != replacement:
+                        raise ModeError("transport configuration changed during rollback")
+                    _replace_private_env(env_path, original, info)
+                run(["systemctl", "daemon-reload"], check=True, timeout=30)
+                run(["systemctl", "start", "messagebox.target"], check=True, timeout=30)
+            except (OSError, subprocess.SubprocessError, ModeError) as exc:
+                raise ModeError("cloud claim activation and rollback both failed") from exc
+            raise
+    return Mode.SETUP
+
+
+def main(argv=None):
     if os.geteuid() != 0:
         raise ModeError("mode reconciliation requires root")
-    reconcile()
+    arguments = os.sys.argv[1:] if argv is None else argv
+    if arguments == ["--enter-cloud-claim"]:
+        enter_cloud_claim()
+    elif not arguments:
+        reconcile()
+    else:
+        raise ModeError("unknown mode action")
     return 0
 
 

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.cloud_runtime import CONTACTS_FILE as CLOUD_CONTACTS_FILE
 from messagebox.nfc_state import (
     AnnouncementStore,
     DEFAULT_ENROLLMENT_TTL_S,
@@ -147,7 +148,7 @@ class NfcRuntime:
 
 def router(announcement_store=None):
     return NfcRouter(
-        ContactStore(CONTACTS_FILE),
+        ContactStore(CLOUD_CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else CONTACTS_FILE),
         SelectionStore(NFC_SELECTION_FILE),
         EnrollmentStore(NFC_ENROLLMENT_FILE),
         announcement_store,

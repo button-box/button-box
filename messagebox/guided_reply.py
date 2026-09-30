@@ -305,8 +305,9 @@ class OutboxJob:
 class OutboxStore:
     """Crash-aware jobs whose recipient is always persisted with the audio."""
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, *, transport: str = "legacy"):
         self.root = Path(root)
+        self.transport = transport
         self.root.mkdir(parents=True, exist_ok=True)
 
     def approve(
@@ -339,6 +340,7 @@ class OutboxStore:
             "flow_kind": flow_kind,
             "duration": round(float(duration), 3),
             "state": "pending",
+            "transport": self.transport,
             "created_at": time.time(),
             "attempts": 0,
         }

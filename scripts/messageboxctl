@@ -14,6 +14,7 @@ Commands:
   services                  Show enabled and active state for every service
   logs [SERVICE]            Follow all logs or one service log
   reset-wifi               Delete saved Wi-Fi and restart onboarding
+  enter-cloud-claim        Open cloud claim setup without changing Wi-Fi
   start|stop|restart        Operate the Button Box target
   enable SERVICE...         Select services; start them if the target is active
   disable SERVICE...        Stop and deselect services
@@ -131,6 +132,15 @@ case "$command" in
     fi
     cd /opt/messagebox
     exec /usr/bin/python3 -m messagebox.onboarding.reset --force
+    ;;
+  enter-cloud-claim)
+    require_root
+    if [ "$#" -ne 0 ]; then
+      usage >&2
+      exit 2
+    fi
+    cd /opt/messagebox
+    exec /usr/bin/python3 -m messagebox.onboarding.mode --enter-cloud-claim
     ;;
   start|stop|restart)
     require_root

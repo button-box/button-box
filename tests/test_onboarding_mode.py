@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from messagebox.onboarding import mode
 
@@ -58,6 +59,98 @@ class ModeTests(unittest.TestCase):
     def arm(self):
         self.marker.write_bytes(b"enabled\n")
         self.marker.chmod(0o600)
+
+    def cloud_transition_fixture(self):
+        configured = self.marker.parent / "configured"
+        configured.write_bytes(b"configured\n")
+        configured.chmod(0o640)
+        env = self.root / "etc/messagebox/env"
+        env.parent.mkdir(parents=True)
+        original = b"# preserve other settings\nMSGBOX_TRANSPORT=business\nMSGBOX_CLOUD_API_URL=https://example.invalid/cloud-api/v1\n"
+        env.write_bytes(original)
+        env.chmod(0o640)
+        cloud_dir = self.root / "var/lib/messagebox-cloud"
+        cloud_dir.mkdir(parents=True)
+        cloud_dir.chmod(0o2770)
+        household = self.root / "var/lib/messagebox/outbox/retained.job/audio.wav"
+        household.parent.mkdir(parents=True)
+        household.write_bytes(b"retained family recording")
+        options = {"env_path": env, "configured_path": configured,
+                   "enabled_path": self.marker, "cloud_dir": cloud_dir,
+                   "lock_path": self.lock, "pending_path": self.pending,
+                   "trusted_uid": self.uid, "env_gid": os.getgid(),
+                   "service_uid": self.uid, "settings_gid": os.getgid(),
+                   "required_cloud_mode": stat.S_IMODE(cloud_dir.stat().st_mode)}
+        return env, original, household, options
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_preserves_wifi_household_and_other_env(self, _geteuid):
+        env, original, household, options = self.cloud_transition_fixture()
+        runner = Runner()
+        result = mode.enter_cloud_claim(**options, run=runner)
+        self.assertEqual(result, mode.Mode.SETUP)
+        self.assertEqual(env.read_bytes(), original.replace(b"MSGBOX_TRANSPORT=business",
+                                                            b"MSGBOX_TRANSPORT=cloud"))
+        self.assertEqual(self.marker.read_bytes(), b"enabled\n")
+        self.assertEqual(household.read_bytes(), b"retained family recording")
+        commands = [call[0] for call in runner.calls]
+        self.assertIn(["systemctl", "stop", "messagebox.target"], commands)
+        self.assertIn(["systemctl", "start", "comitup.service"], commands)
+        self.assertFalse(any("nmcli" in command or "reset" in command or "unlink" in command
+                             for command in commands))
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_failure_restores_runtime_without_data_loss(self, _geteuid):
+        env, original, household, options = self.cloud_transition_fixture()
+        runner = Runner(fail=(["systemctl", "start", "comitup.service"],))
+        with self.assertRaises(subprocess.CalledProcessError):
+            mode.enter_cloud_claim(**options, run=runner)
+        self.assertEqual(env.read_bytes(), original)
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(household.read_bytes(), b"retained family recording")
+        self.assertIn(["systemctl", "start", "messagebox.target"],
+                      [call[0] for call in runner.calls])
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_rolls_back_marker_committed_before_fsync_failure(self, _geteuid):
+        env, original, household, options = self.cloud_transition_fixture()
+        actual_write = mode.write_setup_marker
+        def committed_then_failed(path):
+            actual_write(path)
+            raise OSError("directory fsync failed")
+        runner = Runner()
+        with mock.patch("messagebox.onboarding.mode.write_setup_marker", side_effect=committed_then_failed):
+            with self.assertRaisesRegex(OSError, "fsync failed"):
+                mode.enter_cloud_claim(**options, run=runner)
+        self.assertEqual(env.read_bytes(), original)
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(household.read_bytes(), b"retained family recording")
+        self.assertIn(["systemctl", "start", "messagebox.target"],
+                      [call[0] for call in runner.calls])
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_repeat_resumes_existing_setup(self, _geteuid):
+        env, _original, _household, options = self.cloud_transition_fixture()
+        mode.enter_cloud_claim(**options, run=Runner())
+        before = env.read_bytes()
+        runner = Runner()
+        self.assertEqual(mode.enter_cloud_claim(**options, run=runner), mode.Mode.SETUP)
+        self.assertEqual(env.read_bytes(), before)
+        self.assertNotIn(["systemctl", "stop", "messagebox.target"],
+                         [call[0] for call in runner.calls])
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_rejects_symlink_env_before_mutation(self, _geteuid):
+        env, _original, household, options = self.cloud_transition_fixture()
+        moved = env.with_name("env-real")
+        env.replace(moved)
+        env.symlink_to(moved)
+        runner = Runner()
+        with self.assertRaises(mode.ModeError):
+            mode.enter_cloud_claim(**options, run=runner)
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(household.read_bytes(), b"retained family recording")
+        self.assertEqual(runner.calls, [])
 
     def generated(self):
         output = self.root / "generator"

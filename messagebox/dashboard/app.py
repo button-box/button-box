@@ -38,6 +38,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
+from messagebox import cloud_runtime
+from messagebox.cloud_device import CloudDeviceError
+from messagebox.cloud_runtime import CloudRuntimeError
 from messagebox.identity import read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
@@ -72,6 +75,16 @@ from messagebox.tailnet import (
 )
 from messagebox.wifi_change import WifiChangeError, load_status as wifi_change_status
 from messagebox.wifi_change import request_change as request_wifi_change
+
+
+def _audio_authorized(path):
+    if os.environ.get("MSGBOX_TRANSPORT") != "cloud":
+        return True
+    try:
+        metadata = json.loads(Path(str(path) + ".json").read_text(encoding="utf-8"))
+        return cloud_runtime.playable(metadata)
+    except (OSError, ValueError, CloudDeviceError, CloudRuntimeError):
+        return False
 
 BIND = os.environ.get("MSGBOX_DASH_BIND", "wlan0").strip()
 PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))
@@ -1209,6 +1222,8 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self._send(400, "{}")
             if kind == "played":
+                if not _audio_authorized(Path(PLAYED_DIR) / name):
+                    return self._send(404, "{}")
                 try:
                     return self._send(
                         200, read_played_file(QUEUE_DIR, name), "audio/wav"
@@ -1216,6 +1231,8 @@ class Handler(BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     return self._send(404, "{}")
             path = os.path.join(d, name)
+            if not _audio_authorized(path):
+                return self._send(404, "{}")
             if not os.path.exists(path):
                 return self._send(404, "{}")
             with open(path, "rb") as f:
@@ -1531,6 +1548,8 @@ class Handler(BaseHTTPRequestHandler):
             name = resolve_message_token(token, "played")
             if not name:
                 return self._send(400, "{}")
+            if not _audio_authorized(Path(PLAYED_DIR) / name):
+                return self._send(409, json.dumps({"ok": False, "error": "Audio is no longer available"}))
             try:
                 status = requeue_played_file(QUEUE_DIR, name)
             except FileNotFoundError:

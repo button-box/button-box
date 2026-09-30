@@ -2,6 +2,7 @@
 """Button Box physical-button service with caregiver-selectable interaction."""
 
 import json
+import hashlib
 import os
 import queue
 import select
@@ -38,7 +39,7 @@ from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, 
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
-    CONTACTS_FILE,
+    CONTACTS_FILE as LOCAL_CONTACTS_FILE,
     NFC_ANNOUNCEMENT_FILE,
     NFC_HEALTH_FILE,
     NFC_SELECTION_FILE,
@@ -46,6 +47,15 @@ from messagebox.runtime_paths import (
     STATE_DIR as DEFAULT_STATE_DIR,
 )
 from messagebox.settings import SettingsReader, ringtone_path
+from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, atomic_json
+from messagebox import cloud_runtime, cloud_claim
+from messagebox.cloud_runtime import CloudRuntimeError
+from messagebox.business_send import (
+    BusinessSendClient,
+    BusinessSendRejected,
+    BusinessSendUncertain,
+    recipient_number,
+)
 
 
 MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
@@ -70,6 +80,8 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 )
 SEND_SUCCESS_WAV = str(APP_DIR / "sounds" / "feedback" / "sent-swoosh.wav")
 send_success_notices = queue.SimpleQueue()
+CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+                 else LOCAL_CONTACTS_FILE)
 
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
@@ -185,6 +197,13 @@ def apply_master_volume(settings=None):
         check=False,
     )
     if result.returncode == 0:
+        if transport_mode() == "cloud":
+            try:
+                cloud_runtime.atomic_json(cloud_runtime.APPLIED_FILE, {
+                    "revision": settings["revision"], "settings": settings,
+                })
+            except OSError:
+                return False
         _applied_volume_revision = settings["revision"]
         return True
     return False
@@ -264,6 +283,13 @@ settings_reader = SettingsReader()
 
 def caregiver_settings():
     return settings_reader.snapshot()
+
+
+def transport_mode():
+    mode = os.environ.get("MSGBOX_TRANSPORT", "wacli")
+    if mode not in {"wacli", "business", "cloud"}:
+        raise ValueError("unsupported message transport")
+    return mode
 
 
 def current_recipient_context(*, claim=False):
@@ -670,6 +696,44 @@ def send_legacy_outbox_file(fname):
     return False
 
 
+def stage_hold_release_business_job(fname):
+    """Move an approved hold-release WAV into the keyed, durable send queue.
+
+    The stable ID makes a crash after approving the job but before removing the
+    source harmless: the next attempt finds the same job and never changes its
+    recipient. The source WAV is removed before the sender can complete the job.
+    """
+    path = os.path.join(OUTBOX_DIR, fname)
+    recipient = legacy_job_recipient(path)
+    if recipient is None:
+        log_event("send_blocked", flow="hold_release", reason="missing_recipient")
+        return False
+    try:
+        recipient_number(recipient)
+        milliseconds, _, raw_duration = fname[:-4].partition("-")
+        duration = float(raw_duration)
+        if not milliseconds.isdecimal() or duration <= 0:
+            raise ValueError("invalid hold-release filename")
+        message_id = "hold_" + hashlib.sha256(fname.encode("ascii")).hexdigest()[:48]
+        outbox_store.approve(path, recipient, "hold_release", duration, message_id)
+    except (BusinessSendRejected, OSError, ValueError):
+        log_event("send_blocked", flow="hold_release", reason="staging")
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        # The approved job and the source coexist after an interrupted move.
+        # Keep the sender stopped until the source is removed on a later pass.
+        log_event("send_blocked", flow="hold_release", reason="source_cleanup")
+        return False
+    try:
+        Path(path + ".json").unlink(missing_ok=True)
+    except OSError:
+        # The WAV is gone and the durable job is the only sendable copy.
+        pass
+    return True
+
+
 def send_guided_job(job):
     """Send only to the recipient stored atomically with this approved audio."""
     ogg = os.path.join(TEMP_DIR, f"guided-{uuid.uuid4().hex}.ogg")
@@ -700,6 +764,73 @@ def send_guided_job(job):
         outbox_store.set_state(job, "failed", increment_attempts=True)
         log_event("outbox_failed", message_id=job.message_id, reason="convert")
         log(f"guided conversion failed {job.message_id}; retained for parent")
+        return True
+
+    if transport_mode() == "cloud":
+        try:
+            target = cloud_runtime.recipient_id(job.recipient)
+            client = CloudDeviceClient.from_environment()
+        except (CloudRuntimeError, CloudDeviceError, OSError):
+            os.remove(ogg)
+            outbox_store.set_state(job, "failed", increment_attempts=True)
+            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_preflight")
+            return True
+        job = outbox_store.set_state(job, "sending", increment_attempts=True)
+        try:
+            result = client.send_voice(ogg, target, job.message_id, job.duration)
+        except CloudSendRejected:
+            outbox_store.set_state(job, "failed")
+            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
+            return True
+        except CloudSendUncertain:
+            outbox_store.set_state(job, "uncertain")
+            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_send")
+            return True
+        finally:
+            os.remove(ogg)
+        metadata_path = job.path / "job.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
+                         "cloud_state": result["state"], "expires_at": result["expires_at"],
+                         "server_time": result["server_time"]})
+        atomic_json(metadata_path, metadata)
+        if result["state"] == "delivery_uncertain":
+            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_delivery")
+            return True
+        if result["state"] == "accepted":
+            send_success_notices.put(time.monotonic())
+        log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
+        return True
+
+    if transport_mode() == "business":
+        try:
+            if job.recipient not in ContactStore(CONTACTS_FILE).allowed_jids():
+                raise BusinessSendRejected("recipient is no longer approved")
+            client = BusinessSendClient.from_environment()
+        except (BusinessSendRejected, ContactError, OSError):
+            os.remove(ogg)
+            outbox_store.set_state(job, "failed", increment_attempts=True)
+            log_event("outbox_failed", flow=job.flow_kind, reason="business_preflight")
+            return True
+
+        # A lost provider response is still ambiguous despite the keyed cloud
+        # reservation, so a child recording is never blindly retried.
+        job = outbox_store.set_state(job, "sending", increment_attempts=True)
+        try:
+            client.send_voice(ogg, job.recipient, job.message_id)
+        except BusinessSendRejected:
+            outbox_store.set_state(job, "failed")
+            log_event("outbox_failed", flow=job.flow_kind, reason="business_rejected")
+            return True
+        except BusinessSendUncertain:
+            outbox_store.set_state(job, "uncertain")
+            log_event("outbox_uncertain", flow=job.flow_kind, reason="business_send")
+            return True
+        finally:
+            os.remove(ogg)
+        outbox_store.complete(job)
+        send_success_notices.put(time.monotonic())
+        log_event("sent", flow=job.flow_kind, transport="business", dur=job.duration)
         return True
 
     # Persist 'sending' before crossing the external side-effect boundary.  A
@@ -743,6 +874,14 @@ def send_guided_job(job):
 def sender_loop():
     failures = 0
     while True:
+        if transport_mode() in {"business", "cloud"}:
+            staged = all(
+                stage_hold_release_business_job(filename)
+                for filename in legacy_outbox_files()
+            )
+            if not staged:
+                time.sleep(5)
+                continue
         guided = outbox_store.jobs()
         if guided:
             if send_guided_job(guided[0]):
@@ -910,22 +1049,26 @@ def recover_inflight():
 
 
 def claim_oldest():
-    names = queued()
-    if not names:
-        return None
-    source = Path(QUEUE_DIR) / names[0]
-    metadata = queue_metadata(source)
-    claimed = claim_inbox_file(QUEUE_DIR, source.name)
-    return {"path": claimed, "meta": metadata}
+    for name in queued():
+        source = Path(QUEUE_DIR) / name
+        metadata = queue_metadata(source)
+        if transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+            continue
+        claimed = claim_inbox_file(QUEUE_DIR, source.name)
+        return {"path": claimed, "meta": metadata}
+    return None
 
 
 def finish_claim(claim):
+    cloud = transport_mode() == "cloud" and (claim.get("meta") or {}).get("cloud") is True
     archive_played_file(
-        QUEUE_DIR,
-        claim["path"],
-        metadata=claim.get("meta"),
+        QUEUE_DIR, claim["path"], metadata=claim.get("meta"),
         played_at=claim.get("played_at"),
+        **({"retention_seconds": 91 * 86400, "metadata_limit": 1000000,
+            "media_limit": 1000000, "media_bytes_limit": 1 << 60} if cloud else {}),
     )
+    if cloud and claim.get("played_at"):
+        cloud_runtime.record_played(claim["meta"])
 
 
 def release_claim(claim):
@@ -934,6 +1077,9 @@ def release_claim(claim):
 
 def react_played(meta):
     if not meta or not meta.get("msgid") or not meta.get("chat"):
+        return
+    if transport_mode() in {"business", "cloud"}:
+        # The Cloud API played reaction is a separate, later integration.
         return
     try:
         command = [
@@ -1126,6 +1272,8 @@ def play_warning_for_approval(path, session_id=None):
 
 
 def presence(kind, recipient):
+    if transport_mode() in {"business", "cloud"}:
+        return
     subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
     subprocess.Popen(
         [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", SEND_LOCK_WAIT],
@@ -1272,18 +1420,27 @@ def play_next_legacy():
     names = queued()
     if not names:
         return
-    path = Path(QUEUE_DIR) / names[0]
-    meta = queue_metadata(path)
-    log(f"playing {names[0]} ({len(names)} waiting)")
+    selected = next(((Path(QUEUE_DIR) / name, queue_metadata(Path(QUEUE_DIR) / name))
+                     for name in names if transport_mode() != "cloud" or
+                     cloud_runtime.playable(queue_metadata(Path(QUEUE_DIR) / name))), None)
+    if selected is None:
+        return
+    path, meta = selected
+    log(f"playing {path.name} ({len(names)} waiting)")
     try:
         subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(path)], check=True, timeout=600)
         played_at = time.time()
         archive_played_file(
-            QUEUE_DIR, path, metadata=meta, played_at=played_at
+            QUEUE_DIR, path, metadata=meta, played_at=played_at,
+            **({"retention_seconds": 91 * 86400, "metadata_limit": 1000000,
+                "media_limit": 1000000, "media_bytes_limit": 1 << 60}
+               if transport_mode() == "cloud" else {}),
         )
+        if transport_mode() == "cloud":
+            cloud_runtime.record_played(meta)
         react_played(meta)
         try:
-            wait_s = time.time() - int(names[0].split("-", 1)[0]) / 1000
+            wait_s = time.time() - int(path.name.split("-", 1)[0]) / 1000
         except ValueError:
             wait_s = None
         log_event("played", wait_s=wait_s)
@@ -1414,6 +1571,9 @@ def run_guided_once(settings=None):
     if claim and (not recipient or not claim_recipient_allowed):
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
+            if transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+                release_claim(claim)
+                return
             play_audio_ordinary(claim["path"])
             claim["played_at"] = time.time()
             finish_claim(claim)
@@ -1441,6 +1601,9 @@ def run_guided_once(settings=None):
         # Catch a receipt that arrived after the idle loop saw this press. The
         # announcement finishes before the requested child interaction begins.
         play_pending_listened()
+        if claim and transport_mode() == "cloud" and not cloud_runtime.playable(metadata):
+            release_claim(claim)
+            return
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
@@ -1481,13 +1644,41 @@ def validate_prompts():
         )
 
 
+def claim_only_loop():
+    """Physical possession confirmation without any household audio/outbox work."""
+    switch = Button(BUTTON_PIN)
+    lamp = LED(LED_PIN)
+    lamp.off()
+    while True:
+        while switch.is_pressed:
+            time.sleep(POLL_S)
+        while not switch.is_pressed:
+            time.sleep(POLL_S)
+        started = time.monotonic()
+        while switch.is_pressed and time.monotonic() - started < CONFIRM_PRESS_S:
+            time.sleep(POLL_S)
+        if switch.is_pressed:
+            cloud_claim.consume_claim_press()
+        while switch.is_pressed:
+            time.sleep(POLL_S)
+
+
 def main():
     global button, led, outbox_store, receipt_store
+    try:
+        transport_mode()
+    except ValueError as exc:
+        log(str(exc))
+        return 2
+    if transport_mode() == "cloud" and os.environ.get("MSGBOX_CLAIM_ONLY") == "1":
+        if "--drain" in sys.argv:
+            return 2
+        return claim_only_loop()
     make_beeps()
     os.makedirs(QUEUE_DIR, exist_ok=True)
     os.makedirs(OUTBOX_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
-    outbox_store = OutboxStore(OUTBOX_DIR)
+    outbox_store = OutboxStore(OUTBOX_DIR, transport=transport_mode())
     receipt_store = ReceiptStore(LISTENED_DIR)
     recover_inflight()
     for _ in range(receipt_store.recover_inflight()):
@@ -1500,10 +1691,15 @@ def main():
 
     if "--drain" in sys.argv:
         ok = True
+        if transport_mode() in {"business", "cloud"}:
+            for filename in legacy_outbox_files():
+                if not stage_hold_release_business_job(filename):
+                    return 1
         for job in outbox_store.jobs():
             ok = send_guided_job(job) and ok
-        for filename in legacy_outbox_files():
-            ok = send_legacy_outbox_file(filename) and ok
+        if transport_mode() not in {"business", "cloud"}:
+            for filename in legacy_outbox_files():
+                ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1
 
     try:
@@ -1551,6 +1747,10 @@ def main():
                 solid = False
                 break
         if not solid:
+            continue
+        if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
+            log_event("cloud_claim_button_pressed")
+            wait_for_stable_open()
             continue
         interaction_settings = caregiver_settings()
         try:

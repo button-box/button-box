@@ -5,14 +5,16 @@ Wants=network-online.target
 PartOf=messagebox.target messagebox-onboarding-voice.target
 
 [Service]
+ExecStartPre=+/usr/bin/install -d -o messagebox -g messagebox-settings -m 2770 /var/lib/messagebox-cloud
 User=messagebox
 Group=messagebox
+SupplementaryGroups=messagebox-settings
 WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
 Environment=HOME=/var/lib/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 UMask=0077
-ExecStartPre=/usr/bin/test -x /usr/local/bin/wacli
+ExecStartPre=/bin/sh -c 'if [ "$MSGBOX_TRANSPORT" = business ] || [ "$MSGBOX_TRANSPORT" = cloud ]; then exit 0; fi; test -x /usr/local/bin/wacli'
 ExecStart=/usr/bin/python3 -m messagebox.voicepoll
 Restart=always
 RestartSec=5

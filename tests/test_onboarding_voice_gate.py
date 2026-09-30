@@ -91,6 +91,19 @@ class VoiceGateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "default"):
             self.run_gate()
 
+    def test_cloud_claim_starts_button_without_legacy_recipient_gate(self):
+        self.enabled.write_text("enabled\n", encoding="ascii")
+        claim = self.root / "claim.json"
+        claim.write_text(json.dumps({"expires_at": 1_800_000_600,
+                                     "physical_confirmed": False}), encoding="utf-8")
+        claim.chmod(0o600)
+        with (mock.patch.object(voice_gate, "CLAIM_FILE", claim),
+              mock.patch.object(voice_gate.time, "time", return_value=1_800_000_000),
+              mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"})):
+            result, calls = self.run_gate()
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [(["systemctl", "start", "messagebox-onboarding-button.service"], {"check": True})])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Connect your box to WhatsApp | Button Box</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/cloud-connect.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="card" aria-labelledby="cloud-title">
+      <p class="eyebrow">Button Box Cloud</p>
+      <h1 id="cloud-title">Connect your box to WhatsApp</h1>
+      <p>Current pricing and trial terms are shown during cloud signup.</p>
+      <p>A link lasts ten minutes. Send its prepared message from your WhatsApp account, then press the physical box button once. The button press confirms that you have the box.</p>
+      <button id="cloud-start" type="button">Get a connection link</button>
+      <div id="cloud-claim" hidden>
+        <p><img id="cloud-qr" alt="Scan to open the prepared WhatsApp claim message" width="260" height="260"></p>
+        <p><a id="cloud-link" class="button" href="/cloud-connect" target="_blank" rel="noopener noreferrer">Open WhatsApp</a>
+        <button id="cloud-copy" class="secondary" type="button">Copy link</button></p>
+        <p id="cloud-expiry"></p>
+      </div>
+      <p id="cloud-status" role="status" aria-live="polite">Checking connection status…</p>
+      <button id="cloud-complete" type="button" hidden>Finish box setup</button>
+      <p><a href="/">Return to setup</a></p>
+    </section>
+  </main>
+</body>
+</html>

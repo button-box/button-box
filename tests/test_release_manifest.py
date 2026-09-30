@@ -21,7 +21,7 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 77)
+        self.assertEqual(len(paths), 86)
         self.assertEqual(len(paths.values()), len(set(paths.values())))
         self.assertEqual(paths["scripts/install/audio_config.py"], "/usr/lib/messagebox/audio_config.py")
         self.assertEqual(
@@ -34,6 +34,13 @@ class ReleaseManifestTests(unittest.TestCase):
         )
         self.assertIn("systemd/messagebox-audio-detect.service", paths)
         self.assertIn("messagebox/onboarding/static/clipboard.js", paths)
+        self.assertIn("messagebox/business_send.py", paths)
+        self.assertIn("messagebox/business_receive.py", paths)
+        self.assertIn("messagebox/cloud_device.py", paths)
+        self.assertIn("messagebox/device_http.py", paths)
+        self.assertIn("messagebox/cloud_runtime.py", paths)
+        self.assertIn("messagebox/cloud_claim.py", paths)
+        self.assertIn("messagebox/qrcodegen.py", paths)
         self.assertIn("sounds/feedback/sent-swoosh.wav", paths)
         self.assertNotIn("messagebox/midi_ringtone.py", paths)
         for source, target in paths.items():
@@ -77,7 +84,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 77)
+            self.assertEqual(len(entries), 86)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(
