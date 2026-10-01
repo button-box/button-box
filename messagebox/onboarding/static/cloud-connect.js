@@ -6,7 +6,9 @@ const qr = document.getElementById("cloud-qr");
 const copy = document.getElementById("cloud-copy");
 const expiry = document.getElementById("cloud-expiry");
 const complete = document.getElementById("cloud-complete");
+const cancel = document.getElementById("cloud-cancel");
 let currentLink = "";
+let currentClaim = "";
 let finishing = false;
 let actionPending = false;
 let actionVersion = 0;
@@ -14,25 +16,35 @@ let actionError = "";
 let currentStatus = "";
 
 function render(data) {
-  if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed"].includes(data.status)) {
+  if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed", "cancelled"].includes(data.status)) {
     actionError = "";
   }
   currentStatus = data.status;
   const waiting = data.status === "awaiting_button" || data.status === "waiting_for_whatsapp";
+  const cancelling = data.status === "cancellation_pending";
+  currentClaim = data.claim_id || "";
   claim.hidden = !waiting;
-  start.hidden = waiting || data.status === "claimed";
+  cancel.hidden = !(waiting || cancelling) || !currentClaim;
+  cancel.textContent = cancelling ? "Retry cancellation" : "Cancel connection";
+  start.hidden = waiting || cancelling || data.status === "claimed";
   complete.hidden = data.status !== "claimed";
   if (waiting) {
     currentLink = data.whatsapp_url;
     link.href = currentLink;
     qr.src = `/api/cloud-claim/qr?t=${encodeURIComponent(data.expires_at)}`;
     expiry.textContent = `This link expires at ${new Date(data.expires_at * 1000).toLocaleTimeString()}.`;
+  } else {
+    currentLink = "";
+    link.href = "/cloud-connect";
+    qr.removeAttribute("src");
   }
   status.textContent = actionError || {
     not_started: "Start a connection link when the box is on home Wi-Fi.",
     awaiting_button: "Send the prepared WhatsApp message, then press the physical box button once.",
     waiting_for_whatsapp: "Button press received. Waiting for the WhatsApp claim to complete.",
     claimed: "This box is connected. Continue trial setup in WhatsApp or the cloud dashboard.",
+    cancelled: "Connection cancelled. Get a new connection link when you're ready.",
+    cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] || "Connection status is unavailable. Try again shortly.";
 }
@@ -54,6 +66,7 @@ async function refresh() {
 }
 
 start.addEventListener("click", async () => {
+  if (actionPending || finishing) return;
   start.disabled = true;
   actionPending = true;
   actionVersion++;
@@ -71,6 +84,36 @@ start.addEventListener("click", async () => {
     start.disabled = false;
   }
 });
+cancel.addEventListener("click", async () => {
+  if (actionPending || finishing || !currentClaim) return;
+  const claimId = currentClaim;
+  cancel.disabled = true;
+  actionPending = true;
+  actionVersion++;
+  actionError = "";
+  render({ status: "cancellation_pending", claim_id: claimId });
+  status.textContent = "Cancelling your connection link…";
+  try {
+    const response = await fetch("/api/cloud-claim/cancel", {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `claim_id=${encodeURIComponent(claimId)}`
+    });
+    if (!response.ok) throw new Error("unavailable");
+    const data = await response.json();
+    if (!["cancelled", "claimed"].includes(data.status)) throw new Error("unavailable");
+    render(data);
+    if (data.status === "claimed") {
+      status.textContent = "This box connected before cancellation finished. Its connection has been kept.";
+    }
+  } catch {
+    actionError = "Cancellation is not confirmed. Retry cancellation; the connection link has been kept for recovery.";
+    status.textContent = actionError;
+  } finally {
+    actionPending = false;
+    cancel.disabled = false;
+  }
+});
 copy.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(currentLink);
@@ -80,6 +123,7 @@ copy.addEventListener("click", async () => {
   }
 });
 complete.addEventListener("click", async () => {
+  if (actionPending || finishing) return;
   complete.disabled = true;
   actionPending = true;
   actionVersion++;

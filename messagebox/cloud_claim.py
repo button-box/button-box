@@ -39,7 +39,8 @@ class CloudClaim:
                 or not _ID.fullmatch(value["claim_id"])
                 or type(value.get("expires_at")) is not int
                 or type(value.get("physical_confirmed")) is not bool
-                or not isinstance(value.get("whatsapp_url"), str)):
+                or not isinstance(value.get("whatsapp_url"), str)
+                or type(value.get("cancel_pending", False)) is not bool):
             raise CloudClaimError("claim state is invalid")
         return value
 
@@ -52,7 +53,7 @@ class CloudClaim:
     def start(self):
         with self._locked():
             prior = self._read()
-            if prior and prior["expires_at"] > self.clock():
+            if prior and (prior.get("cancel_pending") or prior["expires_at"] > self.clock()):
                 return self._public(prior)
             # Setup cannot read the runtime user's private health directory.
             # Optional hardware discovery must not prevent claiming the box;
@@ -88,33 +89,63 @@ class CloudClaim:
             return self._public(document)
 
     def _public(self, document):
+        if document.get("cancel_pending"):
+            return {"status": "cancellation_pending", "claim_id": document["claim_id"]}
         return {"status": "waiting_for_whatsapp" if document["physical_confirmed"] else "awaiting_button",
+                "claim_id": document["claim_id"],
                 "whatsapp_url": document["whatsapp_url"],
                 "expires_at": document["expires_at"]}
 
     def status(self):
-        document = self._read()
-        if document is None:
-            try:
-                remote = self.client.claim()
-            except CloudDeviceError:
-                return {"status": "not_started"}
-            return {"status": "claimed" if remote.get("claimed") is True else "not_started"}
+        # Do not hold the button's lock across a read-only network poll.
+        # Compare the claim again before using the response for cleanup.
+        with self._locked():
+            document = self._read()
         try:
             remote = self.client.claim()
         except CloudDeviceError as exc:
+            if document is None:
+                return {"status": "not_started"}
             raise CloudClaimError("cloud claim status is unavailable") from exc
-        if remote.get("claimed") is True:
-            with self._locked():
+        with self._locked():
+            current = self._read()
+            if (document or {}).get("claim_id") != (current or {}).get("claim_id"):
+                return self._public(current) if current else {"status": "not_started"}
+            if remote.get("claimed") is True:
                 self.path.unlink(missing_ok=True)
-            return {"status": "claimed"}
-        if document["expires_at"] <= self.clock():
-            return {"status": "expired"}
-        return self._public(document)
+                return {"status": "claimed"}
+            if current is None:
+                return {"status": "not_started"}
+            if not current.get("cancel_pending") and current["expires_at"] <= self.clock():
+                return {"status": "expired"}
+            return self._public(current)
+
+    def cancel(self, claim_id):
+        if not isinstance(claim_id, str) or not _ID.fullmatch(claim_id):
+            raise CloudClaimError("claim ID is invalid")
+        with self._locked():
+            document = self._read()
+            if document is not None and document["claim_id"] != claim_id:
+                raise CloudClaimError("connection link changed; check its current status")
+            if document is not None:
+                # Save intent before the remote boundary. A timeout/restart must
+                # not revive the link or turn a retry into a recording press.
+                document["cancel_pending"] = True
+                atomic_json(self.path, document)
+            try:
+                result = self.client.cancel_claim(claim_id)
+            except CloudDeviceError as exc:
+                raise CloudClaimError("cloud cancellation is unconfirmed; retry cancellation") from exc
+            if (result.get("claim_id") != claim_id or type(result.get("claimed")) is not bool
+                    or type(result.get("cancelled")) is not bool
+                    or result["claimed"] == result["cancelled"]):
+                raise CloudClaimError("cloud cancellation response is invalid; retry cancellation")
+            self.path.unlink(missing_ok=True)
+            return {"status": "claimed" if result["claimed"] else "cancelled"}
 
     def qr_svg(self):
         document = self._read()
-        if document is None or document["expires_at"] <= self.clock():
+        if document is None or document.get("cancel_pending") or document["expires_at"] <= self.clock():
             raise CloudClaimError("claim is unavailable")
         qr = QrCode.encode_text(document["whatsapp_url"], QrCode.Ecc.MEDIUM)
         size = qr.get_size()
@@ -132,6 +163,8 @@ class CloudClaim:
         """Return true only while explicit claim mode owns this button press."""
         with self._locked():
             document = self._read()
+            if document is not None and document.get("cancel_pending"):
+                return True
             if document is None or document["expires_at"] <= self.clock():
                 return False
             if document["physical_confirmed"]:

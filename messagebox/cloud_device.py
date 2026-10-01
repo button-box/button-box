@@ -233,6 +233,11 @@ class CloudDeviceClient:
             raise CloudDeviceError("claim ID is invalid")
         return self.json("/device/claim/confirm", method="POST", body={"claim_id": claim_id})
 
+    def cancel_claim(self, claim_id: str) -> dict:
+        if not isinstance(claim_id, str) or not _ID.fullmatch(claim_id):
+            raise CloudDeviceError("claim ID is invalid")
+        return self.json("/device/claim/cancel", method="POST", body={"claim_id": claim_id})
+
     def heartbeat(self, state: dict) -> dict:
         return self.json("/device/heartbeat", method="POST", body=state)
 
