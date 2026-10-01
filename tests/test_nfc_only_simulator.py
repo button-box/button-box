@@ -184,10 +184,10 @@ class NfcScratchCueTests(unittest.TestCase):
                 simulator._safe_wav(path, cue)
 
     def test_reachable_cues_must_match_exact_contact_and_unknown_paths(self):
-        contacts = {RECIPIENT_A: {"card_clip": "/private/approved.wav"}}
+        contacts = {RECIPIENT_A: {"card_clip": "/synthetic/approved.wav"}}
         mappings = [{"uid": CARD_A, "recipient": RECIPIENT_A}]
         auth = authorization(cues=[])
-        nfc = types.SimpleNamespace(UNKNOWN_TOKEN_WAV="/private/unknown.wav")
+        nfc = types.SimpleNamespace(UNKNOWN_TOKEN_WAV="/synthetic/unknown.wav")
         with self.assertRaises(simulator.SimulationError):
             simulator._audit_cues(auth, contacts, nfc, mappings)
 
