@@ -143,6 +143,71 @@ Focused contracts are in `tests/test_input_simulator.py`. The script is develope
 source, not an installed service or public endpoint. Review changes to the shared
 handler and this driver together before any authorized test deployment.
 
+### Explicit selected-message loop
+
+`scripts/dev/simulate-selected-message.py` is a narrower, separately opted-in
+owner test for one newly received audio message when older household messages
+must remain waiting. It imports the existing input scheduler, private trace,
+route/account proof, scratch-state guard, and process-group supervisor from the
+standard simulator. It does not weaken or replace the standard simulator's rule
+that every playable FIFO item must be authorized.
+
+The owner records the complete incoming-queue namespace before requesting
+the test message, then authorizes the one normal receiver-created WAV and routing
+sidecar after it arrives. The private `0600` manifest contains version `1`, the
+same transport/account/contacts/settings fingerprints described above, one
+`recipient`, a lexically sorted `baseline_entries` list, and one `target`.
+Each baseline regular file includes its exact relative path and SHA-256;
+directories are recorded by exact relative path and type. The target includes
+its exact WAV name, WAV and sidecar SHA-256 hashes, the exact parsed receiver
+sidecar document, an owner-recorded `not_before` time, and a freshness window of
+at most ten minutes. Keep all real identifiers and the manifest outside the
+repository and outside public reports.
+
+Execution requires all three explicit controls: `--authorization`, a fresh empty
+`--scratch-state-root`, and `--send-generated`. The adapter refuses NFC events,
+claim mode, active button/NFC/poller services, existing NFC state, a non-guided
+settings profile, an account/contact/settings change, an unknown queue entry,
+any changed baseline hash, a symlink or special queue entry, a stale or malformed
+target sidecar, a transport mismatch, a revoked route, or production playback
+rejection. It also refuses to start if the normal played-history retention pass
+would prune any protected metadata or media during the full configured hard
+runtime plus termination grace. Because production retention uses wall time and
+the adapter does not replace the production archive boundary, any preexisting
+non-Cloud played-history metadata also refuses the selected run. The adapter
+does not claim to bound arbitrary wall-clock jumps after the target is claimed.
+It rechecks these boundaries immediately before the atomic target claim and
+before the sole generated outbox job is sent. It never selects the target from
+an arbitrary command-line filename and never redirects the incoming queue.
+
+```sh
+python3 scripts/dev/simulate-selected-message.py /private/path/plan.json
+python3 scripts/dev/simulate-selected-message.py /private/path/plan.json --execute \
+  --authorization /private/path/selected-message-authorization.json \
+  --scratch-state-root /private/path/empty-run-state --send-generated --timeout 180
+```
+
+Only `claim_oldest` is replaced in the child process's message data path, and
+only with the manifest's exact target. A separate validation wrapper prevents
+`consume_claim_press` from making any claim-confirmation side effect and aborts
+if claim-only mode or a claim file appears after preflight. The application still runs `handle_confirmed_press`,
+`run_guided_once`, the production inbound authorization gate, atomic inbox claim,
+real playback/record/review, durable outbox approval, and one normal transport
+send. The archived sidecar must contain every original receiver field unchanged;
+only production `played_at` and optional `duration_s` additions are accepted.
+The target moves through the normal in-flight and played-history path;
+every baseline waiting file and its sidecar must keep the same bytes and FIFO
+position. Scratch outbox, recording temp, and receipt artifacts are retained for
+reconciliation. An interrupted or uncertain run is not retried or cleaned up by
+the adapter.
+
+This selected case proves neither ordinary FIFO behavior nor physical input,
+speaker, microphone, acoustic, provider-delivery, or counterpart-receipt
+acceptance. The sole device owner must preserve the stopped-service state,
+inspect private evidence, and reconcile any target/outbox state before restoring
+normal producers. Focused contracts are in
+`tests/test_selected_message_simulator.py`.
+
 ## Regression test matrix
 
 Matrix case IDs are permanent. Add new cases with a new descriptive ID; do not
