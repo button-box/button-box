@@ -4,7 +4,9 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, main
@@ -236,6 +238,52 @@ class ContactStoreTests(unittest.TestCase):
         self.assertFalse(self.store.remove_contact(PERSON))
         self.assertFalse(self.store.remove_card(CARD_ONE))
         self.assertEqual(self.store.load()["revision"], revision)
+
+    def test_protected_removal_preserves_default_but_trusted_removal_can_clear_it(self):
+        self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        self.store.add_contact(GROUP, "Family", receive_after=0)
+        before = self.store.load()
+
+        with self.assertRaisesRegex(ContactError, "default recipient cannot be removed"):
+            self.store.remove_contact(PERSON, protect_default=True)
+
+        self.assertEqual(self.store.load(), before)
+        self.assertTrue(self.store.remove_contact(GROUP, protect_default=True))
+        self.assertTrue(self.store.remove_contact(PERSON))
+        self.assertIsNone(self.store.load()["default_recipient"])
+
+    def test_protected_removal_is_atomic_with_a_concurrent_default_switch(self):
+        self.store.add_contact(PERSON, "Grandma", receive_after=0)
+        self.store.add_contact(GROUP, "Family", receive_after=0)
+        barrier = threading.Barrier(2)
+
+        def choose_default():
+            barrier.wait()
+            try:
+                self.store.choose_default_recipient(GROUP)
+                return "selected"
+            except ContactError as exc:
+                if str(exc) != "contact does not exist":
+                    raise
+                return "missing"
+
+        def remove_contact():
+            barrier.wait()
+            try:
+                return self.store.remove_contact(GROUP, protect_default=True)
+            except ContactError as exc:
+                if str(exc) != "default recipient cannot be removed":
+                    raise
+                return "protected"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            switched = pool.submit(choose_default)
+            removed = pool.submit(remove_contact)
+            outcome = (switched.result(), removed.result())
+
+        self.assertIn(outcome, {("selected", "protected"), ("missing", True)})
+        document = self.store.load()
+        self.assertIn(document["default_recipient"], document["contacts"])
 
     def test_explicit_default_can_be_set_once_for_existing_contacts(self):
         self.store.add_contact(PERSON, "Grandma", receive_after=0)

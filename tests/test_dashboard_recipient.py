@@ -277,13 +277,25 @@ class DashboardContactTests(unittest.TestCase):
             self.assertNotIn("card_uids", rendered)
             self.assertNotIn(private_uid.hex().upper(), rendered.replace(":", ""))
 
+            rejected = self.post(
+                "/api/contacts", {"action": "remove", "jid": direct}
+            )
+            self.assertEqual(rejected[0], 400)
             self.assertEqual(
-                self.post("/api/contacts", {"action": "remove", "jid": direct})[0],
+                rejected[1]["error"], "default recipient cannot be removed"
+            )
+            self.assertEqual(
+                self.post("/api/contacts", {"action": "remove", "jid": group})[0],
                 200,
             )
 
-        self.assertIsNone(dashboard.contacts_store().resolve_card(private_uid))
-        self.assertEqual(dashboard.contacts_store().allowed_jids(), (group,))
+        self.assertEqual(
+            dashboard.contacts_store().resolve_card(private_uid)["jid"], direct
+        )
+        self.assertEqual(dashboard.contacts_store().allowed_jids(), (direct,))
+        self.assertEqual(
+            dashboard.contacts_store().load()["default_recipient"], direct
+        )
 
     def test_presented_card_unpairs_with_an_empty_form_body(self):
         """The endpoint takes no fields, so the UI posts an empty body."""
