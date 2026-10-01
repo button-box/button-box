@@ -412,13 +412,35 @@ class CloudRuntimeTests(unittest.TestCase):
         item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
                 "created_at": NOW, "expires_at": NOW + 60,
                 "payload": {"ringtone_id": "ding_dong"}}
-        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
              mock.patch("messagebox.cloud_runtime.subprocess.run",
                         return_value=subprocess.CompletedProcess([], 0)) as play:
             self.runtime._command(item, NOW)
+        self.assertEqual(play.call_args.args[0],
+                         ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
+                          str(ringtone_dir / "ring3.wav")])
         self.assertAlmostEqual(play.call_args.kwargs["timeout"], 24.8, places=3)
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"],
                          "applied")
+
+    def test_ringtone_preview_preserves_default_speaker_when_unconfigured(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
+        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+                "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"ringtone_id": "gentle_music_box"}}
+        with mock.patch.dict("os.environ", {}, clear=True), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0)) as play:
+            self.runtime._command(item, NOW)
+        play.assert_called_once_with(
+            ["aplay", "-q", "-D", "default", str(ringtone_dir / "ring1.wav")],
+            timeout=6.0, check=False,
+        )
 
     def test_preview_timeout_is_rejected_without_stopping_later_commands(self):
         self.runtime.heartbeat()
@@ -433,10 +455,16 @@ class CloudRuntimeTests(unittest.TestCase):
              "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,
              "payload": {"held": True}},
         ]
-        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
              mock.patch("messagebox.cloud_runtime.subprocess.run",
-                        side_effect=subprocess.TimeoutExpired(["aplay"], 24.8)):
+                        side_effect=subprocess.TimeoutExpired(["aplay"], 24.8)) as play:
             self.runtime.poll_once()
+        play.assert_called_once_with(
+            ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
+             str(ringtone_dir / "ring3.wav")],
+            timeout=24.8, check=False,
+        )
         states = {ack["operation_id"]: ack["state"] for ack in self.client.acks}
         self.assertEqual(states[OP], "rejected")
         self.assertEqual(states["hold_operation_123456789"], "applied")
