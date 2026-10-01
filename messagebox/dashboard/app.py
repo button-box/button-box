@@ -1373,6 +1373,7 @@ class Handler(BaseHTTPRequestHandler):
             "/recipients/add-number",
             "/recipients/remove",
             "/recipients/default",
+            "/recipients/rename",
             "/recipients/defer",
         }:
             payload = self._form_body()
@@ -1407,6 +1408,10 @@ class Handler(BaseHTTPRequestHandler):
                         if "name" in payload
                         else operation(phone)
                     )
+                elif url.path == "/recipients/rename":
+                    if set(payload) != {"token", "name"}:
+                        raise PairingError("recipient_request_invalid")
+                    result = engine.recipient_rename(payload["token"], payload["name"])
                 else:
                     if set(payload) != {"token"}:
                         raise PairingError("recipient_request_invalid")
