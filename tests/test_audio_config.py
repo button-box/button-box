@@ -149,6 +149,21 @@ class AudioConfigTests(unittest.TestCase):
         self.assertEqual(path.read_text(), "previous\n")
         self.assertEqual(list(self.root.glob(".audio.env.*")), [])
 
+    def test_poller_loads_optional_detected_audio_after_canonical_environment(self):
+        unit = (ROOT / "systemd" / "messagebox-poller.service").read_text(encoding="utf-8")
+        lines = unit.splitlines()
+        environments = [line for line in lines if line.startswith("EnvironmentFile=")]
+        self.assertEqual(environments, [
+            "EnvironmentFile=/etc/messagebox/env",
+            "EnvironmentFile=-/run/messagebox-audio/audio.env",
+        ])
+        after = next(line.removeprefix("After=").split()
+                     for line in lines if line.startswith("After="))
+        self.assertIn("messagebox-audio-detect.service", after)
+        requires = {dependency for line in lines if line.startswith("Requires=")
+                    for dependency in line.removeprefix("Requires=").split()}
+        self.assertNotIn("messagebox-audio-detect.service", requires)
+
     def test_audio_services_require_detector_and_load_override_last(self):
         for name in (
             "messagebox-button.service", "messagebox-nfc.service", "messagebox-dash.service",
