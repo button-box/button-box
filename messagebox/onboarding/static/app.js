@@ -426,6 +426,7 @@ function beginRecipientRename(row, recipient) {
 
 function renderRecipientPicker(data) {
   recipientsData = data;
+  document.getElementById("defer-recipients").hidden = Boolean(data.default);
   const list = document.getElementById("recipient-list");
   const choices = data.recipients.filter((recipient) => recipient.available);
   list.replaceChildren(...choices.map((recipient) => recipientRow(

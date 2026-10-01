@@ -59,6 +59,24 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("recipient picker only offers deferral before a default is selected", () => {
+  const h = harness();
+  for (const status of ["testing", "complete"]) {
+    vm.runInContext(`renderRecipientPicker({
+      status: "${status}",
+      default: {token: "recipient-token-0001", label: "Recipient", kind: "person"},
+      recipients: [],
+    })`, h.context);
+    expect(h.node("defer-recipients").hidden).toBe(true);
+  }
+  for (const status of ["choose", "deferred"]) {
+    vm.runInContext(`renderRecipientPicker({
+      status: "${status}", default: null, recipients: [],
+    })`, h.context);
+    expect(h.node("defer-recipients").hidden).toBe(false);
+  }
+});
+
 test("navigation refetches server state after setup-to-runtime handoff", async () => {
   const h = harness();
   vm.runInContext('let refreshed = false; loadState = async () => { refreshed = true; };', h.context);
