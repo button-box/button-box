@@ -12,6 +12,7 @@ import argparse
 import grp
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -50,6 +51,7 @@ MAX_REQUEST_BYTES = 4096
 LOGOUT_LOCK_WAIT = "15s"
 LOGOUT_PROCESS_TIMEOUT = 35
 ACCOUNT_CLEANUP_CLIENT_TIMEOUT = 45
+_LOGGER = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = frozenset({"starting", "code_pending", "bootstrapping", "verifying"})
 PUBLIC_STATUSES = frozenset(
@@ -95,6 +97,19 @@ _JID = re.compile(
 
 class PairingError(RuntimeError):
     """A safe failure at the worker boundary."""
+
+
+def _log_recipient_refresh_failure(stage, category, exit_code=None):
+    # Captured command output and exception text can contain household data.
+    if stage not in {"sync", "chats", "groups"}:
+        stage = "unknown"
+    if category not in {"command_exit", "timeout", "local_io", "invalid_json", "invalid_rows"}:
+        category = "unknown"
+    if type(exit_code) is int and -255 <= exit_code <= 255:
+        _LOGGER.warning("recipient_refresh_failed stage=%s category=%s exit_code=%d",
+                        stage, category, exit_code)
+    else:
+        _LOGGER.warning("recipient_refresh_failed stage=%s category=%s", stage, category)
 
 
 def normalize_phone(value):
@@ -187,6 +202,18 @@ def _has_row_list(value):
     return isinstance(value, dict) and any(
         isinstance(value.get(key), list) for key in ("data", "chats", "results")
     )
+
+
+def _recipient_refresh_document(stage, output):
+    try:
+        document = _json_document(output)
+    except PairingError as exc:
+        _log_recipient_refresh_failure(stage, "invalid_json")
+        raise PairingError("recipient_refresh_failed") from exc
+    if not _has_row_list(document):
+        _log_recipient_refresh_failure(stage, "invalid_rows")
+        raise PairingError("recipient_refresh_failed")
+    return document
 
 
 def _group_label(value):
@@ -577,8 +604,8 @@ class PairingEngine:
     def _live_candidates(self, *, refresh=False):
         self._require_ready()
         if refresh:
-            synced = self._run_wacli(
-                self.live_store,
+            self._refresh_wacli(
+                "sync",
                 [
                     "--json",
                     "--lock-wait",
@@ -595,29 +622,18 @@ class PairingEngine:
                 ],
                 timeout=25,
             )
-            if synced.returncode != 0:
-                raise PairingError("recipient_refresh_failed")
-            chats = self._run_wacli(
-                self.live_store,
+            chats = self._refresh_wacli(
+                "chats",
                 ["--read-only", "--json", "--full", "chats", "list", "--limit", "50"],
                 timeout=15,
             )
-            if chats.returncode != 0:
-                raise PairingError("recipient_refresh_failed")
-            groups = self._run_wacli(
-                self.live_store,
+            groups = self._refresh_wacli(
+                "groups",
                 ["--read-only", "--json", "--full", "groups", "list", "--limit", "50"],
                 timeout=15,
             )
-            if groups.returncode != 0:
-                raise PairingError("recipient_refresh_failed")
-            try:
-                chats_document = _json_document(chats.stdout)
-                groups_document = _json_document(groups.stdout)
-            except PairingError as exc:
-                raise PairingError("recipient_refresh_failed") from exc
-            if not _has_row_list(chats_document) or not _has_row_list(groups_document):
-                raise PairingError("recipient_refresh_failed")
+            chats_document = _recipient_refresh_document("chats", chats.stdout)
+            groups_document = _recipient_refresh_document("groups", groups.stdout)
             candidates = eligible_conversations(chats_document, groups=groups_document)
             self._write_candidates(candidates, self.candidates_path)
         else:
@@ -907,6 +923,20 @@ class PairingEngine:
             timeout=timeout,
             check=False,
         )
+
+    def _refresh_wacli(self, stage, arguments, *, timeout):
+        try:
+            result = self._run_wacli(self.live_store, arguments, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _log_recipient_refresh_failure(stage, "timeout")
+            raise
+        except OSError:
+            _log_recipient_refresh_failure(stage, "local_io")
+            raise
+        if result.returncode != 0:
+            _log_recipient_refresh_failure(stage, "command_exit", result.returncode)
+            raise PairingError("recipient_refresh_failed")
+        return result
 
     def _logout_live_store(self):
         return self._run_wacli(

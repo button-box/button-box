@@ -113,6 +113,15 @@ arrival signal, quiet hours, time zone, and the NFC confirmation beep. Activity
 contains the privacy-sensitive timeline, browser audio, and queue controls.
 Advanced contains concise health and listener-profile information.
 
+If recipient refresh fails, the service journal records `recipient_refresh_failed`
+with the discovery stage (`sync`, `chats`, or `groups`) and a fixed failure
+category. Command failures also include a bounded numeric exit code when known.
+These diagnostics exclude command output, recipient details, and exception text;
+they do not change refresh behavior or recover details of earlier failures.
+Check the dashboard service journal for runtime refreshes, or the WhatsApp
+pairing service journal during setup. Other journal entries may contain private
+data, so review and sanitize any output before sharing it.
+
 The dashboard intentionally has no login. Anyone on household Wi-Fi can change
 settings and play queued audio. Do not forward port 80 or publish the dashboard
 through a tunnel. Runtime binds only to the Wi-Fi interface.

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -391,6 +392,67 @@ class WhatsAppPairingTests(unittest.TestCase):
             self.assertEqual(self.candidates.read_bytes(), preserved)
             self.assertEqual(engine.recipient_list(), verified)
             self.assertFalse(engine.sync_pause_path.exists())
+
+    def test_refresh_failure_diagnostics_preserve_state_and_exclude_private_output(self):
+        recipient_setup = RecipientSetup(
+            state_path=self.root / "recipient-state.json",
+            contacts_path=self.root / "contacts.json",
+            events_path=self.root / "events.jsonl",
+            voice_request_path=self.root / "voice-request.json",
+            token_factory=lambda: "recipient-token-0001",
+        )
+        runner = WacliRunner(chats=[{"jid": "15551234567@s.whatsapp.net", "name": "Example"}])
+        engine = self.engine(runner=runner, recipient_setup=recipient_setup)
+        self.live_store.mkdir()
+        engine._set_state("ready", phone_hint="WhatsApp number ending in 0123", eligible_count=0)
+        engine.recipient_list(refresh=True)
+        recipient_setup.contacts.add_contact("15551234567@s.whatsapp.net", "Example", make_default=True)
+        paths = [self.candidates, self.root / "contacts.json", self.root / "recipient-state.json"]
+        preserved = {path: path.read_bytes() for path in paths}
+        private = "synthetic-private-command-output 15551234567@s.whatsapp.net"
+        cases = [
+            ("sync", "command_exit", 17),
+            ("chats", "command_exit", -15),
+            ("groups", "command_exit", 2),
+            ("sync", "command_exit", 1_000_000),
+            ("sync", "timeout", None),
+            ("groups", "local_io", None),
+            ("groups", "invalid_json", None),
+            ("chats", "invalid_rows", None),
+        ]
+        for stage, category, exit_code in cases:
+            with self.subTest(stage=stage, category=category, exit_code=exit_code):
+                failure = None
+                if category == "timeout":
+                    failure = subprocess.TimeoutExpired([private], 25, output=private, stderr=private)
+                elif category == "local_io":
+                    failure = PermissionError(private)
+
+                def fail_stage(arguments, **kwargs):
+                    if stage not in arguments:
+                        return runner(arguments, **kwargs)
+                    if failure is not None:
+                        raise failure
+                    output = "{" + private if category == "invalid_json" else json.dumps({"data": private})
+                    return SimpleNamespace(returncode=exit_code or 0, stdout=output, stderr=private)
+
+                engine.run = fail_stage
+                expected_type = type(failure) if failure is not None else PairingError
+                with self.assertLogs("messagebox.onboarding.whatsapp", level="WARNING") as logs:
+                    with self.assertRaises(expected_type) as caught:
+                        engine.recipient_list(refresh=True)
+                if failure is not None:
+                    self.assertIs(caught.exception, failure)
+                else:
+                    self.assertEqual(str(caught.exception), "recipient_refresh_failed")
+                expected = f"recipient_refresh_failed stage={stage} category={category}"
+                if type(exit_code) is int and -255 <= exit_code <= 255:
+                    expected += f" exit_code={exit_code}"
+                self.assertEqual([record.getMessage() for record in logs.records], [expected])
+                self.assertTrue(all(record.exc_info is None and record.stack_info is None for record in logs.records))
+                self.assertNotIn(private, "\n".join(logs.output))
+                self.assertEqual({path: path.read_bytes() for path in paths}, preserved)
+                self.assertFalse(engine.sync_pause_path.exists())
 
     def test_recipient_list_excludes_the_linked_whatsapp_account(self):
         recipient_setup = RecipientSetup(
