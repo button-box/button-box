@@ -8,7 +8,7 @@ PartOf=messagebox.target
 [Service]
 User=messagebox
 Group=messagebox
-SupplementaryGroups=messagebox-settings
+SupplementaryGroups=messagebox-settings audio
 WorkingDirectory=/opt/messagebox
 EnvironmentFile=/etc/messagebox/env
 EnvironmentFile=/run/messagebox-audio/audio.env

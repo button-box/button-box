@@ -166,6 +166,21 @@ class AudioConfigTests(unittest.TestCase):
         self.assertIn('"$REPO_DIR/scripts/install/audio_config.py" /usr/lib/messagebox/audio_config.py', installer)
         self.assertIn("messagebox-dash messagebox-audio-detect; do", installer)
 
+    def test_ringtone_preview_services_can_access_alsa(self):
+        dashboard = (ROOT / "systemd/messagebox-dash.service").read_text()
+        self.assertIn("SupplementaryGroups=messagebox-settings audio", dashboard)
+
+        for name in (
+            "onboarding/messagebox-onboarding-home.service",
+            "onboarding/comitup-web.service.d/messagebox.conf",
+        ):
+            with self.subTest(service=name):
+                unit = (ROOT / "systemd" / name).read_text()
+                self.assertIn("SupplementaryGroups=messagebox-settings audio", unit)
+                self.assertIn("PrivateDevices=yes", unit)
+                self.assertIn("BindPaths=/dev/snd", unit)
+                self.assertIn("DeviceAllow=char-alsa rw", unit)
+
 
 if __name__ == "__main__":
     unittest.main()
