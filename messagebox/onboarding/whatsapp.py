@@ -44,7 +44,6 @@ LIVE_STORE = str(WHATSAPP_LIVE_STORE)
 CANDIDATES_PATH = str(WHATSAPP_CANDIDATES_PATH)
 WACLI_BIN = str(WACLI_PATH)
 MAX_BOOTSTRAP_MESSAGES = 100
-MAX_DISCOVERY_MESSAGES = 1000
 MAX_ELIGIBLE_CONVERSATIONS = 10
 MAX_REQUEST_BYTES = 4096
 LOGOUT_LOCK_WAIT = "15s"
@@ -591,7 +590,7 @@ class PairingEngine:
                     "quiet",
                     "--refresh-groups",
                     "--max-messages",
-                    str(MAX_DISCOVERY_MESSAGES),
+                    "0",  # This caps the entire local DB, not this discovery sync.
                 ],
                 timeout=25,
             )
