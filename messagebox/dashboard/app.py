@@ -1457,7 +1457,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.add_contact(candidate["jid"], candidate["label"])
                     event_type = "dash_contact_added"
                 elif action == "remove":
-                    if not store.remove_contact(jid):
+                    if not store.remove_contact(jid, protect_default=True):
                         raise ContactError("contact does not exist")
                     event_type = "dash_contact_removed"
                 else:
