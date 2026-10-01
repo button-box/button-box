@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 import uuid
+import wave
 from pathlib import Path
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
@@ -34,6 +35,10 @@ _SHA = re.compile(r"^[0-9a-f]{64}$")
 _PHONE = re.compile(r"^[1-9][0-9]{6,14}$")
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 LEDGER_SECONDS = 90 * 86400
+RINGTONE_DIR = Path("/opt/messagebox/ringtones")
+RINGTONE_PREVIEW_MAX_SECONDS = 30
+RINGTONE_PREVIEW_GRACE_SECONDS = 5
+RINGTONE_PREVIEW_MAX_PCM_BYTES = 32 * 1024 * 1024
 
 
 def _current_boot_id():
@@ -67,6 +72,27 @@ def _effective_expiry(metadata, snapshot):
     if not _valid_time(created):
         raise CloudRuntimeError("cloud retention metadata is invalid")
     return min(expiry, created + days * 86400)
+
+
+def _ringtone_preview_timeout(path):
+    try:
+        with wave.open(str(path), "rb") as source:
+            channels = source.getnchannels()
+            width = source.getsampwidth()
+            rate = source.getframerate()
+            frames = source.getnframes()
+            if (source.getcomptype() != "NONE" or channels <= 0 or width not in {1, 2, 3, 4}
+                    or rate <= 0 or frames <= 0):
+                raise CloudRuntimeError("ringtone preview failed")
+            duration = frames / rate
+            expected_bytes = frames * channels * width
+            if (duration > RINGTONE_PREVIEW_MAX_SECONDS
+                    or expected_bytes > RINGTONE_PREVIEW_MAX_PCM_BYTES
+                    or len(source.readframes(frames)) != expected_bytes):
+                raise CloudRuntimeError("ringtone preview failed")
+    except (EOFError, OSError, OverflowError, wave.Error) as exc:
+        raise CloudRuntimeError("ringtone preview failed") from exc
+    return duration + RINGTONE_PREVIEW_GRACE_SECONDS
 
 
 class CloudRuntime:
@@ -612,8 +638,13 @@ class CloudRuntime:
                 self._ack(item["operation_id"], "rejected", error_code="preview_outcome_unknown")
                 return
             atomic_json(intent_path, {"operation_id": item["operation_id"], "ringtone_id": ringtone})
-            path = Path("/opt/messagebox/ringtones") / RINGTONES[ringtone]
-            result = subprocess.run(["aplay", "-q", str(path)], timeout=15, check=False)
+            path = RINGTONE_DIR / RINGTONES[ringtone]
+            timeout = _ringtone_preview_timeout(path)
+            try:
+                result = subprocess.run(["aplay", "-q", str(path)], timeout=timeout,
+                                        check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise CloudRuntimeError("ringtone preview failed") from exc
             if result.returncode:
                 raise CloudRuntimeError("ringtone preview failed")
             self._ack(item["operation_id"], "applied")

@@ -1,7 +1,9 @@
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -56,6 +58,15 @@ def queued_audio(message, source, *, queue_dir):
             "sender_jid": message["SenderJID"], "media_type": "audio", **message["CloudMetadata"]}
     Path(str(path) + ".json").write_text(json.dumps(meta))
     path.write_bytes(source.read_bytes())
+
+
+def write_pcm_wav(path, duration_seconds, sample_rate=8000):
+    frames = round(duration_seconds * sample_rate)
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(b"\0\0" * frames)
 
 
 class CloudRuntimeTests(unittest.TestCase):
@@ -378,10 +389,13 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def test_preview_crash_intent_suppresses_replay(self):
         self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
         item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
                 "created_at": NOW, "expires_at": NOW + 60,
                 "payload": {"ringtone_id": "gentle_music_box"}}
-        with mock.patch("messagebox.cloud_runtime.INTENT_DIR", self.root / "intents"), \
+        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
              mock.patch("messagebox.cloud_runtime.subprocess.run", side_effect=RuntimeError("crash")) as play:
             with self.assertRaisesRegex(RuntimeError, "crash"):
                 self.runtime._command(item, NOW)
@@ -389,6 +403,44 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(play.call_count, 1)
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["error_code"],
                          "preview_outcome_unknown")
+
+    def test_long_pcm_ringtone_preview_uses_duration_aware_timeout(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+                "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"ringtone_id": "ding_dong"}}
+        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0)) as play:
+            self.runtime._command(item, NOW)
+        self.assertAlmostEqual(play.call_args.kwargs["timeout"], 24.8, places=3)
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"],
+                         "applied")
+
+    def test_preview_timeout_is_rejected_without_stopping_later_commands(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        self.client.items = [
+            {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+             "created_at": NOW, "expires_at": NOW + 60,
+             "payload": {"ringtone_id": "ding_dong"}},
+            {"operation_id": "hold_operation_123456789", "sequence": 2,
+             "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,
+             "payload": {"held": True}},
+        ]
+        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        side_effect=subprocess.TimeoutExpired(["aplay"], 24.8)):
+            self.runtime.poll_once()
+        states = {ack["operation_id"]: ack["state"] for ack in self.client.acks}
+        self.assertEqual(states[OP], "rejected")
+        self.assertEqual(states["hold_operation_123456789"], "applied")
+        self.assertEqual(self.runtime.state["cursor"], 2)
 
     def test_uncertain_outbox_recovers_expiry_by_read_only_key_without_resend(self):
         self.runtime.heartbeat()
