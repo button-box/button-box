@@ -255,6 +255,20 @@ class CloudRuntime:
     def _completed_path(self, operation_id):
         return COMPLETED_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
 
+    def _replay_completed(self, operation_id):
+        completed = self._completed_path(operation_id)
+        if not completed.exists():
+            return False
+        try:
+            prior = json.loads(completed.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise CloudRuntimeError("cloud operation ledger is invalid") from exc
+        if prior.get("operation_id") != operation_id:
+            raise CloudRuntimeError("cloud operation ledger conflicts")
+        self._ack(operation_id, prior["state"],
+                  **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        return True
+
     def _intent_path(self, operation_id):
         return INTENT_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
 
@@ -550,16 +564,7 @@ class CloudRuntime:
             self._ack(item["operation_id"], "applied")
 
     def _command(self, item, server_time):
-        completed = self._completed_path(item["operation_id"])
-        if completed.exists():
-            try:
-                prior = json.loads(completed.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise CloudRuntimeError("cloud operation ledger is invalid") from exc
-            if prior.get("operation_id") != item["operation_id"]:
-                raise CloudRuntimeError("cloud operation ledger conflicts")
-            self._ack(item["operation_id"], prior["state"],
-                      **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        if self._replay_completed(item["operation_id"]):
             return
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]):
@@ -637,13 +642,22 @@ class CloudRuntime:
                 self._save()
 
     def _finish_nfc(self):
+        if not self.state["pending_nfc"]:
+            return
         enrollment = EnrollmentStore(NFC_ENROLLMENT_FILE)
+        # Read active state before the receipt: a tap can commit its receipt and
+        # remove the active request between these reads, and must still succeed.
+        active = enrollment.active()
         for operation_id, request_id in list(self.state["pending_nfc"].items()):
-            outcome = enrollment.outcome(request_id)
-            if outcome is not None:
-                self._ack(operation_id, "applied")
-                del self.state["pending_nfc"][operation_id]
-                self._save()
+            if not self._replay_completed(operation_id):
+                if enrollment.outcome(request_id) is not None:
+                    self._ack(operation_id, "applied")
+                elif active is None or active["request_id"] != request_id:
+                    self._ack(operation_id, "rejected", error_code="nfc_enrollment_ended")
+                else:
+                    continue
+            del self.state["pending_nfc"][operation_id]
+            self._save()
 
     def poll_once(self):
         inbox = self.client.inbox(self.state["cursor"])

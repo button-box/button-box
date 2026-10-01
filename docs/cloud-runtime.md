@@ -37,6 +37,14 @@ reached, the source remains private for operator recovery. Command effects and
 ACKs retain per-operation receipts so retries cannot reselect a different NFC
 card or replay a ringtone after a crash.
 
+Pending NFC operations retain their original request IDs across restart. The
+poller reports pairing as applied only with a matching committed success receipt.
+If the original enrollment has ended or been replaced without that receipt, it
+records `rejected` with `nfc_enrollment_ended` and clears the pending entry;
+matching pending or claimed requests keep waiting. A durable terminal receipt is
+replayed after a crash before changing any leftover pending entry. Cancellation
+and expiry do not change saved card routes or queued recordings.
+
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an
 existing box, the bounded updater does not rerun full setup: first create
