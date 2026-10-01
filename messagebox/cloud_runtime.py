@@ -643,8 +643,9 @@ class CloudRuntime:
             atomic_json(intent_path, {"operation_id": item["operation_id"], "ringtone_id": ringtone})
             path = RINGTONE_DIR / RINGTONES[ringtone]
             timeout = _ringtone_preview_timeout(path)
+            speaker = os.environ.get("MSGBOX_SPK_DEV", "default")
             try:
-                result = subprocess.run(["aplay", "-q", str(path)], timeout=timeout,
+                result = subprocess.run(["aplay", "-q", "-D", speaker, str(path)], timeout=timeout,
                                         check=False)
             except subprocess.TimeoutExpired as exc:
                 raise CloudRuntimeError("ringtone preview failed") from exc
