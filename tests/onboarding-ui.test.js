@@ -32,7 +32,7 @@ function harness(fail = false, stateRequest = null) {
   const context = vm.createContext({
     document: { getElementById: node, querySelector: () => null, querySelectorAll: selector => selector === ".primary-nav a" ? routes.map(route => node(`nav-${route}`)) : [], createElement: element },
     window: { addEventListener(name, fn) { handlers[name] = fn; }, clearTimeout() {}, setTimeout() { return 1; } },
-    location: { hash: "#home" },
+    location: { hash: "#home", replace(value) { this.hash = value; } },
     URLSearchParams, FormData: class {
       constructor(form) { this.form = form; }
       get(key) { return this.form[key]; }
@@ -290,4 +290,39 @@ test("recipient rename submits the opaque token and new display name", async () 
   expect(h.calls[0].options.body.get("token")).toBe("recipient-token-0001");
   expect(h.calls[0].options.body.get("name")).toBe("Renamed person");
   expect(h.node("manager-status").textContent).toBe("Name saved.");
+});
+
+
+test("Cloud home setup sends the owner to claiming and never loads standalone pairing", async () => {
+  const h = harness();
+  vm.runInContext('currentState = {mode:"HOME", transport:"cloud", phase:"WHATSAPP_PENDING"}', h.context);
+  for (const hash of ["#home", "#setup", "#whatsapp", "#settings", "#recipients"]) {
+    h.context.location.hash = hash;
+    await vm.runInContext("route()", h.context);
+    expect(h.context.location.hash).toBe("/cloud-connect");
+    expect(h.node("primary-nav").hidden).toBe(true);
+  }
+  await expect(vm.runInContext('formRequest("/whatsapp/pair/start", {phone:"+15555550123"})', h.context)).rejects.toThrow("Button Box Cloud");
+  expect(h.calls).toHaveLength(0);
+});
+
+test("Cloud hotspot stays on Wi-Fi and cannot enter retained legacy management", async () => {
+  const h = harness();
+  vm.runInContext('currentState = {mode:"HOTSPOT", transport:"cloud", phase:"WIFI_SELECT"}', h.context);
+  h.context.location.hash = "#whatsapp";
+  await vm.runInContext("route()", h.context);
+  expect(h.node("wifi-view").hidden).toBe(false);
+  expect(h.node("primary-nav").hidden).toBe(true);
+  expect(h.context.location.hash).toBe("#whatsapp");
+  expect(h.calls.every(call => !call.url.startsWith("/whatsapp/"))).toBe(true);
+});
+
+
+test("a retained Cloud setup page moves to the dedicated runtime page after the service handoff", async () => {
+  const h = harness();
+  vm.runInContext('currentState = {mode:"RUNTIME", transport:"cloud"}', h.context);
+  h.context.location.hash = "#whatsapp";
+  await vm.runInContext("route()", h.context);
+  expect(h.context.location.hash).toBe("/");
+  expect(h.calls).toHaveLength(0);
 });

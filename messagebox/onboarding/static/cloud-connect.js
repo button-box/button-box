@@ -140,8 +140,8 @@ complete.addEventListener("click", async () => {
     });
     if (!response.ok) throw new Error("unavailable");
     finishing = true;
-    status.textContent = "Box setup is finishing. The local dashboard will open shortly.";
-    window.setTimeout(() => { window.location.href = "/"; }, 5000);
+    status.textContent = "Box setup is finishing. Your dashboard will open shortly.";
+    window.setTimeout(() => { window.location.href = "https://button.box/dashboard"; }, 5000);
   } catch {
     complete.disabled = false;
     actionError = "Could not finish setup. Try again shortly.";

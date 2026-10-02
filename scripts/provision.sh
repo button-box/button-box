@@ -122,6 +122,8 @@ rsync -azR \
   "$REPO_DIR/./messagebox/onboarding/static/clipboard.js" \
   "$REPO_DIR/./messagebox/onboarding/static/cloud-connect.html" \
   "$REPO_DIR/./messagebox/onboarding/static/cloud-connect.js" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-local.html" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-local.js" \
   "$REPO_DIR/./messagebox/onboarding/static/index.html" \
   "$REPO_DIR/./messagebox/onboarding/static/styles.css" \
   "$REPO_DIR/./systemd/" \

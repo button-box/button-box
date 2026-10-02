@@ -9,7 +9,7 @@
   <script src="/static/cloud-connect.js" defer></script>
 </head>
 <body>
-  <main class="shell">
+  <main class="shell single-page">
     <section class="card" aria-labelledby="cloud-title">
       <p class="eyebrow">Button Box Cloud</p>
       <h1 id="cloud-title">Welcome!</h1>
@@ -27,7 +27,13 @@
       <button id="cloud-cancel" class="secondary" type="button" hidden>Cancel connection</button>
       <p id="cloud-status" role="status" aria-live="polite">Checking connection status…</p>
       <button id="cloud-complete" type="button" hidden>Finish box setup</button>
-      <p><a href="/">Return to setup</a></p>
+      <details class="settings-detail">
+        <summary>Change Wi-Fi</summary>
+        <p>This disconnects the box from this Wi-Fi. Join its setup hotspot to choose another network.</p>
+        <form action="/wifi/change" method="post">
+          <button class="secondary" type="submit">Use setup hotspot</button>
+        </form>
+      </details>
     </section>
   </main>
 </body>

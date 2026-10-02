@@ -6,6 +6,8 @@ function harness() {
   const nodes = new Map();
   const requests = [];
   let poll;
+  let finish;
+  const location = { href: "" };
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {
       hidden: false, disabled: false, textContent: "", handlers: {},
@@ -16,7 +18,7 @@ function harness() {
   };
   vm.runInNewContext(fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/cloud-connect.js`, "utf8"), {
     document: { getElementById: node },
-    window: { setInterval(fn) { poll = fn; }, setTimeout() {} },
+    window: { setInterval(fn) { poll = fn; }, setTimeout(fn) { finish = fn; }, location },
     fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
   });
   const respond = async (request, data, ok = true) => {
@@ -25,6 +27,7 @@ function harness() {
   };
   return {
     node, requests, respond,
+    finishNavigation: () => { finish(); return location.href; },
     beginPoll: () => poll(),
     async poll(data, ok = true) {
       const pending = poll();
@@ -123,6 +126,7 @@ test("failed completion remains visible while the box stays claimed and can be r
   await h.respond(h.requests.at(-1), { status: "complete" });
   await retry;
   expect(h.node("cloud-status").textContent).toContain("Box setup is finishing");
+  expect(h.finishNavigation()).toBe("https://button.box/dashboard");
 });
 
 test("cancel hides the link, binds the exact claim and rejects an old pending poll", async () => {
