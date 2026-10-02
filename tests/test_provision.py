@@ -1,4 +1,6 @@
 import os
+import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -60,7 +62,7 @@ esac
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run(self, target, *, prompt_dir=None):
+    def _run(self, target, *, prompt_dir=None, transport=None, provision=PROVISION, extra=()):
         env = os.environ.copy()
         env.update(
             {
@@ -70,11 +72,14 @@ esac
             }
         )
         arguments = [
-            str(PROVISION),
+            str(provision),
             "--guided-prompts",
             str(prompt_dir or self.prompt_dir),
             target,
+            *extra,
         ]
+        if transport is not None:
+            arguments += ["--transport", transport]
         return subprocess.run(
             arguments,
             cwd=self.root,
@@ -157,6 +162,39 @@ esac
             ssh_calls[3],
             "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
         )
+
+    def test_forwards_cloud_and_stages_exact_release_identity(self):
+        source = self.root / "release"
+        source.mkdir()
+        for name in ("messagebox", "systemd", "scripts", "sounds", "config"):
+            shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copyfile(ROOT / "VERSION", source / "VERSION")
+        manifest = subprocess.check_output([sys.executable, str(ROOT / "scripts/dev/release-manifest.py")], text=True)
+        (source / "release-manifest.json").write_text(manifest)
+        # Guided overrides must match the pinned release, checked again on the Pi.
+        result = self._run("admin@message-box.local", transport="cloud", provision=source / "scripts/provision.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.ssh_log.read_text().splitlines()
+        self.assertTrue(calls[2].endswith("setup.sh' --transport 'cloud'"))
+        staged = self.rsync_log.read_text().splitlines()[0].split("\t")
+        self.assertIn("./VERSION", staged)
+        self.assertIn("./release-manifest.json", staged)
+        self.assertIn("./scripts/dev/release-manifest.py", staged)
+
+    def test_cloud_without_release_or_invalid_flags_never_connects(self):
+        source = self.root / "developer"
+        (source / "scripts").mkdir(parents=True)
+        provision = source / "scripts/provision.sh"
+        shutil.copyfile(PROVISION, provision)
+        provision.chmod(0o755)
+        result = self._run("admin@message-box.local", transport="cloud", provision=provision)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("pinned release", result.stderr)
+        for extra in (("--transport", "invalid"), ("--transport",), ("--guided-prompts", "duplicate")):
+            result = self._run("admin@message-box.local", extra=extra)
+            self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.ssh_log.exists())
+        self.assertFalse(self.rsync_log.exists())
 
     def test_missing_prompt_pack_fails_before_connecting(self):
         result = self._run(

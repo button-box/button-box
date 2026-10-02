@@ -2,7 +2,7 @@
 # Run this on your computer to install or update a Pi over SSH.
 # It sends only installation inputs to a temporary directory on the Pi, then
 # runs setup.sh there. The installed runtime uses fixed system paths.
-# Usage: ./scripts/provision.sh [--guided-prompts DIR] user@host
+# Usage: ./scripts/provision.sh [--transport wacli|cloud] [--guided-prompts DIR] user@host
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -10,24 +10,37 @@ REPO_DIR=$(dirname "$SCRIPT_DIR")
 GUIDED_PROMPT_NAMES="reply-countdown.wav standalone-countdown.wav press-to-send.wav
 delete-warning.wav not-sent.wav"
 
-case "$#" in
-  1)
-    TARGET=$1
-    GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
-    ;;
-  3)
-    if [ "$1" != "--guided-prompts" ]; then
-      echo "Usage: $0 [--guided-prompts DIR] user@host" >&2
-      exit 2
-    fi
-    GUIDED_PROMPT_DIR=$2
-    TARGET=$3
-    ;;
-  *)
-    echo "Usage: $0 [--guided-prompts DIR] user@host" >&2
-    exit 2
-    ;;
-esac
+usage() {
+  echo "Usage: $0 [--transport wacli|cloud] [--guided-prompts DIR] user@host" >&2
+  exit 2
+}
+TRANSPORT=wacli
+TRANSPORT_SET=0
+GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
+GUIDED_PROMPTS_SET=0
+TARGET=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --transport)
+      [ "$#" -ge 2 ] && [ "$TRANSPORT_SET" -eq 0 ] || usage
+      case "$2" in wacli|cloud) TRANSPORT=$2 ;; *) usage ;; esac
+      TRANSPORT_SET=1
+      shift 2
+      ;;
+    --guided-prompts)
+      [ "$#" -ge 2 ] && [ "$GUIDED_PROMPTS_SET" -eq 0 ] || usage
+      GUIDED_PROMPT_DIR=$2
+      GUIDED_PROMPTS_SET=1
+      shift 2
+      ;;
+    *)
+      [ -z "$TARGET" ] || usage
+      TARGET=$1
+      shift
+      ;;
+  esac
+done
+[ -n "$TARGET" ] || usage
 
 case "$TARGET" in
   -*|*[!A-Za-z0-9._@-]*)
@@ -43,6 +56,15 @@ for name in $GUIDED_PROMPT_NAMES; do
     exit 2
   fi
 done
+
+HAS_RELEASE=0
+if [ -e "$REPO_DIR/release-manifest.json" ] || [ -L "$REPO_DIR/release-manifest.json" ]; then
+  python3 "$SCRIPT_DIR/install/setup_release.py" check-release "$REPO_DIR"
+  HAS_RELEASE=1
+elif [ "$TRANSPORT" = cloud ]; then
+  echo "Fresh Cloud provisioning requires a pinned release with release-manifest.json." >&2
+  exit 2
+fi
 
 REMOTE_SOURCE=$(ssh "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
 case "$REMOTE_SOURCE" in
@@ -65,7 +87,12 @@ echo "Copying installation files to $TARGET:$REMOTE_SOURCE"
 (
 cd "$REPO_DIR"
 REPO_DIR=.
+set --
+if [ "$HAS_RELEASE" -eq 1 ]; then
+  set -- ./VERSION ./release-manifest.json ./scripts/dev/release-manifest.py
+fi
 rsync -azR \
+  "$@" \
   "$REPO_DIR/./config/env.example" \
   "$REPO_DIR/./config/onboarding/" \
   "$REPO_DIR/./config/requirements-nfc.txt" \
@@ -137,5 +164,10 @@ rsync -az \
   "$TARGET:$REMOTE_SOURCE/sounds/guided-reply/"
 
 echo "Running setup on $TARGET"
-ssh -t "$TARGET" \
-  "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
+if [ "$TRANSPORT_SET" -eq 1 ]; then
+  ssh -t "$TARGET" \
+    "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh' --transport '$TRANSPORT'"
+else
+  ssh -t "$TARGET" \
+    "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
+fi

@@ -12,6 +12,7 @@ import array
 import json
 import math
 import os
+import re
 import shutil
 import time
 import uuid
@@ -301,6 +302,11 @@ class OutboxJob:
     duration: float
     state: str
     transport: str
+    account_scope: str | None = None
+
+
+def valid_account_scope(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
 
 
 OUTBOX_TRANSPORTS = {"wacli", "business", "cloud"}
@@ -323,15 +329,21 @@ class OutboxStore:
         flow_kind: str,
         duration: float,
         message_id: str | None = None,
+        *,
+        account_scope: str | None = None,
     ) -> OutboxJob:
         if not recipient:
             raise ValueError("recipient is required")
+        if self.transport == "cloud" and not valid_account_scope(account_scope):
+            raise ValueError("cloud recording account is unavailable")
         mid = message_id or uuid.uuid4().hex
         final_dir = self.root / f"{mid}.job"
         if final_dir.exists():
             existing = self.load(final_dir)
             if existing.transport != self.transport:
                 raise ValueError("message id already bound to a different transport")
+            if self.transport == "cloud" and existing.account_scope != account_scope:
+                raise ValueError("message id already bound to a different account")
             if existing.recipient != recipient:
                 raise ValueError("message id already bound to a different recipient")
             return existing
@@ -352,6 +364,8 @@ class OutboxStore:
             "created_at": time.time(),
             "attempts": 0,
         }
+        if self.transport == "cloud":
+            payload["account_scope"] = account_scope
         _write_json_atomic(tmp_dir / "job.json", payload)
         _fsync_dir(tmp_dir)
         os.replace(tmp_dir, final_dir)
@@ -375,6 +389,7 @@ class OutboxStore:
             duration=float(data.get("duration") or 0),
             state=data.get("state", "pending"),
             transport=transport,
+            account_scope=data.get("account_scope"),
         )
 
     def jobs(self, states: tuple[str, ...] = ("pending",)) -> list[OutboxJob]:
@@ -448,6 +463,7 @@ class GuidedSession:
         incoming_path: str | None = None,
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
+        account_scope: str | None = None,
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
@@ -477,6 +493,7 @@ class GuidedSession:
                 recipient,
                 flow_kind,
                 recording.duration,
+                account_scope=account_scope,
             )
             self.event(
                 "guided_approved",

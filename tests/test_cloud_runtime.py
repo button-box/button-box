@@ -1,13 +1,16 @@
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
 from messagebox.cloud_device import CloudAckGone, CloudDeviceError, atomic_json
 from messagebox.played_history import list_played_history
+from messagebox.nfc_state import EnrollmentStore
 from messagebox.settings import SettingsStore
 
 NOW = 1_800_000_000
@@ -29,7 +32,7 @@ class FakeClient:
         self.retention_days = 30
 
     def heartbeat(self, state):
-        return {"box_id": "box1234567890123456", "server_time": self.server_time,
+        return {"box_id": "box1234567890123456", "account_scope": "a" * 64, "server_time": self.server_time,
                 "people": self.people, "default_recipient_id": self.people[0]["id"] if self.people else None,
                 "entitlement": {"ingest": True, "deliver": self.deliver, "send": self.send,
                                 "until": getattr(self, "heartbeat_until", NOW + 3600)}, "queue_hold": False,
@@ -58,6 +61,15 @@ def queued_audio(message, source, *, queue_dir):
     path.write_bytes(source.read_bytes())
 
 
+def write_pcm_wav(path, duration_seconds, sample_rate=8000):
+    frames = round(duration_seconds * sample_rate)
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(b"\0\0" * frames)
+
+
 class CloudRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -84,6 +96,15 @@ class CloudRuntimeTests(unittest.TestCase):
         intents = mock.patch("messagebox.cloud_runtime.INTENT_DIR", self.root / "intents")
         intents.start()
         self.addCleanup(intents.stop)
+        for name, path in [("NFC_ENROLLMENT_FILE", self.root / "nfc-enrollment.json"),
+                           ("NFC_SELECTION_FILE", self.root / "nfc-selection.json")]:
+            patch = mock.patch("messagebox.cloud_runtime." + name, path)
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch("messagebox.cloud_runtime.EnrollmentStore",
+                           side_effect=lambda path: EnrollmentStore(path, clock=self.runtime.clock))
+        patch.start()
+        self.addCleanup(patch.stop)
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
 
@@ -293,6 +314,20 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
 
+    def test_heartbeat_requires_scope_and_records_transfer(self):
+        original = self.client.heartbeat
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.state["snapshot"]["account_scope"], "a" * 64)
+        before = self.runtime.state_path.read_bytes()
+        for invalid in (None, "bad", 123):
+            self.client.heartbeat = lambda state: {**original(state), "account_scope": invalid}
+            with self.assertRaises(CloudRuntimeError):
+                self.runtime.heartbeat()
+            self.assertEqual(self.runtime.state_path.read_bytes(), before)
+        self.client.heartbeat = lambda state: {**original(state), "account_scope": "b" * 64}
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.state["snapshot"]["account_scope"], "b" * 64)
+
     def test_authoritative_outbox_expiry_only_and_unknown_source_retained(self):
         self.runtime.heartbeat()
         root = self.root / "outbox"
@@ -376,12 +411,107 @@ class CloudRuntimeTests(unittest.TestCase):
                          [mock.call("first-enrollment"), mock.call("first-enrollment")])
         self.assertEqual(router.enrollment.active.call_count, 1)
 
+    def nfc_item(self, operation_id=OP, kind="nfc_enroll"):
+        return {"operation_id": operation_id, "sequence": 1, "kind": kind,
+                "created_at": NOW, "expires_at": NOW + 120,
+                "payload": {"recipient_id": PERSON["id"]} if kind == "nfc_enroll" else {}}
+
+    def test_nfc_canceled_legacy_request_finishes_after_restart_and_ack_retry(self):
+        self.runtime.heartbeat()
+        self.runtime._nfc(self.nfc_item())
+        self.runtime.flush_acks()
+        self.runtime._nfc(self.nfc_item("cancel-operation", "nfc_cancel"))
+        self.assertFalse((self.root / "nfc-enrollment.json").exists())
+        self.assertIsInstance(self.runtime.state["pending_nfc"][OP], str)
+        contacts = self.runtime.contacts.path.read_bytes()
+        restarted = CloudRuntime(self.client, state_path=self.runtime.state_path,
+            contacts_path=self.runtime.contacts.path, queue_dir=self.runtime.queue_dir,
+            outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+            clock=self.runtime.clock, boot_id="test-boot")
+        restarted._finish_nfc()
+        self.assertEqual(restarted.state["pending_nfc"], {})
+        self.assertEqual(self.runtime.contacts.path.read_bytes(), contacts)
+        self.assertEqual(json.loads(restarted._completed_path(OP).read_text()),
+                         {"operation_id": OP, "state": "rejected", "error_code": "nfc_enrollment_ended"})
+        with mock.patch.object(self.client, "ack", side_effect=CloudDeviceError("unavailable")):
+            with self.assertRaises(CloudDeviceError):
+                restarted.flush_acks()
+        restarted.flush_acks()
+        restarted._command(self.nfc_item(), NOW)
+        restarted.flush_acks()
+        self.assertFalse((self.root / "nfc-enrollment.json").exists())
+        self.assertEqual(self.client.acks[-1]["state"], "rejected")
+
+    def test_nfc_expired_or_replaced_request_finishes_without_retargeting(self):
+        for ended in ("expired", "replaced", "missing"):
+            with self.subTest(ended=ended):
+                self.runtime.clock = lambda: NOW
+                self.runtime.heartbeat()
+                operation = OP + ended
+                self.runtime._nfc(self.nfc_item(operation))
+                store = EnrollmentStore(self.root / "nfc-enrollment.json", clock=self.runtime.clock)
+                if ended == "expired":
+                    self.runtime.clock = lambda: NOW + 120
+                else:
+                    store.cancel(self.runtime.state["pending_nfc"][operation])
+                replacement = store.begin(label="New request", jid=PERSON["wa_id"] + "@s.whatsapp.net") if ended == "replaced" else None
+                self.runtime._finish_nfc()
+                self.assertNotIn(operation, self.runtime.state["pending_nfc"])
+                self.assertEqual(json.loads(self.runtime._completed_path(operation).read_text())["state"], "rejected")
+                if replacement:
+                    self.assertEqual(store.active()["request_id"], replacement["request_id"])
+                    store.cancel(replacement["request_id"])
+                self.runtime.clock = lambda: NOW
+
+    def test_nfc_pending_and_claimed_requests_wait_for_verified_success(self):
+        self.runtime.heartbeat()
+        self.runtime._nfc(self.nfc_item())
+        store = EnrollmentStore(self.root / "nfc-enrollment.json", clock=self.runtime.clock)
+        self.runtime._finish_nfc()
+        self.assertIn(OP, self.runtime.state["pending_nfc"])
+        request = store.claim("A1B2C3D4")
+        self.runtime.clock = lambda: NOW + 120
+        self.runtime._finish_nfc()
+        self.assertIn(OP, self.runtime.state["pending_nfc"])
+        self.assertFalse(self.runtime._completed_path(OP).exists())
+        # Commit the matching device receipt after the active snapshot was read.
+        original_active = store.active
+        def finish_during_snapshot():
+            active = original_active()
+            with store.locked():
+                store._record_success_locked(request)
+                store._remove_locked()
+            return active
+        with mock.patch("messagebox.cloud_runtime.EnrollmentStore", return_value=store), \
+             mock.patch.object(store, "active", side_effect=finish_during_snapshot):
+            self.runtime._finish_nfc()
+        self.assertNotIn(OP, self.runtime.state["pending_nfc"])
+        self.assertEqual(json.loads(self.runtime._completed_path(OP).read_text())["state"], "applied")
+
+    def test_nfc_restart_replays_durable_terminal_ack_before_clearing_residual(self):
+        self.runtime.heartbeat()
+        self.runtime.state["pending_nfc"][OP] = "legacy-request"
+        self.runtime._save()
+        # A crash after the terminal receipt but before queueing its ACK must recover it.
+        atomic_json(self.runtime._completed_path(OP), {"operation_id": OP, "state": "applied"})
+        restarted = CloudRuntime(self.client, state_path=self.runtime.state_path,
+            contacts_path=self.runtime.contacts.path, queue_dir=self.runtime.queue_dir,
+            outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+            clock=self.runtime.clock, boot_id="test-boot")
+        restarted._finish_nfc()
+        self.assertEqual(restarted.state["pending_nfc"], {})
+        restarted.flush_acks()
+        self.assertEqual(self.client.acks[-1], {"operation_id": OP, "state": "applied"})
+
     def test_preview_crash_intent_suppresses_replay(self):
         self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
         item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
                 "created_at": NOW, "expires_at": NOW + 60,
                 "payload": {"ringtone_id": "gentle_music_box"}}
-        with mock.patch("messagebox.cloud_runtime.INTENT_DIR", self.root / "intents"), \
+        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
              mock.patch("messagebox.cloud_runtime.subprocess.run", side_effect=RuntimeError("crash")) as play:
             with self.assertRaisesRegex(RuntimeError, "crash"):
                 self.runtime._command(item, NOW)
@@ -389,6 +519,72 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(play.call_count, 1)
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["error_code"],
                          "preview_outcome_unknown")
+
+    def test_long_pcm_ringtone_preview_uses_duration_aware_timeout(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+                "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"ringtone_id": "ding_dong"}}
+        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0)) as play:
+            self.runtime._command(item, NOW)
+        self.assertEqual(play.call_args.args[0],
+                         ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
+                          str(ringtone_dir / "ring3.wav")])
+        self.assertAlmostEqual(play.call_args.kwargs["timeout"], 24.8, places=3)
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"],
+                         "applied")
+
+    def test_ringtone_preview_preserves_default_speaker_when_unconfigured(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
+        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+                "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"ringtone_id": "gentle_music_box"}}
+        with mock.patch.dict("os.environ", {}, clear=True), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0)) as play:
+            self.runtime._command(item, NOW)
+        play.assert_called_once_with(
+            ["aplay", "-q", "-D", "default", str(ringtone_dir / "ring1.wav")],
+            timeout=6.0, check=False,
+        )
+
+    def test_preview_timeout_is_rejected_without_stopping_later_commands(self):
+        self.runtime.heartbeat()
+        ringtone_dir = self.root / "ringtones"
+        ringtone_dir.mkdir()
+        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        self.client.items = [
+            {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
+             "created_at": NOW, "expires_at": NOW + 60,
+             "payload": {"ringtone_id": "ding_dong"}},
+            {"operation_id": "hold_operation_123456789", "sequence": 2,
+             "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,
+             "payload": {"held": True}},
+        ]
+        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
+             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
+             mock.patch("messagebox.cloud_runtime.subprocess.run",
+                        side_effect=subprocess.TimeoutExpired(["aplay"], 24.8)) as play:
+            self.runtime.poll_once()
+        play.assert_called_once_with(
+            ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
+             str(ringtone_dir / "ring3.wav")],
+            timeout=24.8, check=False,
+        )
+        states = {ack["operation_id"]: ack["state"] for ack in self.client.acks}
+        self.assertEqual(states[OP], "rejected")
+        self.assertEqual(states["hold_operation_123456789"], "applied")
+        self.assertEqual(self.runtime.state["cursor"], 2)
 
     def test_uncertain_outbox_recovers_expiry_by_read_only_key_without_resend(self):
         self.runtime.heartbeat()

@@ -27,7 +27,9 @@ the queue, in-flight, hold, or trash state. If that newest fresh route is invali
 or no longer allowed, recording fails closed; it never selects an older sender
 or the default. The explicit default is used only when played history is absent
 or expired. Unknown-card state and stale or missing NFC reader health also fail
-closed before recent-sender routing.
+closed before recent-sender routing. A held unknown card stays blocked after its
+announcement is consumed; the transient block clears only after reader removal
+grace or a recognized card presentation.
 
 Continuous sync owns the writable WhatsApp store. Outbound voice notes,
 played reactions, and recording presence use an immediate lock attempt so the

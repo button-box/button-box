@@ -12,10 +12,54 @@ preserve these before changing modes, and do not resume them until their
 original transport is established. Never infer it from the current mode. Cloud
 audio remains subject to cloud authorization and cannot be played through
 another connection mode.
+Cloud recordings also retain the opaque `account_scope` from the last verified
+heartbeat at the start of their recording interaction. The approval and any
+hold-release sidecar keep that same scope if ownership changes during recording
+or review. Offline recording can use this last known binding; sending requires
+a fresh heartbeat with an identical scope. The sender checks it before audio
+conversion and includes it in the upload for server-side validation. A transfer
+that keeps a relative and device credential does not authorize old recordings
+under the new account.
+
+Pending Cloud jobs without a scope, including jobs created by older releases,
+remain preserved and are never assigned the current account automatically.
+Mismatched and unbound work does not block eligible current-account work. The
+read-only outcome lookup can still resolve a previously attempted upload; it
+never makes an unbound or mismatched recording eligible for reupload.
+
+This contract needs a coordinated Cloud and Pi rollout. Apply the compatible
+Cloud API first: until the Pi update, uploads missing a scope are rejected and
+remain local. After the Pi update, a successful new heartbeat is required before
+recording or sending when the cached snapshot lacks the scope. An older Cloud
+heartbeat without the field is rejected. Neither release migrates old pending
+recordings to the new binding; preserve them for private recovery.
+
 The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
+While a connection is pending, Cancel connection invalidates that exact cloud
+claim before clearing local claim mode. It also works after the button press
+while WhatsApp confirmation is pending. If cancellation cannot be confirmed,
+the portal hides the claim link and offers Retry cancellation; restart and
+repeated button presses keep the pending cancellation for recovery. A completed
+connection stays connected, and cancellation reports that outcome separately.
+This control does not unlink an owned box or change its settings or account.
+
+In runtime cloud mode, the local Home, Setup and Advanced pages link to
+`https://button.box/dashboard` for cloud connection, recipient and settings
+management. Its connection and default-recipient status come from the persisted
+cloud heartbeat, subject to the same boot, monotonic and wall/server-time checks
+as messaging authorization. Stale or unavailable authorization needs attention;
+standalone WhatsApp pairing, contacts and test-message proof do not establish
+cloud readiness. The local page keeps first-message verification outstanding
+because it has no cloud-specific end-to-end acceptance record. The runtime link
+does not start a claim, change connection mode or reset the existing account.
+Wi-Fi recovery and device settings stay local. Stale standalone WhatsApp and
+recipient routes return to Setup; Advanced hides local account and listener controls.
+Local standalone account, contact and NFC management APIs reject Cloud-mode
+requests before reading or changing the retained standalone store. The normal
+local settings and message APIs retain their existing contracts.
 
 The poller accepts family audio only from a fresh authenticated heartbeat and
 the exact inbox message. It verifies the media hash before publishing a WAV,
@@ -36,6 +80,14 @@ It never reuploads an uncertain job. If the server has no record or cannot be
 reached, the source remains private for operator recovery. Command effects and
 ACKs retain per-operation receipts so retries cannot reselect a different NFC
 card or replay a ringtone after a crash.
+
+Pending NFC operations retain their original request IDs across restart. The
+poller reports pairing as applied only with a matching committed success receipt.
+If the original enrollment has ended or been replaced without that receipt, it
+records `rejected` with `nfc_enrollment_ended` and clears the pending entry;
+matching pending or claimed requests keep waiting. A durable terminal receipt is
+replayed after a crash before changing any leftover pending entry. Cancellation
+and expiry do not change saved card routes or queued recordings.
 
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an

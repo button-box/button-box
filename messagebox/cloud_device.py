@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from messagebox.guided_reply import valid_account_scope
 from messagebox.device_http import DEVICE_USER_AGENT, NoRedirect
 
 
@@ -233,6 +234,11 @@ class CloudDeviceClient:
             raise CloudDeviceError("claim ID is invalid")
         return self.json("/device/claim/confirm", method="POST", body={"claim_id": claim_id})
 
+    def cancel_claim(self, claim_id: str) -> dict:
+        if not isinstance(claim_id, str) or not _ID.fullmatch(claim_id):
+            raise CloudDeviceError("claim ID is invalid")
+        return self.json("/device/claim/cancel", method="POST", body={"claim_id": claim_id})
+
     def heartbeat(self, state: dict) -> dict:
         return self.json("/device/heartbeat", method="POST", body=state)
 
@@ -287,10 +293,11 @@ class CloudDeviceClient:
 
     def send_voice(
         self, ogg_path: str | Path, recipient_id: str, idempotency_key: str,
-        duration_seconds: float, *, reply_to: str | None = None,
+        duration_seconds: float, *, account_scope: str, reply_to: str | None = None,
     ) -> dict:
         if (
-            not isinstance(recipient_id, str)
+            not valid_account_scope(account_scope)
+            or not isinstance(recipient_id, str)
             or not _PERSON_ID.fullmatch(recipient_id)
             or not isinstance(idempotency_key, str)
             or not _ID.fullmatch(idempotency_key)
@@ -309,6 +316,7 @@ class CloudDeviceClient:
         boundary = secrets.token_hex(16)
         values = {
             "recipient_id": recipient_id,
+            "account_scope": account_scope,
             "idempotency_key": idempotency_key,
             "duration_seconds": str(round(duration_seconds, 3)),
         }

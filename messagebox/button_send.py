@@ -31,11 +31,12 @@ from messagebox.guided_reply import (
     release_inbox_file,
     should_ring_after_unsent_session,
     voice_send_command,
+    valid_account_scope,
 )
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
-from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
+from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, active_selection, claim_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
@@ -273,10 +274,18 @@ def legacy_outbox_files():
 
 def compatible_legacy_outbox_files():
     mode = transport_mode()
+    scope = None
+    if mode == "cloud":
+        try:
+            scope = cloud_runtime.account_scope(fresh=True)
+        except (CloudRuntimeError, OSError):
+            return []
     return [
         name
         for name in legacy_outbox_files()
         if legacy_job_transport(os.path.join(OUTBOX_DIR, name)) == mode
+        and (mode != "cloud" or
+             (legacy_job_metadata(os.path.join(OUTBOX_DIR, name)) or {}).get("account_scope") == scope)
     ]
 
 
@@ -314,6 +323,9 @@ def current_recipient_context(*, claim=False):
                     return None
             except OSError:
                 log("recipient unavailable: NFC reader health is unavailable")
+                return None
+            if SelectionStore(NFC_SELECTION_FILE).unknown_present():
+                log("recipient unavailable: unrecognized card presentation")
                 return None
             resolver = claim_selection if claim else active_selection
             selection_existed = Path(NFC_SELECTION_FILE).exists()
@@ -381,8 +393,11 @@ def nfc_idle_routing_is_safe(contacts):
         if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
             log("recipient unavailable: NFC reader health is stale")
             return False
+        if SelectionStore(NFC_SELECTION_FILE).unknown_present():
+            log("recipient unavailable: unrecognized card presentation")
+            return False
     except OSError:
-        log("recipient unavailable: NFC reader health is unavailable")
+        log("recipient unavailable: NFC reader state is unavailable")
         return False
     if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
         log("recipient unavailable: unrecognized card presentation")
@@ -587,13 +602,18 @@ def legacy_job_transport(path):
     )
 
 
-def bind_legacy_job_recipient(path, recipient):
+def bind_legacy_job_recipient(path, recipient, *, account_scope=None):
     """Persist routing before the WAV becomes visible to the sender thread."""
+    metadata = {"version": 1, "recipient": recipient, "transport": transport_mode()}
+    if metadata["transport"] == "cloud":
+        if not valid_account_scope(account_scope):
+            raise ValueError("cloud recording account is unavailable")
+        metadata["account_scope"] = account_scope
     metadata_path = path + ".json"
     temporary_path = metadata_path + ".part"
     with open(temporary_path, "w", encoding="utf-8") as handle:
         json.dump(
-            {"version": 1, "recipient": recipient, "transport": transport_mode()},
+            metadata,
             handle,
             sort_keys=True,
         )
@@ -756,7 +776,10 @@ def stage_hold_release_business_job(fname):
         if not milliseconds.isdecimal() or duration <= 0:
             raise ValueError("invalid hold-release filename")
         message_id = "hold_" + hashlib.sha256(fname.encode("ascii")).hexdigest()[:48]
-        outbox_store.approve(path, recipient, "hold_release", duration, message_id)
+        # Never adopt an older recording into the currently linked account.
+        scope = (legacy_job_metadata(path) or {}).get("account_scope")
+        outbox_store.approve(path, recipient, "hold_release", duration, message_id,
+                             account_scope=scope)
     except (BusinessSendRejected, OSError, ValueError):
         log_event("send_blocked", flow="hold_release", reason="staging")
         return False
@@ -787,6 +810,14 @@ def send_guided_job(job):
         log_event("send_blocked", flow=job.flow_kind, reason="transport")
         return False
     job = durable_job
+    if mode == "cloud":
+        try:
+            if (not valid_account_scope(job.account_scope)
+                    or job.account_scope != cloud_runtime.account_scope(fresh=True)):
+                raise CloudRuntimeError("recording belongs to another account")
+        except (CloudRuntimeError, OSError):
+            log_event("send_blocked", flow=job.flow_kind, reason="account_scope")
+            return False
     ogg = os.path.join(TEMP_DIR, f"guided-{uuid.uuid4().hex}.ogg")
     converted = subprocess.run(
         [
@@ -828,7 +859,8 @@ def send_guided_job(job):
             return True
         job = outbox_store.set_state(job, "sending", increment_attempts=True)
         try:
-            result = client.send_voice(ogg, target, job.message_id, job.duration)
+            result = client.send_voice(ogg, target, job.message_id, job.duration,
+                                       account_scope=job.account_scope)
         except CloudSendRejected:
             outbox_store.set_state(job, "failed")
             log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
@@ -922,6 +954,18 @@ def send_guided_job(job):
     return False
 
 
+def compatible_guided_jobs():
+    jobs = outbox_store.jobs()
+    if transport_mode() != "cloud":
+        return jobs
+    try:
+        scope = cloud_runtime.account_scope(fresh=True)
+    except (CloudRuntimeError, OSError):
+        return []
+    # Preserve unbound/foreign jobs without starving this account's recordings.
+    return [job for job in jobs if job.account_scope == scope]
+
+
 def sender_loop():
     failures = 0
     while True:
@@ -933,7 +977,7 @@ def sender_loop():
             if not staged:
                 time.sleep(5)
                 continue
-        guided = outbox_store.jobs()
+        guided = compatible_guided_jobs()
         if guided:
             if send_guided_job(guided[0]):
                 failures = 0
@@ -1516,6 +1560,7 @@ def record_and_send_legacy(settings=None, pressed_at=None):
     global _recording
     settings = settings or caregiver_settings()
     max_seconds = settings["max_recording_seconds"]
+    scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
     intent = acknowledge_and_classify_legacy_press(pressed_at)
     if intent == "play":
@@ -1591,7 +1636,7 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         if presence_last:
             presence("paused", recipient)
         final_path = part[:-5] + f"-{held:.1f}.wav"
-        bind_legacy_job_recipient(final_path, recipient)
+        bind_legacy_job_recipient(final_path, recipient, account_scope=scope)
         os.replace(part, final_path)
     finally:
         _recording = False
@@ -1601,6 +1646,7 @@ def run_guided_once(settings=None):
     global _guided_active
     settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
+    scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
     if card_state == "expired":
         block_unavailable_recipient()
@@ -1675,6 +1721,7 @@ def run_guided_once(settings=None):
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
             auto_record_after_incoming=settings["after_listening"] == "invite_reply",
+            account_scope=scope,
         )
         if claim:
             finish_claim(claim)
@@ -1787,7 +1834,7 @@ def main():
             for filename in compatible_legacy_outbox_files():
                 if not stage_hold_release_business_job(filename):
                     return 1
-        for job in outbox_store.jobs():
+        for job in compatible_guided_jobs():
             ok = send_guided_job(job) and ok
         if transport_mode() not in {"business", "cloud"}:
             for filename in compatible_legacy_outbox_files():

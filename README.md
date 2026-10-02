@@ -29,6 +29,20 @@ installation. Each assembled unit requires its own physical acceptance run
 before delivery.
 
 
+## Cloud release candidate
+
+The [v0.2.0-rc.1 test candidate](docs/releases/v0.2.0-rc.1.md) contains the
+integrated Cloud runtime and its tested fixes. It is for controlled testing on
+additional Raspberry Pi 4 units. It is not a stable release or a universal
+standalone-to-Cloud migration.
+
+For a new Cloud unit, use the
+[fresh Cloud guide](docs/releases/v0.2.0-rc.1-fresh-cloud.md). It selects Cloud
+before onboarding and does not install or pair wacli. For an existing
+installation, use the [candidate update guide](docs/releases/v0.2.0-rc.1-update.md),
+which preserves the selected connection mode. The general build guide below
+describes the standalone path. Read the candidate's limits before choosing it.
+
 ## Build a Button Box
 
 The complete journey is:

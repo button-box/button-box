@@ -135,18 +135,36 @@ class CloudIdentityTests(unittest.TestCase):
             client = CloudDeviceClient(
                 "https://example.invalid/cloud-api/v1", identity, opener=opener
             )
-            result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25)
+            result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64)
             self.assertEqual(result["state"], "queued")
             [request] = requests
             self.assertEqual(request.full_url, "https://example.invalid/cloud-api/v1/device/voice")
             self.assertEqual(request.get_header("Idempotency-key"), "synthetic_key_12345")
             self.assertIn(b'name="recipient_id"\r\n\r\nperson_1', request.data)
             self.assertIn(b'name="idempotency_key"\r\n\r\nsynthetic_key_12345', request.data)
+            self.assertIn(b'name="account_scope"\r\n\r\n' + b"a" * 64, request.data)
             self.assertIn(b"OggSsynthetic", request.data)
             self.assertNotIn(b'name="box"', request.data)
             with self.assertRaises(CloudSendRejected):
-                client.send_voice(audio, "other household", "synthetic_key_12345", 1.25)
+                client.send_voice(audio, "other household", "synthetic_key_12345", 1.25, account_scope="a" * 64)
             self.assertEqual(len(requests), 1)
+
+    def test_cancellation_is_authenticated_and_scoped_to_one_claim(self):
+        identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+        requests = []
+        def opener(request, *, timeout):
+            requests.append(request)
+            return _Response({"claim_id": "synthetic-claim-001", "claimed": False, "cancelled": True})
+        client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=opener)
+        self.assertTrue(client.cancel_claim("synthetic-claim-001")["cancelled"])
+        request = requests[0]
+        self.assertEqual(request.full_url, "https://example.invalid/cloud-api/v1/device/claim/cancel")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Authorization"), "Bearer " + identity["credential"])
+        self.assertEqual(json.loads(request.data), {"claim_id": "synthetic-claim-001"})
+        with self.assertRaises(CloudDeviceError):
+            client.cancel_claim("other/path")
+        self.assertEqual(len(requests), 1)
 
     def test_voice_accepts_cloud_create_202_and_keyed_replay_200(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,7 +181,7 @@ class CloudIdentityTests(unittest.TestCase):
             client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity,
                                        opener=lambda *_args, **_kwargs: responses.pop(0))
             for _ in range(2):
-                result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25)
+                result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64)
                 self.assertEqual(result["state"], "waiting_for_reply")
 
     def test_read_only_voice_status_binds_known_expiry_without_upload(self):
@@ -207,7 +225,7 @@ class CloudIdentityTests(unittest.TestCase):
             for opener, error in ((rejected, CloudSendRejected), (ambiguous, CloudSendUncertain)):
                 with self.subTest(error=error), self.assertRaises(error):
                     CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=opener).send_voice(
-                        audio, "person_1", "synthetic_key_12345", 1.25
+                        audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64
                     )
 
 

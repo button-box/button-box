@@ -1,7 +1,23 @@
 #!/bin/sh
 # Install Button Box into fixed system paths under the messagebox service user.
-# Usage on the Pi: ./scripts/setup.sh
+# Usage on the Pi: ./scripts/setup.sh [--transport wacli|cloud]
 set -eu
+
+TRANSPORT=wacli
+case "$#" in
+  0) ;;
+  2)
+    if [ "$1" != --transport ]; then
+      echo "Usage: $0 [--transport wacli|cloud]" >&2
+      exit 2
+    fi
+    case "$2" in wacli|cloud) TRANSPORT=$2 ;; *)
+      echo "Transport must be wacli or cloud." >&2
+      exit 2
+      ;; esac
+    ;;
+  *) echo "Usage: $0 [--transport wacli|cloud]" >&2; exit 2 ;;
+esac
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(dirname "$SCRIPT_DIR")
@@ -42,6 +58,20 @@ if [ "$(id -u)" -eq 0 ]; then
   exit 1
 fi
 
+# Cloud provisioning is a first-install operation, never an account conversion.
+# Root checks protected paths before any service, account, package or file changes.
+if [ "$TRANSPORT" = cloud ]; then
+  sudo /usr/bin/python3 "$SCRIPT_DIR/install/setup_release.py" check-fresh
+fi
+HAS_RELEASE=0
+if [ -e "$REPO_DIR/release-manifest.json" ] || [ -L "$REPO_DIR/release-manifest.json" ]; then
+  sudo /usr/bin/python3 "$SCRIPT_DIR/install/setup_release.py" check-install "$REPO_DIR"
+  HAS_RELEASE=1
+elif [ "$TRANSPORT" = cloud ]; then
+  echo "Fresh Cloud setup requires a pinned release with release-manifest.json." >&2
+  exit 1
+fi
+
 for name in $PACKAGE_PYTHON $DASHBOARD_PYTHON $ONBOARDING_PYTHON $STATIC_ASSETS; do
   if [ ! -r "$REPO_DIR/messagebox/$name" ]; then
     echo "Missing repository file: messagebox/$name" >&2
@@ -56,6 +86,8 @@ for path in \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
   scripts/install/audio_config.py \
+  scripts/install/setup_release.py \
+  scripts/install/bounded_update.py \
   scripts/install/messagebox-mode-migrate.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
@@ -148,6 +180,13 @@ if [ -L "$APP_DIR" ] || { [ -e "$APP_DIR" ] && [ ! -d "$APP_DIR" ]; }; then
   echo "Cannot install into non-directory application path: $APP_DIR" >&2
   exit 1
 fi
+if sudo test -L "$APP_DIR/release.json" || {
+  sudo test -e "$APP_DIR/release.json" && ! sudo test -f "$APP_DIR/release.json"
+}; then
+  echo "Cannot replace non-regular release identity: $APP_DIR/release.json" >&2
+  exit 1
+fi
+
 GENERATED_ENV=
 CONFIG_STAGE=
 MODE_GENERATOR_STAGE=
@@ -204,8 +243,13 @@ if sudo test -L "$CONFIG_DIR/env" || {
 fi
 if ! sudo test -e "$CONFIG_DIR/env"; then
   GENERATED_ENV=$(mktemp)
-  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" \
-    "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
+  if [ "$TRANSPORT" = cloud ]; then
+    /usr/bin/python3 "$SCRIPT_DIR/install/setup_release.py" cloud-environment \
+      "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
+  else
+    /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" \
+      "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
+  fi
 fi
 
 if account=$(getent passwd "$SERVICE_USER"); then
@@ -360,7 +404,9 @@ fi
 
 (cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
 sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
-"$SCRIPT_DIR/install/wacli.sh"
+if [ "$TRANSPORT" = wacli ]; then
+  "$SCRIPT_DIR/install/wacli.sh"
+fi
 
 # Stage the selector inputs before Comitup installation. The package installer
 # preserves the selected legacy link while onboarding is armed; migration then
@@ -374,7 +420,7 @@ sudo install -o root -g root -m 0644 \
   "$REPO_DIR/systemd/messagebox-mode-reconcile.path" \
   /etc/systemd/system/messagebox-mode-reconcile.path
 sudo install -d -o root -g root -m 0755 /usr/lib/messagebox
-sudo install -o root -g root -m 0755 \
+sudo install -o root -g root -m 0644 \
   "$REPO_DIR/scripts/install/messagebox-mode-migrate.py" \
   /usr/lib/messagebox/messagebox-mode-migrate.py
 MODE_GENERATOR_STAGE=$(sudo mktemp /run/messagebox-mode-generator.XXXXXX)
@@ -476,6 +522,13 @@ export PYTHONPYCACHEPREFIX
 (cd "$APP_DIR" && /usr/bin/python3 -m compileall -q messagebox)
 rm -rf "$PYTHONPYCACHEPREFIX"
 
+if [ "$HAS_RELEASE" -eq 1 ]; then
+  sudo /usr/bin/python3 "$SCRIPT_DIR/install/setup_release.py" record-release "$REPO_DIR"
+else
+  sudo rm -f "$APP_DIR/release.json"
+  echo "Developer source installation: no pinned release identity was recorded."
+fi
+
 if [ -n "$SSH_TARGET" ]; then
   dev_command="ssh -t $SSH_TARGET messagebox-dev-onboard"
   initialize_command="ssh -t $SSH_TARGET sudo messagebox-init-wifi-onboarding"
@@ -495,13 +548,17 @@ printf '%s\n' \
   '============================================================' \
   'No Button Box runtime or Comitup services were started.' \
   '' \
-  'DEV FLOW' \
-  '  Run the standalone shell setup and hardware checks:' \
-  "    $dev_command" \
-  '' \
-  '============================= OR =============================' \
-  '' \
-  'CONSUMER HANDOFF (MANUFACTURER)'
+  "Transport: $TRANSPORT"
+if [ "$TRANSPORT" = wacli ]; then
+  printf '%s\n' \
+    '' \
+    'DEV FLOW' \
+    '  Run the standalone shell setup and hardware checks:' \
+    "    $dev_command" \
+    '' \
+    '============================= OR ============================='
+fi
+printf '%s\n' '' 'CONSUMER HANDOFF (MANUFACTURER)'
 if sudo test -e "$ONBOARDING_CONFIG_DIR/configured"; then
   printf '%s\n' \
     '  Wi-Fi credentials already exist. Confirm they are recorded.'

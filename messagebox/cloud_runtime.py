@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 import uuid
+import wave
 from pathlib import Path
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
@@ -34,6 +35,10 @@ _SHA = re.compile(r"^[0-9a-f]{64}$")
 _PHONE = re.compile(r"^[1-9][0-9]{6,14}$")
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 LEDGER_SECONDS = 90 * 86400
+RINGTONE_DIR = Path("/opt/messagebox/ringtones")
+RINGTONE_PREVIEW_MAX_SECONDS = 30
+RINGTONE_PREVIEW_GRACE_SECONDS = 5
+RINGTONE_PREVIEW_MAX_PCM_BYTES = 32 * 1024 * 1024
 
 
 def _current_boot_id():
@@ -67,6 +72,27 @@ def _effective_expiry(metadata, snapshot):
     if not _valid_time(created):
         raise CloudRuntimeError("cloud retention metadata is invalid")
     return min(expiry, created + days * 86400)
+
+
+def _ringtone_preview_timeout(path):
+    try:
+        with wave.open(str(path), "rb") as source:
+            channels = source.getnchannels()
+            width = source.getsampwidth()
+            rate = source.getframerate()
+            frames = source.getnframes()
+            if (source.getcomptype() != "NONE" or channels <= 0 or width not in {1, 2, 3, 4}
+                    or rate <= 0 or frames <= 0):
+                raise CloudRuntimeError("ringtone preview failed")
+            duration = frames / rate
+            expected_bytes = frames * channels * width
+            if (duration > RINGTONE_PREVIEW_MAX_SECONDS
+                    or expected_bytes > RINGTONE_PREVIEW_MAX_PCM_BYTES
+                    or len(source.readframes(frames)) != expected_bytes):
+                raise CloudRuntimeError("ringtone preview failed")
+    except (EOFError, OSError, OverflowError, wave.Error) as exc:
+        raise CloudRuntimeError("ringtone preview failed") from exc
+    return duration + RINGTONE_PREVIEW_GRACE_SECONDS
 
 
 class CloudRuntime:
@@ -206,6 +232,8 @@ class CloudRuntime:
         people = response.get("people")
         entitlement = response.get("entitlement")
         if (not _valid_id(response.get("box_id")) or not _valid_time(response.get("server_time"))
+                or not isinstance(response.get("account_scope"), str)
+                or not _SHA.fullmatch(response["account_scope"])
                 or not isinstance(people, list) or len(people) > 100
                 or not isinstance(entitlement, dict)
                 or any(type(entitlement.get(key)) is not bool for key in ("ingest", "deliver", "send"))
@@ -236,6 +264,7 @@ class CloudRuntime:
         if until is not None and not _valid_time(until):
             raise CloudRuntimeError("cloud entitlement is invalid")
         snapshot = {"box_id": response["box_id"], "server_time": response["server_time"],
+                    "account_scope": response["account_scope"],
                     "verified_at": self.clock(), "verified_mono": self.monotonic(),
                     "boot_id": self.boot_id,
                     "retention_days": response["retention_days"],
@@ -254,6 +283,20 @@ class CloudRuntime:
 
     def _completed_path(self, operation_id):
         return COMPLETED_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
+
+    def _replay_completed(self, operation_id):
+        completed = self._completed_path(operation_id)
+        if not completed.exists():
+            return False
+        try:
+            prior = json.loads(completed.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise CloudRuntimeError("cloud operation ledger is invalid") from exc
+        if prior.get("operation_id") != operation_id:
+            raise CloudRuntimeError("cloud operation ledger conflicts")
+        self._ack(operation_id, prior["state"],
+                  **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        return True
 
     def _intent_path(self, operation_id):
         return INTENT_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
@@ -550,16 +593,7 @@ class CloudRuntime:
             self._ack(item["operation_id"], "applied")
 
     def _command(self, item, server_time):
-        completed = self._completed_path(item["operation_id"])
-        if completed.exists():
-            try:
-                prior = json.loads(completed.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise CloudRuntimeError("cloud operation ledger is invalid") from exc
-            if prior.get("operation_id") != item["operation_id"]:
-                raise CloudRuntimeError("cloud operation ledger conflicts")
-            self._ack(item["operation_id"], prior["state"],
-                      **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        if self._replay_completed(item["operation_id"]):
             return
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]):
@@ -612,8 +646,14 @@ class CloudRuntime:
                 self._ack(item["operation_id"], "rejected", error_code="preview_outcome_unknown")
                 return
             atomic_json(intent_path, {"operation_id": item["operation_id"], "ringtone_id": ringtone})
-            path = Path("/opt/messagebox/ringtones") / RINGTONES[ringtone]
-            result = subprocess.run(["aplay", "-q", str(path)], timeout=15, check=False)
+            path = RINGTONE_DIR / RINGTONES[ringtone]
+            timeout = _ringtone_preview_timeout(path)
+            speaker = os.environ.get("MSGBOX_SPK_DEV", "default")
+            try:
+                result = subprocess.run(["aplay", "-q", "-D", speaker, str(path)], timeout=timeout,
+                                        check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise CloudRuntimeError("ringtone preview failed") from exc
             if result.returncode:
                 raise CloudRuntimeError("ringtone preview failed")
             self._ack(item["operation_id"], "applied")
@@ -637,13 +677,22 @@ class CloudRuntime:
                 self._save()
 
     def _finish_nfc(self):
+        if not self.state["pending_nfc"]:
+            return
         enrollment = EnrollmentStore(NFC_ENROLLMENT_FILE)
+        # Read active state before the receipt: a tap can commit its receipt and
+        # remove the active request between these reads, and must still succeed.
+        active = enrollment.active()
         for operation_id, request_id in list(self.state["pending_nfc"].items()):
-            outcome = enrollment.outcome(request_id)
-            if outcome is not None:
-                self._ack(operation_id, "applied")
-                del self.state["pending_nfc"][operation_id]
-                self._save()
+            if not self._replay_completed(operation_id):
+                if enrollment.outcome(request_id) is not None:
+                    self._ack(operation_id, "applied")
+                elif active is None or active["request_id"] != request_id:
+                    self._ack(operation_id, "rejected", error_code="nfc_enrollment_ended")
+                else:
+                    continue
+            del self.state["pending_nfc"][operation_id]
+            self._save()
 
     def poll_once(self):
         inbox = self.client.inbox(self.state["cursor"])
@@ -708,6 +757,28 @@ class CloudRuntime:
             time.sleep(min(60, 2 * 2 ** min(failures, 5)) + random.random())
 
 
+def read_snapshot():
+    """Read fresh authorization without creating identity or contacting the service."""
+    snapshot = CloudRuntime(client=object(), state_path=STATE_FILE)._snapshot()
+    people = snapshot.get("people")
+    if (not isinstance(people, list) or len(people) > 100
+            or any(not isinstance(person, dict) or not _valid_id(person.get("id"))
+                   for person in people)):
+        raise CloudRuntimeError("cloud family list is invalid")
+    ids = {person["id"] for person in people}
+    if len(ids) != len(people):
+        raise CloudRuntimeError("cloud family list is invalid")
+    default = snapshot.get("default_recipient_id")
+    if default is not None and (not _valid_id(default) or default not in ids):
+        raise CloudRuntimeError("cloud default recipient is invalid")
+    entitlement = snapshot.get("entitlement")
+    if (not isinstance(entitlement, dict)
+            or any(type(entitlement.get(key)) is not bool for key in ("ingest", "deliver", "send"))
+            or (entitlement.get("until") is not None and not _valid_time(entitlement["until"]))):
+        raise CloudRuntimeError("cloud entitlement is invalid")
+    return snapshot
+
+
 def recipient_id(jid):
     return CloudRuntime().recipient_id(jid)
 
@@ -720,3 +791,13 @@ def record_played(metadata):
     if metadata and metadata.get("cloud") is True and _valid_id(metadata.get("cloud_operation_id")):
         runtime = CloudRuntime()
         runtime._ack(metadata["cloud_operation_id"], "played")
+
+
+def account_scope(*, fresh=False):
+    """Bind offline recordings to the last verified owner; sending needs freshness."""
+    runtime = CloudRuntime(client=object())
+    snapshot = runtime._snapshot() if fresh else runtime.state.get("snapshot", {})
+    scope = snapshot.get("account_scope") if isinstance(snapshot, dict) else None
+    if not isinstance(scope, str) or not _SHA.fullmatch(scope):
+        raise CloudRuntimeError("cloud recording account is unavailable")
+    return scope

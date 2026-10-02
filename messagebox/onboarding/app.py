@@ -828,6 +828,15 @@ def create_app(
                     return _json_response(claim_client().start())(start_response)
                 except CloudClaimError as exc:
                     raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "POST" and path == "/api/cloud-claim/cancel" and cloud_mode and selected_mode == "HOME":
+                _require_same_origin(environ, expected_origin)
+                document = _form(environ, body_limit)
+                if set(document) != {"claim_id"}:
+                    raise RequestError("400 Bad Request", "Invalid cancellation request")
+                try:
+                    return _json_response(claim_client().cancel(document["claim_id"]))(start_response)
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
             if method == "POST" and path == "/onboarding/complete" and cloud_mode:
                 _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
@@ -1163,6 +1172,7 @@ def create_app(
                 "/api/state",
                 "/api/cloud-claim",
                 "/api/cloud-claim/start",
+                "/api/cloud-claim/cancel",
                 "/api/cloud-claim/qr",
                 "/api/settings",
                 "/api/ringtone-preview",
@@ -1211,6 +1221,7 @@ def _allowed_methods(path):
         "/api/state": "GET",
         "/api/cloud-claim": "GET",
         "/api/cloud-claim/start": "POST",
+        "/api/cloud-claim/cancel": "POST",
         "/api/cloud-claim/qr": "GET",
         "/api/settings": "GET, PUT",
         "/api/ringtone-preview": "POST",

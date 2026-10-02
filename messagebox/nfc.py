@@ -115,9 +115,20 @@ class NfcRuntime:
         self.uid = None
         self.last_seen = None
         self.last_refresh = None
+        self.absent_since = None
 
     def observe(self, raw_uid, now):
         if raw_uid is None:
+            if self.uid is None and self.router.selection.unknown_present():
+                # A restarted reader must prove absence before lifting its block.
+                if self.absent_since is None:
+                    self.absent_since = now
+                if now - self.absent_since >= self.removal_grace:
+                    result = self.router.card_absent()
+                    self.absent_since = None
+                    self.announcer.announce(result)
+                    return result
+                return None
             if (
                 self.uid is not None
                 and self.last_seen is not None
@@ -128,6 +139,7 @@ class NfcRuntime:
                 self.announcer.announce(result)
                 return result
             return None
+        self.absent_since = None
         uid = normalize_uid(raw_uid)
         if self.uid != uid:
             result = self.router.card_seen(uid, new_presentation=True)
@@ -162,7 +174,7 @@ def run_daemon():
     nfc_router = router(announcement_store)
     announcer = Announcer(announcement_store)
     runtime = NfcRuntime(nfc_router, announcer)
-    nfc_router.selection.clear()
+    nfc_router.selection.clear(preserve_unknown=True)
     announcement_store.clear()
     try:
         reader = hardware_reader()
@@ -188,7 +200,7 @@ def run_daemon():
             Path(NFC_HEALTH_FILE).unlink()
         except FileNotFoundError:
             pass
-        nfc_router.selection.clear()
+        nfc_router.selection.clear(preserve_unknown=True)
         announcement_store.clear()
 
 
