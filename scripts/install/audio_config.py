@@ -62,7 +62,14 @@ def detect_microphone(sound_root=Path("/sys/class/sound")):
             raise AudioConfigError("could not read a valid ALSA capture card ID")
         raise AudioConfigError("no ALSA capture device detected; connect a microphone")
 
-    _, device_number, card_id = min(candidates)
+    # USB speakers often expose an unused capture input. Enumeration order is
+    # not stable behind hubs, so prefer a capture-only card (a real microphone).
+    capture_only = [
+        candidate
+        for candidate in candidates
+        if not any(sound_root.glob(f"pcmC{candidate[0]}D*p"))
+    ]
+    _, device_number, card_id = min(capture_only or candidates)
     return card_id, f"plughw:CARD={card_id},DEV={device_number}"
 
 

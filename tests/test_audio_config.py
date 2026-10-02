@@ -64,6 +64,30 @@ class AudioConfigTests(unittest.TestCase):
             ("first", "plughw:CARD=first,DEV=1"),
         )
 
+    def test_prefers_capture_only_microphone_over_speaker_capture_input(self):
+        # A USB speaker enumerated first behind a hub also exposes capture.
+        self.add_capture(0, 0, "UACDemoV10")
+        self.add_playback(0, 0, "UACDemoV10", usb=True)
+        self.add_capture(1, 0, "UsbMic")
+
+        self.assertEqual(
+            audio_config.detect_microphone(self.sound_root),
+            ("UsbMic", "plughw:CARD=UsbMic,DEV=0"),
+        )
+        self.assertEqual(
+            audio_config.detect_speaker(self.sound_root),
+            ("UACDemoV10", "plughw:CARD=UACDemoV10,DEV=0"),
+        )
+
+    def test_combined_audio_device_is_used_when_it_is_the_only_capture(self):
+        self.add_capture(0, 0, "headset")
+        self.add_playback(0, 0, "headset", usb=True)
+
+        self.assertEqual(
+            audio_config.detect_microphone(self.sound_root),
+            ("headset", "plughw:CARD=headset,DEV=0"),
+        )
+
     def test_no_capture_device_fails_clearly(self):
         with self.assertRaisesRegex(
             audio_config.AudioConfigError, "connect a microphone"
