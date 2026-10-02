@@ -792,7 +792,7 @@ class InputSimulatorTests(unittest.TestCase):
             with self.subTest(case=case), self.send_runtime("cloud") as (root, store):
                 source = root / "source.wav"
                 source.write_bytes(b"synthetic audio")
-                job = store.approve(str(source), JID, "standalone", 1, message_id="synthetic-local-job")
+                job = store.approve(str(source), JID, "standalone", 1, message_id="synthetic-local-job", account_scope="a" * 64)
                 client = mock.Mock()
                 client.send_voice.return_value = {"message_id": "synthetic-cloud-job", "state": case,
                                                  "expires_at": 1800000000, "server_time": 1700000000}
@@ -808,6 +808,7 @@ class InputSimulatorTests(unittest.TestCase):
 
                 manifest = {"transport": "cloud", "recipients": [JID], "account_sha256": "account"}
                 with mock.patch.object(button_send.subprocess, "run", side_effect=convert), \
+                     mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
                      mock.patch.object(button_send.cloud_runtime, "recipient_id", side_effect=button_send.CloudRuntimeError("preflight") if case == "preflight" else None, return_value="synthetic-person"), \
                      mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=client), \
                      contextlib.redirect_stdout(io.StringIO()) as output:

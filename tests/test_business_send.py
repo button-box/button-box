@@ -14,7 +14,7 @@ from messagebox.business_send import (
     BusinessSendUncertain,
     recipient_number,
 )
-from messagebox.guided_reply import OutboxStore
+from messagebox.guided_reply import OutboxStore, RecordingResult
 
 gpiozero = types.ModuleType("gpiozero")
 gpiozero.Button = object
@@ -273,7 +273,7 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         source.write_bytes(b"synthetic-wav")
         self.store = OutboxStore(str(root / "outbox"), transport="cloud")
         self.job = self.store.approve(str(source), "351900000001@s.whatsapp.net",
-                                      "standalone", 1.0, message_id="local-job-0000001")
+                                      "standalone", 1.0, message_id="local-job-0000001", account_scope="a" * 64)
         self.client = mock.Mock()
         for patch in (
             mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "cloud"}),
@@ -281,6 +281,7 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
             mock.patch.object(button_send, "TEMP_DIR", self.directory.name),
             mock.patch.object(button_send, "send_success_notices", button_send.queue.SimpleQueue()),
             mock.patch.object(button_send, "log_event"),
+            mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64),
             mock.patch.object(button_send.cloud_runtime, "recipient_id", return_value="person1234567890123456"),
             mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=self.client),
             mock.patch.object(button_send.subprocess, "run", side_effect=GuidedBusinessBoundaryTests._convert),
@@ -295,9 +296,100 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         self.assertTrue(self.job.audio_path.exists())
         metadata = json.loads((self.job.path / "job.json").read_text())
         self.assertEqual(metadata["state"], "cloud_retained")
+        self.assertEqual(metadata["account_scope"], "a" * 64)
+        self.assertEqual(self.client.send_voice.call_args.kwargs["account_scope"], "a" * 64)
         self.assertEqual(metadata["cloud_message_id"], "cloud-message")
         self.assertEqual(metadata["expires_at"], 1_800_604_800)
         self.assertFalse(button_send.send_success_notices.empty())
+
+    def test_transfer_during_recording_keeps_original_approval_scope(self):
+        source = Path(self.directory.name) / "source.wav"
+        current_scope = ["a" * 64]
+        io = mock.Mock()
+
+        def record():
+            current_scope[0] = "b" * 64
+            return RecordingResult(str(source), 1.0, True)
+
+        io.record.side_effect = record
+        io.play_review_for_approval.return_value = True
+        with mock.patch.object(button_send.cloud_runtime, "account_scope", side_effect=lambda **_: current_scope[0]), \
+             mock.patch.object(button_send, "claim_fresh_card_intent", return_value=("none", None)), \
+             mock.patch.object(button_send, "claim_oldest", return_value=None), \
+             mock.patch.object(button_send, "recording_recipient_context", return_value={
+                 "contact": {"jid": self.job.recipient}, "via_card": False}), \
+             mock.patch.object(button_send, "PiGuidedIO", return_value=io), \
+             mock.patch.object(button_send, "led", mock.Mock(), create=True), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send, "queued", return_value=[]):
+            button_send.run_guided_once({"max_recording_seconds": 60, "after_listening": "play_only"})
+            approved = [job for job in self.store.jobs() if job.message_id != self.job.message_id][0]
+            self.assertEqual(approved.account_scope, "a" * 64)
+            before = {p.name: p.read_bytes() for p in approved.path.iterdir()}
+            with mock.patch.object(button_send.subprocess, "run") as convert:
+                self.assertFalse(button_send.send_guided_job(approved))
+            convert.assert_not_called()
+            self.client.send_voice.assert_not_called()
+            self.assertEqual({p.name: p.read_bytes() for p in approved.path.iterdir()}, before)
+
+    def test_unbound_or_foreign_account_jobs_never_convert_or_upload(self):
+        metadata_path = self.job.path / "job.json"
+        for scope in (None, "b" * 64, "invalid"):
+            with self.subTest(scope=scope):
+                metadata = json.loads(metadata_path.read_text())
+                metadata.pop("account_scope", None)
+                if scope is not None:
+                    metadata["account_scope"] = scope
+                metadata_path.write_text(json.dumps(metadata))
+                before = {p.name: p.read_bytes() for p in self.job.path.iterdir()}
+                with mock.patch.object(button_send.subprocess, "run") as convert:
+                    self.assertFalse(button_send.send_guided_job(self.job))
+                convert.assert_not_called()
+                self.client.send_voice.assert_not_called()
+                self.assertEqual({p.name: p.read_bytes() for p in self.job.path.iterdir()}, before)
+
+    def test_foreign_and_unbound_jobs_do_not_starve_current_account(self):
+        source = Path(self.directory.name) / "source.wav"
+        for name, scope in (("foreign", "b" * 64), ("unbound", "a" * 64)):
+            job = self.store.approve(str(source), self.job.recipient, "standalone", 1,
+                                     message_id=name, account_scope=scope)
+            if name == "unbound":
+                meta = job.path / "job.json"
+                document = json.loads(meta.read_text())
+                document.pop("account_scope")
+                meta.write_text(json.dumps(document))
+        before = {str(p): p.read_bytes() for p in self.store.root.rglob("*") if p.is_file()}
+        self.assertEqual([job.message_id for job in button_send.compatible_guided_jobs()], [self.job.message_id])
+        self.assertEqual({str(p): p.read_bytes() for p in self.store.root.rglob("*") if p.is_file()}, before)
+        with mock.patch.object(button_send, "OUTBOX_DIR", str(self.store.root)):
+            for index, scope in enumerate((None, "b" * 64, "a" * 64)):
+                path = self.store.root / f"170000000001{index}-1.5.wav"
+                path.write_bytes(b"synthetic-held-audio")
+                Path(str(path) + ".json").write_text(json.dumps({
+                    "version": 1, "recipient": self.job.recipient, "transport": "cloud", "account_scope": scope}))
+            self.assertEqual(button_send.compatible_legacy_outbox_files(), ["1700000000012-1.5.wav"])
+
+    def test_hold_release_carries_original_scope_and_does_not_adopt_unbound_audio(self):
+        with mock.patch.object(button_send, "OUTBOX_DIR", str(self.store.root)):
+            path = self.store.root / "1700000000010-1.5.wav"
+            path.write_bytes(b"synthetic-held-audio")
+            button_send.bind_legacy_job_recipient(str(path), self.job.recipient, account_scope="b" * 64)
+            self.assertTrue(button_send.stage_hold_release_business_job(path.name))
+            staged = [job for job in self.store.jobs() if job.flow_kind == "hold_release"][0]
+            self.assertEqual(staged.account_scope, "b" * 64)
+            with mock.patch.object(button_send.subprocess, "run") as convert:
+                self.assertFalse(button_send.send_guided_job(staged))
+            convert.assert_not_called()
+            self.assertTrue(staged.audio_path.exists())
+            path.write_bytes(b"legacy-unbound-audio")
+            sidecar = Path(str(path) + ".json")
+            sidecar.write_text(json.dumps({"version": 1, "recipient": self.job.recipient, "transport": "cloud"}))
+            before = (path.read_bytes(), sidecar.read_bytes())
+            self.assertFalse(button_send.stage_hold_release_business_job(path.name))
+            self.assertEqual((path.read_bytes(), sidecar.read_bytes()), before)
 
     def test_delivery_uncertain_or_lost_response_never_cues_or_reuploads(self):
         self.client.send_voice.return_value = {"message_id": "cloud-message", "state": "delivery_uncertain",
@@ -325,7 +417,8 @@ class GuidedTransportIsolationTests(unittest.TestCase):
                 source.write_bytes(b"synthetic-wav")
                 approved_store = OutboxStore(str(root / "outbox"), transport=approved)
                 job = approved_store.approve(
-                    str(source), "351900000001@s.whatsapp.net", "standalone", 1.0
+                    str(source), "351900000001@s.whatsapp.net", "standalone", 1.0,
+                    account_scope="a" * 64 if approved == "cloud" else None
                 )
                 current_store = OutboxStore(str(root / "outbox"), transport=current)
                 with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": current}), \

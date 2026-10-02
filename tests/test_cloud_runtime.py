@@ -29,7 +29,7 @@ class FakeClient:
         self.retention_days = 30
 
     def heartbeat(self, state):
-        return {"box_id": "box1234567890123456", "server_time": self.server_time,
+        return {"box_id": "box1234567890123456", "account_scope": "a" * 64, "server_time": self.server_time,
                 "people": self.people, "default_recipient_id": self.people[0]["id"] if self.people else None,
                 "entitlement": {"ingest": True, "deliver": self.deliver, "send": self.send,
                                 "until": getattr(self, "heartbeat_until", NOW + 3600)}, "queue_hold": False,
@@ -292,6 +292,20 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertTrue(self.runtime.state["snapshot"]["queue_hold"])
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_heartbeat_requires_scope_and_records_transfer(self):
+        original = self.client.heartbeat
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.state["snapshot"]["account_scope"], "a" * 64)
+        before = self.runtime.state_path.read_bytes()
+        for invalid in (None, "bad", 123):
+            self.client.heartbeat = lambda state: {**original(state), "account_scope": invalid}
+            with self.assertRaises(CloudRuntimeError):
+                self.runtime.heartbeat()
+            self.assertEqual(self.runtime.state_path.read_bytes(), before)
+        self.client.heartbeat = lambda state: {**original(state), "account_scope": "b" * 64}
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.state["snapshot"]["account_scope"], "b" * 64)
 
     def test_authoritative_outbox_expiry_only_and_unknown_source_retained(self):
         self.runtime.heartbeat()
