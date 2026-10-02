@@ -12,6 +12,28 @@ preserve these before changing modes, and do not resume them until their
 original transport is established. Never infer it from the current mode. Cloud
 audio remains subject to cloud authorization and cannot be played through
 another connection mode.
+Cloud recordings also retain the opaque `account_scope` from the last verified
+heartbeat at the start of their recording interaction. The approval and any
+hold-release sidecar keep that same scope if ownership changes during recording
+or review. Offline recording can use this last known binding; sending requires
+a fresh heartbeat with an identical scope. The sender checks it before audio
+conversion and includes it in the upload for server-side validation. A transfer
+that keeps a relative and device credential does not authorize old recordings
+under the new account.
+
+Pending Cloud jobs without a scope, including jobs created by older releases,
+remain preserved and are never assigned the current account automatically.
+Mismatched and unbound work does not block eligible current-account work. The
+read-only outcome lookup can still resolve a previously attempted upload; it
+never makes an unbound or mismatched recording eligible for reupload.
+
+This contract needs a coordinated Cloud and Pi rollout. Apply the compatible
+Cloud API first: until the Pi update, uploads missing a scope are rejected and
+remain local. After the Pi update, a successful new heartbeat is required before
+recording or sending when the cached snapshot lacks the scope. An older Cloud
+heartbeat without the field is rejected. Neither release migrates old pending
+recordings to the new binding; preserve them for private recovery.
+
 The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
