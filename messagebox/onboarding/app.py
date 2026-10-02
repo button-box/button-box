@@ -495,6 +495,14 @@ def create_app(
         }
 
     def safe_state(state):
+        if cloud_mode:
+            return {
+                "phase": state["phase"],
+                "box_id": read_box_id(),
+                "safe_error": state["safe_error"],
+                "mode": selected_mode,
+                "transport": "cloud",
+            }
         whatsapp_state = safe_whatsapp_state(state)
         if whatsapp_state["status"] == "ready" and state["phase"] == WHATSAPP_PENDING:
             state = store.load()
@@ -789,7 +797,22 @@ def create_app(
                     )(start_response)
                 raise RequestError("400 Bad Request", "Use the printed Button Box address")
 
+            if cloud_mode and (
+                path in {"/api/data", "/api/recipients", "/api/nfc"}
+                or path.startswith(("/whatsapp/", "/recipients/", "/nfc/"))
+            ):
+                raise RequestError(
+                    "409 Conflict", "Manage your connection and people in Button Box Cloud"
+                )
+
             if method == "GET" and path == "/":
+                # Read the durable proof only; connectivity probes must not delay page loading.
+                if cloud_mode and selected_mode == "HOME" and store.load()["phase"] in {
+                    WHATSAPP_PENDING, WHATSAPP_READY,
+                }:
+                    return Response(
+                        b"", "302 Found", [("Location", "/cloud-connect")]
+                    )(start_response)
                 body, content_type = static_files["index.html"]
                 displayed_url = (
                     expected_origin + "/"

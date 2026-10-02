@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Button Box Cloud</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/cloud-local.js" defer></script>
+</head>
+<body>
+  <main class="shell single-page">
+    <section class="card" aria-labelledby="cloud-title">
+      <p class="eyebrow">Button Box Cloud</p>
+      <h1 id="cloud-title">Your box, online.</h1>
+      <p>Manage your box, invite your family, and change settings in your dashboard.</p>
+      <p><a id="home-cloud-dashboard" class="button" href="https://button.box/dashboard">Open dashboard</a></p>
+      <details class="settings-detail">
+        <summary>Change Wi-Fi</summary>
+        <p>Your current Wi-Fi is kept if the new connection fails.</p>
+        <form id="cloud-wifi-form" class="compact-form">
+          <label for="cloud-wifi-name">Wi-Fi name</label>
+          <input id="cloud-wifi-name" maxlength="32" autocomplete="off" required>
+          <label for="cloud-wifi-password">Wi-Fi password</label>
+          <input id="cloud-wifi-password" type="password" minlength="8" maxlength="63" autocomplete="off" required>
+          <label class="choice"><input id="cloud-wifi-open" type="checkbox"> This network has no password</label>
+          <button id="cloud-wifi-submit" type="submit">Connect</button>
+          <p id="cloud-wifi-status" role="status" aria-live="polite"></p>
+        </form>
+      </details>
+      <p><a href="https://wa.me/351926421843" target="_blank" rel="noopener noreferrer">Need help? Chat with us</a></p>
+    </section>
+  </main>
+</body>
+</html>

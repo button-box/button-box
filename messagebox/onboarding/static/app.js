@@ -49,6 +49,15 @@ function acceptanceControl(tag, ...caseIds) {
   return control;
 }
 
+function isCloud(state = currentState) {
+  return state?.transport === "cloud";
+}
+
+function legacyManagementPath(url) {
+  return ["/api/whatsapp", "/api/recipients", "/api/contacts", "/api/listeners", "/api/nfc-runtime", "/api/nfc"].includes(url.split("?")[0])
+    || ["/whatsapp/", "/recipients/", "/nfc/"].some(prefix => url.startsWith(prefix));
+}
+
 function showView(name) {
   for (const view of views) {
     const element = document.getElementById(`${view}-view`);
@@ -74,6 +83,9 @@ function rememberState(state) {
 }
 
 async function request(url, options = {}) {
+  if (isCloud() && legacyManagementPath(url)) {
+    throw new Error("Manage your connection and people in Button Box Cloud.");
+  }
   const response = await fetch(url, {
     cache: "no-store",
     ...options,
@@ -247,6 +259,11 @@ function applyRecipientState(recipient, nfcSummary = null) {
 }
 
 function applyWhatsAppState(state, { manage = false } = {}) {
+  if (isCloud(state)) {
+    if (state.mode === "HOME") location.replace("/cloud-connect");
+    else showView("wifi");
+    return;
+  }
   const whatsapp = state.whatsapp || {
     status: "failed",
     pairing_code: null,
@@ -1212,6 +1229,15 @@ async function ringNow() {
 async function route() {
   renderIdentity(currentState);
   const routeName = location.hash.slice(1) || "home";
+  if (isCloud() && currentState.mode === "RUNTIME") {
+    location.replace("/");
+    return;
+  }
+  if (isCloud() && currentState.mode !== "RUNTIME") {
+    document.getElementById("primary-nav").hidden = true;
+    applyState(currentState);
+    return;
+  }
   const navRoute = ["continue", "whatsapp", "recipient-picker", "recipients"].includes(routeName)
     ? (currentState.mode === "RUNTIME" ? "advanced" : "setup") : routeName;
   document.querySelectorAll("[data-route]").forEach((link) => {

@@ -27,6 +27,20 @@ repeated button presses keep the pending cancellation for recovery. A completed
 connection stays connected, and cancellation reports that outcome separately.
 This control does not unlink an owned box or change its settings or account.
 
+In runtime cloud mode, the local page opens the hosted dashboard at
+`https://button.box/dashboard`. Family, WhatsApp and settings management belongs
+there. The local page keeps a collapsed Wi-Fi recovery form and support link;
+it does not show the standalone management dashboard. Existing local device
+settings and message APIs retain their contracts for device controls.
+
+Cloud setup state never queries the retained standalone WhatsApp, recipient or
+NFC store, and those management routes reject requests in both setup and runtime.
+After durable home internet proof, the local setup root opens the Cloud claiming
+page. That page keeps an explicit Wi-Fi recovery action. Finishing the confirmed
+claim opens the hosted dashboard. Standalone setup and management remain available
+when the selected transport is wacli. A dashboard link does not prove entitlement,
+message delivery or physical acceptance; those still require independent checks.
+
 The poller accepts family audio only from a fresh authenticated heartbeat and
 the exact inbox message. It verifies the media hash before publishing a WAV,
 then acknowledges the durable queue entry. The button checks the same fresh

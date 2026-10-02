@@ -26,7 +26,7 @@ ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
 onboarding/completion.py onboarding/mode.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
-STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/cloud-connect.html onboarding/static/cloud-connect.js onboarding/static/index.html onboarding/static/styles.css"
+STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/cloud-connect.html onboarding/static/cloud-connect.js onboarding/static/cloud-local.html onboarding/static/cloud-local.js onboarding/static/index.html onboarding/static/styles.css"
 GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
 
 case "$SSH_TARGET" in

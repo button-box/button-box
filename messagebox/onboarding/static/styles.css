@@ -381,6 +381,8 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
   .shortcut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
+.shell.single-page { display: block; max-width: 44rem; }
+
 @media (max-width: 24rem) {
   .two-column, .inline-control { grid-template-columns: 1fr; }
 }

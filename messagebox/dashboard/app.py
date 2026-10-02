@@ -115,6 +115,7 @@ TAILSCALE_HOST_SETTING = os.environ.get("MSGBOX_TAILSCALE_HOST", "")
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
 QUEUE_ACTION_LOCK = threading.Lock()
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parents[1] / "onboarding" / "static"
+CLOUD_LOCAL_HTML = DASHBOARD_STATIC_DIR.joinpath("cloud-local.html").read_bytes()
 DASHBOARD_STATIC = {
     "/": (
         DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes(),
@@ -127,6 +128,10 @@ DASHBOARD_STATIC = {
     "/static/styles.css": (
         DASHBOARD_STATIC_DIR.joinpath("styles.css").read_bytes(),
         "text/css; charset=utf-8",
+    ),
+    "/static/cloud-local.js": (
+        DASHBOARD_STATIC_DIR.joinpath("cloud-local.js").read_bytes(),
+        "text/javascript; charset=utf-8",
     ),
     "/static/clipboard.js": (
         DASHBOARD_STATIC_DIR.joinpath("clipboard.js").read_bytes(),
@@ -195,6 +200,10 @@ def runtime_running():
 
 
 def runtime_state():
+    if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+        # A setup tab can outlive the service handoff. Keep its transport marker
+        # without querying retained standalone account or household state.
+        return {"mode": "RUNTIME", "transport": "cloud", "box_id": read_box_id()}
     contacts = {"contacts": {}}
     try:
         contacts = contacts_store().public_view()
@@ -1158,12 +1167,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"ok": False, "error": "invalid form submission"}))
             return None
 
+    def _reject_cloud_management(self, path):
+        if os.environ.get("MSGBOX_TRANSPORT") != "cloud":
+            return False
+        if path in {"/api/whatsapp", "/api/recipients", "/api/contacts", "/api/listeners", "/api/nfc-runtime"} or path.startswith(("/whatsapp/", "/recipients/", "/nfc/")):
+            self._send(409, json.dumps({"error": "Manage your connection and people in Button Box Cloud."}))
+            return True
+        return False
+
     def do_GET(self):
         if not self._require_trusted_host():
             return
         url = urllib.parse.urlparse(self.path)
+        if self._reject_cloud_management(url.path):
+            return
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
+            if url.path == "/" and os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+                return self._send(200, CLOUD_LOCAL_HTML, "text/html; charset=utf-8")
             return self._send(200, *static)
         if url.path == "/api/state":
             return self._send(200, json.dumps(runtime_state()))
@@ -1272,6 +1293,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
         if url.path != "/api/wacli-receipt" and not self._require_same_origin():
+            return
+        if self._reject_cloud_management(url.path):
             return
         if url.path == "/api/ringtone-preview":
             payload = self._json_body(1024)
