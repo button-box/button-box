@@ -21,6 +21,10 @@ class CloudClaimError(Exception):
     """A safe claim error without tokens or device identity."""
 
 
+class CloudClaimClockError(CloudClaimError):
+    """Home Wi-Fi is ready but the box clock is still catching up."""
+
+
 class CloudClaim:
     def __init__(self, client=None, *, path=CLAIM_FILE, clock=time.time):
         self.client = client or CloudDeviceClient.from_environment()
@@ -73,7 +77,7 @@ class CloudClaim:
             link, expires = result.get("whatsapp_url"), result.get("expires_at")
             if (not isinstance(claim_id, str) or not _ID.fullmatch(claim_id)
                     or not isinstance(token, str) or not _TOKEN.fullmatch(token)
-                    or type(expires) is not int or not self.clock() < expires <= self.clock() + 605
+                    or type(expires) is not int or expires <= self.clock()
                     or not isinstance(link, str)):
                 raise CloudClaimError("cloud registration response is invalid")
             parsed = urlsplit(link)
@@ -83,6 +87,10 @@ class CloudClaim:
                     or len(text) != 1 or text[0] != "claim " + token
                     or parsed.fragment or parsed.username or parsed.password):
                 raise CloudClaimError("cloud claim link is invalid")
+            # A Pi without a battery clock can reach Cloud before NTP corrects
+            # its time. Keep the expiry guard; give setup a retryable reason.
+            if expires > self.clock() + 605:
+                raise CloudClaimClockError("cloud clock is not ready")
             document = {"claim_id": claim_id, "expires_at": expires,
                         "whatsapp_url": link, "physical_confirmed": False}
             atomic_json(self.path, document)

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import quote
 
-from messagebox.cloud_claim import CloudClaim, CloudClaimError
+from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
 
 NOW = 1_800_000_000
@@ -86,6 +86,16 @@ class ClaimTests(unittest.TestCase):
                     self.assertEqual(self.claim.start()["status"], "awaiting_button")
                 self.assertEqual(register.call_args.args[0]["nfc"], expected)
                 self.assertTrue(self.path.exists())
+
+    def test_clock_behind_cloud_rejects_link_until_time_is_corrected(self):
+        self.claim.clock = lambda: NOW - 223
+        with self.assertRaises(CloudClaimClockError):
+            self.claim.start()
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.claim.consume_press())
+        self.claim.clock = lambda: NOW
+        self.assertEqual(self.claim.start()["status"], "awaiting_button")
+        self.assertTrue(self.path.exists())
 
     def test_registration_and_claim_write_failures_are_not_optional(self):
         self.client.register = mock.Mock(side_effect=CloudDeviceError("unavailable"))

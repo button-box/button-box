@@ -38,15 +38,15 @@ function render(data) {
     link.href = "/cloud-connect";
     qr.removeAttribute("src");
   }
-  status.textContent = actionError || {
-    not_started: "Start a connection link when the box is on home Wi-Fi.",
-    awaiting_button: "Send the prepared WhatsApp message, then press the physical box button once.",
-    waiting_for_whatsapp: "Button press received. Waiting for the WhatsApp claim to complete.",
-    claimed: "This box is connected. Continue trial setup in WhatsApp or the cloud dashboard.",
+  status.textContent = actionError || ({
+    not_started: "",
+    awaiting_button: "Open WhatsApp and send the message. Then press the button on your box once.",
+    waiting_for_whatsapp: "Button press received. Send the message in WhatsApp to finish connecting.",
+    claimed: "You're connected! Continue in WhatsApp to finish setup.",
     cancelled: "Connection cancelled. Get a new connection link when you're ready.",
     cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
-  }[data.status] || "Connection status is unavailable. Try again shortly.";
+  }[data.status] ?? "Connection status is unavailable. Try again shortly.");
 }
 
 async function refresh() {
@@ -74,10 +74,13 @@ start.addEventListener("click", async () => {
   status.textContent = "Creating your connection link…";
   try {
     const response = await fetch("/api/cloud-claim/start", { method: "POST", cache: "no-store" });
-    if (!response.ok) throw new Error("unavailable");
-    render(await response.json());
-  } catch {
-    actionError = "Could not start a connection link. Try again shortly.";
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error === "clock_not_ready" ? "clock_not_ready" : "unavailable");
+    render(data);
+  } catch (error) {
+    actionError = error.message === "clock_not_ready"
+      ? "Your box is setting its clock. Try again in a moment."
+      : "Could not connect to WhatsApp. Try again in a moment.";
     status.textContent = actionError;
   } finally {
     actionPending = false;

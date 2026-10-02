@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.onboarding.app import create_app
-from messagebox.cloud_claim import CloudClaim
+from messagebox.cloud_claim import CloudClaim, CloudClaimClockError
 from messagebox.cloud_device import CloudDeviceError
 from messagebox.onboarding.state import PROOFS, StateStore
 from messagebox.settings import SettingsStore
@@ -74,7 +74,7 @@ class CloudOnboardingTests(unittest.TestCase):
         home = self.request("GET", "/")
         self.assertIn(b"/cloud-connect", home["body"])
         page = self.request("GET", "/cloud-connect")
-        self.assertIn(b"Get a connection link", page["body"])
+        self.assertIn(b"Connect WhatsApp", page["body"])
         self.assertIn(b"cloud-connect.js", page["body"])
         self.assertEqual(self.request("GET", "/api/cloud-claim")["status"], "200 OK")
         denied = self.request("POST", "/api/cloud-claim/start", "https://other.invalid")
@@ -100,6 +100,13 @@ class CloudOnboardingTests(unittest.TestCase):
         completed = self.request("POST", "/onboarding/complete", f"http://{HOST}", body)
         self.assertEqual(completed["status"], "202 Accepted")
         self.assertEqual(self.completions, [{"transport": "cloud"}])
+
+    def test_unsynchronized_clock_returns_safe_retry_reason_without_completing_setup(self):
+        with mock.patch.object(self.cloud, "start", side_effect=CloudClaimClockError("cloud clock is not ready")):
+            response = self.request("POST", "/api/cloud-claim/start", f"http://{HOST}")
+        self.assertEqual(response["status"], "503 Service Unavailable")
+        self.assertEqual(json.loads(response["body"]), {"error": "clock_not_ready"})
+        self.assertEqual(self.completions, [])
 
     def test_cancel_route_requires_same_origin_exact_form_and_post(self):
         body = b"claim_id=synthetic-claim-001"
