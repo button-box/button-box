@@ -488,6 +488,8 @@ async function loadRecipients({ refresh = false, manager = false } = {}) {
 }
 
 async function continueRecipientSetup() {
+  window.clearTimeout(pollTimer);
+  pollTimer = null;
   try {
     const data = await loadRecipients();
     if (["testing", "complete"].includes(data.status)) {
@@ -1341,6 +1343,53 @@ function copyPairingCode() {
   );
 }
 
+let latestTestReport = null;
+
+async function createTestReport() {
+  const button = document.getElementById("create-test-report");
+  const status = document.getElementById("test-report-status");
+  button.disabled = true;
+  status.textContent = "Collecting sanitized metadata…";
+  try {
+    const response = await fetch("/api/test-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: document.getElementById("test-report-note").value }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not create report");
+    latestTestReport = payload;
+    const output = document.getElementById("test-report-output");
+    output.value = latestTestReport.markdown;
+    output.hidden = false;
+    document.getElementById("test-report-actions").hidden = false;
+    status.textContent = "Report ready. Copy it into Codex or download the JSON.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function copyTestReport() {
+  return copyText(
+    document.getElementById("test-report-output").value,
+    document.getElementById("copy-test-report"),
+    document.getElementById("test-report-status"),
+    "Sanitized report copied.",
+  );
+}
+
+function downloadTestReport() {
+  if (!latestTestReport) return;
+  const blob = new Blob([JSON.stringify(latestTestReport.report, null, 2)], { type: "application/json" });
+  const link = acceptanceControl("a", "BB-TEST-01");
+  link.href = URL.createObjectURL(blob);
+  link.download = `button-box-report-${latestTestReport.report.report_id}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 async function unlinkWhatsApp(event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector('button[type="submit"]');
@@ -1519,4 +1568,7 @@ window.addEventListener("hashchange", () => {
   if (mainRoutes.has(requested)) showMainRoute(requested);
   loadState();
 });
+document.getElementById("create-test-report")?.addEventListener("click", createTestReport);
+document.getElementById("copy-test-report")?.addEventListener("click", copyTestReport);
+document.getElementById("download-test-report")?.addEventListener("click", downloadTestReport);
 loadState();

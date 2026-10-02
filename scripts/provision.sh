@@ -44,6 +44,18 @@ for name in $GUIDED_PROMPT_NAMES; do
   fi
 done
 
+SOURCE_REVISION=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)
+if [ "${#SOURCE_REVISION}" -ne 40 ]; then
+  echo "Cannot determine the exact 40-character source revision." >&2
+  exit 1
+fi
+case "$SOURCE_REVISION" in
+  *[!0-9a-f]*)
+    echo "Cannot determine the exact 40-character source revision." >&2
+    exit 1
+    ;;
+esac
+
 REMOTE_SOURCE=$(ssh "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
 case "$REMOTE_SOURCE" in
   /tmp/messagebox-provision.*) ;;
@@ -73,6 +85,7 @@ rsync -azR \
   "$REPO_DIR/./scripts/commands/messagebox-comitup-state" \
   "$REPO_DIR/./scripts/commands/messagebox-contact" \
   "$REPO_DIR/./scripts/commands/messagebox-init-wifi-onboarding" \
+  "$REPO_DIR/./scripts/commands/messagebox-test" \
   "$REPO_DIR/./scripts/dev/onboard.sh" \
   "$REPO_DIR/./scripts/dev/hardware-test.sh" \
   "$REPO_DIR/./scripts/messageboxctl" \
@@ -91,11 +104,14 @@ rsync -azR \
   "$REPO_DIR/./messagebox/runtime_paths.py" \
   "$REPO_DIR/./messagebox/settings.py" \
   "$REPO_DIR/./messagebox/tailnet.py" \
+  "$REPO_DIR/./messagebox/test_report.py" \
+  "$REPO_DIR/./messagebox/test_runner.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
   "$REPO_DIR/./messagebox/wifi_change.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \
+  "$REPO_DIR/./messagebox/dashboard/static/apple-touch-icon.png" \
   "$REPO_DIR/./messagebox/onboarding/__init__.py" \
   "$REPO_DIR/./messagebox/onboarding/app.py" \
   "$REPO_DIR/./messagebox/onboarding/activity.py" \
@@ -129,4 +145,4 @@ rsync -az \
 
 echo "Running setup on $TARGET"
 ssh -t "$TARGET" \
-  "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
+  "MESSAGEBOX_SOURCE_REVISION='$SOURCE_REVISION' MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"

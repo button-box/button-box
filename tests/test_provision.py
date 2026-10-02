@@ -117,7 +117,11 @@ esac
         self.assertNotIn("scripts/dev/dashboard-preview.py", staged_paths)
         self.assertIn("messagebox/wifi_change.py", staged_paths)
         self.assertNotIn("messagebox/dashboard/static/app.js", staged_paths)
+        self.assertIn("messagebox/dashboard/static/apple-touch-icon.png", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
+        self.assertIn("messagebox/test_report.py", staged_paths)
+        self.assertIn("messagebox/test_runner.py", staged_paths)
+        self.assertIn("scripts/commands/messagebox-test", staged_paths)
 
         prompt_args = rsync_calls[1][1:]
         self.assertEqual(prompt_args[0], "-az")
@@ -147,11 +151,11 @@ esac
             "CALL\tadmin@message-box.local\t"
             "mkdir -p '/tmp/messagebox-provision.test/sounds/guided-reply'",
         )
-        self.assertEqual(
-            ssh_calls[2],
-            "CALL\t-t\tadmin@message-box.local\t"
-            "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
-            "'/tmp/messagebox-provision.test/scripts/setup.sh'",
+        self.assertIn("CALL\t-t\tadmin@message-box.local\t", ssh_calls[2])
+        self.assertIn("MESSAGEBOX_SOURCE_REVISION=", ssh_calls[2])
+        self.assertIn("MESSAGEBOX_SSH_TARGET='admin@message-box.local'", ssh_calls[2])
+        self.assertTrue(
+            ssh_calls[2].endswith("'/tmp/messagebox-provision.test/scripts/setup.sh'")
         )
         self.assertEqual(
             ssh_calls[3],

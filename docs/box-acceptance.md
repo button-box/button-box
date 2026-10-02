@@ -64,6 +64,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-PERSIST-02 | API+LOG | Targeted service restart preserves state and returns healthy. |
 | BB-PERSIST-03 | PHYSICAL+API+LOG | Cold reboot restores services, state, ring, and one message route. |
 | BB-UPDATE-01 | TEST+API+LOG | The bounded update and rollback preserve configuration, contacts, identity, queues, permissions, and the exact prior boot selector and active services. Both setup and runtime mode migration are covered. |
+| BB-TEST-01 | TEST+UI | On an explicitly enabled test rig, the report controls create, copy, and download a sanitized diagnostic bundle without exposing household data. |
 | BB-LAYOUT-01 | UI | Desktop controls are visible, labeled, and usable. |
 | BB-LAYOUT-02 | UI | Narrow mobile layout scrolls and exposes every active control. |
 | BB-RECOVERY-01 | UI+API | API outage shows a clear error and clears it automatically after recovery. |

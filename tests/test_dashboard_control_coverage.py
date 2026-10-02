@@ -102,6 +102,9 @@ CONTROL_CASES = {
     "failure-recheck": ["BB-WIFI-02"],
     "try-again": ["BB-WIFI-02"],
     "reset-failed-network": ["BB-WIFI-02"],
+    "create-test-report": ["BB-TEST-01"],
+    "copy-test-report": ["BB-TEST-01"],
+    "download-test-report": ["BB-TEST-01"],
 }
 
 
