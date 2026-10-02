@@ -313,6 +313,7 @@ class PairingEngine:
             self._write_state(self._default_state())
         if recover:
             self._recover_interrupted_attempt()
+            self._adopt_existing_link()
             try:
                 self.recipients.ensure_voice_request()
             except RecipientError:
@@ -321,6 +322,36 @@ class PairingEngine:
             self._resume_sync()
         else:
             self._pause_sync()
+
+    def _adopt_existing_link(self):
+        """Record a link made outside this worker (terminal onboarding) as ready.
+
+        Without this, an idle state pauses the runtime sync even though the live
+        store is already authenticated. Only an idle, error-free state with no
+        staged attempt is eligible; anything unproven keeps the paused default.
+        """
+        with self._lock:
+            state = self._load_state()
+            if (
+                state["status"] != "idle"
+                or state["safe_error"] is not None
+                or self.stage.exists()
+                or not self.live_store.is_dir()
+            ):
+                return
+            try:
+                auth = self._run_wacli(
+                    self.live_store,
+                    ["--read-only", "--json", "auth", "status"],
+                    timeout=15,
+                )
+                if auth.returncode != 0:
+                    return
+                phone_hint = _masked_phone(_json_document(auth.stdout))
+            except (OSError, PairingError, subprocess.SubprocessError):
+                return
+            if phone_hint is not None:
+                self._set_state("ready", phone_hint=phone_hint, eligible_count=0)
 
     def _default_state(self):
         return {
