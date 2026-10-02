@@ -12,14 +12,16 @@
   <main class="shell">
     <section class="card" aria-labelledby="cloud-title">
       <p class="eyebrow">Button Box Cloud</p>
-      <h1 id="cloud-title">Connect your box to WhatsApp</h1>
-      <p>Current pricing and trial terms are shown during cloud signup.</p>
-      <p>A link lasts ten minutes. Send its prepared message from your WhatsApp account, then press the physical box button once. The button press confirms that you have the box.</p>
-      <button id="cloud-start" type="button">Get a connection link</button>
+      <h1 id="cloud-title">Welcome!</h1>
+      <p>Connect your WhatsApp account to manage your box and invite your family.</p>
+      <button id="cloud-start" type="button">Connect WhatsApp</button>
       <div id="cloud-claim" hidden>
-        <p><img id="cloud-qr" alt="Scan to open the prepared WhatsApp claim message" width="260" height="260"></p>
-        <p><a id="cloud-link" class="button" href="/cloud-connect" target="_blank" rel="noopener noreferrer">Open WhatsApp</a>
-        <button id="cloud-copy" class="secondary" type="button">Copy link</button></p>
+        <p><a id="cloud-link" class="button" href="/cloud-connect" target="_blank" rel="noopener noreferrer">Open WhatsApp</a></p>
+        <details>
+          <summary>Using another phone?</summary>
+          <p><img id="cloud-qr" alt="Scan to connect in WhatsApp" width="260" height="260"></p>
+          <button id="cloud-copy" class="secondary" type="button">Copy link</button>
+        </details>
         <p id="cloud-expiry"></p>
       </div>
       <button id="cloud-cancel" class="secondary" type="button" hidden>Cancel connection</button>

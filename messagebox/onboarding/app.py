@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from messagebox.identity import read_box_id
-from messagebox.cloud_claim import CloudClaim, CloudClaimError
+from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
@@ -826,6 +826,8 @@ def create_app(
                     raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
                 try:
                     return _json_response(claim_client().start())(start_response)
+                except CloudClaimClockError as exc:
+                    raise RequestError("503 Service Unavailable", "clock_not_ready") from exc
                 except CloudClaimError as exc:
                     raise RequestError("503 Service Unavailable", str(exc)) from exc
             if method == "POST" and path == "/api/cloud-claim/cancel" and cloud_mode and selected_mode == "HOME":

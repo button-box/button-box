@@ -44,13 +44,14 @@ const waiting = {
 test("failed connection start stays visible across unchanged and failed polls, then clears on retry", async () => {
   const h = harness();
   await h.respond(h.requests[0], { status: "not_started" });
+  expect(h.node("cloud-status").textContent).toBe("");
   const start = h.node("cloud-start");
   const attempt = start.handlers.click();
   expect(start.disabled).toBe(true);
   await h.respond(h.requests.at(-1), {}, false);
   await attempt;
   const failure = h.node("cloud-status").textContent;
-  expect(failure).toBe("Could not start a connection link. Try again shortly.");
+  expect(failure).toBe("Could not connect to WhatsApp. Try again in a moment.");
   expect(start.disabled).toBe(false);
 
   await h.poll({ status: "not_started" });
@@ -62,7 +63,7 @@ test("failed connection start stays visible across unchanged and failed polls, t
   expect(h.node("cloud-status").textContent).toBe("Creating your connection link…");
   await h.respond(h.requests.at(-1), waiting);
   await retry;
-  expect(h.node("cloud-status").textContent).toContain("press the physical box button once");
+  expect(h.node("cloud-status").textContent).toContain("press the button on your box once");
   expect(h.node("cloud-claim").hidden).toBe(false);
   expect(h.node("cloud-link").href).toBe(waiting.whatsapp_url);
 });
@@ -74,8 +75,26 @@ test("a later confirmed claim state clears an uncertain start failure without a 
   await h.respond(h.requests.at(-1), {}, false);
   await attempt;
   await h.poll(waiting);
-  expect(h.node("cloud-status").textContent).toContain("press the physical box button once");
+  expect(h.node("cloud-status").textContent).toContain("press the button on your box once");
   expect(h.requests.filter(request => request.url === "/api/cloud-claim/start")).toHaveLength(1);
+});
+
+test("clock correction explains the wait and lets the owner retry without losing the expiry guard", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], { status: "not_started" });
+  const start = h.node("cloud-start");
+  const attempt = start.handlers.click();
+  await h.respond(h.requests.at(-1), { error: "clock_not_ready" }, false);
+  await attempt;
+  expect(h.node("cloud-status").textContent).toBe("Your box is setting its clock. Try again in a moment.");
+  expect(start.disabled).toBe(false);
+  await h.poll({ status: "not_started" });
+  expect(h.node("cloud-status").textContent).toContain("setting its clock");
+  const retry = start.handlers.click();
+  await h.respond(h.requests.at(-1), waiting);
+  await retry;
+  expect(h.node("cloud-link").href).toBe(waiting.whatsapp_url);
+  expect(h.node("cloud-status").textContent).toContain("Open WhatsApp");
 });
 
 test("a poll already in flight cannot replace a successful connection start", async () => {
@@ -85,7 +104,7 @@ test("a poll already in flight cannot replace a successful connection start", as
   await h.respond(h.requests.at(-1), waiting);
   await attempt;
   await h.respond(oldPoll, { status: "not_started" });
-  expect(h.node("cloud-status").textContent).toContain("press the physical box button once");
+  expect(h.node("cloud-status").textContent).toContain("press the button on your box once");
   expect(h.node("cloud-start").hidden).toBe(true);
   expect(h.node("cloud-claim").hidden).toBe(false);
 });

@@ -16,6 +16,9 @@ The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
+If the box clock is still catching up after joining Wi-Fi, the portal asks the
+owner to try again in a moment. Links outside the normal expiry bound are not
+saved or used for button confirmation. Retry after time synchronization.
 While a connection is pending, Cancel connection invalidates that exact cloud
 claim before clearing local claim mode. It also works after the button press
 while WhatsApp confirmation is pending. If cancellation cannot be confirmed,
