@@ -206,6 +206,8 @@ class CloudRuntime:
         people = response.get("people")
         entitlement = response.get("entitlement")
         if (not _valid_id(response.get("box_id")) or not _valid_time(response.get("server_time"))
+                or not isinstance(response.get("account_scope"), str)
+                or not _SHA.fullmatch(response["account_scope"])
                 or not isinstance(people, list) or len(people) > 100
                 or not isinstance(entitlement, dict)
                 or any(type(entitlement.get(key)) is not bool for key in ("ingest", "deliver", "send"))
@@ -236,6 +238,7 @@ class CloudRuntime:
         if until is not None and not _valid_time(until):
             raise CloudRuntimeError("cloud entitlement is invalid")
         snapshot = {"box_id": response["box_id"], "server_time": response["server_time"],
+                    "account_scope": response["account_scope"],
                     "verified_at": self.clock(), "verified_mono": self.monotonic(),
                     "boot_id": self.boot_id,
                     "retention_days": response["retention_days"],
@@ -734,3 +737,13 @@ def record_played(metadata):
     if metadata and metadata.get("cloud") is True and _valid_id(metadata.get("cloud_operation_id")):
         runtime = CloudRuntime()
         runtime._ack(metadata["cloud_operation_id"], "played")
+
+
+def account_scope(*, fresh=False):
+    """Bind offline recordings to the last verified owner; sending needs freshness."""
+    runtime = CloudRuntime(client=object())
+    snapshot = runtime._snapshot() if fresh else runtime.state.get("snapshot", {})
+    scope = snapshot.get("account_scope") if isinstance(snapshot, dict) else None
+    if not isinstance(scope, str) or not _SHA.fullmatch(scope):
+        raise CloudRuntimeError("cloud recording account is unavailable")
+    return scope

@@ -154,6 +154,25 @@ class OutboxTests(unittest.TestCase):
                     message_id="stable-id",
                 )
 
+    def test_cloud_approval_scope_is_immutable_and_missing_scope_keeps_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            store = OutboxStore(str(root / "outbox"), transport="cloud")
+            original = source.read_bytes()
+            with self.assertRaises(ValueError):
+                store.approve(str(source), "family@example.invalid", "reply", 0.25)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(store.root.iterdir()), [])
+            job = store.approve(str(source), "family@example.invalid", "reply", 0.25,
+                                message_id="same-recording", account_scope="a" * 64)
+            before = {p.name: p.read_bytes() for p in job.path.iterdir()}
+            with self.assertRaises(ValueError):
+                store.approve(str(source), job.recipient, "reply", 0.25,
+                              message_id=job.message_id, account_scope="b" * 64)
+            self.assertEqual({p.name: p.read_bytes() for p in job.path.iterdir()}, before)
+
     def test_send_command_uses_bound_recipient_without_fallback(self):
         command = voice_send_command(
             "/usr/local/bin/wacli",
@@ -192,14 +211,14 @@ class OutboxTests(unittest.TestCase):
             wacli = OutboxStore(str(root / "outbox"), transport="wacli")
             cloud_job = cloud.approve(
                 str(source), "12025550101@s.whatsapp.net", "reply", 0.25,
-                message_id="cloud-job",
+                message_id="cloud-job", account_scope="a" * 64,
             )
             self.assertEqual([job.message_id for job in cloud.jobs()], [cloud_job.message_id])
             self.assertEqual(wacli.jobs(), [])
             with self.assertRaises(ValueError):
                 wacli.approve(
                     str(source), cloud_job.recipient, "reply", 0.25,
-                    message_id=cloud_job.message_id,
+                    message_id=cloud_job.message_id, account_scope="a" * 64,
                 )
 
             wacli_job = wacli.approve(
@@ -238,7 +257,7 @@ class OutboxTests(unittest.TestCase):
             cloud = OutboxStore(str(root / "outbox"), transport="cloud")
             wacli = OutboxStore(str(root / "outbox"), transport="wacli")
             cloud_job = cloud.set_state(
-                cloud.approve(str(source), "12025550101@s.whatsapp.net", "reply", 0.25),
+                cloud.approve(str(source), "12025550101@s.whatsapp.net", "reply", 0.25, account_scope="a" * 64),
                 "sending",
             )
             wacli_job = wacli.set_state(
