@@ -85,25 +85,32 @@ _HANDOFF_HTML = b"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Connecting | Button Box</title>
-  <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede,.status{color:#adb7b0}.pulse{width:34px;height:34px;border:4px solid #363b3d;border-top-color:#69c5a5;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.pulse{animation:none;border-color:#69c5a5}}.button{display:inline-block;color:#07120e;background:#69c5a5;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:700}</style>
+  <style nonce="messagebox-handoff">__STYLES__</style>
 </head>
 <body>
-  <main class="shell">
-    <section class="card handoff" aria-labelledby="handoff-title">
-      <p class="eyebrow">Wi-Fi setup</p>
-      <div class="pulse" aria-hidden="true"></div>
-      <h1 id="handoff-title">Join the same Wi-Fi</h1>
-      <p class="lede">The box is trying to connect. Its setup hotspot will disappear and your phone may close this page.</p>
-      <ol class="steps">
-        <li>In your phone's Wi-Fi settings, join the network you selected for the box, even if it is a separate IoT network.</li>
-        <li>Open <strong>__MESSAGEBOX_URL__</strong> in Safari or Chrome to continue setup.</li>
-      </ol>
-      <p class="status" id="handoff-status">This page cannot confirm the connection. If the address does not open, check your phone's Wi-Fi and retry.</p>
-      <a class="button secondary" href="__MESSAGEBOX_URL__">Try the setup URL now</a>
-      <p class="status">If the setup hotspot returns, reopen it and check the Wi-Fi details.</p>
-    </section>
-  </main>
+  <div class="shell">
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Button Box</span>
+    </header>
+    <main>
+      <section class="card handoff" aria-labelledby="handoff-title">
+        <p class="eyebrow">Wi-Fi setup</p>
+        <div class="pulse" aria-hidden="true"></div>
+        <h1 id="handoff-title">Join the same Wi-Fi</h1>
+        <p class="lede">The box is trying to connect. Its setup hotspot will disappear and your phone may close this page.</p>
+        <ol class="steps">
+          <li>In your phone's Wi-Fi settings, join the network you selected for the box, even if it is a separate IoT network.</li>
+          <li>Open <strong>__MESSAGEBOX_URL__</strong> in Safari or Chrome to continue setup.</li>
+        </ol>
+        <p class="status" id="handoff-status">This page cannot confirm the connection. If the address does not open, check your phone's Wi-Fi and retry.</p>
+        <a class="button" href="__MESSAGEBOX_URL__">Try the setup URL now</a>
+        <p class="status">If the setup hotspot returns, reopen it and check the Wi-Fi details.</p>
+      </section>
+    </main>
+  </div>
 </body>
 </html>
 """
@@ -113,23 +120,30 @@ _CHANGE_HTML = b"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Changing Wi-Fi | Button Box</title>
-  <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede{color:#adb7b0}</style>
+  <style nonce="messagebox-handoff">__STYLES__</style>
 </head>
 <body>
-  <main class="shell">
-    <section class="card" aria-labelledby="change-title">
-      <p class="eyebrow">Wi-Fi setup</p>
-      <h1 id="change-title">Returning to setup mode</h1>
-      <p class="lede">The Button Box setup hotspot may take up to five minutes to return.</p>
-      <ol class="steps">
-        <li>Open Wi-Fi settings on this phone.</li>
-        <li>Join the printed Button Box hotspot when it appears.</li>
-        <li>Open the printed Button Box address to continue.</li>
-      </ol>
-      <a class="button secondary" href="/">Return if the hotspot does not come back</a>
-    </section>
-  </main>
+  <div class="shell">
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Button Box</span>
+    </header>
+    <main>
+      <section class="card" aria-labelledby="change-title">
+        <p class="eyebrow">Wi-Fi setup</p>
+        <h1 id="change-title">Returning to setup mode</h1>
+        <p class="lede">The Button Box setup hotspot may take up to five minutes to return.</p>
+        <ol class="steps">
+          <li>Open Wi-Fi settings on this phone.</li>
+          <li>Join the printed Button Box hotspot when it appears.</li>
+          <li>Open the printed Button Box address to continue.</li>
+        </ol>
+        <a class="button secondary" href="/">Return if the hotspot does not come back</a>
+      </section>
+    </main>
+  </div>
 </body>
 </html>
 """
@@ -673,9 +687,10 @@ def create_app(
 
     def handoff(start_response, callback=None, body=None):
         if body is None:
-            body = _HANDOFF_HTML.replace(
-                b"__MESSAGEBOX_URL__", canonical_url.encode("ascii")
-            )
+            body = _HANDOFF_HTML
+        # Embed the shared styles before the hotspot can disappear.
+        body = body.replace(b"__MESSAGEBOX_URL__", canonical_url.encode("ascii"))
+        body = body.replace(b"__STYLES__", static_files["styles.css"][0])
         headers = [
             header for header in _SECURITY_HEADERS
             if header[0].lower() != "content-security-policy"

@@ -11,7 +11,7 @@ from unittest import mock
 
 from unittest.mock import patch
 
-from messagebox.onboarding.app import create_app
+from messagebox.onboarding.app import STATIC_DIR, create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
 from messagebox.onboarding.whatsapp import PairingError
@@ -740,6 +740,9 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(response["status"], "202 Accepted")
         self.assertIn(b"messagebox-handoff", response["body"])
+        self.assertIn((STATIC_DIR / "styles.css").read_bytes(), response["body"])
+        self.assertIn(b'<header class="brand">', response["body"])
+        self.assertNotIn(b"__STYLES__", response["body"])
         self.assertIn(f'href="http://{HOST}/"'.encode(), response["body"])
         self.assertEqual(self.adapter.calls, [])
         self.assertNotIn(password, self.state_path.read_text(encoding="utf-8"))
@@ -843,6 +846,8 @@ class OnboardingAPITests(unittest.TestCase):
         client = WSGIHarness(application)
         response = client.form("POST", "/wifi/change", {})
         self.assertEqual(response["status"], "202 Accepted")
+        self.assertIn((STATIC_DIR / "styles.css").read_bytes(), response["body"])
+        self.assertIn(b'<header class="brand">', response["body"])
         self.assertEqual(adapter.calls, [("delete",)])
         self.assertEqual(home_store.load()["phase"], "WIFI_ASSOCIATED")
 
