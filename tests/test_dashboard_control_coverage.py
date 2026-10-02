@@ -31,6 +31,7 @@ CONTROL_CASES = {
     "home-connections-setup": ["BB-SETUP-01"],
     "ring-now": ["BB-HOME-02"],
     "recording-mode-tap-review": ["BB-SET-02"],
+    "recording-mode-tap-send": ["BB-SET-02"],
     "recording-mode-hold-release": ["BB-SET-02"],
     "after-listening-play-only": ["BB-SET-02"],
     "after-listening-invite-reply": ["BB-SET-02"],

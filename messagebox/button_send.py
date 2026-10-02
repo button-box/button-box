@@ -1231,10 +1231,10 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
     bounds = vad.trim_bounds()
     if bounds is None:
         raw_path.unlink(missing_ok=True)
-        return RecordingResult(None, time.monotonic() - started, False)
+        return RecordingResult(None, time.monotonic() - started, False, stopped_by_press)
     duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
     raw_path.unlink(missing_ok=True)
-    return RecordingResult(str(wav_path), duration, True)
+    return RecordingResult(str(wav_path), duration, True, stopped_by_press)
 
 
 class PiGuidedIO:
@@ -1451,6 +1451,8 @@ def run_guided_once(settings=None):
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
             auto_record_after_incoming=settings["after_listening"] == "invite_reply",
+            replay_for_review=settings["recording_mode"] == "tap_review",
+            send_on_stop=settings["recording_mode"] == "tap_send",
         )
         if claim:
             finish_claim(claim)
@@ -1554,7 +1556,7 @@ def main():
             continue
         interaction_settings = caregiver_settings()
         try:
-            if interaction_settings["recording_mode"] == "tap_review":
+            if interaction_settings["recording_mode"] in {"tap_review", "tap_send"}:
                 # The session starts from this press only after its release; it can
                 # never be carried into incoming audio, countdown, or recording.
                 acknowledge_guided_press("start_session")

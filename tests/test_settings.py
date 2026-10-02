@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import tempfile
@@ -118,6 +119,46 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(document["ringtone_id"], "ding_dong")
         self.assertEqual(document["arrival_signal"], "ring_and_lamp")
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "22:00", "end": "07:00"})
+
+    def test_tap_send_is_a_supported_recording_mode(self):
+        store = SettingsStore(self.path)
+        document, _attention = store.load()
+
+        saved = store.update(
+            self.candidate(document, recording_mode="tap_send"),
+            document["revision"],
+        )
+
+        self.assertEqual(saved["recording_mode"], "tap_send")
+        self.assertEqual(store.load()[0]["recording_mode"], "tap_send")
+
+    def test_documents_from_before_tap_send_still_load_unchanged(self):
+        """Adding a mode adds no key, so installed settings stay valid.
+
+        ``validate`` compares the key set exactly and ``load`` falls back to
+        ``defaults()`` on failure, which would silently discard every stored
+        choice.  A new enum value must not trigger that path.
+        """
+        existing = {
+            "version": 1,
+            "revision": 6,
+            "timezone": "America/Los_Angeles",
+            "recording_mode": "tap_review",
+            "after_listening": "play_only",
+            "max_recording_seconds": 120,
+            "ringtone_id": "ding_dong",
+            "master_volume_percent": 30,
+            "arrival_signal": "lamp_only",
+            "quiet_hours": {"enabled": False, "start": "19:00", "end": "07:30"},
+            "nfc_confirmation_beep": True,
+        }
+        self.path.write_text(json.dumps(existing), encoding="utf-8")
+
+        document, attention = SettingsStore(self.path).load()
+
+        self.assertFalse(attention, "an existing document must not raise attention")
+        for key, expected in existing.items():
+            self.assertEqual(document[key], expected, f"{key} was not preserved")
 
 
 if __name__ == "__main__":

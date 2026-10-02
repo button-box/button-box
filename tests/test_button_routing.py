@@ -292,7 +292,7 @@ class ButtonRoutingTests(unittest.TestCase):
                 return "sent" if kwargs["flow_kind"] == "standalone" else "played"
 
         button_send.led = FakeLed()
-        settings = {"max_recording_seconds": 60, "after_listening": "play_only"}
+        settings = {"max_recording_seconds": 60, "after_listening": "play_only", "recording_mode": "tap_review"}
         with mock.patch.object(
             button_send, "ensure_nfc_confirmation", return_value=True
         ), mock.patch.object(
@@ -351,7 +351,7 @@ class ButtonRoutingTests(unittest.TestCase):
                 return "played"
 
         button_send.led = FakeLed()
-        settings = {"max_recording_seconds": 60, "after_listening": "play_only"}
+        settings = {"max_recording_seconds": 60, "after_listening": "play_only", "recording_mode": "tap_review"}
         with mock.patch.object(
             button_send, "GuidedSession", return_value=FakeSession()
         ), mock.patch.object(
@@ -397,7 +397,7 @@ class ButtonRoutingTests(unittest.TestCase):
             button_send, "quiet_hours", return_value=False
         ), mock.patch.object(button_send, "ring_alert"):
             button_send.run_guided_once(
-                {"max_recording_seconds": 60, "after_listening": "play_only"}
+                {"max_recording_seconds": 60, "after_listening": "play_only", "recording_mode": "tap_review"}
             )
 
         self.assertTrue(wav.exists())
@@ -437,12 +437,62 @@ class ButtonRoutingTests(unittest.TestCase):
             button_send, "quiet_hours", return_value=False
         ):
             button_send.run_guided_once(
-                {"max_recording_seconds": 60, "after_listening": "play_only"}
+                {"max_recording_seconds": 60, "after_listening": "play_only", "recording_mode": "tap_review"}
             )
 
         self.assertEqual(captured["flow_kind"], "standalone")
         self.assertEqual(captured["recipient"], FAMILY)
         self.assertIsNone(captured["incoming_path"])
+
+    def test_both_tap_modes_route_to_guided_with_the_right_replay(self):
+        """tap_send is the guided flow minus the replay, not a separate path."""
+        self.add_grandma()
+        self.add_family()
+        recent = {
+            "contact": {"jid": FAMILY, "label": "Family"},
+            "via_card": False,
+            "via_recent_reply": True,
+        }
+        for mode, expected_replay, expected_send_on_stop in (
+            ("tap_review", True, False),
+            ("tap_send", False, True),
+        ):
+            with self.subTest(mode=mode):
+                captured = {}
+
+                class FakeSession:
+                    def run(self, **kwargs):
+                        captured.update(kwargs)
+                        return "sent"
+
+                button_send.led = FakeLed()
+                with mock.patch.object(
+                    button_send, "claim_oldest", return_value=None
+                ), mock.patch.object(
+                    button_send, "recording_recipient_context", return_value=recent
+                ), mock.patch.object(
+                    button_send, "GuidedSession", return_value=FakeSession()
+                ), mock.patch.object(
+                    button_send, "play_pending_listened"
+                ), mock.patch.object(
+                    button_send, "mark_queue_known"
+                ), mock.patch.object(
+                    button_send, "refresh_led"
+                ), mock.patch.object(
+                    button_send, "quiet_hours", return_value=False
+                ):
+                    button_send.run_guided_once(
+                        {
+                            "max_recording_seconds": 60,
+                            "after_listening": "play_only",
+                            "recording_mode": mode,
+                        }
+                    )
+
+                self.assertEqual(captured["replay_for_review"], expected_replay)
+                self.assertEqual(captured["send_on_stop"], expected_send_on_stop)
+                self.assertEqual(captured["recipient"], FAMILY)
+                self.assertEqual(captured["flow_kind"], "standalone")
 
     def test_card_claim_race_fails_closed_without_claiming_queue(self):
         self.selection_path.write_text("{}", encoding="utf-8")
@@ -461,7 +511,7 @@ class ButtonRoutingTests(unittest.TestCase):
             side_effect=AssertionError("queue was claimed"),
         ), mock.patch.object(button_send, "block_unavailable_recipient") as blocked:
             button_send.run_guided_once(
-                {"max_recording_seconds": 60, "after_listening": "play_only"}
+                {"max_recording_seconds": 60, "after_listening": "play_only", "recording_mode": "tap_review"}
             )
 
         blocked.assert_called_once_with()

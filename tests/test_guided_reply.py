@@ -398,6 +398,182 @@ class SessionTests(unittest.TestCase):
                 all(data["session_id"] == "stable-session-id" for _, data in events)
             )
 
+    def test_no_replay_skips_the_playback_but_still_demands_a_press(self):
+        """``replay_for_review=False`` removes the replay, not the consent.
+
+        ``approve_review`` is deliberately True: if the replay still ran it
+        would approve the message there and the send prompt would never play,
+        so these assertions prove the step was genuinely skipped.
+        """
+        for flow in ("reply", "standalone"):
+            with self.subTest(flow=flow), tempfile.TemporaryDirectory() as directory:
+                paths = self._paths(directory)
+                io = FakeIO(
+                    [RecordingResult(paths["reply"], 0.25, True)],
+                    approve_initial=True,
+                    approve_review=True,
+                )
+                events = []
+                store = OutboxStore(str(Path(directory) / "outbox"))
+                session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+
+                result = session.run(
+                    recipient="origin@g.us",
+                    flow_kind=flow,
+                    countdown_path=paths["standalone"],
+                    send_prompt_path=paths["send"],
+                    delete_warning_path=paths["warning"],
+                    not_sent_path=paths["not-sent"],
+                    incoming_path=paths["incoming"] if flow == "reply" else None,
+                    replay_for_review=False,
+                )
+
+                self.assertEqual(result, "approved")
+                self.assertFalse([c for c in io.calls if c[0] == "review"])
+                self.assertIn(("ordinary", "send.wav"), io.calls)
+                self.assertIn(("wait", 10.0), io.calls)
+                self.assertIn("guided_review_skipped", events)
+                self.assertNotIn("guided_review_played", events)
+                self.assertEqual(len(store.jobs()), 1)
+
+    def test_no_replay_still_warns_before_deleting_an_unsent_recording(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            io = FakeIO(
+                [RecordingResult(paths["reply"], 0.25, True)],
+                approve_initial=False,
+                approve_warning=False,
+            )
+            events = []
+            store = OutboxStore(str(Path(directory) / "outbox"))
+            session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+
+            result = session.run(
+                recipient="origin@g.us",
+                flow_kind="standalone",
+                countdown_path=paths["standalone"],
+                send_prompt_path=paths["send"],
+                delete_warning_path=paths["warning"],
+                not_sent_path=paths["not-sent"],
+                replay_for_review=False,
+            )
+
+            self.assertEqual(result, "deleted")
+            self.assertIn(("warning", "warning.wav"), io.calls)
+            self.assertIn(("ordinary", "not-sent.wav"), io.calls)
+            self.assertEqual(store.jobs(), [])
+
+    def test_replay_remains_the_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            io = FakeIO([RecordingResult(paths["reply"], 0.25, True)], approve_review=True)
+            store = OutboxStore(str(Path(directory) / "outbox"))
+            events = []
+            session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+
+            result = session.run(
+                recipient="origin@g.us",
+                flow_kind="standalone",
+                countdown_path=paths["standalone"],
+                send_prompt_path=paths["send"],
+                delete_warning_path=paths["warning"],
+                not_sent_path=paths["not-sent"],
+            )
+
+            self.assertEqual(result, "approved")
+            self.assertIn(("review", "reply.wav"), io.calls)
+            self.assertNotIn("guided_review_skipped", events)
+
+    def test_stop_press_sends_without_any_further_prompt(self):
+        """Two presses total: one to start talking, one to send."""
+        for flow in ("reply", "standalone"):
+            with self.subTest(flow=flow), tempfile.TemporaryDirectory() as directory:
+                paths = self._paths(directory)
+                io = FakeIO(
+                    [RecordingResult(paths["reply"], 0.25, True, stopped_by_press=True)],
+                    approve_initial=False,
+                    approve_warning=False,
+                    approve_review=False,
+                )
+                events = []
+                store = OutboxStore(str(Path(directory) / "outbox"))
+                session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+
+                result = session.run(
+                    recipient="origin@g.us",
+                    flow_kind=flow,
+                    countdown_path=paths["standalone"],
+                    send_prompt_path=paths["send"],
+                    delete_warning_path=paths["warning"],
+                    not_sent_path=paths["not-sent"],
+                    incoming_path=paths["incoming"] if flow == "reply" else None,
+                    replay_for_review=False,
+                    send_on_stop=True,
+                )
+
+                self.assertEqual(result, "approved")
+                self.assertEqual(len(store.jobs()), 1)
+                self.assertIn("guided_stop_press_sent", events)
+                # nothing else is played or waited on after the recording
+                self.assertFalse([c for c in io.calls if c[0] in ("review", "wait", "warning")])
+                self.assertNotIn(("ordinary", "send.wav"), io.calls)
+                self.assertNotIn(("ordinary", "not-sent.wav"), io.calls)
+
+    def test_recording_that_ends_on_its_own_is_never_sent_silently(self):
+        """No deliberate end means no deliberate send: ask, warn, delete."""
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            io = FakeIO(
+                [RecordingResult(paths["reply"], 0.25, True, stopped_by_press=False)],
+                approve_initial=False,
+                approve_warning=False,
+            )
+            events = []
+            store = OutboxStore(str(Path(directory) / "outbox"))
+            session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
+
+            result = session.run(
+                recipient="origin@g.us",
+                flow_kind="standalone",
+                countdown_path=paths["standalone"],
+                send_prompt_path=paths["send"],
+                delete_warning_path=paths["warning"],
+                not_sent_path=paths["not-sent"],
+                replay_for_review=False,
+                send_on_stop=True,
+            )
+
+            self.assertEqual(result, "deleted")
+            self.assertEqual(store.jobs(), [])
+            self.assertNotIn("guided_stop_press_sent", events)
+            self.assertIn(("ordinary", "send.wav"), io.calls)
+            self.assertIn(("warning", "warning.wav"), io.calls)
+            self.assertIn(("ordinary", "not-sent.wav"), io.calls)
+
+    def test_a_timed_out_recording_can_still_be_rescued_by_a_press(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            io = FakeIO(
+                [RecordingResult(paths["reply"], 0.25, True, stopped_by_press=False)],
+                approve_initial=True,
+            )
+            store = OutboxStore(str(Path(directory) / "outbox"))
+            session = GuidedSession(io, store, lambda kind, **data: None)
+
+            result = session.run(
+                recipient="origin@g.us",
+                flow_kind="standalone",
+                countdown_path=paths["standalone"],
+                send_prompt_path=paths["send"],
+                delete_warning_path=paths["warning"],
+                not_sent_path=paths["not-sent"],
+                replay_for_review=False,
+                send_on_stop=True,
+            )
+
+            self.assertEqual(result, "approved")
+            self.assertEqual(len(store.jobs()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
