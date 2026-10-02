@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from messagebox.identity import read_box_id
+from messagebox.device_time import time_synchronized
 from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
@@ -328,6 +329,7 @@ def create_app(
     state_path=STATE_PATH,
     adapter=None,
     connectivity_checker=None,
+    time_ready=time_synchronized,
     whatsapp_client=None,
     cloud_claim=None,
     nfc_client=None,
@@ -370,6 +372,12 @@ def create_app(
     whatsapp = whatsapp_client or WhatsAppPairingClient()
     cloud = cloud_claim
     cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+
+    def clock_ready():
+        try:
+            return time_ready() is True
+        except Exception:
+            return False
 
     def claim_client():
         nonlocal cloud
@@ -502,6 +510,7 @@ def create_app(
                 "safe_error": state["safe_error"],
                 "mode": selected_mode,
                 "transport": "cloud",
+                "clock_ready": selected_mode == "HOME" and clock_ready(),
             }
         whatsapp_state = safe_whatsapp_state(state)
         if whatsapp_state["status"] == "ready" and state["phase"] == WHATSAPP_PENDING:
@@ -834,7 +843,16 @@ def create_app(
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
             if method == "GET" and path == "/api/cloud-claim" and cloud_mode and selected_mode == "HOME":
                 try:
-                    return _json_response(claim_client().status())(start_response)
+                    document = claim_client().status()
+                    if document.get("status") == "not_started":
+                        document = {**document, "clock_ready": clock_ready()}
+                    return _json_response(document)(start_response)
+                except CloudClaimClockError as exc:
+                    # Retain cancellation recovery without exposing the link/token.
+                    document = {"error": "clock_not_ready"}
+                    if exc.claim_id:
+                        document["claim_id"] = exc.claim_id
+                    return _json_response(document, "503 Service Unavailable")(start_response)
                 except CloudClaimError as exc:
                     raise RequestError("503 Service Unavailable", str(exc)) from exc
             if method == "GET" and path == "/api/cloud-claim/qr" and cloud_mode and selected_mode == "HOME":
@@ -847,6 +865,8 @@ def create_app(
                 _require_same_origin(environ, expected_origin)
                 if store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
                     raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+                if not clock_ready():
+                    raise RequestError("503 Service Unavailable", "clock_not_ready")
                 try:
                     return _json_response(claim_client().start())(start_response)
                 except CloudClaimClockError as exc:

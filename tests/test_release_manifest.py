@@ -21,7 +21,7 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 88)
+        self.assertEqual(len(paths), 89)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
@@ -40,6 +40,7 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertIn("messagebox/business_receive.py", paths)
         self.assertIn("messagebox/cloud_device.py", paths)
         self.assertIn("messagebox/device_http.py", paths)
+        self.assertIn("messagebox/device_time.py", paths)
         self.assertIn("messagebox/cloud_runtime.py", paths)
         self.assertIn("messagebox/cloud_claim.py", paths)
         self.assertIn("messagebox/qrcodegen.py", paths)
@@ -86,7 +87,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 88)
+            self.assertEqual(len(entries), 89)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(

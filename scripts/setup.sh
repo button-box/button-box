@@ -19,7 +19,7 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="__init__.py business_send.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
+PACKAGE_PYTHON="__init__.py business_send.py device_http.py device_time.py cloud_device.py cloud_claim.py cloud_runtime.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
 make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py business_receive.py wifi_change.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py

@@ -8,6 +8,7 @@ function harness() {
   let poll;
   let finish;
   const location = { href: "" };
+  let elapsed = 0;
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {
       hidden: false, disabled: false, textContent: "", handlers: {},
@@ -18,6 +19,7 @@ function harness() {
   };
   vm.runInNewContext(fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/cloud-connect.js`, "utf8"), {
     document: { getElementById: node },
+    performance: { now: () => elapsed },
     window: { setInterval(fn) { poll = fn; }, setTimeout(fn) { finish = fn; }, location },
     fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
   });
@@ -27,6 +29,7 @@ function harness() {
   };
   return {
     node, requests, respond,
+    advance: ms => { elapsed += ms; },
     finishNavigation: () => { finish(); return location.href; },
     beginPoll: () => poll(),
     async poll(data, ok = true) {
@@ -82,23 +85,51 @@ test("a later confirmed claim state clears an uncertain start failure without a 
   expect(h.requests.filter(request => request.url === "/api/cloud-claim/start")).toHaveLength(1);
 });
 
-test("clock correction explains the wait and lets the owner retry without losing the expiry guard", async () => {
+test("clock wait continues one requested connection automatically after synchronization", async () => {
   const h = harness();
-  await h.respond(h.requests[0], { status: "not_started" });
-  const start = h.node("cloud-start");
-  const attempt = start.handlers.click();
+  await h.respond(h.requests[0], { status: "not_started", clock_ready: true });
+  const attempt = h.node("cloud-start").handlers.click();
   await h.respond(h.requests.at(-1), { error: "clock_not_ready" }, false);
   await attempt;
-  expect(h.node("cloud-status").textContent).toBe("Your box is setting its clock. Try again in a moment.");
-  expect(start.disabled).toBe(false);
-  await h.poll({ status: "not_started" });
-  expect(h.node("cloud-status").textContent).toContain("setting its clock");
-  const retry = start.handlers.click();
+  expect(h.node("cloud-status").textContent).toContain("Finishing setup");
+  expect(h.node("cloud-start").disabled).toBe(true);
+  await h.poll({ status: "not_started", clock_ready: false });
+  expect(h.requests.filter(r => r.url === "/api/cloud-claim/start")).toHaveLength(1);
+  const resumed = h.beginPoll();
+  await h.respond(h.requests.at(-1), { status: "not_started", clock_ready: true });
+  expect(h.requests.at(-1).url).toBe("/api/cloud-claim/start");
   await h.respond(h.requests.at(-1), waiting);
-  await retry;
+  await resumed;
   expect(h.node("cloud-link").href).toBe(waiting.whatsapp_url);
-  expect(h.node("cloud-status").textContent).toContain("Open WhatsApp");
+  await h.poll(waiting);
+  expect(h.requests.filter(r => r.url === "/api/cloud-claim/start")).toHaveLength(2);
 });
+
+test("initial time check keeps connection disabled without creating a link", async () => {
+  const h = harness();
+  expect(h.node("cloud-start").disabled).toBe(true);
+  await h.respond(h.requests[0], { status: "not_started", clock_ready: false });
+  expect(h.node("cloud-status").textContent).toContain("continue automatically");
+  await h.poll({ status: "not_started", clock_ready: true });
+  expect(h.node("cloud-start").disabled).toBe(false);
+  expect(h.requests.every(r => !r.options?.method)).toBe(true);
+});
+
+test("time wait timeout bounds automatic retry using elapsed time and leaves help and manual retry", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], { status: "not_started", clock_ready: true });
+  const attempt = h.node("cloud-start").handlers.click();
+  await h.respond(h.requests.at(-1), { error: "clock_not_ready" }, false);
+  await attempt;
+  h.advance(90_001);
+  await h.poll({ status: "not_started", clock_ready: false });
+  expect(h.node("cloud-start").disabled).toBe(false);
+  expect(h.node("cloud-start").textContent).toBe("Try again");
+  expect(h.node("cloud-status").textContent).toContain("ask for help");
+  await h.poll({ status: "not_started", clock_ready: true });
+  expect(h.requests.filter(r => r.url === "/api/cloud-claim/start")).toHaveLength(1);
+});
+
 
 test("a poll already in flight cannot replace a successful connection start", async () => {
   const h = harness();
@@ -173,4 +204,37 @@ test("uncertain cancellation stays retryable after status readback and does not 
   expect(h.node("cloud-status").textContent).toContain("connected before cancellation finished");
   expect(h.node("cloud-cancel").hidden).toBe(true);
   expect(h.node("cloud-complete").hidden).toBe(false);
+});
+
+
+test("clock readiness flapping cannot restart the automatic wait budget", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], {status:"not_started", clock_ready:true});
+  const attempt = h.node("cloud-start").handlers.click();
+  await h.respond(h.requests.at(-1), {error:"clock_not_ready"}, false);
+  await attempt;
+  h.advance(89_000);
+  const resumed = h.beginPoll();
+  await h.respond(h.requests.at(-1), {status:"not_started", clock_ready:true});
+  await h.respond(h.requests.at(-1), {error:"clock_not_ready"}, false);
+  await resumed;
+  h.advance(1_001);
+  await h.poll({status:"not_started", clock_ready:false});
+  expect(h.node("cloud-start").textContent).toBe("Try again");
+  await h.poll({status:"not_started", clock_ready:true});
+  expect(h.requests.filter(r => r.url === "/api/cloud-claim/start")).toHaveLength(2);
+});
+
+test("reloaded pending claim can be cancelled while its link stays hidden until time is ready", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], {error:"clock_not_ready", claim_id:waiting.claim_id}, false);
+  expect(h.node("cloud-claim").hidden).toBe(true);
+  expect(h.node("cloud-cancel").hidden).toBe(false);
+  expect(h.node("cloud-qr").src).toBeUndefined();
+  const cancellation = h.node("cloud-cancel").handlers.click();
+  const request = h.requests.at(-1);
+  expect(request.url).toBe("/api/cloud-claim/cancel");
+  expect(request.options.body).toBe(`claim_id=${waiting.claim_id}`);
+  await h.respond(request, {status:"cancelled"});
+  await cancellation;
 });

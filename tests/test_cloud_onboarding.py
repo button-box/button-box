@@ -53,9 +53,10 @@ class CloudOnboardingTests(unittest.TestCase):
         self.adapter = mock.Mock()
         self.checker = mock.Mock(spec=[], return_value={"ok": True, "proof": sorted(PROOFS), "error": None})
         self.completions = []
+        self.clock_ready = mock.Mock(return_value=True)
         with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
             self.app = create_app(mode="HOME", config={"device_id": "A7K2"},
-                state_store=state, cloud_claim=self.cloud,
+                state_store=state, cloud_claim=self.cloud, time_ready=self.clock_ready,
                 whatsapp_client=self.whatsapp, nfc_client=self.nfc, adapter=self.adapter,
                 completion_request=lambda **kwargs: self.completions.append(kwargs),
                 caregiver_settings=SettingsStore(root / "settings.json", environ={"TZ": "UTC"}),
@@ -112,7 +113,7 @@ class CloudOnboardingTests(unittest.TestCase):
                 self.assertEqual(response["status"], "200 OK")
                 document = json.loads(response["body"])
                 self.assertEqual(document["transport"], "cloud")
-                self.assertEqual(set(document), {"phase", "box_id", "safe_error", "mode", "transport"})
+                self.assertEqual(set(document), {"phase", "box_id", "safe_error", "mode", "transport", "clock_ready"})
                 self.assertEqual(self.request("GET", "/")["headers"]["Location"], "/cloud-connect")
         self.assertEqual(self.whatsapp.mock_calls, [])
         self.assertEqual(self.nfc.mock_calls, [])
@@ -214,10 +215,10 @@ class CloudOnboardingTests(unittest.TestCase):
         from tests.test_cloud_claim import FakeClient, ID, NOW
         root = Path(self.temp.name)
         client = FakeClient()
-        claim = CloudClaim(client, path=root / "claim.json", clock=lambda: NOW)
+        claim = CloudClaim(client, path=root / "claim.json", clock=lambda: NOW, time_ready=lambda: True)
         with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
             self.app = create_app(mode="HOME", config={"device_id": "A7K2"},
-                state_store=StateStore(root / "state.json"), cloud_claim=claim,
+                state_store=StateStore(root / "state.json"), cloud_claim=claim, time_ready=lambda: True,
                 completion_request=lambda **kwargs: self.completions.append(kwargs),
                 caregiver_settings=SettingsStore(root / "settings.json", environ={"TZ": "UTC"}),
                 connectivity_checker=lambda: {"ok": True, "proof": sorted(PROOFS), "error": None})
@@ -236,12 +237,49 @@ class CloudOnboardingTests(unittest.TestCase):
         cancelled = self.request("POST", "/api/cloud-claim/cancel", f"http://{HOST}", body)
         self.assertEqual(cancelled["status"], "200 OK")
         self.assertEqual(json.loads(cancelled["body"]), {"status": "cancelled"})
-        self.assertEqual(json.loads(self.request("GET", "/api/cloud-claim")["body"]), {"status": "not_started"})
+        self.assertEqual(json.loads(self.request("GET", "/api/cloud-claim")["body"]), {"status": "not_started", "clock_ready": True})
         self.assertFalse(claim.consume_press())
         self.assertEqual(client.register_calls, 1)
         self.assertEqual(client.confirm_calls, 1)
         self.assertEqual(client.cancel_calls, [ID])
         self.assertEqual(self.completions, [])
+
+
+
+
+
+    def test_unsynchronized_pending_claim_returns_only_safe_cancellation_reference(self):
+        with mock.patch.object(self.cloud, "status", side_effect=CloudClaimClockError("cloud clock is not ready", claim_id="synthetic-claim-001")):
+            response = self.request("GET", "/api/cloud-claim")
+        self.assertEqual(response["status"], "503 Service Unavailable")
+        self.assertEqual(json.loads(response["body"]), {"error": "clock_not_ready", "claim_id": "synthetic-claim-001"})
+
+    def test_clock_readiness_is_checked_after_restart_even_with_durable_wifi_proof(self):
+        self.clock_ready.return_value = False
+        before = self.state.load()
+        state = json.loads(self.request("GET", "/api/state")["body"])
+        self.assertFalse(state["clock_ready"])
+        status = json.loads(self.request("GET", "/api/cloud-claim")["body"])
+        self.assertEqual(status, {"status": "not_started", "clock_ready": False})
+        denied = self.request("POST", "/api/cloud-claim/start", f"http://{HOST}")
+        self.assertEqual(denied["status"], "503 Service Unavailable")
+        self.assertEqual(json.loads(denied["body"]), {"error": "clock_not_ready"})
+        self.assertEqual(self.cloud.started, 0)
+        self.assertEqual(self.state.load(), before)
+        self.assertEqual(self.request("GET", "/cloud-connect")["status"], "200 OK")
+        self.assertEqual(self.request("GET", "/static/cloud-connect.js")["status"], "200 OK")
+        self.clock_ready.return_value = True
+        self.assertEqual(self.request("POST", "/api/cloud-claim/start", f"http://{HOST}")["status"], "200 OK")
+        self.assertEqual(self.cloud.started, 1)
+
+    def test_clock_probe_failure_closes_creation_gate_but_preserves_claimed_and_cancel_recovery(self):
+        self.clock_ready.side_effect = OSError("unavailable")
+        self.cloud.claimed = True
+        self.assertEqual(json.loads(self.request("GET", "/api/cloud-claim")["body"]), {"status": "claimed"})
+        self.cloud.claimed = False
+        response = self.request("POST", "/api/cloud-claim/cancel", f"http://{HOST}", b"claim_id=synthetic-claim-001")
+        self.assertEqual(response["status"], "200 OK")
+        self.assertEqual(self.request("POST", "/api/cloud-claim/start", f"http://{HOST}")["status"], "503 Service Unavailable")
 
 
 if __name__ == "__main__":

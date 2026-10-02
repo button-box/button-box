@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from messagebox.cloud_device import CLAIM_FILE, CloudDeviceClient, CloudDeviceError, atomic_json, capabilities, open_private_lock
+from messagebox.device_time import time_synchronized
 from messagebox.runtime_paths import NFC_HEALTH_FILE
 from messagebox.qrcodegen import QrCode
 
@@ -24,12 +25,17 @@ class CloudClaimError(Exception):
 class CloudClaimClockError(CloudClaimError):
     """Home Wi-Fi is ready but the box clock is still catching up."""
 
+    def __init__(self, message, *, claim_id=None):
+        super().__init__(message)
+        self.claim_id = claim_id if isinstance(claim_id, str) and _ID.fullmatch(claim_id) else None
+
 
 class CloudClaim:
-    def __init__(self, client=None, *, path=CLAIM_FILE, clock=time.time):
+    def __init__(self, client=None, *, path=CLAIM_FILE, clock=time.time, time_ready=time_synchronized):
         self.client = client or CloudDeviceClient.from_environment()
         self.path = Path(path)
         self.clock = clock
+        self.time_ready = time_ready
         self.lock_path = self.path.with_name(".claim.lock")
 
     def _read(self):
@@ -57,7 +63,10 @@ class CloudClaim:
     def start(self):
         with self._locked():
             prior = self._read()
-            if prior and (prior.get("cancel_pending") or prior["expires_at"] > self.clock()):
+            if prior and prior.get("cancel_pending"):
+                return self._public(prior)
+            self._require_time_ready()
+            if prior and prior["expires_at"] > self.clock():
                 return self._public(prior)
             # Setup cannot read the runtime user's private health directory.
             # Optional hardware discovery must not prevent claiming the box;
@@ -66,6 +75,7 @@ class CloudClaim:
                 nfc = NFC_HEALTH_FILE.exists()
             except OSError:
                 nfc = False
+            self._require_time_ready()
             try:
                 result = self.client.register(capabilities(nfc=nfc))
             except CloudDeviceError as exc:
@@ -73,6 +83,7 @@ class CloudClaim:
             if result.get("claimed") is True:
                 self.path.unlink(missing_ok=True)
                 return {"status": "claimed"}
+            self._require_time_ready()
             claim_id, token = result.get("claim_id"), result.get("claim_token")
             link, expires = result.get("whatsapp_url"), result.get("expires_at")
             if (not isinstance(claim_id, str) or not _ID.fullmatch(claim_id)
@@ -93,12 +104,22 @@ class CloudClaim:
                 raise CloudClaimClockError("cloud clock is not ready")
             document = {"claim_id": claim_id, "expires_at": expires,
                         "whatsapp_url": link, "physical_confirmed": False}
+            public = self._public(document)
             atomic_json(self.path, document)
-            return self._public(document)
+            return public
+
+    def _require_time_ready(self, *, claim_id=None):
+        try:
+            ready = self.time_ready() is True
+        except Exception:
+            ready = False
+        if not ready:
+            raise CloudClaimClockError("cloud clock is not ready", claim_id=claim_id)
 
     def _public(self, document):
         if document.get("cancel_pending"):
             return {"status": "cancellation_pending", "claim_id": document["claim_id"]}
+        self._require_time_ready(claim_id=document["claim_id"])
         return {"status": "waiting_for_whatsapp" if document["physical_confirmed"] else "awaiting_button",
                 "claim_id": document["claim_id"],
                 "whatsapp_url": document["whatsapp_url"],
@@ -112,8 +133,15 @@ class CloudClaim:
         try:
             remote = self.client.claim()
         except CloudDeviceError as exc:
-            if document is None:
-                return {"status": "not_started"}
+            # A bad clock can also prevent TLS. Read the current claim again so
+            # cancellation recovery never uses a stale or removed reference.
+            with self._locked():
+                current = self._read()
+                if current is None:
+                    return {"status": "not_started"}
+                if current.get("cancel_pending"):
+                    return self._public(current)
+                self._require_time_ready(claim_id=current["claim_id"])
             raise CloudClaimError("cloud claim status is unavailable") from exc
         with self._locked():
             current = self._read()
@@ -124,7 +152,10 @@ class CloudClaim:
                 return {"status": "claimed"}
             if current is None:
                 return {"status": "not_started"}
-            if not current.get("cancel_pending") and current["expires_at"] <= self.clock():
+            if current.get("cancel_pending"):
+                return self._public(current)
+            self._require_time_ready(claim_id=current["claim_id"])
+            if current["expires_at"] <= self.clock():
                 return {"status": "expired"}
             return self._public(current)
 
@@ -153,7 +184,10 @@ class CloudClaim:
 
     def qr_svg(self):
         document = self._read()
-        if document is None or document.get("cancel_pending") or document["expires_at"] <= self.clock():
+        if document is None or document.get("cancel_pending"):
+            raise CloudClaimError("claim is unavailable")
+        self._require_time_ready()
+        if document["expires_at"] <= self.clock():
             raise CloudClaimError("claim is unavailable")
         qr = QrCode.encode_text(document["whatsapp_url"], QrCode.Ecc.MEDIUM)
         size = qr.get_size()
@@ -163,6 +197,7 @@ class CloudClaim:
                 if qr.get_module(x, y):
                     cells.append(f"M{x+4},{y+4}h1v1h-1z")
         path = "".join(cells)
+        self._require_time_ready()
         return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size+8} {size+8}" '
                 f'role="img" aria-label="WhatsApp claim QR code"><rect width="100%" height="100%" '
                 f'fill="white"/><path d="{path}" fill="black"/></svg>').encode("ascii")
@@ -173,17 +208,28 @@ class CloudClaim:
             document = self._read()
             if document is not None and document.get("cancel_pending"):
                 return True
-            if document is None or document["expires_at"] <= self.clock():
+            if document is None:
+                return False
+            try:
+                self._require_time_ready()
+            except CloudClaimClockError:
+                return True  # Uncertain expiry must never turn claim intent into recording.
+            if document["expires_at"] <= self.clock():
                 return False
             if document["physical_confirmed"]:
                 return True
             try:
+                self._require_time_ready()
                 result = self.client.confirm_claim(document["claim_id"])
-            except CloudDeviceError:
+            except (CloudDeviceError, CloudClaimClockError):
                 return True  # Keep claim mode; a later press may retry safely.
             if result.get("claimed") is True:
                 self.path.unlink(missing_ok=True)
             elif result.get("claimed") is False:
+                try:
+                    self._require_time_ready()
+                except CloudClaimClockError:
+                    return True
                 document["physical_confirmed"] = True
                 atomic_json(self.path, document)
             else:
