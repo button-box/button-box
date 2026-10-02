@@ -49,7 +49,7 @@ class ClaimTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "claim.json"
         self.client = FakeClient()
         self.clock = lambda: NOW
-        self.claim = CloudClaim(self.client, path=self.path, clock=self.clock)
+        self.claim = CloudClaim(self.client, path=self.path, clock=self.clock, time_ready=lambda: True)
 
     def test_resumable_claim_needs_physical_press_and_local_qr(self):
         self.assertEqual(self.claim.status()["status"], "not_started")
@@ -150,7 +150,7 @@ class ClaimTests(unittest.TestCase):
         self.client.cancel_claim = mock.Mock(side_effect=CloudDeviceError("unavailable"))
         with self.assertRaises(CloudClaimError):
             self.claim.cancel(ID)
-        restarted = CloudClaim(self.client, path=self.path, clock=lambda: NOW + 601)
+        restarted = CloudClaim(self.client, path=self.path, clock=lambda: NOW + 601, time_ready=lambda: True)
         self.assertEqual(restarted.status(), {"status": "cancellation_pending", "claim_id": ID})
         self.assertEqual(restarted.start(), restarted.status())
         self.assertEqual(self.client.register_calls, 1)
@@ -248,6 +248,159 @@ class ClaimTests(unittest.TestCase):
         with mock.patch("messagebox.cloud_device.os.fchmod", side_effect=deny_other_owner):
             self.assertTrue(self.claim.consume_press())
 
+    def test_unsynchronized_new_claim_does_not_register_at_any_wall_clock(self):
+        for offset in (-86_400, 86_400):
+            with self.subTest(offset=offset):
+                claim = CloudClaim(self.client, path=self.path, clock=lambda: NOW + offset,
+                                   time_ready=lambda: False)
+                with self.assertRaises(CloudClaimClockError):
+                    claim.start()
+                self.assertFalse(self.path.exists())
+                self.assertEqual(self.client.register_calls, 0)
+                self.assertFalse(claim.consume_press())
+
+    def test_unsynchronized_restart_preserves_pending_claim_and_owns_press_until_ready(self):
+        started = self.claim.start()
+        original = self.path.read_bytes()
+        for offset in (-86_400, 86_400):
+            with self.subTest(offset=offset):
+                restarted = CloudClaim(self.client, path=self.path, clock=lambda: NOW + offset,
+                                       time_ready=lambda: False)
+                for operation in (restarted.start, restarted.status, restarted.qr_svg):
+                    with self.assertRaises(CloudClaimClockError):
+                        operation()
+                self.assertTrue(restarted.consume_press())
+                self.assertEqual(self.path.read_bytes(), original)
+                self.assertEqual(self.client.register_calls, 1)
+                self.assertEqual(self.client.confirm_calls, 0)
+                restarted.time_ready = lambda: True
+                restarted.clock = lambda: NOW
+                self.assertEqual(restarted.start(), started)
+                self.assertEqual(restarted.status(), started)
+
+    def test_sync_loss_during_registration_preserves_prior_claim_and_allows_retry(self):
+        self.claim.start()
+        original = self.path.read_bytes()
+        self.claim.clock = lambda: NOW + 601
+        ready = True
+        def register(_capabilities):
+            nonlocal ready
+            ready = False
+            return {"claim_id": ID, "claim_token": TOKEN, "whatsapp_url": URL,
+                    "expires_at": NOW + 1201}
+        self.claim.time_ready = lambda: ready
+        self.client.register = mock.Mock(side_effect=register)
+        with self.assertRaises(CloudClaimClockError):
+            self.claim.start()
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertTrue(self.claim.consume_press())
+        self.assertEqual(self.client.confirm_calls, 0)
+        ready = True
+        self.client.register.side_effect = None
+        self.client.register.return_value = {"claim_id": ID, "claim_token": TOKEN,
+            "whatsapp_url": URL, "expires_at": NOW + 1201}
+        self.assertEqual(self.claim.start()["status"], "awaiting_button")
+
+    def test_readiness_is_rechecked_before_registration_and_pending_publication(self):
+        for readiness, registrations in (([True, False], 0), ([True, True, True, False], 1)):
+            with self.subTest(readiness=readiness):
+                self.client.register_calls = 0
+                self.claim.time_ready = mock.Mock(side_effect=readiness)
+                with self.assertRaises(CloudClaimClockError):
+                    self.claim.start()
+                self.assertFalse(self.path.exists())
+                self.assertEqual(self.client.register_calls, registrations)
+
+    def test_unsynchronized_cancellation_and_authoritative_claimed_recovery_still_work(self):
+        self.claim.start()
+        self.claim.time_ready = lambda: False
+        self.client.cancel_claim = mock.Mock(side_effect=CloudDeviceError("unavailable"))
+        with self.assertRaises(CloudClaimError):
+            self.claim.cancel(ID)
+        pending = self.path.read_bytes()
+        self.assertEqual(self.claim.start(), {"status": "cancellation_pending", "claim_id": ID})
+        self.assertEqual(self.claim.status(), self.claim.start())
+        self.assertTrue(self.claim.consume_press())
+        self.assertEqual(self.path.read_bytes(), pending)
+        self.client.cancel_claim = FakeClient().cancel_claim
+        self.assertEqual(self.claim.cancel(ID), {"status": "cancelled"})
+        self.assertFalse(self.path.exists())
+        self.claim.time_ready = lambda: True
+        self.claim.start()
+        self.claim.time_ready = lambda: False
+        self.client.claimed = True
+        self.assertEqual(self.claim.status(), {"status": "claimed"})
+        self.assertFalse(self.path.exists())
+
+    def test_authoritative_registration_claimed_response_survives_sync_loss(self):
+        self.claim.start()
+        self.claim.clock = lambda: NOW + 601
+        def register(_capabilities):
+            self.claim.time_ready = lambda: False
+            return {"claimed": True}
+        self.client.register = register
+        self.assertEqual(self.claim.start(), {"status": "claimed"})
+        self.assertFalse(self.path.exists())
+
+    def test_loss_of_sync_before_confirmation_or_qr_output_never_publishes_or_records(self):
+        self.claim.start()
+        original = self.path.read_bytes()
+        self.claim.time_ready = mock.Mock(side_effect=[True, False])
+        self.assertTrue(self.claim.consume_press())
+        self.assertEqual(self.client.confirm_calls, 0)
+        self.claim.time_ready = mock.Mock(side_effect=[True, False])
+        with self.assertRaises(CloudClaimClockError):
+            self.claim.qr_svg()
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_sync_loss_during_confirmation_preserves_unconfirmed_local_claim(self):
+        self.claim.start()
+        original = self.path.read_bytes()
+        self.claim.time_ready = mock.Mock(side_effect=[True, True, False])
+        self.assertTrue(self.claim.consume_press())
+        self.assertEqual(self.client.confirm_calls, 1)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.claim.time_ready = lambda: True
+        self.assertTrue(self.claim.consume_press())
+        self.assertTrue(self.claim._read()["physical_confirmed"])
+
+    def test_exception_in_readiness_probe_fails_closed(self):
+        self.claim.time_ready = mock.Mock(side_effect=OSError("unavailable"))
+        with self.assertRaises(CloudClaimClockError):
+            self.claim.start()
+        self.assertEqual(self.client.register_calls, 0)
+
+
+    def test_unsynchronized_remote_failure_retains_current_safe_cancellation_reference(self):
+        self.claim.start()
+        before = self.path.read_bytes()
+        self.claim.time_ready = lambda: False
+        self.client.claim = mock.Mock(side_effect=CloudDeviceError("TLS failed"))
+        with self.assertRaises(CloudClaimClockError) as error:
+            self.claim.status()
+        self.assertEqual(error.exception.claim_id, ID)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.claim.cancel(ID), {"status": "cancelled"})
+
+    def test_failed_status_poll_never_returns_an_old_removed_or_replaced_claim_reference(self):
+        import json
+        self.claim.start()
+        self.claim.time_ready = lambda: False
+        newer_id = "differentclaim123456"
+        def replaced_during_poll():
+            document = json.loads(self.path.read_text())
+            document["claim_id"] = newer_id
+            self.path.write_text(json.dumps(document))
+            raise CloudDeviceError("unavailable")
+        self.client.claim = replaced_during_poll
+        with self.assertRaises(CloudClaimClockError) as error:
+            self.claim.status()
+        self.assertEqual(error.exception.claim_id, newer_id)
+        def removed_during_poll():
+            self.path.unlink()
+            raise CloudDeviceError("unavailable")
+        self.client.claim = removed_during_poll
+        self.assertEqual(self.claim.status(), {"status": "not_started"})
 
 if __name__ == "__main__":
     unittest.main()

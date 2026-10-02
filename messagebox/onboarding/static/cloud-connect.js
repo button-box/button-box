@@ -14,12 +14,41 @@ let actionPending = false;
 let actionVersion = 0;
 let actionError = "";
 let currentStatus = "";
+let clockWaitSince = null;
+let resumeStart = false;
+const clockWaitLimit = 90_000;
+start.disabled = true;
+
+function renderClockWait() {
+  if (clockWaitSince === null) clockWaitSince = performance.now();
+  const timedOut = performance.now() - clockWaitSince >= clockWaitLimit;
+  if (timedOut) resumeStart = false;
+  claim.hidden = true;
+  qr.removeAttribute("src");
+  complete.hidden = true;
+  start.hidden = Boolean(currentClaim);
+  start.disabled = !timedOut;
+  start.textContent = timedOut ? "Try again" : "Connect WhatsApp";
+  cancel.hidden = !currentClaim;
+  status.textContent = timedOut
+    ? "Wi-Fi is connected, but setup could not finish yet. Check your internet connection or ask for help."
+    : "Finishing setup… Your box is setting its clock. This page will continue automatically.";
+}
 
 function render(data) {
+  if (data.status === "clock_not_ready" || data.clock_ready === false) {
+    if (data.claim_id) currentClaim = data.claim_id;
+    renderClockWait();
+    return;
+  }
+  clockWaitSince = null;
+  start.disabled = false;
+  start.textContent = "Connect WhatsApp";
   if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed", "cancelled"].includes(data.status)) {
     actionError = "";
   }
   currentStatus = data.status;
+  if (["awaiting_button", "waiting_for_whatsapp", "claimed", "cancelled", "cancellation_pending"].includes(data.status)) resumeStart = false;
   const waiting = data.status === "awaiting_button" || data.status === "waiting_for_whatsapp";
   const cancelling = data.status === "cancellation_pending";
   currentClaim = data.claim_id || "";
@@ -54,10 +83,20 @@ async function refresh() {
   const version = actionVersion;
   try {
     const response = await fetch("/api/cloud-claim", { cache: "no-store" });
-    if (!response.ok) throw new Error("unavailable");
     const data = await response.json();
+    if (!response.ok && data.error !== "clock_not_ready") throw new Error("unavailable");
     // A poll started before a click must not replace that action's result.
-    if (version === actionVersion && !finishing && !actionPending) render(data);
+    if (version === actionVersion && !finishing && !actionPending) {
+      const canResume = resumeStart && data.status === "not_started" && data.clock_ready === true
+        && clockWaitSince !== null && performance.now() - clockWaitSince < clockWaitLimit;
+      const startedWaitingAt = clockWaitSince;
+      render(response.ok ? data : { status: "clock_not_ready", claim_id: data.claim_id });
+      if (canResume) {
+        clockWaitSince = startedWaitingAt;
+        resumeStart = false;
+        await beginStart(true);
+      }
+    }
   } catch {
     if (version === actionVersion && !finishing && !actionPending && !actionError) {
       status.textContent = "Connection status is unavailable. Try again shortly.";
@@ -65,12 +104,14 @@ async function refresh() {
   }
 }
 
-start.addEventListener("click", async () => {
+async function beginStart(automatic = false) {
   if (actionPending || finishing) return;
   start.disabled = true;
   actionPending = true;
   actionVersion++;
   actionError = "";
+  if (!automatic) clockWaitSince = null;
+  resumeStart = false;
   status.textContent = "Creating your connection link…";
   try {
     const response = await fetch("/api/cloud-claim/start", { method: "POST", cache: "no-store" });
@@ -78,15 +119,19 @@ start.addEventListener("click", async () => {
     if (!response.ok) throw new Error(data.error === "clock_not_ready" ? "clock_not_ready" : "unavailable");
     render(data);
   } catch (error) {
-    actionError = error.message === "clock_not_ready"
-      ? "Your box is setting its clock. Try again in a moment."
-      : "Could not connect to WhatsApp. Try again in a moment.";
-    status.textContent = actionError;
+    if (error.message === "clock_not_ready") {
+      resumeStart = true;
+      renderClockWait();
+    } else {
+      actionError = "Could not connect to WhatsApp. Try again in a moment.";
+      status.textContent = actionError;
+    }
   } finally {
     actionPending = false;
-    start.disabled = false;
+    start.disabled = clockWaitSince !== null && performance.now() - clockWaitSince < clockWaitLimit;
   }
-});
+}
+start.addEventListener("click", () => beginStart());
 cancel.addEventListener("click", async () => {
   if (actionPending || finishing || !currentClaim) return;
   const claimId = currentClaim;

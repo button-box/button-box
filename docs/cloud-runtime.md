@@ -41,6 +41,20 @@ claim opens the hosted dashboard. Standalone setup and management remain availab
 when the selected transport is wacli. A dashboard link does not prove entitlement,
 message delivery or physical acceptance; those still require independent checks.
 
+Cloud setup checks current OS time synchronization before enabling connection,
+including when durable Wi-Fi proof survived a restart. The Wi-Fi portal and help
+remain available while synchronization is pending. Pending link creation,
+publication, QR generation and physical confirmation also check time readiness
+inside the claim boundary. Cancellation and authoritative ownership recovery
+remain possible while the clock is uncertain; existing claim files are preserved.
+The browser uses its existing status poll and a monotonic 90-second wait budget.
+It resumes a requested connection once time is ready, or offers manual recovery
+when that budget ends. TLS validation and the ten-minute link limit are unchanged.
+This gate uses the existing OS NTP service, not a new boot dependency that could
+prevent the owner from configuring Wi-Fi. Network time must be reachable; a
+battery clock is not assumed. This change covers connection setup, not an audit
+or acceptance of unrelated retention, billing or runtime time-dependent flows.
+
 The poller accepts family audio only from a fresh authenticated heartbeat and
 the exact inbox message. It verifies the media hash before publishing a WAV,
 then acknowledges the durable queue entry. The button checks the same fresh
