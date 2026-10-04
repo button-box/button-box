@@ -2,16 +2,26 @@ import hashlib
 import json
 import subprocess
 import tempfile
+import sys
+import types
 import unittest
 import wave
 from pathlib import Path
 from unittest import mock
 
+from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
 from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
 from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
 from messagebox.played_history import list_played_history
 from messagebox.settings import SettingsStore
+
+gpiozero = types.ModuleType("gpiozero")
+gpiozero.Button = object
+gpiozero.LED = object
+with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
+    from messagebox import button_send
+
 
 NOW = 1_800_000_000
 PERSON = {"id": "person1234567890123456", "wa_id": "12025550101", "display_name": "Family", "role": "family"}
@@ -502,88 +512,164 @@ class CloudRuntimeTests(unittest.TestCase):
                          [mock.call("first-enrollment"), mock.call("first-enrollment")])
         self.assertEqual(router.enrollment.active.call_count, 1)
 
-    def test_preview_crash_intent_suppresses_replay(self):
+    def preview(self, ringtone="gentle_music_box", operation_id=OP):
+        return {"operation_id": operation_id, "sequence": 1, "kind": "preview_ringtone",
+                "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"ringtone_id": ringtone}}
+
+    def audio_owner(self):
+        return mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
+            _recording=False, _guided_active=False,
+            button=types.SimpleNamespace(is_pressed=False), create=True)
+
+    def test_preview_waits_for_idle_button_owner_and_acknowledges_only_playback(self):
         self.runtime.heartbeat()
+        item = self.preview()
+        with mock.patch.object(button_send.subprocess, "run") as poller_play:
+            self.runtime._command(item, NOW)
+            self.runtime._command(item, NOW)
+            self.runtime._finish_previews()
+        poller_play.assert_not_called()
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "received")
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
         write_pcm_wav(ringtone_dir / "ring1.wav", 1)
-        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
-                "created_at": NOW, "expires_at": NOW + 60,
-                "payload": {"ringtone_id": "gentle_music_box"}}
-        with mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
-             mock.patch("messagebox.cloud_runtime.subprocess.run", side_effect=RuntimeError("crash")) as play:
-            with self.assertRaisesRegex(RuntimeError, "crash"):
-                self.runtime._command(item, NOW)
-            self.runtime._command(item, NOW)
-        self.assertEqual(play.call_count, 1)
+        with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+            for flag in ("_recording", "_guided_active"):
+                with mock.patch.object(button_send, flag, True):
+                    self.assertFalse(button_send.maybe_play_cloud_sound())
+            with mock.patch.object(button_send.button, "is_pressed", True):
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+            play.assert_not_called()
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        play.assert_called_once_with(ringtone_dir / "ring1.wav", 6.0)
+        self.runtime._finish_previews()
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
+        self.assertEqual(self.runtime.state["pending_previews"], {})
+
+    def test_preview_claim_before_crash_suppresses_replay_and_reports_unknown(self):
+        self.runtime.heartbeat()
+        self.runtime._command(self.preview(), NOW)
+        with self.runtime.audio_requests.owner() as acquired:
+            self.assertTrue(acquired)
+            self.assertIsNotNone(self.runtime.audio_requests.claim_next("a" * 64))
+            self.runtime._finish_previews()
+            self.assertIn(OP, self.runtime.state["pending_previews"])
+        restarted = CloudRuntime(self.client, state_path=self.runtime.state_path,
+            contacts_path=self.runtime.contacts.path, queue_dir=self.runtime.queue_dir,
+            outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+            clock=self.runtime.clock, boot_id="test-boot")
+        restarted._finish_previews()
+        restarted._command(self.preview(), NOW)
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["error_code"],
                          "preview_outcome_unknown")
+        with restarted.audio_requests.owner():
+            self.assertIsNone(restarted.audio_requests.claim_next("a" * 64))
 
-    def test_long_pcm_ringtone_preview_uses_duration_aware_timeout(self):
+    def test_legacy_preview_crash_intent_is_never_replayed(self):
+        self.runtime.heartbeat()
+        atomic_json(self.runtime._intent_path(OP), {"operation_id": OP, "ringtone_id": "ding_dong"})
+        self.runtime._command(self.preview(), NOW)
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["error_code"],
+                         "preview_outcome_unknown")
+        self.assertIsNone(self.runtime.audio_requests.outcome(preview_key(OP)))
+
+    def test_preview_long_wav_timeout_and_owner_speaker_are_preserved(self):
         self.runtime.heartbeat()
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
         write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
-        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
-                "created_at": NOW, "expires_at": NOW + 60,
-                "payload": {"ringtone_id": "ding_dong"}}
-        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
-             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
-             mock.patch("messagebox.cloud_runtime.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 0)) as play:
-            self.runtime._command(item, NOW)
-        self.assertEqual(play.call_args.args[0],
-                         ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
-                          str(ringtone_dir / "ring3.wav")])
-        self.assertAlmostEqual(play.call_args.kwargs["timeout"], 24.8, places=3)
-        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"],
-                         "applied")
+        self.runtime._command(self.preview("ding_dong"), NOW)
+        process = mock.Mock()
+        process.poll.return_value = 0
+        with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
+             mock.patch.object(button_send, "SPK_DEV", "plughw:CARD=ExampleSpeaker,DEV=2"), \
+             mock.patch.object(button_send.subprocess, "Popen", return_value=process) as play:
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+        play.assert_called_once_with(["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
+                                     str(ringtone_dir / "ring3.wav")])
+        from messagebox.cloud_runtime import _ringtone_preview_timeout
+        self.assertAlmostEqual(_ringtone_preview_timeout(ringtone_dir / "ring3.wav"), 24.8)
 
-    def test_ringtone_preview_preserves_default_speaker_when_unconfigured(self):
+    def test_expired_preview_never_plays_and_is_acknowledged_expired(self):
         self.runtime.heartbeat()
-        ringtone_dir = self.root / "ringtones"
-        ringtone_dir.mkdir()
-        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
-        item = {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
-                "created_at": NOW, "expires_at": NOW + 60,
-                "payload": {"ringtone_id": "gentle_music_box"}}
-        with mock.patch.dict("os.environ", {}, clear=True), \
-             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
-             mock.patch("messagebox.cloud_runtime.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 0)) as play:
-            self.runtime._command(item, NOW)
-        play.assert_called_once_with(
-            ["aplay", "-q", "-D", "default", str(ringtone_dir / "ring1.wav")],
-            timeout=6.0, check=False,
-        )
+        self.runtime._command(self.preview(), NOW)
+        self.runtime.audio_requests.clock = lambda: NOW + 31
+        self.runtime._finish_previews()
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "expired")
+        with self.runtime.audio_requests.owner():
+            self.assertIsNone(self.runtime.audio_requests.claim_next("a" * 64))
 
-    def test_preview_timeout_is_rejected_without_stopping_later_commands(self):
+    def test_preview_failure_does_not_stop_later_commands_and_never_replays(self):
         self.runtime.heartbeat()
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
         write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
-        self.client.items = [
-            {"operation_id": OP, "sequence": 1, "kind": "preview_ringtone",
-             "created_at": NOW, "expires_at": NOW + 60,
-             "payload": {"ringtone_id": "ding_dong"}},
+        self.client.items = [self.preview("ding_dong"),
             {"operation_id": "hold_operation_123456789", "sequence": 2,
              "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,
-             "payload": {"held": True}},
-        ]
-        with mock.patch.dict("os.environ", {"MSGBOX_SPK_DEV": "plughw:CARD=ExampleSpeaker,DEV=2"}), \
-             mock.patch("messagebox.cloud_runtime.RINGTONE_DIR", ringtone_dir), \
-             mock.patch("messagebox.cloud_runtime.subprocess.run",
-                        side_effect=subprocess.TimeoutExpired(["aplay"], 24.8)) as play:
-            self.runtime.poll_once()
-        play.assert_called_once_with(
-            ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
-             str(ringtone_dir / "ring3.wav")],
-            timeout=24.8, check=False,
-        )
+             "payload": {"held": True}}]
+        self.runtime.poll_once()
+        with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
+             mock.patch.object(button_send, "log_event"), \
+             mock.patch.object(button_send, "play_idle_sound", side_effect=subprocess.TimeoutExpired("aplay", 24.8)) as play:
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(play.call_count, 1)
+        self.runtime._finish_previews()
+        self.runtime.flush_acks()
         states = {ack["operation_id"]: ack["state"] for ack in self.client.acks}
         self.assertEqual(states[OP], "rejected")
         self.assertEqual(states["hold_operation_123456789"], "applied")
         self.assertEqual(self.runtime.state["cursor"], 2)
+
+    def test_delayed_acceptance_queues_durable_success_once_across_restart(self):
+        self.runtime.heartbeat()
+        job = self.runtime.outbox_dir / "original_key_123456.job"
+        job.mkdir(parents=True)
+        for state in ("accepted", "delivered", "read"):
+            with self.subTest(state=state):
+                metadata = {"transport": "cloud", "message_id": job.stem,
+                    "account_scope": "a" * 64, "state": "cloud_retained", "cloud_state": "queued",
+                    "cloud_status_checked_at": NOW - 5}
+                atomic_json(job / "job.json", metadata)
+                self.client.voice_status = lambda _: {"message_id": MID, "state": state,
+                    "expires_at": NOW + 3600, "server_time": NOW, "deleted": False}
+                self.runtime.recover_outbox()
+                key = success_key("a" * 64, job.stem)
+                self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
+        # A separate process uses the same persisted request after restart.
+        restarted = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW)
+        with restarted.owner():
+            request = restarted.claim_next("a" * 64)
+            self.assertEqual(request["kind"], "success")
+            restarted.finish(request, "played")
+        self.runtime.recover_outbox()
+        self.assertEqual(restarted.outcome(key), "played")
+        with restarted.owner():
+            self.assertIsNone(restarted.claim_next("a" * 64))
+
+    def test_stale_foreign_and_unsuccessful_outbox_statuses_never_cue(self):
+        self.runtime.heartbeat()
+        base = {"message_id": "local-key", "account_scope": "a" * 64, "state": "cloud_retained",
+                "cloud_state": "queued", "cloud_status_checked_at": NOW - 5}
+        status = {"message_id": MID, "state": "accepted", "expires_at": NOW + 60,
+                  "server_time": NOW, "deleted": False}
+        for state in ("queued", "waiting_for_reply", "delivery_uncertain", "failed", "expired"):
+            self.runtime.queue_send_success(base, {**status, "state": state})
+        for fields in ({"cloud_status_checked_at": NOW - 31}, {"account_scope": "b" * 64},
+                       {"cloud_state": "accepted"}, {"cloud_state": "failed"}):
+            self.runtime.queue_send_success({**base, **fields}, status)
+        self.runtime.queue_send_success(base, {**status, "deleted": True})
+        self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
 
     def test_uncertain_outbox_recovers_expiry_by_read_only_key_without_resend(self):
         self.runtime.heartbeat()

@@ -103,6 +103,44 @@ class SendSuccessTests(unittest.TestCase):
             self.assertFalse(button_send.maybe_play_send_success())
         self.assertTrue(self.notices.empty())
 
+    def test_cloud_success_is_durable_scoped_and_consumed_by_idle_owner_once(self):
+        store = button_send.AudioRequests(Path(self.directory.name) / "audio-requests", clock=lambda: 100)
+        key = button_send.success_key("a" * 64, "local-test")
+        store.enqueue(key, "success", "a" * 64, 130)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "cloud_audio_requests", store), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_send_success_cue", return_value=True) as play:
+            for flag in ("_recording", "_guided_active"):
+                with mock.patch.object(button_send, flag, True):
+                    self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertEqual(store.outcome(key), "pending")
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            # A new process and repeated enqueue cannot replay the cue.
+            restarted = button_send.AudioRequests(store.directory, clock=lambda: 101)
+            restarted.enqueue(key, "success", "a" * 64, 131)
+            with mock.patch.object(button_send, "cloud_audio_requests", restarted):
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+            play.assert_called_once_with()
+        self.assertEqual(store.outcome(key), "played")
+
+    def test_cloud_stale_foreign_or_crash_claimed_cues_never_play(self):
+        for case in ("expired", "foreign", "crash"):
+            with self.subTest(case=case):
+                store = button_send.AudioRequests(Path(self.directory.name) / case, clock=lambda: 100)
+                key = button_send.success_key("a" * 64, "local-test")
+                store.enqueue(key, "success", "a" * 64, 99 if case == "expired" else 130)
+                if case == "crash":
+                    with store.owner():
+                        self.assertIsNotNone(store.claim_next("a" * 64))
+                with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+                     mock.patch.object(button_send, "cloud_audio_requests", store), \
+                     mock.patch.object(button_send.cloud_runtime, "account_scope", return_value=("b" if case == "foreign" else "a") * 64), \
+                     mock.patch.object(button_send, "play_send_success_cue") as play:
+                    self.assertFalse(button_send.maybe_play_cloud_sound())
+                    play.assert_not_called()
+                self.assertEqual(store.outcome(key), {"expired": "expired", "foreign": "rejected", "crash": "unknown"}[case])
+
     def test_new_press_interrupts_success_cue_without_being_consumed(self):
         self.notices.put(button_send.time.monotonic())
         process = mock.Mock()
@@ -124,8 +162,7 @@ class SendSuccessTests(unittest.TestCase):
         process = mock.Mock()
         process.poll.return_value = None
         process.wait.side_effect = [subprocess.TimeoutExpired("aplay", 0.2), 0]
-        button_send.button.is_pressed = True
-        with mock.patch.object(button_send.subprocess, "Popen", return_value=process):
+        with mock.patch.object(button_send.subprocess, "Popen", side_effect=lambda *_: (setattr(button_send.button, "is_pressed", True), process)[1]):
             button_send.play_send_success_cue()
         self.assertEqual(process.method_calls, [
             mock.call.poll(), mock.call.poll(), mock.call.terminate(),

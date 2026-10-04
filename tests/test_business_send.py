@@ -285,6 +285,7 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
             mock.patch.object(cloud_runtime, "account_scope", return_value="a" * 64),
             mock.patch.object(cloud_runtime, "outbox_retry_until", return_value=1_800_604_800),
             mock.patch.object(cloud_runtime, "outbox_now", return_value=1_800_000_000),
+            mock.patch.object(button_send, "cloud_audio_requests", button_send.AudioRequests(root / "audio-requests", clock=lambda: 1_800_000_000)),
             mock.patch.object(button_send.cloud_runtime, "recipient_id", return_value="person1234567890123456"),
             mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=self.client),
             mock.patch.object(button_send.subprocess, "run", side_effect=GuidedBusinessBoundaryTests._convert),
@@ -303,7 +304,9 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         self.assertEqual(self.client.send_voice.call_args.kwargs["account_scope"], "a" * 64)
         self.assertEqual(metadata["cloud_message_id"], "cloud-message")
         self.assertEqual(metadata["expires_at"], 1_800_604_800)
-        self.assertFalse(button_send.send_success_notices.empty())
+        self.assertTrue(button_send.send_success_notices.empty())
+        key = button_send.success_key(self.job.account_scope, self.job.message_id)
+        self.assertEqual(button_send.cloud_audio_requests.outcome(key), "pending")
 
     def test_transfer_during_recording_keeps_original_approval_scope(self):
         source = Path(self.directory.name) / "source.wav"

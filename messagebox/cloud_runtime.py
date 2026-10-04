@@ -9,13 +9,13 @@ import os
 import random
 import re
 import shutil
-import subprocess
 import time
 import uuid
 import wave
 from pathlib import Path
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
+from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.nfc_state import EnrollmentStore, NfcError, NfcRouter, SelectionStore
@@ -114,13 +114,14 @@ class CloudRuntime:
         self.converter = converter
         self.monotonic = monotonic
         self.boot_id = _current_boot_id() if boot_id is None else boot_id
+        self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests", clock=clock)
         self.state = self._load()
 
     def _load(self):
         try:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {"version": 1, "cursor": 0, "acks": {}, "seen": {}, "deleted": [], "pending_nfc": {}, "pending_settings": {}, "outbox_status_cursor": 0}
+            return {"version": 1, "cursor": 0, "acks": {}, "seen": {}, "deleted": [], "pending_nfc": {}, "pending_settings": {}, "outbox_status_cursor": 0, "pending_previews": {}}
         except (OSError, ValueError) as exc:
             raise CloudRuntimeError("cloud state is unavailable") from exc
         if (not isinstance(state, dict) or state.get("version") != 1
@@ -134,6 +135,8 @@ class CloudRuntime:
                 or state.get("outbox_status_cursor", 0) < 0
                 or type(state.get("queue_hold_sequence", -1)) is not int
                 or state.get("queue_hold_sequence", -1) < -1):
+            raise CloudRuntimeError("cloud state is invalid")
+        if not isinstance(state.setdefault("pending_previews", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
         return state
 
@@ -455,6 +458,7 @@ class CloudRuntime:
             metadata["state"] = "pending"
             atomic_json(job_dir / "job.json", metadata)
             return
+        self.queue_send_success(metadata, status)
         metadata.update({"state": "cloud_retained", "cloud_message_id": status["message_id"],
                          "cloud_state": status["state"], "expires_at": status["expires_at"],
                          "server_time": status["server_time"],
@@ -464,6 +468,29 @@ class CloudRuntime:
             shutil.rmtree(job_dir)
         else:
             atomic_json(job_dir / "job.json", metadata)
+
+    def queue_send_success(self, metadata, status):
+        """Only recent, scoped acceptance may become a child-facing cue."""
+        if (status.get("state") not in {"accepted", "delivered", "read"}
+                or status.get("deleted") is True
+                or status.get("message_id") in self.state["deleted"]
+                or status["server_time"] >= status["expires_at"]
+                or metadata.get("state") not in {"sending", "uncertain", "cloud_retained"}
+                or metadata.get("cloud_state") not in {None, "queued", "waiting_for_reply", "held_for_review", "uncertain"}):
+            return
+        observed = metadata.get("cloud_status_checked_at", metadata.get("cloud_send_started_at"))
+        # The API has no acceptance timestamp. A recent nonaccepted observation
+        # bounds the transition; after a long outage we keep old sends silent.
+        if not _valid_time(observed) or not 0 <= status["server_time"] - observed <= 30:
+            return
+        try:
+            scope = self._snapshot()["account_scope"]
+        except CloudRuntimeError:
+            return
+        if metadata.get("account_scope") != scope:
+            return
+        self.audio_requests.enqueue(success_key(scope, metadata["message_id"]),
+            "success", scope, status["server_time"] + 30)
 
     def _audio(self, item, server_time):
         payload = item["payload"]
@@ -630,7 +657,8 @@ class CloudRuntime:
                       **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
             return
         if (item["operation_id"] in self.state["pending_settings"]
-                or item["operation_id"] in self.state["pending_nfc"]):
+                or item["operation_id"] in self.state["pending_nfc"]
+                or item["operation_id"] in self.state["pending_previews"]):
             return
         kind, payload = item["kind"], item["payload"]
         if kind == "audio":
@@ -685,24 +713,35 @@ class CloudRuntime:
             ringtone = payload.get("ringtone_id")
             if ringtone not in RINGTONES:
                 raise CloudRuntimeError("ringtone is invalid")
-            intent_path = self._intent_path(item["operation_id"])
-            if intent_path.exists():
+            # Old releases left this marker before crossing aplay. Its result is
+            # uncertain and must never be replayed by the new audio owner.
+            if self._intent_path(item["operation_id"]).exists():
                 self._ack(item["operation_id"], "rejected", error_code="preview_outcome_unknown")
                 return
-            atomic_json(intent_path, {"operation_id": item["operation_id"], "ringtone_id": ringtone})
-            path = RINGTONE_DIR / RINGTONES[ringtone]
-            timeout = _ringtone_preview_timeout(path)
-            speaker = os.environ.get("MSGBOX_SPK_DEV", "default")
-            try:
-                result = subprocess.run(["aplay", "-q", "-D", speaker, str(path)], timeout=timeout,
-                                        check=False)
-            except subprocess.TimeoutExpired as exc:
-                raise CloudRuntimeError("ringtone preview failed") from exc
-            if result.returncode:
-                raise CloudRuntimeError("ringtone preview failed")
-            self._ack(item["operation_id"], "applied")
+            scope = self._snapshot()["account_scope"]
+            key = preview_key(item["operation_id"])
+            self.audio_requests.enqueue(key, "preview", scope,
+                min(item["expires_at"], server_time + 30), ringtone_id=ringtone)
+            self.state["pending_previews"][item["operation_id"]] = key
+            self._save()
+            self._ack(item["operation_id"], "received")
         else:
             raise CloudRuntimeError("cloud command is unsupported")
+
+    def _finish_previews(self):
+        for operation_id, key in list(self.state["pending_previews"].items()):
+            outcome = self.audio_requests.outcome(key)
+            if outcome in {None, "pending", "claimed"}:
+                continue
+            if outcome == "played":
+                self._ack(operation_id, "applied")
+            elif outcome == "expired":
+                self._ack(operation_id, "expired")
+            else:
+                self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
+                          if outcome == "unknown" else "preview_failed")
+            del self.state["pending_previews"][operation_id]
+            self._save()
 
     def _finish_settings(self):
         try:
@@ -744,6 +783,7 @@ class CloudRuntime:
                         and item.get("kind") == "delete_message"}
         self.flush_acks(deletion_ids if deletion_only else None)
         if not deletion_only:
+            self._finish_previews()
             self._finish_nfc()
             self._finish_settings()
             self.flush_acks()

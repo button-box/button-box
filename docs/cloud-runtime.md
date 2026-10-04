@@ -98,6 +98,25 @@ The status lookup accepts `uncertain` and `held_for_review`, retaining the local
 source until authoritative expiry or deletion. Command effects and ACKs retain per-operation receipts so retries cannot reselect a different NFC
 card or replay a ringtone after a crash.
 
+Cloud send confirmations and ringtone previews use short-lived durable audio
+requests consumed by the existing button service. The poller never starts preview
+playback. The button owner waits until recording, guided interaction and playback
+are idle, checks fresh account scope, and yields to a physical press while stopping
+the player before starting recording. Claims are committed before playback; terminal
+receipts suppress repeated commands and requests across process restarts. A preview
+is `received` while waiting and `applied` only after successful playback. Expired,
+failed, interrupted or crash-uncertain previews are never replayed. Its start window
+is at most 30 seconds and playback retains the selected speaker and WAV-duration
+plus five-second timeout.
+
+Accepted, delivered or read cloud sends can produce one success cue. Queued,
+waiting, review-held, uncertain and failed statuses do not. The status API has no
+acceptance timestamp, so a recovered acceptance must follow a nonaccepted
+observation no more than 30 seconds old. Acceptance discovered after a longer gap
+stays silent. Each cue expires 30 seconds after its first verified acceptance
+observation; waiting for a busy button owner never extends that deadline.
+Standalone wacli and business send confirmation behavior is unchanged.
+
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an
 existing box, the bounded updater does not rerun full setup: first create

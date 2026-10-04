@@ -35,6 +35,7 @@ from messagebox.guided_reply import (
     voice_send_command,
     valid_account_scope,
 )
+from messagebox.audio_requests import AudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import ContactError, ContactStore
@@ -83,6 +84,7 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 )
 SEND_SUCCESS_WAV = str(APP_DIR / "sounds" / "feedback" / "sent-swoosh.wav")
 send_success_notices = queue.SimpleQueue()
+cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
                  else LOCAL_CONTACTS_FILE)
 
@@ -973,6 +975,9 @@ def _send_cloud_upload(job):
             return False
     if result is None:
         job = outbox_store.set_state(job, "sending", increment_attempts=True)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["cloud_send_started_at"] = cloud_runtime.outbox_now()
+        atomic_json(metadata_path, metadata)
         try:
             result = client.send_voice(ogg, upload["recipient_id"], upload["idempotency_key"],
                                        upload["duration"], account_scope=upload["account_scope"])
@@ -987,15 +992,22 @@ def _send_cloud_upload(job):
             log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_send")
             return True
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    observed = metadata.get("cloud_status_checked_at", metadata.get("cloud_send_started_at"))
+    if (result["state"] in {"accepted", "delivered", "read"}
+            and result.get("deleted") is not True
+            and result["server_time"] < result["expires_at"]
+            and type(observed) in (int, float)
+            and 0 <= result["server_time"] - observed <= 30):
+        cloud_audio_requests.enqueue(success_key(job.account_scope, job.message_id),
+            "success", job.account_scope, result["server_time"] + 30)
     metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
                      "cloud_state": result["state"], "expires_at": result["expires_at"],
-                     "server_time": result["server_time"]})
+                     "server_time": result["server_time"],
+                     "cloud_status_checked_at": result["server_time"]})
     atomic_json(metadata_path, metadata)
     if result["state"] == "delivery_uncertain":
         log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_delivery")
         return True
-    if result["state"] == "accepted":
-        send_success_notices.put(time.monotonic())
     log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
     return True
 
@@ -1325,19 +1337,22 @@ def play_pending_listened(limit=4):
     return played
 
 
-def play_send_success_cue():
-    """Keep one audio owner, but yield to a new press without consuming it."""
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, SEND_SUCCESS_WAV])
-    deadline = time.monotonic() + 5
+def play_idle_sound(path, timeout):
+    """Yield to a press and release the speaker before recording can start."""
+    if button.is_pressed:
+        return False
+    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    deadline = time.monotonic() + timeout
     try:
         while (code := process.poll()) is None:
             if button.is_pressed:
-                return
+                return False
             if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired("aplay", 5)
+                raise subprocess.TimeoutExpired("aplay", timeout)
             time.sleep(POLL_S)
         if code:
             raise subprocess.CalledProcessError(code, "aplay")
+        return True
     finally:
         if process.poll() is None:
             process.terminate()
@@ -1346,6 +1361,40 @@ def play_send_success_cue():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=0.2)
+
+
+def play_send_success_cue():
+    return play_idle_sound(SEND_SUCCESS_WAV, 5)
+
+
+def maybe_play_cloud_sound():
+    """Only this main-loop owner starts cloud sounds, never the poller."""
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
+        return False
+    try:
+        scope = cloud_runtime.account_scope(fresh=True)
+        with cloud_audio_requests.owner() as acquired:
+            if not acquired:
+                return False
+            request = cloud_audio_requests.claim_next(scope)
+            if request is None:
+                return False
+            try:
+                if request["kind"] == "success":
+                    played = play_send_success_cue()
+                elif request["kind"] == "preview" and request["ringtone_id"] in cloud_runtime.RINGTONES:
+                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[request["ringtone_id"]]
+                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                else:
+                    played = False
+                cloud_audio_requests.finish(request, "played" if played else "rejected")
+                return played
+            except (OSError, subprocess.SubprocessError, CloudRuntimeError):
+                cloud_audio_requests.finish(request, "rejected")
+                log_event("cloud_sound_unavailable")
+    except (OSError, ValueError, CloudRuntimeError):
+        log_event("cloud_sound_unavailable")
+    return False
 
 
 def maybe_play_send_success():
@@ -1917,6 +1966,7 @@ def main():
             time.sleep(POLL_S)
             apply_master_volume()
             maybe_play_send_success()
+            maybe_play_cloud_sound()
             if button.is_pressed:
                 break
             play_pending_nfc_announcement()
