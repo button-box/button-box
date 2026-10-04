@@ -966,7 +966,8 @@ def _send_cloud_upload(job):
     # A delayed first request may have committed since recovery's 404. Read
     # again before replaying; the server key still deduplicates the remaining race.
     result = None
-    if metadata.get("attempts", 0):
+    prior_attempts = metadata.get("attempts", 0)
+    if prior_attempts:
         try:
             result = client.voice_status(job.message_id)
         except CloudVoiceNotFound:
@@ -984,7 +985,7 @@ def _send_cloud_upload(job):
         except CloudSendRejected:
             # A racing original request can still succeed after a rejected
             # retry. Keep ambiguous attempts available to keyed reconciliation.
-            outbox_store.set_state(job, "uncertain" if metadata.get("attempts", 0) else "failed")
+            outbox_store.set_state(job, "uncertain" if prior_attempts else "failed")
             log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
             return True
         except CloudSendUncertain:

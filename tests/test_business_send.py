@@ -413,6 +413,21 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         self.assertTrue(button_send.send_success_notices.empty())
         self.client.send_voice.assert_called_once()
 
+    def test_definitive_first_rejection_stops_but_ambiguous_retry_stays_reconcilable(self):
+        self.client.send_voice.side_effect = button_send.CloudSendRejected("rejected")
+        self.assertTrue(button_send.send_guided_job(self.job))
+        self.assertEqual(self.store.load(self.job.path).state, "failed")
+        self.assertEqual(self.store.jobs(), [])
+        self.assertTrue(self.job.audio_path.exists())
+        self.assertTrue(button_send.send_success_notices.empty())
+        key = button_send.success_key(self.job.account_scope, self.job.message_id)
+        self.assertIsNone(button_send.cloud_audio_requests.outcome(key))
+        # A known earlier ambiguous attempt still needs status reconciliation.
+        self.store.set_state(self.store.load(self.job.path), "pending")
+        self.client.voice_status.side_effect = button_send.CloudVoiceNotFound("not found")
+        self.assertTrue(button_send.send_guided_job(self.job))
+        self.assertEqual(self.store.load(self.job.path).state, "uncertain")
+
     def test_restart_retries_identical_encoded_bytes_without_conversion(self):
         original_calls = []
         def interrupted(path, recipient, key, duration, **kwargs):
