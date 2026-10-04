@@ -27,6 +27,8 @@ _ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _SECRET = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
 _PERSON_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _MESSAGE_ID = re.compile(r"^[A-Za-z0-9:._-]{1,240}$")
+_VOICE_STATES = {"queued", "waiting_for_reply", "held_for_review", "accepted", "uncertain",
+                 "delivered", "read", "failed", "expired", "deleted", "canceled"}
 _OPENER = urllib.request.build_opener(NoRedirect()).open
 
 
@@ -267,7 +269,7 @@ class CloudDeviceClient:
             raise CloudDeviceError("voice status is invalid") from exc
         if (not isinstance(result, dict) or not isinstance(result.get("message_id"), str)
                 or not _MESSAGE_ID.fullmatch(result["message_id"])
-                or result.get("state") not in {"queued", "waiting_for_reply", "accepted", "delivery_uncertain", "delivered", "read", "failed", "expired", "deleted", "canceled"}
+                or result.get("state") not in _VOICE_STATES
                 or type(result.get("expires_at")) is not int
                 or not 1_700_000_000 <= result["expires_at"] < 4_102_444_800
                 or type(result.get("server_time")) is not int
@@ -363,7 +365,7 @@ class CloudDeviceClient:
             not isinstance(result, dict)
             or not isinstance(result.get("message_id"), str)
             or not _MESSAGE_ID.fullmatch(result["message_id"])
-            or result.get("state") not in {"queued", "waiting_for_reply", "accepted", "delivery_uncertain", "delivered", "read", "failed", "expired", "deleted", "canceled"}
+            or result.get("state") not in _VOICE_STATES
             or type(result.get("expires_at")) is not int
             or not 1_700_000_000 <= result["expires_at"] < 4_102_444_800
             or type(result.get("server_time")) is not int

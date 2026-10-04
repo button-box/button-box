@@ -199,6 +199,28 @@ class CloudIdentityTests(unittest.TestCase):
             self.assertEqual(requests[0].get_method(), "GET")
             self.assertTrue(requests[0].full_url.endswith("/device/voice/status?idempotency_key=original_key_123456"))
 
+    def test_upload_replay_and_status_share_cloud_message_state_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "voice.ogg"
+            audio.write_bytes(b"OggSsynthetic")
+            identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+            for state in ("queued", "waiting_for_reply", "held_for_review", "accepted", "uncertain",
+                          "delivered", "read", "failed", "expired", "deleted", "canceled"):
+                with self.subTest(state=state):
+                    response = {"message_id": "cloud-message", "state": state,
+                                "expires_at": 1_800_604_800, "server_time": 1_800_000_100,
+                                "deleted": state == "deleted"}
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity,
+                        opener=lambda *_args, **_kwargs: _Response(response))
+                    self.assertEqual(client.voice_status("original_key_123456")["state"], state)
+                    self.assertEqual(client.send_voice(audio, "person_1", "original_key_123456", 1.25,
+                                                      account_scope="a" * 64)["state"], state)
+            response["state"] = "unknown_server_state"
+            with self.assertRaises(CloudDeviceError):
+                client.voice_status("original_key_123456")
+            with self.assertRaises(CloudSendUncertain):
+                client.send_voice(audio, "person_1", "original_key_123456", 1.25, account_scope="a" * 64)
+
     def test_voice_status_exact_not_found_is_distinct_from_network_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()

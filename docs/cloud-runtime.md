@@ -72,6 +72,11 @@ The service authorizes inbound delivery and outbound sending separately.
 The device enforces those permissions and their expiry; accounts, billing,
 provider credentials and service policy remain server-side. Message expiry, deletion tombstones, active membership,
 and queue hold remain playback gates.
+An inbox audio operation encountered during a temporary queue hold remains
+pending without a rejection or media download. Later hold/resume commands still
+apply in sequence; a subsequent poll fetches the audio with current authorization.
+Hold effects and their sequence are saved together, so an interrupted command can
+resume safely and an older retry cannot override a newer hold/resume command.
 
 Cloud WAV/history copies and successfully uploaded outbound sources are
 deleted only after a fresh authenticated server timestamp reaches their
@@ -79,9 +84,11 @@ authoritative expiry, or after a scoped cloud deletion. A lost upload response
 leaves the local recording in `uncertain`; the poller uses a read-only status
 lookup by its original idempotency key to recover the message ID and expiry.
 It never reuploads an uncertain job. If the server has no record or cannot be
-reached, the source remains private for operator recovery. Command effects and
-ACKs retain per-operation receipts so retries cannot reselect a different NFC
-card or replay a ringtone after a crash.
+reached, the source remains private for operator recovery.
+The status lookup accepts the Cloud message states `uncertain` and
+`held_for_review`, retaining the local source until authoritative expiry or deletion.
+Command effects and ACKs retain per-operation receipts so retries cannot reselect
+a different NFC card or replay a ringtone after a crash.
 
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an

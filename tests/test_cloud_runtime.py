@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
-from messagebox.cloud_device import CloudAckGone, CloudDeviceError, atomic_json
+from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, atomic_json
 from messagebox.played_history import list_played_history
 from messagebox.settings import SettingsStore
 
@@ -130,6 +130,106 @@ class CloudRuntimeTests(unittest.TestCase):
         restarted.poll_once()
         self.assertFalse(queued[0].exists())
         self.assertFalse(restarted.playable(metadata))
+
+    def hold_item(self, held, sequence=2):
+        return {"operation_id": f"hold_operation_{sequence:016d}", "sequence": sequence,
+                "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,
+                "payload": {"held": held}}
+
+    def restart(self):
+        return CloudRuntime(self.client, state_path=self.root / "runtime.json",
+            contacts_path=self.root / "cloud-contacts.json", queue_dir=self.root / "queue",
+            outbox_dir=self.root / "outbox", settings_path=self.root / "settings.json",
+            clock=lambda: NOW, converter=queued_audio, monotonic=lambda: self.mono[0],
+            boot_id="test-boot")
+
+    def test_held_audio_waits_for_delayed_resume_without_terminal_receipt(self):
+        self.runtime.heartbeat()
+        self.runtime.state["snapshot"]["queue_hold"] = True
+        self.runtime._save()
+        self.client.items = [self.audio_item()]
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as media:
+            self.runtime.poll_once()
+            self.runtime = self.restart()
+            self.runtime.poll_once()
+            self.assertEqual(self.client.acks, [])
+            self.assertEqual(self.runtime.state["cursor"], 0)
+            self.assertFalse(list((self.root / "queue").glob("*.wav")))
+            self.client.items.append(self.hold_item(False))
+            self.runtime.poll_once()
+            self.assertFalse(self.runtime.state["snapshot"]["queue_hold"])
+            self.assertEqual([ack["state"] for ack in self.client.acks], ["applied"])
+            self.runtime.poll_once()
+            self.runtime = self.restart()
+            self.runtime.poll_once()
+            media.assert_called_once()
+        self.assertEqual(len(list((self.root / "queue").glob("*.wav"))), 1)
+        self.assertEqual({ack["state"] for ack in self.client.acks if ack["operation_id"] == OP},
+                         {"received"})
+
+    def test_resume_interrupted_after_intent_recovers_pending_audio(self):
+        self.runtime.heartbeat()
+        self.runtime.state["snapshot"]["queue_hold"] = True
+        self.runtime._save()
+        self.client.items = [self.audio_item(), self.hold_item(False)]
+        with mock.patch.object(self.runtime, "_save", side_effect=RuntimeError("crash")):
+            with self.assertRaisesRegex(RuntimeError, "crash"):
+                self.runtime.poll_once()
+        self.runtime = self.restart()
+        self.assertTrue(self.runtime.state["snapshot"]["queue_hold"])
+        self.runtime.poll_once()
+        self.assertFalse(self.runtime.state["snapshot"]["queue_hold"])
+        self.runtime.poll_once()
+        self.assertEqual(len(list((self.root / "queue").glob("*.wav"))), 1)
+        self.assertNotIn("rejected", [ack["state"] for ack in self.client.acks])
+
+    def test_resume_retry_after_saved_effect_cannot_undo_newer_hold(self):
+        self.runtime.heartbeat()
+        resume = self.hold_item(False)
+        with mock.patch.object(self.runtime, "_ack", side_effect=RuntimeError("crash")):
+            with self.assertRaisesRegex(RuntimeError, "crash"):
+                self.runtime._command(resume, NOW)
+        self.runtime._command(self.hold_item(True, sequence=3), NOW)
+        self.runtime = self.restart()
+        self.runtime._command(resume, NOW)
+        self.runtime.flush_acks()
+        self.assertTrue(self.runtime.state["snapshot"]["queue_hold"])
+        self.assertEqual(self.runtime.state["queue_hold_sequence"], 3)
+        self.assertEqual({ack["state"] for ack in self.client.acks}, {"applied"})
+
+    def test_temporary_hold_does_not_bypass_revoked_delivery_or_sender(self):
+        for revoked in ("delivery", "sender"):
+            with self.subTest(revoked=revoked):
+                self.client.deliver = revoked != "delivery"
+                self.client.people = [] if revoked == "sender" else [PERSON.copy()]
+                self.runtime.heartbeat()
+                self.runtime.state["snapshot"]["queue_hold"] = True
+                self.runtime._save()
+                item = self.audio_item()
+                item["operation_id"] += revoked
+                self.client.items = [item]
+                with mock.patch.object(self.client, "media") as media:
+                    self.runtime.poll_once()
+                    media.assert_not_called()
+                self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertFalse(list((self.root / "queue").glob("*.wav")))
+
+    def test_delete_still_expires_older_pending_audio_while_held(self):
+        self.runtime.heartbeat()
+        self.runtime.state["snapshot"]["queue_hold"] = True
+        self.runtime._save()
+        deletion = {"operation_id": "delete_operation_123456789", "sequence": 2,
+                    "kind": "delete_message", "created_at": NOW, "expires_at": NOW + 60,
+                    "payload": {"message_id": MID}}
+        self.client.items = [self.audio_item(), deletion]
+        with mock.patch.object(self.client, "media") as media:
+            self.runtime.poll_once()
+            self.runtime = self.restart()
+            self.runtime.poll_once()
+            media.assert_not_called()
+        self.assertIn(MID, self.runtime.state["deleted"])
+        self.assertEqual({ack["state"] for ack in self.client.acks if ack["operation_id"] == OP},
+                         {"expired"})
 
     def test_new_requeue_operation_returns_played_message_to_queue_once(self):
         self.runtime.heartbeat()
@@ -503,6 +603,33 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(metadata["expires_at"], NOW + 3600)
         self.assertEqual(calls, ["original_key_123456"])
         self.assertTrue((job / "audio.wav").exists())
+
+    def test_outbox_recovery_accepts_real_cloud_uncertain_and_review_states(self):
+        for cloud_state in ("uncertain", "held_for_review"):
+            with self.subTest(cloud_state=cloud_state):
+                job = self.root / "outbox" / f"original_key_{cloud_state}.job"
+                job.mkdir(parents=True)
+                (job / "audio.wav").write_bytes(b"synthetic recording")
+                atomic_json(job / "job.json", {"transport": "cloud", "message_id": job.stem,
+                                               "state": "uncertain"})
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.status = 200
+                response.read.return_value = json.dumps({"message_id": "cloud-message",
+                    "state": cloud_state, "expires_at": NOW + 3600,
+                    "server_time": NOW, "deleted": False}).encode()
+                opener = mock.Mock(return_value=response)
+                client = CloudDeviceClient("https://example.invalid/cloud-api/v1",
+                    {"device_id": "synthetic-device-001", "credential": "x" * 43}, opener=opener)
+                self.client.voice_status = client.voice_status
+                self.runtime = self.restart()
+                self.runtime.recover_outbox()
+                metadata = json.loads((job / "job.json").read_text())
+                self.assertEqual(metadata["state"], "cloud_retained")
+                self.assertEqual(metadata["cloud_state"], cloud_state)
+                self.assertEqual(metadata["expires_at"], NOW + 3600)
+                self.assertTrue((job / "audio.wav").exists())
+                self.assertTrue(all(call.args[0].get_method() == "GET" for call in opener.call_args_list))
 
     def test_unknown_upload_status_keeps_source_until_authoritative_answer(self):
         job = self.root / "outbox" / "original_key_123456.job"

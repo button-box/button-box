@@ -53,6 +53,10 @@ class CloudRuntimeError(Exception):
     """A safe error without response bodies or family identifiers."""
 
 
+class CloudCommandDeferred(CloudRuntimeError):
+    """Temporary local gate; the server must keep the operation pending."""
+
+
 def _valid_id(value):
     return isinstance(value, str) and bool(_ID.fullmatch(value))
 
@@ -126,7 +130,9 @@ class CloudRuntime:
                 or not isinstance(state.get("pending_nfc"), dict)
                 or not isinstance(state.get("pending_settings"), dict)
                 or type(state.get("outbox_status_cursor", 0)) is not int
-                or state.get("outbox_status_cursor", 0) < 0):
+                or state.get("outbox_status_cursor", 0) < 0
+                or type(state.get("queue_hold_sequence", -1)) is not int
+                or state.get("queue_hold_sequence", -1) < -1):
             raise CloudRuntimeError("cloud state is invalid")
         return state
 
@@ -443,11 +449,15 @@ class CloudRuntime:
                 or payload.get("content_type") not in {"audio/ogg", "audio/opus", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr", "audio/wav", "audio/x-wav"}
                 or not isinstance(payload.get("media_url"), str)):
             raise CloudRuntimeError("cloud audio metadata is invalid")
-        if not self._snapshot()["entitlement"]["deliver"] or self._snapshot()["queue_hold"]:
+        if not self._snapshot()["entitlement"]["deliver"]:
             raise CloudRuntimeError("cloud delivery is paused")
         if message_id in self.state["deleted"] or server_time >= expires_at:
             self._ack(item["operation_id"], "expired")
             return
+        if self._snapshot()["queue_hold"]:
+            # A newer resume may follow this older audio in the same inbox.
+            # Keep it pending for a fresh authorized fetch after the hold clears.
+            raise CloudCommandDeferred("cloud queue is held")
         self._refresh_message_expiry(message_id, expires_at, message_created_at)
         digest = hashlib.sha256((message_id + ":" + item["operation_id"]).encode("utf-8")).hexdigest()
         if digest in self.state["seen"]:
@@ -626,11 +636,21 @@ class CloudRuntime:
                 raise CloudRuntimeError("queue hold is invalid")
             intent_path = self._intent_path(item["operation_id"])
             if intent_path.exists():
-                self._ack(item["operation_id"], "rejected", error_code="hold_outcome_unknown")
-                return
-            atomic_json(intent_path, {"operation_id": item["operation_id"], "held": payload["held"]})
-            self.state["snapshot"]["queue_hold"] = payload["held"]
-            self._save()
+                intent = json.loads(intent_path.read_text(encoding="utf-8"))
+                if (not isinstance(intent, dict) or intent.get("operation_id") != item["operation_id"]
+                        or type(intent.get("held")) is not bool or intent["held"] != payload["held"]
+                        or ("sequence" in intent and (type(intent["sequence"]) is not int
+                            or intent["sequence"] != item["sequence"]))):
+                    raise CloudRuntimeError("queue hold intent conflicts")
+            else:
+                atomic_json(intent_path, {"operation_id": item["operation_id"],
+                                         "held": payload["held"], "sequence": item["sequence"]})
+            # Setting a boolean is safe to resume after a crash. The sequence is
+            # saved with the effect so a delayed retry cannot undo a newer hold.
+            if item["sequence"] > self.state.get("queue_hold_sequence", -1):
+                self.state["snapshot"]["queue_hold"] = payload["held"]
+                self.state["queue_hold_sequence"] = item["sequence"]
+                self._save()
             self._ack(item["operation_id"], "applied")
         elif kind == "preview_ringtone":
             ringtone = payload.get("ringtone_id")
@@ -715,6 +735,10 @@ class CloudRuntime:
             else:
                 try:
                     self._command(item, now)
+                except CloudCommandDeferred:
+                    # Inbox cursors are hints; the service returns all pending
+                    # operations until ACKed, including work before the cursor.
+                    continue
                 except (CloudRuntimeError, SettingsError, ContactError, NfcError, OSError, ValueError):
                     self._ack(item["operation_id"], "rejected", error_code="device_command_rejected")
             self.state["cursor"] = max(self.state["cursor"], item["sequence"])
