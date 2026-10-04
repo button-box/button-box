@@ -659,6 +659,24 @@ class CloudRuntimeTests(unittest.TestCase):
         with restarted.owner():
             self.assertIsNone(restarted.claim_next("a" * 64))
 
+    def test_clock_step_during_enqueue_cannot_change_relative_sound_window(self):
+        for step in (-20, 20):
+            with self.subTest(step=step):
+                wall = [NOW]
+                mono = [100.0]
+                def changing_clock():
+                    value = wall[0]
+                    wall[0] += step
+                    return value
+                requests = AudioRequests(self.root / f"step-{step}", clock=changing_clock,
+                    monotonic=lambda: mono[0], boot_id="test-boot")
+                requests.enqueue_for("preview-step", "preview", "a" * 64, 15,
+                    ringtone_id="gentle_music_box")
+                mono[0] = 114.9
+                self.assertEqual(requests.outcome("preview-step"), "pending")
+                mono[0] = 115.0
+                self.assertEqual(requests.outcome("preview-step"), "expired")
+
     def test_skewed_wall_clock_keeps_server_send_time_retry_window_and_success_cue(self):
         store, job = self.staged_upload()
         original = json.loads((job.path / "job.json").read_text())

@@ -74,19 +74,20 @@ class AudioRequests:
             yield
 
     def enqueue(self, key, kind, scope, expires_at, **fields):
+        self.enqueue_for(key, kind, scope, expires_at - self.clock(), **fields)
+
+    def enqueue_for(self, key, kind, scope, seconds, **fields):
+        """Persist a remaining duration without round-tripping through wall time."""
+        remaining = max(0, min(30, seconds))
+        expires_mono = self.monotonic() + remaining
+        expires_at = self.clock() + remaining
         path = self._path(key)
         with self._locked(path):
             if path.exists() or self._completed(path).exists():
                 return  # Terminal receipts prevent replays, including after a crash.
-            remaining = max(0, min(30, expires_at - self.clock()))
             atomic_json(path, {"key": key, "kind": kind, "account_scope": scope,
-                               "expires_at": self.clock() + remaining,
-                               "expires_mono": self.monotonic() + remaining,
+                               "expires_at": expires_at, "expires_mono": expires_mono,
                                "boot_id": self.boot_id, "state": "pending", **fields})
-
-    def enqueue_for(self, key, kind, scope, seconds, **fields):
-        """Convert a server-derived remaining duration into local deadlines."""
-        self.enqueue(key, kind, scope, self.clock() + max(0, min(30, seconds)), **fields)
 
     @contextmanager
     def owner(self):
