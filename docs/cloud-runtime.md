@@ -81,14 +81,22 @@ resume safely and an older retry cannot override a newer hold/resume command.
 Cloud WAV/history copies and successfully uploaded outbound sources are
 deleted only after a fresh authenticated server timestamp reaches their
 authoritative expiry, or after a scoped cloud deletion. A lost upload response
-leaves the local recording in `uncertain`; the poller uses a read-only status
-lookup by its original idempotency key to recover the message ID and expiry.
-It never reuploads an uncertain job. If the server has no record or cannot be
-reached, the source remains private for operator recovery.
-The status lookup accepts the Cloud message states `uncertain` and
-`held_for_review`, retaining the local source until authoritative expiry or deletion.
-Command effects and ACKs retain per-operation receipts so retries cannot reselect
-a different NFC card or replay a ringtone after a crash.
+leaves the local recording in `uncertain`; the poller uses a status lookup by
+its original idempotency key to recover the message ID and expiry. Before the
+first upload, the job durably retains `audio.ogg` and a `cloud_upload` descriptor
+with its hash, key, original account, recipient identity and duration. A keyed
+not-found response can return an interrupted job to `pending` only when that
+exact payload remains valid and fresh authorization still matches. The sender
+checks status again and reuses those bytes and routing fields, so a delayed
+original request and retry share the server's unique upload key. A shared job
+lock serializes local sending and recovery. Automatic retries end at the
+retention deadline fixed from the first upload's verified clock, before server
+key tombstones can be collected; this does not authorize local deletion.
+Older uncertain jobs without the original encoding, changed payloads, expired
+retry deadlines, and unavailable status remain private for operator recovery.
+The status lookup accepts `uncertain` and `held_for_review`, retaining the local
+source until authoritative expiry or deletion. Command effects and ACKs retain per-operation receipts so retries cannot reselect a different NFC
+card or replay a ringtone after a crash.
 
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an

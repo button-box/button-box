@@ -14,7 +14,8 @@ from messagebox.business_send import (
     BusinessSendUncertain,
     recipient_number,
 )
-from messagebox.guided_reply import OutboxStore, RecordingResult
+from messagebox.guided_reply import OutboxStore, RecordingResult, cloud_outbox_lock
+from messagebox import cloud_runtime
 
 gpiozero = types.ModuleType("gpiozero")
 gpiozero.Button = object
@@ -281,7 +282,9 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
             mock.patch.object(button_send, "TEMP_DIR", self.directory.name),
             mock.patch.object(button_send, "send_success_notices", button_send.queue.SimpleQueue()),
             mock.patch.object(button_send, "log_event"),
-            mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64),
+            mock.patch.object(cloud_runtime, "account_scope", return_value="a" * 64),
+            mock.patch.object(cloud_runtime, "outbox_retry_until", return_value=1_800_604_800),
+            mock.patch.object(cloud_runtime, "outbox_now", return_value=1_800_000_000),
             mock.patch.object(button_send.cloud_runtime, "recipient_id", return_value="person1234567890123456"),
             mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=self.client),
             mock.patch.object(button_send.subprocess, "run", side_effect=GuidedBusinessBoundaryTests._convert),
@@ -399,13 +402,92 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         self.assertTrue(button_send.send_success_notices.empty())
         self.client.send_voice.assert_called_once()
 
-    def test_transport_uncertainty_keeps_private_source_and_no_retry(self):
+    def test_transport_uncertainty_preserves_exact_payload_for_reconciliation(self):
         self.client.send_voice.side_effect = button_send.CloudSendUncertain("unknown")
         self.assertTrue(button_send.send_guided_job(self.job))
         self.assertTrue(self.job.audio_path.exists())
         self.assertEqual(self.store.jobs(states=("uncertain",))[0].message_id, self.job.message_id)
         self.assertTrue(button_send.send_success_notices.empty())
         self.client.send_voice.assert_called_once()
+
+    def test_restart_retries_identical_encoded_bytes_without_conversion(self):
+        original_calls = []
+        def interrupted(path, recipient, key, duration, **kwargs):
+            original_calls.append((Path(path).read_bytes(), recipient, key, duration, kwargs))
+            raise SystemExit("interrupted after request")
+        self.client.send_voice.side_effect = interrupted
+        with self.assertRaises(SystemExit):
+            button_send.send_guided_job(self.job)
+        self.assertEqual(self.store.load(self.job.path).state, "sending")
+        self.assertEqual(self.store.recover_startup(), [self.job.message_id])
+        # Recovery authorizes only the original payload after keyed not-found.
+        self.store.set_state(self.store.load(self.job.path), "pending")
+        self.client.voice_status.side_effect = button_send.CloudVoiceNotFound("not found")
+        self.client.send_voice.side_effect = None
+        self.client.send_voice.return_value = {"message_id": "cloud-message", "state": "queued",
+            "expires_at": 1_800_604_800, "server_time": 1_800_000_000}
+        with mock.patch.object(button_send.subprocess, "run") as convert:
+            self.assertTrue(button_send.send_guided_job(self.job))
+        convert.assert_not_called()
+        args = self.client.send_voice.call_args
+        self.assertEqual((Path(args.args[0]).read_bytes(), *args.args[1:], args.kwargs), original_calls[0])
+        self.assertEqual(self.store.load(self.job.path).state, "cloud_retained")
+        # A stale sender reference cannot repeat the retained request.
+        button_send.send_guided_job(self.job)
+        self.assertEqual(self.client.send_voice.call_count, 2)
+
+    def test_restart_after_payload_commit_before_request_reuses_encoding(self):
+        original_set_state = self.store.set_state
+        def interrupt(job, state, **kwargs):
+            if state == "sending":
+                raise SystemExit("interrupted before request")
+            return original_set_state(job, state, **kwargs)
+        with mock.patch.object(self.store, "set_state", side_effect=interrupt):
+            with self.assertRaises(SystemExit):
+                button_send.send_guided_job(self.job)
+        self.client.send_voice.assert_not_called()
+        self.assertEqual(self.store.load(self.job.path).state, "pending")
+        encoded = (self.job.path / "audio.ogg").read_bytes()
+        self.client.send_voice.return_value = {"message_id": "cloud-message", "state": "queued",
+            "expires_at": 1_800_604_800, "server_time": 1_800_000_000}
+        with mock.patch.object(button_send.subprocess, "run") as convert:
+            self.assertTrue(button_send.send_guided_job(self.job))
+        convert.assert_not_called()
+        self.assertEqual(Path(self.client.send_voice.call_args.args[0]).read_bytes(), encoded)
+
+    def test_delayed_acceptance_is_reconciled_before_reupload(self):
+        self.client.send_voice.side_effect = button_send.CloudSendUncertain("lost response")
+        button_send.send_guided_job(self.job)
+        self.store.set_state(self.store.load(self.job.path), "pending")
+        self.client.voice_status.return_value = {"message_id": "cloud-message", "state": "accepted",
+            "expires_at": 1_800_604_800, "server_time": 1_800_000_000, "deleted": False}
+        with mock.patch.object(button_send.subprocess, "run") as convert:
+            self.assertTrue(button_send.send_guided_job(self.job))
+        convert.assert_not_called()
+        self.client.send_voice.assert_called_once()
+        self.assertEqual(self.store.load(self.job.path).state, "cloud_retained")
+
+    def test_sender_lock_serializes_two_sender_instances(self):
+        with cloud_outbox_lock(self.job.path) as acquired:
+            self.assertTrue(acquired)
+            with mock.patch.object(button_send.subprocess, "run") as convert:
+                self.assertFalse(button_send.send_guided_job(self.job))
+        convert.assert_not_called()
+        self.client.send_voice.assert_not_called()
+
+    def test_replay_preserves_scope_and_rejects_recipient_identity_reassignment(self):
+        self.client.send_voice.side_effect = button_send.CloudSendUncertain("lost response")
+        button_send.send_guided_job(self.job)
+        self.store.set_state(self.store.load(self.job.path), "pending")
+        with mock.patch.object(button_send.cloud_runtime, "recipient_id", return_value="replacement-person"):
+            self.assertTrue(button_send.send_guided_job(self.job))
+        self.client.send_voice.assert_called_once()
+        self.assertEqual(self.store.load(self.job.path).state, "uncertain")
+        self.store.set_state(self.store.load(self.job.path), "pending")
+        with mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="b" * 64):
+            self.assertFalse(button_send.send_guided_job(self.job))
+        self.client.send_voice.assert_called_once()
+
 
 
 class GuidedTransportIsolationTests(unittest.TestCase):

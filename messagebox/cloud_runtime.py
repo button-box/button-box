@@ -17,6 +17,7 @@ from pathlib import Path
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.nfc_state import EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_ENROLLMENT_FILE,
@@ -400,7 +401,7 @@ class CloudRuntime:
         self._save()
 
     def recover_outbox(self):
-        """Resolve lost upload responses by keyed read; never repeat a send."""
+        """Resolve keyed uploads; retry only a verified original payload."""
         candidates = []
         for job_dir in self.outbox_dir.glob("*.job"):
             try:
@@ -408,9 +409,9 @@ class CloudRuntime:
             except (OSError, ValueError):
                 continue
             if (metadata.get("transport") == "cloud"
-                    and metadata.get("state") in {"uncertain", "cloud_retained"}
+                    and metadata.get("state") in {"sending", "uncertain", "cloud_retained"}
                     and _valid_id(metadata.get("message_id"))):
-                candidates.append((job_dir.name, job_dir, metadata))
+                candidates.append((job_dir.name, job_dir))
         candidates.sort()
         if not candidates:
             return
@@ -421,20 +422,48 @@ class CloudRuntime:
         # starve a later recording. This cursor is scheduling state, not time proof.
         self.state["outbox_status_cursor"] = (start + count) % len(candidates)
         self._save()
-        for _, job_dir, metadata in selected:
+        for _, job_dir in selected:
             try:
-                status = self.client.voice_status(metadata["message_id"])
-            except (CloudVoiceNotFound, CloudDeviceError):
+                with cloud_outbox_lock(job_dir) as acquired:
+                    if acquired:
+                        self._recover_outbox_job(job_dir)
+            except (OSError, ValueError, CloudDeviceError):
                 continue
-            metadata.update({"state": "cloud_retained", "cloud_message_id": status["message_id"],
-                             "cloud_state": status["state"], "expires_at": status["expires_at"],
-                             "server_time": status["server_time"],
-                             "cloud_status_checked_at": status["server_time"]})
-            if (status["deleted"] is True or status["message_id"] in self.state["deleted"]
-                    or status["server_time"] >= status["expires_at"]):
-                shutil.rmtree(job_dir)
-            else:
-                atomic_json(job_dir / "job.json", metadata)
+
+    def _recover_outbox_job(self, job_dir):
+        metadata = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        if (metadata.get("transport") != "cloud"
+                or metadata.get("state") not in {"sending", "uncertain", "cloud_retained"}
+                or not _valid_id(metadata.get("message_id"))):
+            return
+        try:
+            status = self.client.voice_status(metadata["message_id"])
+        except CloudVoiceNotFound:
+            # A 404 may race the first request. Reusing its exact bytes/key is
+            # safe under the server's unique message key; a new encoding is not.
+            if metadata.get("state") == "cloud_retained" or metadata.get("cloud_message_id"):
+                return
+            try:
+                _, upload = cloud_upload_payload(job_dir, metadata)
+                snapshot = self._snapshot()
+                if (upload["account_scope"] != snapshot["account_scope"]
+                        or upload["recipient_id"] != self.recipient_id(upload["recipient"])
+                        or self.trusted_now() >= upload["retry_until"]):
+                    return
+            except (CloudRuntimeError, OSError, ValueError):
+                return
+            metadata["state"] = "pending"
+            atomic_json(job_dir / "job.json", metadata)
+            return
+        metadata.update({"state": "cloud_retained", "cloud_message_id": status["message_id"],
+                         "cloud_state": status["state"], "expires_at": status["expires_at"],
+                         "server_time": status["server_time"],
+                         "cloud_status_checked_at": status["server_time"]})
+        if (status["deleted"] is True or status["message_id"] in self.state["deleted"]
+                or status["server_time"] >= status["expires_at"]):
+            shutil.rmtree(job_dir)
+        else:
+            atomic_json(job_dir / "job.json", metadata)
 
     def _audio(self, item, server_time):
         payload = item["payload"]
@@ -789,3 +818,16 @@ def account_scope(*, fresh=False):
     if not isinstance(scope, str) or not _SHA.fullmatch(scope):
         raise CloudRuntimeError("cloud recording account is unavailable")
     return scope
+
+
+def outbox_retry_until():
+    """Bound retries before server upload-key tombstones can be collected."""
+    runtime = CloudRuntime(client=object())
+    snapshot = runtime._snapshot()
+    return runtime.trusted_now() + snapshot["retention_days"] * 86400
+
+
+def outbox_now():
+    runtime = CloudRuntime(client=object())
+    runtime._snapshot()
+    return runtime.trusted_now()

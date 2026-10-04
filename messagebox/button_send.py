@@ -24,6 +24,8 @@ from messagebox.guided_reply import (
     OutboxStore,
     RecordingResult,
     claim_inbox_file,
+    cloud_outbox_lock,
+    cloud_upload_payload,
     discard_held_playback_press,
     invalid_prompt_files,
     raw_pcm_to_trimmed_wav,
@@ -48,7 +50,7 @@ from messagebox.runtime_paths import (
     STATE_DIR as DEFAULT_STATE_DIR,
 )
 from messagebox.settings import SettingsReader, ringtone_path
-from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, atomic_json
+from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
 from messagebox import cloud_runtime, cloud_claim
 from messagebox.cloud_runtime import CloudRuntimeError
 from messagebox.business_send import (
@@ -799,6 +801,17 @@ def stage_hold_release_business_job(fname):
 
 
 def send_guided_job(job):
+    if transport_mode() == "cloud":
+        try:
+            with cloud_outbox_lock(job.path) as acquired:
+                return _send_guided_job(job) if acquired else False
+        except (OSError, ValueError, CloudDeviceError):
+            log_event("send_blocked", flow=job.flow_kind, reason="cloud_payload")
+            return False
+    return _send_guided_job(job)
+
+
+def _send_guided_job(job):
     """Send only to the recipient stored atomically with this approved audio."""
     mode = transport_mode()
     try:
@@ -818,6 +831,12 @@ def send_guided_job(job):
         except (CloudRuntimeError, OSError):
             log_event("send_blocked", flow=job.flow_kind, reason="account_scope")
             return False
+    if mode == "cloud" and job.state != "pending":
+        return True
+    if mode == "cloud":
+        metadata = json.loads((job.path / "job.json").read_text(encoding="utf-8"))
+        if "cloud_upload" in metadata:
+            return _send_cloud_upload(job)
     ogg = os.path.join(TEMP_DIR, f"guided-{uuid.uuid4().hex}.ogg")
     converted = subprocess.run(
         [
@@ -851,39 +870,14 @@ def send_guided_job(job):
     if mode == "cloud":
         try:
             target = cloud_runtime.recipient_id(job.recipient)
-            client = CloudDeviceClient.from_environment()
-        except (CloudRuntimeError, CloudDeviceError, OSError):
-            os.remove(ogg)
+            outbox_store.prepare_cloud_upload(job, ogg, target, cloud_runtime.outbox_retry_until())
+        except (CloudRuntimeError, CloudDeviceError, OSError, ValueError):
             outbox_store.set_state(job, "failed", increment_attempts=True)
             log_event("outbox_failed", flow=job.flow_kind, reason="cloud_preflight")
             return True
-        job = outbox_store.set_state(job, "sending", increment_attempts=True)
-        try:
-            result = client.send_voice(ogg, target, job.message_id, job.duration,
-                                       account_scope=job.account_scope)
-        except CloudSendRejected:
-            outbox_store.set_state(job, "failed")
-            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
-            return True
-        except CloudSendUncertain:
-            outbox_store.set_state(job, "uncertain")
-            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_send")
-            return True
         finally:
-            os.remove(ogg)
-        metadata_path = job.path / "job.json"
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
-                         "cloud_state": result["state"], "expires_at": result["expires_at"],
-                         "server_time": result["server_time"]})
-        atomic_json(metadata_path, metadata)
-        if result["state"] == "delivery_uncertain":
-            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_delivery")
-            return True
-        if result["state"] == "accepted":
-            send_success_notices.put(time.monotonic())
-        log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
-        return True
+            Path(ogg).unlink(missing_ok=True)
+        return _send_cloud_upload(job)
 
     if mode == "business":
         try:
@@ -952,6 +946,58 @@ def send_guided_job(job):
     log_event("outbox_retry", message_id=job.message_id, flow=job.flow_kind)
     log(f"guided send retry {job.message_id}: {(sent.stderr or sent.stdout).strip()[:200]}")
     return False
+
+
+def _send_cloud_upload(job):
+    metadata_path = job.path / "job.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    try:
+        ogg, upload = cloud_upload_payload(job.path, metadata)
+        if (upload["recipient_id"] != cloud_runtime.recipient_id(job.recipient)
+                or cloud_runtime.outbox_now() >= upload["retry_until"]):
+            raise CloudRuntimeError("cloud upload authorization changed")
+        client = CloudDeviceClient.from_environment()
+    except (CloudRuntimeError, CloudDeviceError, OSError, ValueError):
+        outbox_store.set_state(job, "uncertain" if metadata.get("attempts", 0) else "failed")
+        log_event("send_blocked", flow=job.flow_kind, reason="cloud_payload")
+        return True
+    # A delayed first request may have committed since recovery's 404. Read
+    # again before replaying; the server key still deduplicates the remaining race.
+    result = None
+    if metadata.get("attempts", 0):
+        try:
+            result = client.voice_status(job.message_id)
+        except CloudVoiceNotFound:
+            pass
+        except CloudDeviceError:
+            return False
+    if result is None:
+        job = outbox_store.set_state(job, "sending", increment_attempts=True)
+        try:
+            result = client.send_voice(ogg, upload["recipient_id"], upload["idempotency_key"],
+                                       upload["duration"], account_scope=upload["account_scope"])
+        except CloudSendRejected:
+            # A racing original request can still succeed after a rejected
+            # retry. Keep ambiguous attempts available to keyed reconciliation.
+            outbox_store.set_state(job, "uncertain" if metadata.get("attempts", 0) else "failed")
+            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
+            return True
+        except CloudSendUncertain:
+            outbox_store.set_state(job, "uncertain")
+            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_send")
+            return True
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
+                     "cloud_state": result["state"], "expires_at": result["expires_at"],
+                     "server_time": result["server_time"]})
+    atomic_json(metadata_path, metadata)
+    if result["state"] == "delivery_uncertain":
+        log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_delivery")
+        return True
+    if result["state"] == "accepted":
+        send_success_notices.put(time.monotonic())
+    log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
+    return True
 
 
 def compatible_guided_jobs():

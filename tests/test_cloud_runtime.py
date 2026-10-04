@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
-from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, atomic_json
+from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
+from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
 from messagebox.played_history import list_played_history
 from messagebox.settings import SettingsStore
 
@@ -666,6 +667,95 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertIn("key_05_1234567890", calls)
         metadata = json.loads((self.root / "outbox" / "key_05_1234567890.job" / "job.json").read_text())
         self.assertEqual(metadata["cloud_message_id"], "cloud-message")
+
+    def staged_upload(self):
+        self.runtime.heartbeat()
+        source = self.root / "recording.wav"
+        source.write_bytes(b"synthetic WAV")
+        encoded = self.root / "encoded.ogg"
+        encoded.write_bytes(b"OggSoriginal-encoding")
+        store = OutboxStore(self.runtime.outbox_dir, transport="cloud")
+        job = store.approve(str(source), PERSON["wa_id"] + "@s.whatsapp.net",
+                            "standalone", 1.25, message_id="original_key_123456",
+                            account_scope="a" * 64)
+        store.prepare_cloud_upload(job, encoded, PERSON["id"], NOW + 7 * 86400)
+        store.set_state(job, "sending", increment_attempts=True)
+        self.client.voice_status = mock.Mock(side_effect=CloudVoiceNotFound("not found"))
+        return store, job
+
+    def test_missing_upload_requeues_same_payload_after_interruption_and_restart(self):
+        store, job = self.staged_upload()
+        before = (job.path / "audio.ogg").read_bytes()
+        restarted = CloudRuntime(self.client, state_path=self.runtime.state_path,
+            contacts_path=self.root / "cloud-contacts.json", queue_dir=self.runtime.queue_dir,
+            outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+            clock=lambda: NOW, monotonic=lambda: self.mono[0], boot_id="test-boot")
+        restarted.recover_outbox()
+        self.assertEqual(store.load(job.path).state, "pending")
+        self.assertEqual((job.path / "audio.ogg").read_bytes(), before)
+        self.assertEqual(json.loads((job.path / "job.json").read_text())["cloud_upload"]["recipient_id"], PERSON["id"])
+        self.client.voice_status.assert_called_once_with(job.message_id)
+
+    def test_not_found_never_requeues_missing_changed_or_legacy_payload(self):
+        store, job = self.staged_upload()
+        metadata_path = job.path / "job.json"
+        original = json.loads(metadata_path.read_text())
+        for change in ("audio", "legacy", "account", "recipient", "id", "duration", "deadline"):
+            with self.subTest(change=change):
+                metadata = json.loads(json.dumps(original))
+                (job.path / "audio.ogg").write_bytes(b"OggSoriginal-encoding")
+                if change == "audio":
+                    (job.path / "audio.ogg").write_bytes(b"OggSdifferent-encoding")
+                elif change == "legacy":
+                    metadata.pop("cloud_upload")
+                elif change == "account":
+                    metadata["account_scope"] = "b" * 64
+                elif change == "recipient":
+                    metadata["recipient"] = "12025550102@s.whatsapp.net"
+                elif change == "id":
+                    metadata["cloud_upload"]["recipient_id"] = "different-person"
+                elif change == "duration":
+                    metadata["duration"] = 2.5
+                else:
+                    metadata["cloud_upload"]["retry_until"] = NOW
+                atomic_json(metadata_path, metadata)
+                self.runtime.recover_outbox()
+                self.assertEqual(store.load(job.path).state, "sending")
+                self.assertTrue(job.audio_path.exists())
+
+    def test_transfer_stale_heartbeat_or_removed_person_blocks_not_found_retry(self):
+        store, job = self.staged_upload()
+        original = json.loads(json.dumps(self.runtime.state["snapshot"]))
+        for change in ("account", "stale", "removed", "paused"):
+            with self.subTest(change=change):
+                self.runtime.state["snapshot"] = json.loads(json.dumps(original))
+                snapshot = self.runtime.state["snapshot"]
+                if change == "account":
+                    snapshot["account_scope"] = "b" * 64
+                elif change == "stale":
+                    snapshot["boot_id"] = "old-boot"
+                elif change == "removed":
+                    snapshot["people"] = []
+                else:
+                    snapshot["entitlement"]["send"] = False
+                self.runtime.recover_outbox()
+                self.assertEqual(store.load(job.path).state, "sending")
+
+    def test_active_sender_lock_prevents_status_or_requeue(self):
+        store, job = self.staged_upload()
+        with cloud_outbox_lock(job.path) as acquired:
+            self.assertTrue(acquired)
+            self.runtime.recover_outbox()
+        self.client.voice_status.assert_not_called()
+        self.assertEqual(store.load(job.path).state, "sending")
+        self.runtime.recover_outbox()
+        self.assertEqual(store.load(job.path).state, "pending")
+
+    def test_retained_upload_not_found_never_creates_another_request(self):
+        store, job = self.staged_upload()
+        store.set_state(job, "cloud_retained")
+        self.runtime.recover_outbox()
+        self.assertEqual(store.load(job.path).state, "cloud_retained")
 
     def test_late_status_recovery_honors_prior_authorized_delete(self):
         job = self.root / "outbox" / "original_key_123456.job"
