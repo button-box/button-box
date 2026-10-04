@@ -601,6 +601,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.heartbeat()
         self.runtime._command(self.preview(), NOW)
         self.runtime.audio_requests.clock = lambda: NOW + 31
+        self.mono[0] += 31
         self.runtime._finish_previews()
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "expired")
         with self.runtime.audio_requests.owner():
@@ -647,7 +648,8 @@ class CloudRuntimeTests(unittest.TestCase):
                 key = success_key("a" * 64, job.stem)
                 self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
         # A separate process uses the same persisted request after restart.
-        restarted = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW)
+        restarted = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW,
+            monotonic=lambda: self.mono[0], boot_id="test-boot")
         with restarted.owner():
             request = restarted.claim_next("a" * 64)
             self.assertEqual(request["kind"], "success")
@@ -656,6 +658,75 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(restarted.outcome(key), "played")
         with restarted.owner():
             self.assertIsNone(restarted.claim_next("a" * 64))
+
+    def test_skewed_wall_clock_keeps_server_send_time_retry_window_and_success_cue(self):
+        store, job = self.staged_upload()
+        original = json.loads((job.path / "job.json").read_text())
+        for skew in (-20, 20):
+            with self.subTest(skew=skew):
+                elapsed = [0.0]
+                self.mono[0] = 100
+                self.runtime.clock = lambda: NOW + skew + elapsed[0]
+                self.runtime.heartbeat()
+                self.mono[0] += 0.25
+                elapsed[0] = 0.25
+                notices = AudioRequests(self.root / f"skew-{skew}", clock=self.runtime.clock,
+                    monotonic=lambda: self.mono[0], boot_id="test-boot")
+                metadata = {**original, "state": "pending", "attempts": 0}
+                atomic_json(job.path / "job.json", metadata)
+                self.client.send_voice = mock.Mock(return_value={"message_id": MID, "state": "accepted",
+                    "server_time": NOW, "expires_at": NOW + 3600})
+                with mock.patch.object(button_send.cloud_runtime, "CloudRuntime", return_value=self.runtime), \
+                     mock.patch.object(button_send, "outbox_store", store), \
+                     mock.patch.object(button_send, "cloud_audio_requests", notices), \
+                     mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=self.client), \
+                     mock.patch.object(button_send, "log_event"):
+                    self.assertEqual(button_send.cloud_runtime.outbox_now(), NOW + 0.25)
+                    self.assertEqual(button_send.cloud_runtime.outbox_retry_until(), NOW + 0.25 + 30 * 86400)
+                    self.assertTrue(button_send._send_cloud_upload(store.load(job.path)))
+                saved = json.loads((job.path / "job.json").read_text())
+                self.assertEqual(saved["cloud_send_started_at"], NOW)
+                key = success_key("a" * 64, job.message_id)
+                self.assertEqual(notices.outcome(key), "pending")
+                # A wall-clock correction on process restart cannot extend or
+                # shorten the original same-boot monotonic cue window.
+                restarted = AudioRequests(notices.directory, clock=lambda: NOW - skew + 10,
+                    monotonic=lambda: self.mono[0], boot_id="test-boot")
+                self.mono[0] = 110
+                self.assertEqual(restarted.outcome(key), "pending")
+                self.mono[0] = 131
+                self.assertEqual(restarted.outcome(key), "expired")
+
+    def test_skewed_preview_deadline_survives_restart_without_extending_or_replay(self):
+        for skew in (-20, 20):
+            with self.subTest(skew=skew):
+                self.mono[0] = 100
+                self.runtime.clock = lambda: NOW + skew
+                self.runtime.heartbeat()
+                self.runtime.audio_requests = AudioRequests(self.root / f"preview-skew-{skew}",
+                    clock=self.runtime.clock, monotonic=lambda: self.mono[0], boot_id="test-boot")
+                item = self.preview(operation_id=OP + str(skew))
+                item["expires_at"] = NOW + 15
+                self.runtime._command(item, NOW)
+                key = preview_key(item["operation_id"])
+                self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
+                # Restart at ten seconds with the wall clock corrected across
+                # zero skew; only five seconds of the original window remain.
+                self.mono[0] = 110
+                restarted = AudioRequests(self.runtime.audio_requests.directory,
+                    clock=lambda: NOW - skew + 10, monotonic=lambda: self.mono[0], boot_id="test-boot")
+                self.assertEqual(restarted.outcome(key), "pending")
+                self.mono[0] = 115
+                with restarted.owner():
+                    self.assertIsNone(restarted.claim_next("a" * 64))
+                self.assertEqual(restarted.outcome(key), "expired")
+                # Reboot invalidates any pending sound even if wall time is behind.
+                reboot = AudioRequests(self.root / f"preview-reboot-{skew}", clock=lambda: NOW + skew,
+                    monotonic=lambda: 100, boot_id="test-boot")
+                reboot.enqueue_for(key, "preview", "a" * 64, 15, ringtone_id="gentle_music_box")
+                after_boot = AudioRequests(reboot.directory, clock=lambda: NOW - 90,
+                    monotonic=lambda: 1, boot_id="next-boot")
+                self.assertEqual(after_boot.outcome(key), "expired")
 
     def test_stale_foreign_and_unsuccessful_outbox_statuses_never_cue(self):
         self.runtime.heartbeat()

@@ -308,6 +308,19 @@ class GuidedCloudBoundaryTests(unittest.TestCase):
         key = button_send.success_key(self.job.account_scope, self.job.message_id)
         self.assertEqual(button_send.cloud_audio_requests.outcome(key), "pending")
 
+    def test_heartbeat_expiring_during_send_suppresses_cue_but_keeps_accepted_outcome(self):
+        self.client.send_voice.return_value = {"message_id": "cloud-message", "state": "accepted",
+            "expires_at": 1_800_604_800, "server_time": 1_800_000_000}
+        with mock.patch.object(button_send.cloud_runtime, "outbox_now", side_effect=[
+                1_800_000_000, 1_800_000_000, button_send.CloudRuntimeError("stale heartbeat")]):
+            self.assertTrue(button_send.send_guided_job(self.job))
+        metadata = json.loads((self.job.path / "job.json").read_text())
+        self.assertEqual(metadata["cloud_state"], "accepted")
+        self.assertEqual(metadata["state"], "cloud_retained")
+        self.client.send_voice.assert_called_once()
+        key = button_send.success_key(self.job.account_scope, self.job.message_id)
+        self.assertIsNone(button_send.cloud_audio_requests.outcome(key))
+
     def test_transfer_during_recording_keeps_original_approval_scope(self):
         source = Path(self.directory.name) / "source.wav"
         current_scope = ["a" * 64]

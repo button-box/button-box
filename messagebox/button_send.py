@@ -977,7 +977,7 @@ def _send_cloud_upload(job):
     if result is None:
         job = outbox_store.set_state(job, "sending", increment_attempts=True)
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        metadata["cloud_send_started_at"] = cloud_runtime.outbox_now()
+        metadata["cloud_send_started_at"] = int(cloud_runtime.outbox_now())
         atomic_json(metadata_path, metadata)
         try:
             result = client.send_voice(ogg, upload["recipient_id"], upload["idempotency_key"],
@@ -999,8 +999,13 @@ def _send_cloud_upload(job):
             and result["server_time"] < result["expires_at"]
             and type(observed) in (int, float)
             and 0 <= result["server_time"] - observed <= 30):
-        cloud_audio_requests.enqueue(success_key(job.account_scope, job.message_id),
-            "success", job.account_scope, result["server_time"] + 30)
+        try:
+            remaining = result["server_time"] + 30 - cloud_runtime.outbox_now()
+        except (CloudRuntimeError, OSError):
+            pass  # A stale heartbeat can suppress sound, never the accepted outcome.
+        else:
+            cloud_audio_requests.enqueue_for(success_key(job.account_scope, job.message_id),
+                "success", job.account_scope, remaining)
     metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
                      "cloud_state": result["state"], "expires_at": result["expires_at"],
                      "server_time": result["server_time"],

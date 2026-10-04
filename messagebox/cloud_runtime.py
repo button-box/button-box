@@ -114,7 +114,8 @@ class CloudRuntime:
         self.converter = converter
         self.monotonic = monotonic
         self.boot_id = _current_boot_id() if boot_id is None else boot_id
-        self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests", clock=clock)
+        self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
+            clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
 
     def _load(self):
@@ -165,6 +166,11 @@ class CloudRuntime:
                 or not _valid_time(verified_at) or not 0 <= self.clock() - verified_at <= 90):
             raise CloudRuntimeError("cloud authorization is stale")
         return snapshot
+
+    def server_now(self):
+        """Estimate authoritative time without adding the local wall-clock skew."""
+        snapshot = self._snapshot()
+        return snapshot["server_time"] + self.monotonic() - snapshot["verified_mono"]
 
     def _people(self):
         snapshot = self._snapshot()
@@ -451,7 +457,7 @@ class CloudRuntime:
                 snapshot = self._snapshot()
                 if (upload["account_scope"] != snapshot["account_scope"]
                         or upload["recipient_id"] != self.recipient_id(upload["recipient"])
-                        or self.trusted_now() >= upload["retry_until"]):
+                        or self.server_now() >= upload["retry_until"]):
                     return
             except (CloudRuntimeError, OSError, ValueError):
                 return
@@ -485,12 +491,13 @@ class CloudRuntime:
             return
         try:
             scope = self._snapshot()["account_scope"]
+            remaining = status["server_time"] + 30 - self.server_now()
         except CloudRuntimeError:
             return
         if metadata.get("account_scope") != scope:
             return
-        self.audio_requests.enqueue(success_key(scope, metadata["message_id"]),
-            "success", scope, status["server_time"] + 30)
+        self.audio_requests.enqueue_for(success_key(scope, metadata["message_id"]),
+            "success", scope, remaining)
 
     def _audio(self, item, server_time):
         payload = item["payload"]
@@ -720,8 +727,8 @@ class CloudRuntime:
                 return
             scope = self._snapshot()["account_scope"]
             key = preview_key(item["operation_id"])
-            self.audio_requests.enqueue(key, "preview", scope,
-                min(item["expires_at"], server_time + 30), ringtone_id=ringtone)
+            self.audio_requests.enqueue_for(key, "preview", scope,
+                min(item["expires_at"], server_time + 30) - self.server_now(), ringtone_id=ringtone)
             self.state["pending_previews"][item["operation_id"]] = key
             self._save()
             self._ack(item["operation_id"], "received")
@@ -864,10 +871,9 @@ def outbox_retry_until():
     """Bound retries before server upload-key tombstones can be collected."""
     runtime = CloudRuntime(client=object())
     snapshot = runtime._snapshot()
-    return runtime.trusted_now() + snapshot["retention_days"] * 86400
+    return runtime.server_now() + snapshot["retention_days"] * 86400
 
 
 def outbox_now():
     runtime = CloudRuntime(client=object())
-    runtime._snapshot()
-    return runtime.trusted_now()
+    return runtime.server_now()

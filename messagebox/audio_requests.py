@@ -13,10 +13,20 @@ from messagebox.cloud_device import atomic_json
 from messagebox.settings import RINGTONES
 
 
+def _boot_id():
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return value if re.fullmatch(r"[0-9a-f-]{36}", value) else None
+
+
 class AudioRequests:
-    def __init__(self, directory, *, clock=time.time):
+    def __init__(self, directory, *, clock=time.time, monotonic=time.monotonic, boot_id=None):
         self.directory = Path(directory)
         self.clock = clock
+        self.monotonic = monotonic
+        self.boot_id = _boot_id() if boot_id is None else boot_id
 
     def _path(self, key):
         return self.directory / (hashlib.sha256(key.encode()).hexdigest() + ".json")
@@ -31,9 +41,19 @@ class AudioRequests:
                 or not re.fullmatch(r"[0-9a-f]{64}", request["account_scope"])
                 or type(request.get("expires_at")) not in (int, float)
                 or not math.isfinite(request["expires_at"])
+                or (request.get("boot_id") is not None and (not isinstance(request["boot_id"], str)
+                    or "expires_mono" not in request))
+                or ("expires_mono" in request and (type(request["expires_mono"]) not in (int, float)
+                    or not math.isfinite(request["expires_mono"])))
                 or request.get("state") not in {"pending", "claimed", "played", "rejected", "unknown", "expired"}):
             raise ValueError("audio request is invalid")
         return request
+
+    def _expired(self, request):
+        boot = request.get("boot_id")
+        if boot is not None:
+            return boot != self.boot_id or self.monotonic() >= request["expires_mono"]
+        return self.clock() >= request["expires_at"]
 
     def _completed(self, path):
         return self.directory / "completed" / path.name
@@ -58,8 +78,15 @@ class AudioRequests:
         with self._locked(path):
             if path.exists() or self._completed(path).exists():
                 return  # Terminal receipts prevent replays, including after a crash.
+            remaining = max(0, min(30, expires_at - self.clock()))
             atomic_json(path, {"key": key, "kind": kind, "account_scope": scope,
-                               "expires_at": min(expires_at, self.clock() + 30), "state": "pending", **fields})
+                               "expires_at": self.clock() + remaining,
+                               "expires_mono": self.monotonic() + remaining,
+                               "boot_id": self.boot_id, "state": "pending", **fields})
+
+    def enqueue_for(self, key, kind, scope, seconds, **fields):
+        """Convert a server-derived remaining duration into local deadlines."""
+        self.enqueue(key, kind, scope, self.clock() + max(0, min(30, seconds)), **fields)
 
     @contextmanager
     def owner(self):
@@ -91,7 +118,7 @@ class AudioRequests:
                     continue
                 if request["account_scope"] != scope:
                     request["state"] = "rejected"
-                elif self.clock() >= request["expires_at"]:
+                elif self._expired(request):
                     request["state"] = "expired"
                 else:
                     request["state"] = "claimed"
@@ -118,7 +145,7 @@ class AudioRequests:
             if request["state"] == "claimed" and idle:
                 request["state"] = "unknown"
                 self._save(path, request)
-            elif request["state"] == "pending" and self.clock() >= request["expires_at"]:
+            elif request["state"] == "pending" and self._expired(request):
                 request["state"] = "expired"
                 self._save(path, request)
             return request["state"]
