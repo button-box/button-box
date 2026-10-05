@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.cloud_device import (
+    capabilities,
     CloudDeviceClient,
     CloudDeviceError,
     CloudSendRejected,
@@ -14,6 +15,11 @@ from messagebox.cloud_device import (
     CloudVoiceNotFound,
     DeviceIdentityStore,
 )
+
+
+class CloudCapabilityTests(unittest.TestCase):
+    def test_swoosh_capability_is_advertised(self):
+        self.assertIs(capabilities()["swoosh_sound_enabled"], True)
 
 
 class _Response:

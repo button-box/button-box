@@ -95,6 +95,8 @@
         <label for="master-volume">Master volume: <output id="volume-output">50%</output></label>
         <input id="master-volume" name="master_volume_percent" type="range" min="0" max="100" step="5">
         <p class="field-help">Controls voice messages, prompts, beeps, and ringtones.</p>
+        <label class="choice"><input id="swoosh-sound" name="swoosh_sound_enabled" type="checkbox"> Swoosh sound</label>
+        <p class="field-help">Plays after the box accepts a message for sending.</p>
         <label for="arrival-signal">New-message signal</label>
         <select id="arrival-signal" name="arrival_signal"><option value="ring_and_lamp">Ring and lamp</option><option value="ring_only">Ring only</option><option value="lamp_only">Lamp only</option><option value="silent">Silent</option></select>
 

@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import tempfile
@@ -5,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox.settings import RevisionConflict, SettingsError, SettingsStore, defaults
+from messagebox.settings import RevisionConflict, SettingsError, SettingsStore, defaults, validate
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -49,6 +50,21 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(document["master_volume_percent"], 65)
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "21:00", "end": "06:00"})
         self.assertFalse(document["nfc_confirmation_beep"])
+        self.assertTrue(document["swoosh_sound_enabled"])
+
+    def test_old_settings_document_keeps_existing_send_cue_enabled(self):
+        initial = defaults({"TZ": "UTC"})
+        initial.pop("swoosh_sound_enabled")
+        self.path.write_text(json.dumps(initial), encoding="utf-8")
+        document, warning = SettingsStore(self.path, environ={"TZ": "UTC"}).load()
+        self.assertFalse(warning)
+        self.assertTrue(document["swoosh_sound_enabled"])
+        self.assertEqual(document["revision"], initial["revision"])
+
+    def test_swoosh_setting_requires_boolean(self):
+        document = defaults({"TZ": "UTC"})
+        with self.assertRaises(SettingsError):
+            validate({**document, "swoosh_sound_enabled": 1})
 
     def test_revision_conflict_never_overwrites_newer_settings(self):
         store = SettingsStore(self.path, environ={"TZ": "UTC"})

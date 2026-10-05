@@ -39,7 +39,9 @@ _ROOT_KEYS = {
     "arrival_signal",
     "quiet_hours",
     "nfc_confirmation_beep",
+    "swoosh_sound_enabled",
 }
+_LEGACY_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled"}
 
 
 class SettingsError(ValueError):
@@ -97,11 +99,17 @@ def defaults(environ=None):
             "end": f"{end_hour:02d}:00",
         },
         "nfc_confirmation_beep": _env_flag(environ, "MSGBOX_NFC_DETECTION_BEEP", True),
+        "swoosh_sound_enabled": True,
     }
 
 
 def validate(document):
-    if not isinstance(document, dict) or set(document) != _ROOT_KEYS:
+    if not isinstance(document, dict):
+        raise SettingsError("settings have an invalid schema")
+    if set(document) == _LEGACY_ROOT_KEYS:
+        # Existing boxes keep the successful-send cue until an owner changes it.
+        document = {**document, "swoosh_sound_enabled": True}
+    if set(document) != _ROOT_KEYS:
         raise SettingsError("settings have an invalid schema")
     if document["version"] != SCHEMA_VERSION:
         raise SettingsError("settings version is unsupported")
@@ -138,6 +146,8 @@ def validate(document):
         raise SettingsError("quiet hours end time is invalid")
     if type(document["nfc_confirmation_beep"]) is not bool:
         raise SettingsError("NFC confirmation beep value is invalid")
+    if type(document["swoosh_sound_enabled"]) is not bool:
+        raise SettingsError("swoosh sound value is invalid")
     return copy.deepcopy(document)
 
 

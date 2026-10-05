@@ -124,6 +124,19 @@ class SendSuccessTests(unittest.TestCase):
             play.assert_called_once_with()
         self.assertEqual(store.outcome(key), "played")
 
+    def test_cloud_swoosh_off_consumes_success_cue_without_audio(self):
+        store = button_send.AudioRequests(Path(self.directory.name) / "audio-off", clock=lambda: 100)
+        key = button_send.success_key("a" * 64, "local-test")
+        store.enqueue(key, "success", "a" * 64, 130)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "cloud_audio_requests", store), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "caregiver_settings", return_value={"swoosh_sound_enabled": False}), \
+             mock.patch.object(button_send, "play_idle_sound") as play:
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        play.assert_not_called()
+        self.assertEqual(store.outcome(key), "rejected")
+
     def test_cloud_stale_foreign_or_crash_claimed_cues_never_play(self):
         for case in ("expired", "foreign", "crash"):
             with self.subTest(case=case):
@@ -176,6 +189,18 @@ class SendSuccessTests(unittest.TestCase):
             button_send.play_send_success_cue()
         process.terminate.assert_not_called()
         process.kill.assert_not_called()
+
+    def test_swoosh_off_suppresses_only_the_send_success_cue(self):
+        with mock.patch.object(button_send, "caregiver_settings", return_value={"swoosh_sound_enabled": False}), \
+             mock.patch.object(button_send, "play_idle_sound") as play:
+            self.assertFalse(button_send.play_send_success_cue())
+        play.assert_not_called()
+
+    def test_missing_swoosh_setting_preserves_legacy_default(self):
+        with mock.patch.object(button_send, "caregiver_settings", return_value={}), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+            self.assertTrue(button_send.play_send_success_cue())
+        play.assert_called_once_with(button_send.SEND_SUCCESS_WAV, 5)
 
     def test_success_cue_player_failure_or_timeout_does_not_retry_send(self):
         for status in (1, None):

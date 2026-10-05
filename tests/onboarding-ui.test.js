@@ -426,7 +426,7 @@ test("Cloud local Settings navigation still loads and renders normal device sett
   const settings = {
     recording_mode: "hold_release", after_listening: "play_only", max_recording_seconds: 60,
     ringtone_id: "default", master_volume_percent: 30, arrival_signal: "ring",
-    quiet_hours: {enabled:false, start:"22:00", end:"07:00"}, timezone: "UTC", nfc_confirmation_beep: true,
+    quiet_hours: {enabled:false, start:"22:00", end:"07:00"}, timezone: "UTC", nfc_confirmation_beep: true, swoosh_sound_enabled: true,
   };
   h.context.document.querySelector = selector => selector.startsWith("[name=") ? h.node(selector) : null;
   h.context.fetch = async (url) => {
@@ -441,6 +441,7 @@ test("Cloud local Settings navigation still loads and renders normal device sett
   expect(h.node("settings-view").hidden).toBe(false);
   expect(h.node("setup-view").hidden).toBe(true);
   expect(h.node("master-volume").value).toBe("30");
+  expect(h.node("swoosh-sound").checked).toBe(true);
   expect(h.node("settings-status").textContent).toBe("");
   expect(h.calls.map(call=>call.url)).toEqual(["/api/settings"]);
 });

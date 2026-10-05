@@ -1370,6 +1370,8 @@ def play_idle_sound(path, timeout):
 
 
 def play_send_success_cue():
+    if not caregiver_settings().get("swoosh_sound_enabled", True):
+        return False
     return play_idle_sound(SEND_SUCCESS_WAV, 5)
 
 

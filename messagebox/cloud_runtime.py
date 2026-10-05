@@ -730,6 +730,12 @@ class CloudRuntime:
             document = payload.get("settings")
             candidate = ({key: value for key, value in document.items() if key not in {"version", "revision"}}
                          if isinstance(document, dict) else None)
+            # A queued command from before Swoosh sound existed keeps the old
+            # behavior when it reaches a newly updated box.
+            if isinstance(candidate, dict):
+                candidate.setdefault("swoosh_sound_enabled", True)
+                if isinstance(document, dict) and "swoosh_sound_enabled" not in document:
+                    document = {**document, "swoosh_sound_enabled": True}
             if (warning or type(expected) is not int or type(desired) is not int or desired <= expected
                     or not isinstance(document, dict) or document.get("version") != 1
                     or document.get("revision") != desired):

@@ -610,6 +610,7 @@ class OnboardingAPITests(unittest.TestCase):
             if key not in {"version", "revision"}
         }
         candidate["max_recording_seconds"] = 120
+        candidate["swoosh_sound_enabled"] = False
         saved = self.client.json(
             "PUT",
             "/api/settings",
@@ -618,6 +619,8 @@ class OnboardingAPITests(unittest.TestCase):
             headers={"Origin": "http://10.41.0.1"},
         )
         self.assertEqual(saved["status"], "200 OK")
+        loaded_again = json.loads(self.client.request("GET", "/api/settings", host="10.41.0.1")["body"])["settings"]
+        self.assertFalse(loaded_again["swoosh_sound_enabled"])
         conflict = self.client.json(
             "PUT",
             "/api/settings",

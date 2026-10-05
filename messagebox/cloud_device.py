@@ -381,4 +381,5 @@ def capabilities(*, nfc=False) -> dict:
         "audio": True,
         "nfc": bool(nfc),
         "settings_version": 1,
+        "swoosh_sound_enabled": True,
     }

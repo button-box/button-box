@@ -1012,6 +1012,7 @@ function populateSettings(payload) {
   document.getElementById("quiet-end").value = value.quiet_hours.end;
   document.getElementById("timezone").value = value.timezone;
   document.getElementById("nfc-beep").checked = value.nfc_confirmation_beep;
+  document.getElementById("swoosh-sound").checked = value.swoosh_sound_enabled;
   document.getElementById("settings-attention").hidden = !payload.attention;
   const suggested = Intl.DateTimeFormat().resolvedOptions().timeZone;
   document.getElementById("timezone-help").textContent = suggested && suggested !== value.timezone
@@ -1045,6 +1046,7 @@ function settingsCandidate() {
       end: document.getElementById("quiet-end").value,
     },
     nfc_confirmation_beep: document.getElementById("nfc-beep").checked,
+    swoosh_sound_enabled: document.getElementById("swoosh-sound").checked,
   };
 }
 

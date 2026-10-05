@@ -403,13 +403,14 @@ class CloudRuntimeTests(unittest.TestCase):
     def test_settings_revision_replay_and_local_conflict(self):
         self.runtime.heartbeat()
         document, _ = SettingsStore(self.root / "settings.json").load()
-        candidate = {**document, "revision": 1, "master_volume_percent": 40}
+        candidate = {**document, "revision": 1, "master_volume_percent": 40, "swoosh_sound_enabled": False}
         item = {"operation_id": OP, "sequence": 1, "kind": "settings", "created_at": NOW,
                 "expires_at": NOW + 100, "payload": {"settings": candidate,
                 "expected_revision": 0, "desired_revision": 1}}
         self.client.items = [item]
         self.runtime.poll_once()
         self.assertEqual(SettingsStore(self.root / "settings.json").load()[0]["master_volume_percent"], 40)
+        self.assertFalse(SettingsStore(self.root / "settings.json").load()[0]["swoosh_sound_enabled"])
         self.assertEqual(self.client.acks[-1]["state"], "received")
         (self.root / "applied-settings.json").write_text(json.dumps({"revision": 1, "settings": candidate}))
         self.client.items = []
@@ -424,6 +425,28 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "rejected")
         self.assertEqual(SettingsStore(self.root / "settings.json").load()[0]["master_volume_percent"], 40)
+
+    def test_pre_swoosh_queued_settings_command_keeps_existing_send_cue_default(self):
+        self.runtime.heartbeat()
+        old, _warning = self.runtime.settings.load()
+        old.pop("swoosh_sound_enabled")
+        self.runtime.settings.path.write_text(json.dumps(old))
+        candidate = {**old, "revision": 1, "master_volume_percent": 40}
+        item = {"operation_id": OP, "sequence": 1, "kind": "settings", "created_at": NOW,
+                "expires_at": NOW + 100, "payload": {"settings": candidate,
+                "expected_revision": 0, "desired_revision": 1}}
+        self.client.items = [item]
+        self.runtime.poll_once()
+        saved, warning = self.runtime.settings.load()
+        self.assertFalse(warning)
+        self.assertEqual(saved["revision"], 1)
+        self.assertEqual(saved["master_volume_percent"], 40)
+        self.assertTrue(saved["swoosh_sound_enabled"])
+        self.assertEqual(self.client.acks[-1]["state"], "received")
+        (self.root / "applied-settings.json").write_text(json.dumps({"revision": 1, "settings": saved}))
+        self.runtime._finish_settings()
+        self.runtime.flush_acks()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
 
     def test_settings_recovers_skipped_generations_without_claiming_early_success(self):
         self.runtime.heartbeat()
