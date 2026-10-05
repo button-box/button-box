@@ -55,7 +55,7 @@
       <div class="shortcut-grid">
         <a id="home-button-settings" href="#settings" class="shortcut"><strong>Button and recording</strong><span>Choose tap and review or press and hold.</span></a>
         <a id="home-sound-settings" href="#settings" class="shortcut"><strong>Sounds and quiet hours</strong><span>Ringtone, volume, lamp, and schedule.</span></a>
-        <a id="home-connections-setup" href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and NFC.</span></a>
+        <a id="home-connections-setup" href="#setup" class="shortcut"><strong>Connections and recipients</strong><span>Wi-Fi, WhatsApp, recipients, and Family cards.</span></a>
       </div>
     </section>
 
@@ -109,8 +109,8 @@
         <p id="timezone-help" class="field-help"></p>
         <p class="field-help">During quiet hours, new messages queue without ringing or lighting the lamp. Deliberate playback still works and overnight messages do not ring later.</p>
 
-        <h2>NFC</h2>
-        <label class="choice"><input id="nfc-beep" name="nfc_confirmation_beep" type="checkbox"> Beep when an NFC card is detected or confirmed</label>
+        <h2>Family cards</h2>
+        <label class="choice"><input id="nfc-beep" name="nfc_confirmation_beep" type="checkbox"> Family confirmation beep</label>
         <button id="save-settings" type="submit">Save settings</button>
         <p id="settings-status" class="status" role="status" aria-live="polite"></p>
       </form>
@@ -119,7 +119,7 @@
     <section class="card" id="activity-view" aria-labelledby="activity-title" hidden>
       <p class="eyebrow">Privacy-sensitive</p>
       <h1 id="activity-title" tabindex="-1">Activity</h1>
-      <p class="lede">The timeline is content-free: no transcripts, raw NFC identifiers, or internal message identifiers. Household users can play queued audio below.</p>
+      <p class="lede">The timeline is content-free: no transcripts, card identifiers, or internal message identifiers. Household users can play queued audio below.</p>
       <div id="activity-summary" class="status-grid"></div>
       <div id="activity-timeline" class="activity-list"></div>
       <h2>Queue</h2><div id="activity-queue"></div>
@@ -136,7 +136,7 @@
       <h2>Connections and people</h2>
       <div class="shortcut-grid">
         <a id="advanced-connections-setup" href="#setup" class="shortcut"><strong id="advanced-connections-label">Wi-Fi and WhatsApp</strong><span id="advanced-connections-copy">Reconnect, relink, or continue setup.</span></a>
-        <a id="advanced-recipients-setup" href="#setup" class="shortcut"><strong>Recipients and NFC cards</strong><span>Add, remove, select, pair, reassign, or unpair.</span></a>
+        <a id="advanced-recipients-setup" href="#setup" class="shortcut"><strong>Recipients and Family cards</strong><span>Add, remove, select, Pair, reassign, or Unpair.</span></a>
       </div>
       <p id="advanced-cloud-management" hidden><a id="advanced-cloud-dashboard" href="https://button.box/dashboard" class="button">Manage Button Box Cloud</a></p>
       <div class="button-row">
@@ -274,7 +274,7 @@
       <form id="unlink-form" class="confirm-panel" hidden>
         <input type="hidden" name="confirm" value="unlink">
         <p><strong>Link a different account?</strong></p>
-        <p>This logs out the current WhatsApp account and removes its private device store, recipients, NFC mappings, listener profiles, and voice-test state before a new link can begin.</p>
+        <p>This logs out the current WhatsApp account and removes its private device store, recipients, Family card mappings, listener profiles, and voice-test state before a new link can begin.</p>
         <div class="button-row">
           <button id="confirm-whatsapp-unlink" type="submit" class="danger-button">Log out and continue</button>
           <button type="button" id="keep-account" class="secondary">Keep this account</button>
@@ -312,7 +312,7 @@
     <section class="card" id="deferred-view" aria-labelledby="deferred-title" hidden>
       <p class="eyebrow">Setup paused</p>
       <h1 id="deferred-title" tabindex="-1">Come back when you’re ready</h1>
-      <p class="lede">Messaging and NFC setup stay off until you choose a default recipient.</p>
+      <p class="lede">Messaging and Family card pairing stay off until you choose a default recipient.</p>
       <button type="button" id="resume-recipients">Choose a recipient</button>
     </section>
 
@@ -345,7 +345,7 @@
     <section class="card" id="recipient-manager-view" aria-labelledby="recipient-manager-title" hidden>
       <p class="eyebrow success">Messaging ready</p>
       <h1 id="recipient-manager-title" tabindex="-1">Recipients</h1>
-      <p class="lede">Choose which allowed person or group receives messages when no NFC card is used. NFC cards can be assigned later.</p>
+      <p class="lede">Choose which allowed person or group receives messages when no Family card is used. Family cards can be paired later.</p>
       <h2 class="section-title">Allowed recipients</h2>
       <ul id="configured-recipient-list" class="recipient-list"></ul>
       <div class="manual-recipient">
@@ -368,33 +368,33 @@
       <button type="button" id="manager-refresh" class="secondary">Refresh WhatsApp</button>
       <p id="manager-status" class="field-help" role="status" aria-live="polite"></p>
       <div class="notice success-notice manager-next">
-        <strong>NFC cards come next</strong>
-        <span>Your default recipient already works without a card. To unpair one card, present it to Button Box and choose Unpair presented card.</span>
+        <strong>Family cards come next</strong>
+        <span>Your default recipient already works without a card. To Unpair one card, present it to Button Box and choose Unpair.</span>
       </div>
       <div class="button-row">
-        <button type="button" id="continue-nfc">Continue to NFC setup</button>
-        <button type="button" id="unpair-presented-nfc" class="secondary">Unpair presented card</button>
+        <button type="button" id="continue-nfc">Continue to Family cards</button>
+        <button type="button" id="unpair-presented-nfc" class="secondary">Unpair</button>
         <button type="button" id="cancel-runtime-nfc" class="text-button" hidden>Cancel card pairing</button>
       </div>
     </section>
 
     <section class="card" id="nfc-view" aria-labelledby="nfc-title" hidden>
-      <p class="eyebrow">NFC setup</p>
-      <h1 id="nfc-title" tabindex="-1">Hold a tag over Button Box</h1>
-      <p class="lede">Keep it near the NFC reader until Button Box beeps. After the beep, you can remove it.</p>
-      <div class="nfc-reader" aria-hidden="true"><span>NFC</span></div>
-      <p id="nfc-waiting-status" class="status" role="status" aria-live="polite">Waiting for a tag…</p>
+      <p class="eyebrow">Family cards</p>
+      <h1 id="nfc-title" tabindex="-1">Hold a card over Button Box</h1>
+      <p class="lede">Keep it near the card reader until Button Box beeps. After the beep, you can remove it.</p>
+      <div class="nfc-reader" aria-hidden="true"><span>Card</span></div>
+      <p id="nfc-waiting-status" class="status" role="status" aria-live="polite">Waiting for a card…</p>
       <p id="nfc-count" class="field-help"></p>
       <div class="button-row">
         <button type="button" id="back-from-nfc" class="secondary">Back</button>
-        <button type="button" id="finish-nfc" class="text-button">Skip NFC setup</button>
+        <button type="button" id="finish-nfc" class="text-button">Skip pairing</button>
       </div>
     </section>
 
     <section class="card" id="nfc-choose-view" aria-labelledby="nfc-choose-title" hidden>
-      <p class="eyebrow success">Tag detected</p>
-      <h1 id="nfc-choose-title" tabindex="-1">Who is this tag for?</h1>
-      <p class="lede">The tag is ready. You can remove it from Button Box now.</p>
+      <p class="eyebrow success">Card detected</p>
+      <h1 id="nfc-choose-title" tabindex="-1">Who is this card for?</h1>
+      <p class="lede">The card is ready. You can remove it from Button Box now.</p>
       <ul id="nfc-recipient-list" class="recipient-list"></ul>
       <form id="nfc-allow-form">
         <h2>Allow a new recipient</h2>
@@ -402,7 +402,7 @@
         <input id="nfc-allow-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" aria-describedby="nfc-allow-help" required>
         <label for="nfc-allow-name">Name <span class="optional">optional</span></label>
         <input id="nfc-allow-name" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Grandma">
-        <p id="nfc-allow-help" class="field-help">Include + and the country code. Your scanned tag stays ready and your default recipient will not change. After adding, choose the recipient above.</p>
+        <p id="nfc-allow-help" class="field-help">Include + and the country code. Your card stays ready and your default recipient will not change. After adding, choose the recipient above.</p>
         <button id="allow-nfc-recipient" type="submit">Allow this number</button>
         <p id="nfc-allow-status" class="field-help" role="status" aria-live="polite"></p>
       </form>
@@ -411,8 +411,8 @@
     </section>
 
     <section class="card" id="nfc-mapped-view" aria-labelledby="nfc-mapped-title" hidden>
-      <p class="eyebrow">Tag already paired</p>
-      <h1 id="nfc-mapped-title" tabindex="-1">This tag belongs to <span id="nfc-mapped-recipient">a recipient</span></h1>
+      <p class="eyebrow">Card already paired</p>
+      <h1 id="nfc-mapped-title" tabindex="-1">This card belongs to <span id="nfc-mapped-recipient">a recipient</span></h1>
       <p class="lede">Keep this pairing, or explicitly choose a different recipient.</p>
       <div class="button-row">
         <button type="button" id="keep-nfc-pairing">Keep this pairing</button>
@@ -422,23 +422,23 @@
     </section>
 
     <section class="card" id="nfc-success-view" aria-labelledby="nfc-success-title" hidden>
-      <p class="eyebrow success">Tag paired</p>
+      <p class="eyebrow success">Card paired</p>
       <h1 id="nfc-success-title" tabindex="-1">Ready for <span id="nfc-success-recipient">your recipient</span></h1>
-      <p class="lede">Using this tag will route a new message to this recipient.</p>
-      <p id="nfc-sound-warning" class="notice" hidden>The tag was saved, but the confirmation sound could not play.</p>
+      <p class="lede">Using this card will route a new message to this recipient.</p>
+      <p id="nfc-sound-warning" class="notice" hidden>The card was saved, but the Family confirmation beep could not play.</p>
       <div class="button-row">
-        <button type="button" id="pair-another-nfc">Pair another tag</button>
+        <button type="button" id="pair-another-nfc">Pair another card</button>
         <button type="button" id="done-nfc" class="secondary">Done</button>
       </div>
     </section>
 
     <section class="card" id="nfc-unavailable-view" aria-labelledby="nfc-unavailable-title" hidden>
-      <p class="eyebrow danger">NFC needs attention</p>
-      <h1 id="nfc-unavailable-title" tabindex="-1">The NFC reader is unavailable</h1>
-      <p class="lede" id="nfc-unavailable-copy">Check the reader connection and try again. You can also skip NFC setup; the default recipient will still work.</p>
+      <p class="eyebrow danger">Family cards need attention</p>
+      <h1 id="nfc-unavailable-title" tabindex="-1">The card reader is unavailable</h1>
+      <p class="lede" id="nfc-unavailable-copy">Check the reader connection and try again. You can also skip pairing; the default recipient will still work.</p>
       <div class="button-row">
         <button type="button" id="retry-nfc">Retry</button>
-        <button type="button" id="skip-unavailable-nfc" class="secondary">Skip NFC setup</button>
+        <button type="button" id="skip-unavailable-nfc" class="secondary">Skip pairing</button>
       </div>
       <button type="button" id="back-from-unavailable" class="text-button">Back</button>
     </section>

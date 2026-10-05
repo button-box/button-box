@@ -631,7 +631,7 @@ def create_app(
             "sound_warning",
         }
         if not isinstance(document, dict) or set(document) != expected:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if document["status"] not in {
             "idle",
             "waiting",
@@ -640,16 +640,16 @@ def create_app(
             "success",
             "unavailable",
         }:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         recipients = document["recipients"]
         if not isinstance(recipients, list) or len(recipients) > 20:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         cleaned = []
         for recipient in recipients:
             if not isinstance(recipient, dict) or set(recipient) != {
                 "token", "label", "kind", "is_default", "card_count"
             }:
-                raise NfcOnboardingError("NFC setup response is invalid")
+                raise NfcOnboardingError("Family card setup response is invalid")
             if (
                 not isinstance(recipient["token"], str)
                 or not _RECIPIENT_TOKEN.fullmatch(recipient["token"])
@@ -661,7 +661,7 @@ def create_app(
                 or type(recipient["card_count"]) is not int
                 or recipient["card_count"] < 0
             ):
-                raise NfcOnboardingError("NFC setup response is invalid")
+                raise NfcOnboardingError("Family card setup response is invalid")
             cleaned.append(dict(recipient))
         selected = document["recipient"]
         if selected is not None and (
@@ -672,14 +672,14 @@ def create_app(
             or len(selected["label"]) > 80
             or selected["kind"] not in {"person", "group"}
         ):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if (
             type(document["mapped_count"]) is not int
             or document["mapped_count"] < 0
             or not isinstance(document["remove_tag"], bool)
             or not isinstance(document["sound_warning"], bool)
         ):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         result = {
             "status": document["status"],
             "mapped_count": document["mapped_count"],
@@ -938,7 +938,7 @@ def create_app(
 
             if method == "GET" and path == "/api/nfc":
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
-                    raise RequestError("409 Conflict", "NFC setup requires linked WhatsApp")
+                    raise RequestError("409 Conflict", "Family card setup requires linked WhatsApp")
                 recipient_state = safe_recipient_state(whatsapp.recipient_state())
                 if recipient_state["status"] != "complete":
                     raise RequestError("409 Conflict", "Complete recipient setup first")
@@ -1149,7 +1149,7 @@ def create_app(
             }:
                 _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
-                    raise RequestError("409 Conflict", "NFC setup requires linked WhatsApp")
+                    raise RequestError("409 Conflict", "Family card setup requires linked WhatsApp")
                 recipient_state = safe_recipient_state(whatsapp.recipient_state())
                 if recipient_state["status"] != "complete":
                     raise RequestError("409 Conflict", "Complete recipient setup first")
@@ -1159,7 +1159,7 @@ def create_app(
                         if set(document) != {"token"} or not _RECIPIENT_TOKEN.fullmatch(
                             document["token"]
                         ):
-                            raise RequestError("400 Bad Request", "Invalid NFC recipient")
+                            raise RequestError("400 Bad Request", "Invalid family card recipient")
                         result = nfc.assign(document["token"])
                     elif path == "/onboarding/complete":
                         if set(document) != {"intent"} or document["intent"] not in {
@@ -1180,7 +1180,7 @@ def create_app(
                         )(start_response)
                     else:
                         if document:
-                            raise RequestError("400 Bad Request", "Invalid NFC request")
+                            raise RequestError("400 Bad Request", "Invalid family card request")
                         operation = {
                             "/nfc/start": nfc.start,
                             "/nfc/retry": nfc.retry,

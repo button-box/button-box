@@ -76,34 +76,34 @@ def _load_state(path, *, clock=time.time):
     except FileNotFoundError:
         return _default_state()
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-        raise NfcOnboardingError("NFC setup state is unavailable") from exc
+        raise NfcOnboardingError("Family card setup is unavailable") from exc
     if not isinstance(document, dict) or set(document) != set(_default_state()):
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     if document["version"] != STATE_VERSION or document["status"] not in {
         "idle", *ACTIVE_STATUSES
     }:
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     if not isinstance(document["reassign_allowed"], bool) or not isinstance(
         document["sound_warning"], bool
     ):
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     uid = document["pending_uid"]
     captured = document["captured_at"]
     if uid is not None:
         try:
             document["pending_uid"] = normalize_uid(uid)
         except NfcError as exc:
-            raise NfcOnboardingError("NFC setup state is unavailable") from exc
+            raise NfcOnboardingError("Family card setup is unavailable") from exc
         if type(captured) not in (int, float) or not math.isfinite(captured) or captured < 0:
-            raise NfcOnboardingError("NFC setup state is unavailable")
+            raise NfcOnboardingError("Family card setup is unavailable")
         if clock() - captured > PENDING_TTL_S:
             document = _default_state()
             document["status"] = "waiting"
     elif captured is not None:
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     for key in ("recipient_label", "recipient_kind"):
         if document[key] is not None and not isinstance(document[key], str):
-            raise NfcOnboardingError("NFC setup state is unavailable")
+            raise NfcOnboardingError("Family card setup is unavailable")
     return document
 
 
@@ -276,7 +276,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] != "already_paired" or state["pending_uid"] is None:
-                raise NfcOnboardingError("There is no mapped tag to reassign")
+                raise NfcOnboardingError("There is no saved card to reassign")
             state["status"] = "choose"
             state["reassign_allowed"] = True
             self._write(state)
@@ -286,7 +286,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] != "choose" or state["pending_uid"] is None:
-                raise NfcOnboardingError("Scan a tag before choosing a recipient")
+                raise NfcOnboardingError("Present a card before choosing a person")
             existing = self.contacts.resolve_card(state["pending_uid"])
             if existing is not None and not state["reassign_allowed"]:
                 raise NfcOnboardingError("Confirm reassignment first")
@@ -306,7 +306,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] not in {"success", "already_paired"}:
-                raise NfcOnboardingError("Finish the current tag first")
+                raise NfcOnboardingError("Finish pairing the current card first")
             state = _default_state()
             state["status"] = "waiting"
             self._write(state)
@@ -322,7 +322,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["pending_uid"] is not None or state["status"] == "choose":
-                raise NfcOnboardingError("Finish or cancel the detected tag first")
+                raise NfcOnboardingError("Finish or cancel pairing the detected card first")
             state = _default_state()
             self._write(state)
             return self.public_state(state)
@@ -393,18 +393,18 @@ class NfcOnboardingClient:
             connection.sendall(encoded)
             response = connection.makefile("rb").readline(MAX_MESSAGE_BYTES + 1)
         if len(response) > MAX_MESSAGE_BYTES:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         try:
             document = json.loads(response)
         except (ValueError, json.JSONDecodeError) as exc:
-            raise NfcOnboardingError("NFC setup response is invalid") from exc
+            raise NfcOnboardingError("Family card setup response is invalid") from exc
         if not isinstance(document, dict):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if document.get("ok") is not True:
-            raise NfcOnboardingError(str(document.get("error") or "NFC setup is unavailable"))
+            raise NfcOnboardingError(str(document.get("error") or "Family card setup is unavailable"))
         state = document.get("state")
         if not isinstance(state, dict):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         return state
 
     def status(self):
@@ -436,7 +436,7 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         raw = self.rfile.readline(MAX_MESSAGE_BYTES + 1)
         if len(raw) > MAX_MESSAGE_BYTES:
-            return self._respond({"ok": False, "error": "NFC setup request is invalid"})
+            return self._respond({"ok": False, "error": "Family card setup request is invalid"})
         try:
             request = json.loads(raw)
             if not isinstance(request, dict):
@@ -456,10 +456,10 @@ class _Handler(socketserver.StreamRequestHandler):
             elif action == "assign" and set(request) == {"action", "token"}:
                 state = self.server.engine.assign(request["token"])
             else:
-                raise NfcOnboardingError("NFC setup request is invalid")
+                raise NfcOnboardingError("Family card setup request is invalid")
             self._respond({"ok": True, "state": state})
         except (ContactError, NfcError, NfcOnboardingError, RecipientError, OSError, ValueError, json.JSONDecodeError):
-            self._respond({"ok": False, "error": "NFC setup could not be updated"})
+            self._respond({"ok": False, "error": "Family card setup could not be updated"})
 
     def _respond(self, document):
         self.wfile.write(json.dumps(document, separators=(",", ":")).encode() + b"\n")
@@ -477,7 +477,7 @@ def serve(socket_path=NFC_ONBOARDING_SOCKET_PATH):
     path = Path(socket_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
-        raise NfcOnboardingError("NFC setup socket is unsafe")
+        raise NfcOnboardingError("Family card setup is unavailable")
     path.unlink(missing_ok=True)
     engine = NfcOnboardingEngine()
     server = _Server(os.fspath(path), engine)

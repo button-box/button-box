@@ -20,9 +20,9 @@ from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
-from messagebox.nfc_state import EnrollmentStore, NfcError, NfcRouter, SelectionStore
+from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
-from messagebox.runtime_paths import (NFC_ENROLLMENT_FILE,
+from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE)
 from messagebox.settings import SettingsError, SettingsStore, RINGTONES
 from messagebox.voicepoll import queue_message
@@ -227,6 +227,23 @@ class CloudRuntime:
             return changed, None
         self.contacts._mutate(sync)
 
+    def _nfc_inventory(self):
+        snapshot = self.state.get("snapshot")
+        if not snapshot:
+            return None
+        try:
+            document = self.contacts.load()
+        except ContactError:
+            return None
+        cards = []
+        for person in snapshot["people"]:
+            contact = document["contacts"].get(person["wa_id"] + "@s.whatsapp.net")
+            if contact:
+                cards.extend((person["id"], uid) for uid in contact["card_uids"])
+        cards = CardReferenceStore(NFC_CARD_REFERENCES_FILE).sync(snapshot["account_scope"], cards)
+        return {"account_scope": snapshot["account_scope"],
+                "revision": document["revision"], "cards": cards}
+
     def heartbeat(self):
         current, warning = self.settings.load()
         if warning:
@@ -240,12 +257,14 @@ class CloudRuntime:
                 or type(settings.get("revision")) is not int
                 or settings["revision"] > current["revision"]):
             raise CloudRuntimeError("physical settings state is invalid")
+        inventory = self._nfc_inventory()
         response = self.client.heartbeat({
             "version": "cloud-mvp-1", "capabilities": capabilities(nfc=NFC_HEALTH_FILE.exists()),
             "settings": settings, "applied_revision": settings["revision"],
             "queue": {"held": bool((self.state.get("snapshot") or {}).get("queue_hold", False)),
                       "count": len(list(self.queue_dir.glob("*.wav"))), "playing_message_id": None},
             "last_error": None,
+            **({"nfc_inventory": inventory} if inventory is not None else {}),
         })
         people = response.get("people")
         entitlement = response.get("entitlement")
@@ -649,6 +668,7 @@ class CloudRuntime:
             self._ack(item["operation_id"], "applied")
         else:
             intent_path = self._intent_path(item["operation_id"])
+            targeted = bool(payload)
             if intent_path.exists():
                 try:
                     intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -656,15 +676,39 @@ class CloudRuntime:
                     raise CloudRuntimeError("NFC operation intent is invalid") from exc
                 if intent.get("operation_id") != item["operation_id"] or not isinstance(intent.get("uid"), str):
                     raise CloudRuntimeError("NFC operation intent conflicts")
+                if targeted and any(intent.get(key) != payload.get(key)
+                                    for key in ("card_ref", "recipient_id")):
+                    raise CloudRuntimeError("saved card removal intent conflicts")
             else:
-                selection = router.selection.load(max_age=30)
-                if selection is None:
-                    raise CloudRuntimeError("no presented card to unpair")
-                intent = {"operation_id": item["operation_id"], "uid": selection["uid"]}
+                if targeted:
+                    recipient_id = payload.get("recipient_id")
+                    person = self._people().get(recipient_id)
+                    snapshot = self.state.get("snapshot") or {}
+                    uid = CardReferenceStore(NFC_CARD_REFERENCES_FILE).resolve(
+                        snapshot.get("account_scope"), payload.get("card_ref"))
+                    if person is None or uid is None:
+                        raise CloudRuntimeError("selected saved card is no longer available")
+                    jid = person["wa_id"] + "@s.whatsapp.net"
+                    document = self.contacts.load()
+                    if uid not in document["contacts"].get(jid, {}).get("card_uids", []):
+                        raise CloudRuntimeError("selected saved card changed")
+                    intent = {"operation_id": item["operation_id"], "uid": uid,
+                              "jid": jid, "card_ref": payload["card_ref"],
+                              "recipient_id": recipient_id}
+                else:
+                    selection = router.selection.load(max_age=30)
+                    if selection is None:
+                        raise CloudRuntimeError("no presented card to unpair")
+                    intent = {"operation_id": item["operation_id"], "uid": selection["uid"]}
                 atomic_json(intent_path, intent)
             # A crash can only resume the originally bound UID; a later presented
             # card is never selected for this same cloud operation.
-            self.contacts.remove_card(intent["uid"])
+            if not self.contacts.remove_card(intent["uid"], expected_jid=intent.get("jid")):
+                document = self.contacts.load()
+                current_jid, _contact = next(((jid, contact) for jid, contact in document["contacts"].items()
+                    if intent["uid"] in contact["card_uids"]), (None, None))
+                if current_jid is not None:
+                    raise CloudRuntimeError("selected saved card changed")
             self._ack(item["operation_id"], "applied")
 
     def _command(self, item, server_time):
@@ -815,7 +859,15 @@ class CloudRuntime:
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
                     or item.get("kind") not in {"audio", "settings", "preview_ringtone", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
-                    or not isinstance(item.get("payload"), dict)):
+                    or not isinstance(item.get("payload"), dict)
+                    or item.get("kind") == "nfc_unpair" and item["payload"] and (
+                        set(item["payload"]) != {"card_ref", "recipient_id", "inventory_revision"}
+                        or not isinstance(item["payload"].get("card_ref"), str)
+                        or not re.fullmatch(r"[a-f0-9]{32}", item["payload"]["card_ref"])
+                        or not isinstance(item["payload"].get("recipient_id"), str)
+                        or not _ID.fullmatch(item["payload"]["recipient_id"])
+                        or type(item["payload"].get("inventory_revision")) is not int
+                        or item["payload"]["inventory_revision"] < 0)):
                 raise CloudRuntimeError("cloud inbox item is invalid")
             if inbox.get("deleted") is True and item["kind"] != "delete_message":
                 continue

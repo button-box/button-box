@@ -348,7 +348,7 @@ function recipientRow(recipient, actions = []) {
   name.textContent = recipient.label;
   const meta = document.createElement("span");
   const tagCopy = recipient.card_count
-    ? ` · ${recipient.card_count} tag${recipient.card_count === 1 ? "" : "s"}`
+    ? ` · ${recipient.card_count} card${recipient.card_count === 1 ? "" : "s"}`
     : "";
   const identity = recipient.secondary_label && recipient.secondary_label !== recipient.label
     ? ` · ${recipient.secondary_label}`
@@ -471,8 +471,8 @@ function renderRecipientManager(data) {
   recipientsData = data;
   document.getElementById("unpair-presented-nfc").hidden = currentState?.mode !== "RUNTIME";
   document.getElementById("continue-nfc").textContent = currentState?.mode === "RUNTIME"
-    ? "Pair an NFC card"
-    : "Continue to NFC setup";
+    ? "Pair a card"
+    : "Continue to Family cards";
   const configured = data.recipients.filter((recipient) => recipient.configured);
   const available = data.recipients.filter((recipient) => recipient.available && !recipient.configured);
   document.getElementById("configured-recipient-list").replaceChildren(...configured.map((recipient) => {
@@ -652,7 +652,7 @@ async function pollRuntimeNfc(generation = runtimePairingGeneration) {
     if (state.status === "waiting") {
       setRuntimePairingMessage(state.healthy
         ? `Hold a card over Button Box for ${runtimePairing.label}. Waiting for a scan…`
-        : "Waiting for the NFC reader. Check its connection if this continues.");
+        : "Waiting for the card reader. Check its connection if this continues.");
       nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(generation), 800);
     } else {
       runtimePairing.pending = false;
@@ -665,7 +665,7 @@ async function pollRuntimeNfc(generation = runtimePairingGeneration) {
     }
   } catch (_error) {
     if (generation !== runtimePairingGeneration) return;
-    setRuntimePairingMessage("Cannot check pairing. Reconnecting…");
+    setRuntimePairingMessage("Cannot check the card reader. Reconnecting…");
     nfcPollTimer = window.setTimeout(() => pollRuntimeNfc(generation), 2000);
   }
 }
@@ -725,7 +725,7 @@ async function allowNfcRecipient(event) {
   status.textContent = "Saving…";
   try {
     // Reuse the same allowed-recipient boundary; do not select a default,
-    // restart NFC, or assign the captured tag without an explicit Choose.
+    // restart card pairing, or assign the captured card without an explicit Choose.
     recipientsData = await formRequest("/recipients/add-number", {
       phone: new FormData(form).get("phone"),
       name: new FormData(form).get("name") || "",
@@ -733,7 +733,7 @@ async function allowNfcRecipient(event) {
     form.reset();
     const data = await request("/api/nfc");
     renderNfc(data);
-    status.textContent = "Number allowed. Choose it above to pair this tag.";
+    status.textContent = "Number allowed. Choose it above to pair this card.";
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -744,16 +744,16 @@ async function allowNfcRecipient(event) {
 function renderNfc(data) {
   nfcData = data;
   const mapped = data.mapped_count;
-  const countCopy = mapped === 1 ? "1 tag paired." : `${mapped} tags paired.`;
+  const countCopy = mapped === 1 ? "1 card paired." : `${mapped} cards paired.`;
   switch (data.status) {
     case "waiting": {
       showView("nfc");
       document.getElementById("nfc-waiting-status").textContent = data.remove_tag
-        ? "Remove the last tag before presenting another."
-        : "Waiting for a tag…";
+        ? "Remove the last card before presenting another."
+        : "Waiting for a card…";
       document.getElementById("nfc-count").textContent = countCopy;
       const finish = document.getElementById("finish-nfc");
-      finish.textContent = mapped ? "Done" : "Skip NFC setup";
+      finish.textContent = mapped ? "Done" : "Skip pairing";
       finish.dataset.intent = mapped ? "done" : "skip";
       scheduleNfcPoll();
       break;
@@ -764,7 +764,7 @@ function renderNfc(data) {
         ...data.recipients.map(nfcRecipientRow),
       );
       document.getElementById("nfc-choose-status").textContent = data.sound_warning
-        ? "Tag detected, but the read sound could not play."
+        ? "Card detected, but the read sound could not play."
         : "";
       scheduleNfcPoll();
       break;
@@ -782,11 +782,11 @@ function renderNfc(data) {
     case "unavailable":
       showView("nfc-unavailable");
       document.getElementById("nfc-unavailable-copy").textContent = mapped
-        ? "Check the reader connection and try again. Your saved tag mappings are preserved."
-        : "Check the reader connection and try again. You can also skip NFC setup; the default recipient will still work.";
+        ? "Check the reader connection and try again. Your saved card mappings are preserved."
+        : "Check the reader connection and try again. You can also skip pairing; the default recipient will still work.";
       document.getElementById("skip-unavailable-nfc").textContent = mapped
         ? "Done"
-        : "Skip NFC setup";
+        : "Skip pairing";
       document.getElementById("skip-unavailable-nfc").dataset.intent = mapped
         ? "done"
         : "skip";
@@ -928,7 +928,7 @@ function renderSetup(state) {
     taskStatus("Receive, play, record, and send a test message", progress.first_message, activeSetup ? "#continue" : "#activity"),
   );
   document.getElementById("optional-tasks").replaceChildren(
-    taskStatus("Pair NFC cards", progress.nfc, cloud ? cloudDashboard : activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Pair Family cards", progress.nfc, cloud ? cloudDashboard : activeSetup ? "#continue" : "#advanced"),
     taskStatus("Personalize button, sounds, and quiet hours", "optional", cloud ? cloudDashboard : "#settings"),
   );
 }

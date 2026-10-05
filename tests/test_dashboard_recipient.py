@@ -322,7 +322,7 @@ class DashboardContactTests(unittest.TestCase):
     def test_empty_form_body_reaches_the_endpoint_rather_than_the_parser(self):
         code, body = self.post_form("/nfc/unpair-presented", {})
         self.assertEqual(code, 409)
-        self.assertIn("Present a paired NFC card", body["error"])
+        self.assertIn("Present the paired card", body["error"])
 
     def test_add_rejects_malformed_and_undiscovered_jids(self):
         discovered = [

@@ -1246,7 +1246,7 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
             except (ContactError, NfcError, OSError):
-                return self._send(503, json.dumps({"error": "NFC status is unavailable"}))
+                return self._send(503, json.dumps({"error": "Family card status is unavailable"}))
         if url.path == "/api/wifi-change":
             try:
                 return self._send(200, json.dumps(wifi_change_status()))
@@ -1454,20 +1454,20 @@ class Handler(BaseHTTPRequestHandler):
                         json.dumps({"status": "waiting", "recipient": candidate["label"], "attempt": enrollment["request_id"]}),
                     )
                 if payload:
-                    raise NfcError("NFC request is invalid")
+                    raise NfcError("Family card request is invalid")
                 if url.path == "/nfc/cancel-runtime":
                     nfc_router().cancel_enrollment()
                     return self._send(200, json.dumps({"status": "idle"}))
                 selection = active_selection(CONTACTS_FILE, NFC_SELECTION_FILE)
                 if selection is None:
-                    raise NfcError("Present a paired NFC card, then try again")
+                    raise NfcError("Present the paired card, then try again")
                 ContactStore(CONTACTS_FILE).remove_card(selection["uid"])
                 Path(NFC_SELECTION_FILE).unlink(missing_ok=True)
                 return self._send(200, json.dumps({"status": "unpaired"}))
             except (ContactError, NfcError, PairingError) as exc:
                 return self._send(409, json.dumps({"error": str(exc)}))
             except OSError:
-                return self._send(503, json.dumps({"error": "NFC setup is unavailable"}))
+                return self._send(503, json.dumps({"error": "Family card setup is unavailable"}))
         if url.path == "/api/wifi-change":
             payload = self._json_body(2048)
             if payload is None:
