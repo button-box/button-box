@@ -27,6 +27,12 @@ const views = [
   "failed",
 ];
 const activePairingStates = new Set(["starting", "code_pending", "bootstrapping", "verifying"]);
+const cloudDashboard = "https://button.box/dashboard";
+const legacyViews = new Set([
+  "whatsapp", "code", "pairing-progress", "pairing-error", "ready", "recipients",
+  "deferred", "voice-test", "voice-success", "recipient-manager", "nfc", "nfc-choose",
+  "nfc-mapped", "nfc-success", "nfc-unavailable",
+]);
 const mainRoutes = new Set(["home", "setup", "settings", "activity", "advanced"]);
 let pollTimer = null;
 let loadingState = false;
@@ -49,7 +55,20 @@ function acceptanceControl(tag, ...caseIds) {
   return control;
 }
 
+function isCloud(state = currentState) {
+  return state?.transport === "cloud";
+}
+
+function legacyManagementPath(url) {
+  return ["/api/whatsapp", "/api/recipients", "/api/contacts", "/api/listeners", "/api/nfc-runtime"].includes(url.split("?")[0])
+    || ["/whatsapp/", "/recipients/", "/nfc/"].some((prefix) => url.startsWith(prefix));
+}
+
 function showView(name) {
+  if (isCloud() && legacyViews.has(name)) {
+    renderSetup(currentState);
+    name = "setup";
+  }
   for (const view of views) {
     const element = document.getElementById(`${view}-view`);
     if (element) element.hidden = view !== name;
@@ -74,6 +93,9 @@ function rememberState(state) {
 }
 
 async function request(url, options = {}) {
+  if (isCloud() && legacyManagementPath(url)) {
+    throw new Error("Manage your connection and people in Button Box Cloud.");
+  }
   const response = await fetch(url, {
     cache: "no-store",
     ...options,
@@ -178,8 +200,11 @@ function schedulePoll(status, recipientStatus = null) {
 }
 
 async function loadRuntimeWhatsApp() {
+  if (isCloud()) return;
+  const requestedState = currentState;
   try {
     const whatsapp = await request("/api/whatsapp");
+    if (currentState !== requestedState || isCloud()) return;
     const state = rememberState({
       mode: "RUNTIME",
       phase: whatsapp.status === "ready" ? "WHATSAPP_READY" : "WHATSAPP_PENDING",
@@ -187,6 +212,7 @@ async function loadRuntimeWhatsApp() {
     });
     if (whatsapp.status === "ready") {
       state.recipient_setup = await request("/api/recipients");
+      if (currentState !== state || isCloud()) return;
       state.nfc_setup = { status: "idle", mapped_count: 0 };
     }
     applyWhatsAppState(state, { manage: true });
@@ -247,6 +273,11 @@ function applyRecipientState(recipient, nfcSummary = null) {
 }
 
 function applyWhatsAppState(state, { manage = false } = {}) {
+  if (isCloud(state)) {
+    if (state.mode === "HOME") location.replace("/cloud-connect");
+    else showView("wifi");
+    return;
+  }
   const whatsapp = state.whatsapp || {
     status: "failed",
     pairing_code: null,
@@ -426,6 +457,7 @@ function beginRecipientRename(row, recipient) {
 
 function renderRecipientPicker(data) {
   recipientsData = data;
+  document.getElementById("defer-recipients").hidden = Boolean(data.default);
   const list = document.getElementById("recipient-list");
   const choices = data.recipients.filter((recipient) => recipient.available);
   list.replaceChildren(...choices.map((recipient) => recipientRow(
@@ -467,12 +499,15 @@ function renderRecipientManager(data) {
 }
 
 async function loadRecipients({ refresh = false, manager = false } = {}) {
+  if (isCloud()) return;
+  const requestedState = currentState;
   const status = document.getElementById(manager ? "manager-status" : "recipient-status");
   status.textContent = refresh ? "Refreshing WhatsApp…" : "Loading…";
   try {
     const data = refresh
       ? await formRequest("/recipients/refresh")
       : await request("/api/recipients");
+    if (currentState !== requestedState || isCloud()) return;
     if (manager) renderRecipientManager(data);
     else renderRecipientPicker(data);
     status.textContent = refresh ? "WhatsApp refreshed." : "";
@@ -885,15 +920,16 @@ function setupProgress(state) {
 function renderSetup(state) {
   const progress = setupProgress(state);
   const activeSetup = state.mode !== "RUNTIME";
+  const cloud = isCloud(state);
   document.getElementById("required-tasks").replaceChildren(
     taskStatus("Connect Wi-Fi", progress.wifi, activeSetup ? "#continue" : "#advanced"),
-    taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp"),
-    taskStatus("Choose a default recipient", progress.recipient, activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Link WhatsApp", progress.whatsapp, cloud ? cloudDashboard : "#whatsapp"),
+    taskStatus("Choose a default recipient", progress.recipient, cloud ? cloudDashboard : activeSetup ? "#continue" : "#advanced"),
     taskStatus("Receive, play, record, and send a test message", progress.first_message, activeSetup ? "#continue" : "#activity"),
   );
   document.getElementById("optional-tasks").replaceChildren(
-    taskStatus("Pair NFC cards", progress.nfc, activeSetup ? "#continue" : "#advanced"),
-    taskStatus("Personalize button, sounds, and quiet hours", "optional", "#settings"),
+    taskStatus("Pair NFC cards", progress.nfc, cloud ? cloudDashboard : activeSetup ? "#continue" : "#advanced"),
+    taskStatus("Personalize button, sounds, and quiet hours", "optional", cloud ? cloudDashboard : "#settings"),
   );
 }
 
@@ -901,10 +937,25 @@ function showMainRoute(name) {
   showView(name);
   if (currentState?.mode && name === "setup") renderSetup(currentState);
   if (currentState?.mode && name === "home") renderHome(currentState);
+  if (name === "advanced") renderAdvancedManagement();
 }
 
 function renderHome(state) {
   const progress = setupProgress(state);
+  const cloudRuntime = state.mode === "RUNTIME" && state.transport === "cloud";
+  for (const [id, route] of [
+    ["home-continue-setup", "#setup"],
+    ["home-button-settings", "#settings"],
+    ["home-sound-settings", "#settings"],
+    ["home-connections-setup", "#setup"],
+  ]) {
+    document.getElementById(id).href = cloudRuntime ? "https://button.box/dashboard" : route;
+  }
+  document.getElementById("home-continue-setup").textContent = cloudRuntime
+    ? "Open Button Box Cloud" : "Continue setup";
+  document.getElementById("home-attention-copy").textContent = cloudRuntime
+    ? "Review your cloud connection and recipient, then verify a real message on your box."
+    : "Finish the required tasks before Button Box is ready.";
   const runtimeRunning = state.mode === "RUNTIME" && state.health?.runtime === "running";
   const ready = runtimeRunning
     && [progress.wifi, progress.whatsapp, progress.recipient, progress.first_message]
@@ -912,7 +963,9 @@ function renderHome(state) {
   document.getElementById("home-attention").hidden = ready;
   document.getElementById("home-summary").textContent = ready && state.mode === "RUNTIME"
     ? "Connected and set up for voice messages. Say hello to someone you love."
-    : "A few small steps to bring your people closer. Pick up where you left off.";
+    : (cloudRuntime
+      ? "Manage your connection and people in Button Box Cloud. Messaging on your box still needs verification."
+      : "A few small steps to bring your people closer. Pick up where you left off.");
   document.getElementById("home-wifi").textContent = progress.wifi === "complete"
     ? `Connected${state.health?.network_name ? ` · ${state.health.network_name}` : ""}`
     : "Needs attention";
@@ -1106,7 +1159,26 @@ async function loadActivity() {
   }
 }
 
+function renderAdvancedManagement() {
+  const cloud = isCloud();
+  for (const id of ["manage-whatsapp", "manage-recipients", "listener-form"]) {
+    document.getElementById(id).hidden = cloud;
+  }
+  document.getElementById("advanced-cloud-management").hidden = !cloud;
+  document.getElementById("advanced-connections-label").textContent = cloud ? "WhatsApp connection" : "Wi-Fi and WhatsApp";
+  document.getElementById("advanced-connections-copy").textContent = cloud
+    ? "Manage your connection in Button Box Cloud."
+    : "Reconnect, relink, or continue setup.";
+  for (const id of ["advanced-connections-setup", "advanced-recipients-setup"]) {
+    document.getElementById(id).href = cloud ? cloudDashboard : "#setup";
+  }
+  if (cloud) {
+    document.getElementById("listener-profiles").textContent = "Manage people and their settings in Button Box Cloud.";
+  }
+}
+
 async function loadAdvanced() {
+  renderAdvancedManagement();
   const health = document.getElementById("advanced-health");
   health.replaceChildren();
   const runtime = document.createElement("div"); runtime.className = "status-card";
@@ -1122,8 +1194,11 @@ async function loadAdvanced() {
     document.getElementById("listener-profiles").textContent = "Listener profiles become available after setup.";
     return;
   }
+  if (isCloud()) return;
+  const requestedState = currentState;
   try {
     const contacts = await request("/api/contacts");
+    if (currentState !== requestedState || isCloud()) return;
     const profiles = Object.entries(contacts.listeners || {});
     document.getElementById("listener-profiles").replaceChildren(...(profiles.length ? profiles.map(([jid, profile]) => {
       const row = document.createElement("article"); row.className = "activity-row";
@@ -1212,6 +1287,16 @@ async function ringNow() {
 async function route() {
   renderIdentity(currentState);
   const routeName = location.hash.slice(1) || "home";
+  if (isCloud() && currentState.mode !== "RUNTIME") {
+    document.getElementById("primary-nav").hidden = true;
+    applyState(currentState);
+    return;
+  }
+  if (isCloud() && ["whatsapp", "recipient-picker", "recipients"].includes(routeName)) {
+    showMainRoute("setup");
+    location.replace("#setup");
+    return;
+  }
   const navRoute = ["continue", "whatsapp", "recipient-picker", "recipients"].includes(routeName)
     ? (currentState.mode === "RUNTIME" ? "advanced" : "setup") : routeName;
   document.querySelectorAll("[data-route]").forEach((link) => {

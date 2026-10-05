@@ -9,14 +9,18 @@ the development machine.
 from __future__ import annotations
 
 import array
+import fcntl
+import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import time
 import uuid
 import wave
 from dataclasses import dataclass
+from contextlib import contextmanager
 from pathlib import Path
 
 from messagebox.played_history import played_history_lock
@@ -300,13 +304,66 @@ class OutboxJob:
     flow_kind: str
     duration: float
     state: str
+    transport: str
+    account_scope: str | None = None
+
+
+def valid_account_scope(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
+
+
+OUTBOX_TRANSPORTS = {"wacli", "business", "cloud"}
+
+
+@contextmanager
+def cloud_outbox_lock(job_dir):
+    """Serialize upload/recovery across processes, including a deleted job."""
+    # Keep the lock outside the directory that expiry/deletion removes.
+    from messagebox.cloud_device import open_private_lock
+    path = Path(job_dir)
+    with open_private_lock(path.with_name("." + path.name + ".lock")) as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def cloud_upload_payload(job_dir, metadata):
+    """Verify the exact first upload; never regenerate ambiguous Ogg bytes."""
+    upload = metadata.get("cloud_upload")
+    if (not isinstance(upload, dict) or upload.get("version") != 1
+            or upload.get("idempotency_key") != metadata.get("message_id")
+            or upload.get("account_scope") != metadata.get("account_scope")
+            or not valid_account_scope(upload.get("account_scope"))
+            or upload.get("recipient") != metadata.get("recipient")
+            or upload.get("duration") != metadata.get("duration")
+            or not isinstance(upload.get("recipient_id"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", upload["recipient_id"])
+            or type(upload.get("retry_until")) not in (int, float)
+            or not 1_700_000_000 <= upload["retry_until"] < 4_102_444_800):
+        raise ValueError("cloud upload metadata is invalid")
+    path = Path(job_dir) / "audio.ogg"
+    with path.open("rb") as handle:
+        audio = handle.read(10 * 1024 * 1024 + 1)
+    if (not audio.startswith(b"OggS") or len(audio) > 10 * 1024 * 1024
+            or hashlib.sha256(audio).hexdigest() != upload.get("sha256")):
+        raise ValueError("cloud upload payload is invalid")
+    return path, upload
 
 
 class OutboxStore:
     """Crash-aware jobs whose recipient is always persisted with the audio."""
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, *, transport: str = "wacli"):
+        if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
+            raise ValueError("unsupported outbox transport")
         self.root = Path(root)
+        self.transport = transport
         self.root.mkdir(parents=True, exist_ok=True)
 
     def approve(
@@ -316,13 +373,21 @@ class OutboxStore:
         flow_kind: str,
         duration: float,
         message_id: str | None = None,
+        *,
+        account_scope: str | None = None,
     ) -> OutboxJob:
         if not recipient:
             raise ValueError("recipient is required")
+        if self.transport == "cloud" and not valid_account_scope(account_scope):
+            raise ValueError("cloud recording account is unavailable")
         mid = message_id or uuid.uuid4().hex
         final_dir = self.root / f"{mid}.job"
         if final_dir.exists():
             existing = self.load(final_dir)
+            if existing.transport != self.transport:
+                raise ValueError("message id already bound to a different transport")
+            if self.transport == "cloud" and existing.account_scope != account_scope:
+                raise ValueError("message id already bound to a different account")
             if existing.recipient != recipient:
                 raise ValueError("message id already bound to a different recipient")
             return existing
@@ -339,9 +404,12 @@ class OutboxStore:
             "flow_kind": flow_kind,
             "duration": round(float(duration), 3),
             "state": "pending",
+            "transport": self.transport,
             "created_at": time.time(),
             "attempts": 0,
         }
+        if self.transport == "cloud":
+            payload["account_scope"] = account_scope
         _write_json_atomic(tmp_dir / "job.json", payload)
         _fsync_dir(tmp_dir)
         os.replace(tmp_dir, final_dir)
@@ -351,6 +419,11 @@ class OutboxStore:
     def load(self, job_dir: Path) -> OutboxJob:
         with open(job_dir / "job.json", encoding="utf-8") as handle:
             data = json.load(handle)
+        # Jobs deployed before transport metadata existed were approved only
+        # for the standalone wacli path. Never infer a newer transport.
+        transport = data.get("transport", "wacli")
+        if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
+            raise ValueError("unsupported outbox transport")
         return OutboxJob(
             message_id=data["message_id"],
             path=job_dir,
@@ -359,6 +432,8 @@ class OutboxStore:
             flow_kind=data["flow_kind"],
             duration=float(data.get("duration") or 0),
             state=data.get("state", "pending"),
+            transport=transport,
+            account_scope=data.get("account_scope"),
         )
 
     def jobs(self, states: tuple[str, ...] = ("pending",)) -> list[OutboxJob]:
@@ -368,7 +443,7 @@ class OutboxStore:
                 job = self.load(path)
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 continue
-            if job.state in states:
+            if job.transport == self.transport and job.state in states:
                 rows.append(job)
         return rows
 
@@ -382,6 +457,34 @@ class OutboxStore:
             data["attempts"] = int(data.get("attempts") or 0) + 1
         _write_json_atomic(meta, data)
         return self.load(job.path)
+
+    def prepare_cloud_upload(self, job, ogg_path, recipient_id, retry_until):
+        """Commit payload and routing before marking the first request sending."""
+        metadata_path = job.path / "job.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("transport") != "cloud" or metadata.get("state") != "pending":
+            raise ValueError("cloud upload is not pending")
+        if "cloud_upload" in metadata:
+            return cloud_upload_payload(job.path, metadata)
+        audio_path = job.path / "audio.ogg"
+        temporary = job.path / ".audio.ogg.tmp"
+        try:
+            shutil.copyfile(ogg_path, temporary)
+            os.chmod(temporary, 0o660)
+            with temporary.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temporary, audio_path)
+            _fsync_dir(job.path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        metadata["cloud_upload"] = {"version": 1, "idempotency_key": job.message_id,
+            "account_scope": job.account_scope, "recipient": job.recipient,
+            "recipient_id": recipient_id, "duration": job.duration,
+            "sha256": hashlib.sha256(audio_path.read_bytes()).hexdigest(),
+            "retry_until": retry_until}
+        cloud_upload_payload(job.path, metadata)
+        _write_json_atomic(metadata_path, metadata)
+        return audio_path, metadata["cloud_upload"]
 
     def complete(self, job: OutboxJob) -> None:
         shutil.rmtree(job.path)
@@ -432,6 +535,7 @@ class GuidedSession:
         incoming_path: str | None = None,
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
+        account_scope: str | None = None,
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
@@ -461,6 +565,7 @@ class GuidedSession:
                 recipient,
                 flow_kind,
                 recording.duration,
+                account_scope=account_scope,
             )
             self.event(
                 "guided_approved",

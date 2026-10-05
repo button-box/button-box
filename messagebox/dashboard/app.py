@@ -38,6 +38,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore, validate_contact
+from messagebox import cloud_runtime
+from messagebox.cloud_device import CloudDeviceError
+from messagebox.cloud_runtime import CloudRuntimeError
 from messagebox.identity import read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
@@ -72,6 +75,26 @@ from messagebox.tailnet import (
 )
 from messagebox.wifi_change import WifiChangeError, load_status as wifi_change_status
 from messagebox.wifi_change import request_change as request_wifi_change
+
+
+def _audio_authorized(path):
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+    try:
+        metadata = json.loads(Path(str(path) + ".json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return not cloud_mode
+    except (OSError, ValueError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("cloud") is True and not cloud_mode:
+        return False
+    if cloud_mode:
+        try:
+            return cloud_runtime.playable(metadata)
+        except (OSError, CloudDeviceError, CloudRuntimeError):
+            return False
+    return True
 
 BIND = os.environ.get("MSGBOX_DASH_BIND", "wlan0").strip()
 PORT = int(os.environ.get("MSGBOX_DASH_PORT", "80"))
@@ -109,7 +132,12 @@ DASHBOARD_STATIC = {
         DASHBOARD_STATIC_DIR.joinpath("clipboard.js").read_bytes(),
         "text/javascript; charset=utf-8",
     ),
+    "/static/cloud-local.js": (
+        DASHBOARD_STATIC_DIR.joinpath("cloud-local.js").read_bytes(),
+        "text/javascript; charset=utf-8",
+    ),
 }
+CLOUD_LOCAL_HTML = DASHBOARD_STATIC_DIR.joinpath("cloud-local.html").read_bytes()
 RINGTONE_PREVIEW_LOCK = threading.Lock()
 PUBLIC_MESSAGE_LOCK = threading.Lock()
 PUBLIC_MESSAGES = {}
@@ -172,14 +200,40 @@ def runtime_running():
 
 
 def runtime_state():
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
     contacts = {"contacts": {}}
-    try:
-        contacts = contacts_store().public_view()
-        recipient_ready = bool(contacts.get("default_recipient"))
-        recipient_count = len(contacts.get("contacts", {}))
-    except (ContactError, OSError):
-        recipient_ready = False
-        recipient_count = 0
+    recipient_ready = False
+    recipient_count = 0
+    whatsapp_connected = False
+    if cloud_mode:
+        try:
+            snapshot = cloud_runtime.read_snapshot()
+            people = snapshot["people"]
+            entitlement = snapshot["entitlement"]
+            until = entitlement.get("until")
+            whatsapp_connected = (
+                entitlement.get("send") is True and entitlement.get("deliver") is True
+                and (until is None or time.time() < until)
+            )
+            recipient_count = len(people)
+            recipient_ready = whatsapp_connected and any(
+                person["id"] == snapshot["default_recipient_id"] for person in people
+            )
+        except (OSError, CloudRuntimeError, KeyError, TypeError, ValueError):
+            whatsapp_connected = False
+            recipient_ready = False
+            recipient_count = 0
+        try:
+            contacts = ContactStore(cloud_runtime.CONTACTS_FILE).public_view()
+        except (ContactError, OSError):
+            pass
+    else:
+        try:
+            contacts = contacts_store().public_view()
+            recipient_ready = bool(contacts.get("default_recipient"))
+            recipient_count = len(contacts.get("contacts", {}))
+        except (ContactError, OSError):
+            pass
     wifi_connected = False
     network_name = None
     try:
@@ -204,28 +258,29 @@ def runtime_state():
                 network_name = candidate
         except (OSError, subprocess.SubprocessError):
             pass
-    whatsapp_connected = False
     first_message_ready = False
-    try:
-        recipient_state = RecipientSetup().public_state()
-        first_message_ready = recipient_state.get("status") == "complete"
-    except (OSError, RecipientError):
-        pass
-    try:
-        result = subprocess.run(
-            [WACLI_BIN, "--read-only", "--json", "auth", "status"],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=3,
-        )
-        status = json.loads(result.stdout) if result.returncode == 0 else {}
-
-        whatsapp_connected = whatsapp_authenticated(status)
-    except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
-        pass
+    if not cloud_mode:
+        try:
+            recipient_state = RecipientSetup().public_state()
+            first_message_ready = recipient_state.get("status") == "complete"
+        except (OSError, RecipientError):
+            pass
+        try:
+            result = subprocess.run(
+                [WACLI_BIN, "--read-only", "--json", "auth", "status"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=3,
+            )
+            status = json.loads(result.stdout) if result.returncode == 0 else {}
+            whatsapp_connected = whatsapp_authenticated(status)
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+            pass
+    # Standalone test-message proof cannot establish cloud message acceptance.
     return {
         "mode": "RUNTIME",
+        "transport": "cloud" if cloud_mode else os.environ.get("MSGBOX_TRANSPORT", "wacli"),
         "phase": "COMPLETE",
         "product": "Button Box",
         "box_id": read_box_id(),
@@ -1141,7 +1196,22 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
-            return self._send(200, *static)
+            body, content_type = static
+            if url.path == "/":
+                if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+                    return self._send(200, CLOUD_LOCAL_HTML, content_type)
+                body = body.replace(
+                    b"__MESSAGEBOX_URL__", (self._trusted_origin() + "/").encode("ascii")
+                ).replace(
+                    b"__CLOUD_CONNECT_LINK__",
+                    (b'<p><a id="home-cloud-dashboard" class="button" '
+                     b'href="https://button.box/dashboard" target="_blank" '
+                     b'rel="noopener noreferrer">Manage Button Box Cloud</a></p>'
+                     if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else b""),
+                )
+            return self._send(200, body, content_type)
+        if self._reject_cloud_management(url.path):
+            return
         if url.path == "/api/state":
             return self._send(200, json.dumps(runtime_state()))
         if url.path == "/api/settings":
@@ -1209,6 +1279,8 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self._send(400, "{}")
             if kind == "played":
+                if not _audio_authorized(Path(PLAYED_DIR) / name):
+                    return self._send(404, "{}")
                 try:
                     return self._send(
                         200, read_played_file(QUEUE_DIR, name), "audio/wav"
@@ -1216,6 +1288,8 @@ class Handler(BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     return self._send(404, "{}")
             path = os.path.join(d, name)
+            if not _audio_authorized(path):
+                return self._send(404, "{}")
             if not os.path.exists(path):
                 return self._send(404, "{}")
             with open(path, "rb") as f:
@@ -1242,9 +1316,25 @@ class Handler(BaseHTTPRequestHandler):
         log_event(type="settings_updated", revision=document["revision"])
         return self._send(200, json.dumps({"ok": True, "settings": document, "attention": False}))
 
+    def _reject_cloud_management(self, path):
+        # These routes belong to the retained standalone account and contact store.
+        legacy = path in {
+            "/api/whatsapp", "/api/recipients", "/api/contacts", "/api/listeners",
+            "/api/nfc-runtime",
+        } or path.startswith(("/whatsapp/", "/recipients/", "/nfc/"))
+        if os.environ.get("MSGBOX_TRANSPORT") != "cloud" or not legacy:
+            return False
+        self._send(409, json.dumps({
+            "error": "Manage your connection and people in Button Box Cloud",
+            "management_url": "https://button.box/dashboard",
+        }))
+        return True
+
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
         if url.path != "/api/wacli-receipt" and not self._require_same_origin():
+            return
+        if self._reject_cloud_management(url.path):
             return
         if url.path == "/api/ringtone-preview":
             payload = self._json_body(1024)
@@ -1290,6 +1380,7 @@ class Handler(BaseHTTPRequestHandler):
             "/recipients/add-number",
             "/recipients/remove",
             "/recipients/default",
+            "/recipients/rename",
             "/recipients/defer",
         }:
             payload = self._form_body()
@@ -1324,6 +1415,10 @@ class Handler(BaseHTTPRequestHandler):
                         if "name" in payload
                         else operation(phone)
                     )
+                elif url.path == "/recipients/rename":
+                    if set(payload) != {"token", "name"}:
+                        raise PairingError("recipient_request_invalid")
+                    result = engine.recipient_rename(payload["token"], payload["name"])
                 else:
                     if set(payload) != {"token"}:
                         raise PairingError("recipient_request_invalid")
@@ -1457,7 +1552,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.add_contact(candidate["jid"], candidate["label"])
                     event_type = "dash_contact_added"
                 elif action == "remove":
-                    if not store.remove_contact(jid):
+                    if not store.remove_contact(jid, protect_default=True):
                         raise ContactError("contact does not exist")
                     event_type = "dash_contact_removed"
                 else:
@@ -1531,6 +1626,8 @@ class Handler(BaseHTTPRequestHandler):
             name = resolve_message_token(token, "played")
             if not name:
                 return self._send(400, "{}")
+            if not _audio_authorized(Path(PLAYED_DIR) / name):
+                return self._send(409, json.dumps({"ok": False, "error": "Audio is no longer available"}))
             try:
                 status = requeue_played_file(QUEUE_DIR, name)
             except FileNotFoundError:

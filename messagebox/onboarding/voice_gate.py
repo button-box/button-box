@@ -7,9 +7,11 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.cloud_device import CLAIM_FILE
 from messagebox.onboarding.paths import ONBOARDING_ENABLED_PATH
 from messagebox.onboarding.recipients import VOICE_REQUEST_FILE
 from messagebox.runtime_paths import CONTACTS_FILE
@@ -34,8 +36,24 @@ def main(*, run=subprocess.run):
         raise RuntimeError("voice gate requires root")
     if not Path(ONBOARDING_ENABLED_PATH).is_file():
         run(["systemctl", "stop", VOICE_TARGET], check=True)
+        if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+            run(["systemctl", "stop", "messagebox-onboarding-button.service"], check=True)
         return 0
     request_path = Path(VOICE_REQUEST_FILE)
+    if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+        try:
+            metadata = CLAIM_FILE.lstat()
+            document = json.loads(CLAIM_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return 0
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o007
+                or not isinstance(document, dict)
+                or type(document.get("expires_at")) is not int
+                or document["expires_at"] <= time.time()
+                or type(document.get("physical_confirmed")) is not bool):
+            raise RuntimeError("cloud claim button request is invalid")
+        run(["systemctl", "start", "messagebox-onboarding-button.service"], check=True)
+        return 0
     if not request_path.exists():
         run(["systemctl", "stop", VOICE_TARGET], check=True)
         return 0

@@ -80,6 +80,14 @@ rsync -azR \
   "$REPO_DIR/./sounds/" \
   "$REPO_DIR/./messagebox/__init__.py" \
   "$REPO_DIR/./messagebox/button_send.py" \
+  "$REPO_DIR/./messagebox/business_send.py" \
+  "$REPO_DIR/./messagebox/device_http.py" \
+  "$REPO_DIR/./messagebox/cloud_device.py" \
+  "$REPO_DIR/./messagebox/cloud_claim.py" \
+  "$REPO_DIR/./messagebox/qrcodegen.py" \
+  "$REPO_DIR/./messagebox/cloud_runtime.py" \
+  "$REPO_DIR/./messagebox/audio_requests.py" \
+  "$REPO_DIR/./messagebox/cloud_events.py" \
   "$REPO_DIR/./messagebox/contacts.py" \
   "$REPO_DIR/./messagebox/guided_reply.py" \
   "$REPO_DIR/./messagebox/identity.py" \
@@ -93,6 +101,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/tailnet.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
+  "$REPO_DIR/./messagebox/business_receive.py" \
   "$REPO_DIR/./messagebox/wifi_change.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \
@@ -113,6 +122,10 @@ rsync -azR \
   "$REPO_DIR/./messagebox/onboarding/whatsapp.py" \
   "$REPO_DIR/./messagebox/onboarding/static/app.js" \
   "$REPO_DIR/./messagebox/onboarding/static/clipboard.js" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-connect.html" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-connect.js" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-local.html" \
+  "$REPO_DIR/./messagebox/onboarding/static/cloud-local.js" \
   "$REPO_DIR/./messagebox/onboarding/static/index.html" \
   "$REPO_DIR/./messagebox/onboarding/static/styles.css" \
   "$REPO_DIR/./systemd/" \

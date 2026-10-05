@@ -54,6 +54,23 @@ test("Home reports runtime attention when the button service is down", () => {
   expect(h.node("home-summary").textContent).not.toContain("Connected and set up");
 });
 
+test("Cloud Home directs management to the service and keeps message acceptance outstanding", () => {
+  const h = harness();
+  h.run('renderHome({mode:"RUNTIME",transport:"cloud",health:{runtime:"running"},setup:{wifi:"complete",whatsapp:"complete",recipient:"attention",first_message:"attention"}})');
+  for (const id of ["home-continue-setup", "home-button-settings", "home-sound-settings", "home-connections-setup"]) {
+    expect(h.node(id).href).toBe("https://button.box/dashboard");
+  }
+  expect(h.node("home-whatsapp").textContent).toBe("Linked");
+  expect(h.node("home-runtime").textContent).toBe("Needs attention");
+  expect(h.node("home-summary").textContent).toContain("still needs verification");
+  expect(h.node("home-continue-setup").textContent).toBe("Open Button Box Cloud");
+  h.run('renderHome({mode:"RUNTIME",health:{runtime:"running"},setup:{wifi:"complete",whatsapp:"complete",recipient:"complete",first_message:"complete"}})');
+  expect(h.node("home-continue-setup").href).toBe("#setup");
+  expect(h.node("home-button-settings").href).toBe("#settings");
+  expect(h.node("home-continue-setup").textContent).toBe("Continue setup");
+  expect(h.node("home-runtime").textContent).toBe("Ready");
+});
+
 test("Footer never copies missing or invalid identity; reassignment clears stale feedback", async () => {
   const h = harness();
   for (const id of [null, "hostname", "BOX-0", "<script>", 42]) {

@@ -154,6 +154,25 @@ class OutboxTests(unittest.TestCase):
                     message_id="stable-id",
                 )
 
+    def test_cloud_approval_scope_is_immutable_and_missing_scope_keeps_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            store = OutboxStore(str(root / "outbox"), transport="cloud")
+            original = source.read_bytes()
+            with self.assertRaises(ValueError):
+                store.approve(str(source), "family@example.invalid", "reply", 0.25)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(store.root.iterdir()), [])
+            job = store.approve(str(source), "family@example.invalid", "reply", 0.25,
+                                message_id="same-recording", account_scope="a" * 64)
+            before = {p.name: p.read_bytes() for p in job.path.iterdir()}
+            with self.assertRaises(ValueError):
+                store.approve(str(source), job.recipient, "reply", 0.25,
+                              message_id=job.message_id, account_scope="b" * 64)
+            self.assertEqual({p.name: p.read_bytes() for p in job.path.iterdir()}, before)
+
     def test_send_command_uses_bound_recipient_without_fallback(self):
         command = voice_send_command(
             "/usr/local/bin/wacli",
@@ -182,6 +201,74 @@ class OutboxTests(unittest.TestCase):
             self.assertFalse(staging.exists())
             self.assertEqual(store.load(pending.path).state, "pending")
             self.assertEqual(store.load(sending.path).state, "uncertain")
+
+    def test_transport_scopes_pending_jobs_in_both_directions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            cloud = OutboxStore(str(root / "outbox"), transport="cloud")
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            cloud_job = cloud.approve(
+                str(source), "12025550101@s.whatsapp.net", "reply", 0.25,
+                message_id="cloud-job", account_scope="a" * 64,
+            )
+            self.assertEqual([job.message_id for job in cloud.jobs()], [cloud_job.message_id])
+            self.assertEqual(wacli.jobs(), [])
+            with self.assertRaises(ValueError):
+                wacli.approve(
+                    str(source), cloud_job.recipient, "reply", 0.25,
+                    message_id=cloud_job.message_id, account_scope="a" * 64,
+                )
+
+            wacli_job = wacli.approve(
+                str(source), "family@g.us", "standalone", 0.25,
+                message_id="wacli-job",
+            )
+            self.assertEqual([job.message_id for job in cloud.jobs()], [cloud_job.message_id])
+            self.assertEqual([job.message_id for job in wacli.jobs()], [wacli_job.message_id])
+
+    def test_missing_transport_remains_wacli_and_unknown_metadata_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            job = wacli.approve(str(source), "family@g.us", "standalone", 0.25)
+            metadata_path = job.path / "job.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.pop("transport")
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            self.assertEqual(wacli.jobs()[0].transport, "wacli")
+            self.assertEqual(OutboxStore(str(root / "outbox"), transport="cloud").jobs(), [])
+
+            metadata["transport"] = []
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            self.assertEqual(wacli.jobs(), [])
+            self.assertTrue(job.path.exists())
+            self.assertTrue(job.audio_path.exists())
+
+    def test_recovery_only_quarantines_current_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            cloud = OutboxStore(str(root / "outbox"), transport="cloud")
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            cloud_job = cloud.set_state(
+                cloud.approve(str(source), "12025550101@s.whatsapp.net", "reply", 0.25, account_scope="a" * 64),
+                "sending",
+            )
+            wacli_job = wacli.set_state(
+                wacli.approve(str(source), "family@g.us", "standalone", 0.25),
+                "sending",
+            )
+
+            self.assertEqual(wacli.recover_startup(), [wacli_job.message_id])
+            self.assertEqual(cloud.load(cloud_job.path).state, "sending")
+            self.assertEqual(cloud.recover_startup(), [cloud_job.message_id])
+            self.assertEqual(wacli.load(wacli_job.path).state, "uncertain")
 
 
 class InboxRestartTests(unittest.TestCase):

@@ -219,7 +219,7 @@ class SettingsStore:
         _atomic_json(self.path, document)
         _atomic_json(self.last_good_path, document)
 
-    def update(self, candidate, expected_revision):
+    def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
         value_keys = _ROOT_KEYS - {"version", "revision"}
@@ -232,9 +232,12 @@ class SettingsStore:
                 current, _warning = self.load()
                 if type(expected_revision) is not int or expected_revision != current["revision"]:
                     raise RevisionConflict("settings changed in another browser; reload and try again")
+                revision = current["revision"] + 1 if desired_revision is None else desired_revision
+                if type(revision) is not int or revision <= current["revision"]:
+                    raise SettingsError("settings revision must advance")
                 document = {
                     "version": SCHEMA_VERSION,
-                    "revision": current["revision"] + 1,
+                    "revision": revision,
                     **candidate,
                 }
                 document = validate(document)

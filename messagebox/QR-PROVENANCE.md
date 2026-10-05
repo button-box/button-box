@@ -1,0 +1,3 @@
+# Local claim QR encoder
+
+`qrcodegen.py` is the Project Nayuki Python QR Code generator, copied from commit `3c6d0b3cefb4e049dc337e82237c9644399716a8` at `https://github.com/nayuki/QR-Code-generator/blob/3c6d0b3cefb4e049dc337e82237c9644399716a8/python/qrcodegen.py` on 29 September 2026. Upstream SHA-256: `9f4ed1dd201dcb92b1bc0d6e14f46c754bcff0ce48580c5d7e8ace8f6926c8ef`. Local changes split one import line for the repository linter and remove trailing whitespace. Local SHA-256: `28142c06ca2f5bd31161d77977a53b7571d134948b9771b2a4601bb264d9d3b5`. It retains its MIT license in the source header. It runs locally so claim tokens are not sent to a QR service.

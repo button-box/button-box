@@ -201,7 +201,8 @@ def download_path(message):
     return output_path
 
 
-def queue_message(message, source_path):
+def queue_message(message, source_path, *, queue_dir=None):
+    queue_dir = QUEUE_DIR if queue_dir is None else os.fspath(queue_dir)
     media_type = str(message.get("MediaType") or "").strip().lower()
     if media_type == "video":
         source_size = os.path.getsize(source_path)
@@ -211,9 +212,12 @@ def queue_message(message, source_path):
         if duration is not None and duration > VIDEO_MAX_DURATION_S:
             raise MediaRejected("video exceeds the configured duration limit")
 
-    os.makedirs(QUEUE_DIR, exist_ok=True)
+    os.makedirs(queue_dir, exist_ok=True)
     # Millisecond prefix keeps the queue sorted oldest-first.
-    qwav = os.path.join(QUEUE_DIR, f"{next_queue_ms()}-{message['MsgID']}.wav")
+    queue_name = message.get("QueueFilename") or f"{next_queue_ms()}-{message['MsgID']}.wav"
+    if os.path.basename(queue_name) != queue_name or not queue_name.endswith(".wav"):
+        raise MediaRejected("invalid queue filename")
+    qwav = os.path.join(queue_dir, queue_name)
     qtmp = qwav + ".part"
     qmeta = qwav + ".json"
     qmeta_tmp = qmeta + ".part"
@@ -249,12 +253,20 @@ def queue_message(message, source_path):
                 "msgid": message["MsgID"],
                 "sender_jid": message.get("SenderJID"),
                 "media_type": media_type,
+                **message.get("CloudMetadata", {}),
             }, f, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
         os.replace(qmeta_tmp, qmeta)
         metadata_published = True
+        with open(qtmp, "rb") as audio:
+            os.fsync(audio.fileno())
         os.replace(qtmp, qwav)  # WAV appears only after routing metadata
+        directory = os.open(queue_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
         return qwav, duration
     except subprocess.TimeoutExpired:
         raise
@@ -335,6 +347,15 @@ def poll_once(seen, authorizations):
 
 
 def main():
+    transport = os.environ.get("MSGBOX_TRANSPORT", "wacli")
+    if transport == "cloud":
+        from messagebox.cloud_runtime import CloudRuntime
+        return CloudRuntime().run()
+    if transport == "business":
+        from messagebox.business_receive import main as business_main
+        return business_main()
+    if transport != "wacli":
+        raise ValueError("unsupported message transport")
     seen = load_seen()
     print(f"messagebox poller up: seen={len(seen)}", flush=True)
     while True:

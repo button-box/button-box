@@ -8,6 +8,7 @@ Conflicts=comitup-web.service
 After=comitup.service network-online.target messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service comitup-web.service messagebox-audio-detect.service
 
 [Service]
+ExecStartPre=+/usr/bin/install -d -o messagebox -g messagebox-settings -m 2770 /var/lib/messagebox-cloud
 Type=simple
 User=messagebox-onboarding
 Group=messagebox-onboarding
@@ -31,5 +32,5 @@ PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/etc/messagebox-onboarding
-ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings
+ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings /var/lib/messagebox-cloud
 LimitCORE=0

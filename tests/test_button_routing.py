@@ -13,7 +13,8 @@ gpiozero.LED = object
 with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
 from messagebox.contacts import ContactStore  # noqa: E402
-from messagebox.nfc_state import AnnouncementStore, SelectionStore  # noqa: E402
+from messagebox.nfc import Announcer, NfcRuntime  # noqa: E402
+from messagebox.nfc_state import AnnouncementStore, EnrollmentStore, NfcRouter, SelectionStore  # noqa: E402
 
 
 GRANDMA = "15551234567@s.whatsapp.net"
@@ -144,6 +145,72 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(archived_metadata["msgid"], "synthetic")
         self.assertEqual(archived_metadata["played_at"], 2_000_000_000)
 
+    def test_standalone_mode_never_claims_cloud_marked_audio(self):
+        wav, sidecar = self.queue_incoming()
+        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+        metadata["cloud"] = True
+        sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}):
+            self.assertIsNone(button_send.claim_oldest())
+
+        self.assertTrue(wav.exists())
+        self.assertTrue(sidecar.exists())
+
+    def test_cloud_mode_claims_only_fresh_authorized_audio(self):
+        wav, _sidecar = self.queue_incoming()
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "playable", return_value=True) as playable:
+            claim = button_send.claim_oldest()
+
+        self.assertEqual(claim["path"].name, wav.name)
+        playable.assert_called_once_with(claim["meta"])
+
+    def test_legacy_play_skips_cloud_audio_and_plays_next_standalone_message(self):
+        cloud_wav, cloud_sidecar = self.queue_incoming("0001-cloud.wav")
+        cloud_metadata = json.loads(cloud_sidecar.read_text(encoding="utf-8"))
+        cloud_metadata["cloud"] = True
+        cloud_sidecar.write_text(json.dumps(cloud_metadata), encoding="utf-8")
+        standalone_wav, _ = self.queue_incoming("0002-standalone.wav")
+
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
+             mock.patch.object(button_send, "archive_played_file") as archive, \
+             mock.patch.object(button_send, "react_played"), \
+             mock.patch.object(button_send, "wait_for_stable_open"), \
+             mock.patch.object(button_send, "refresh_led"):
+            button_send.play_next_legacy()
+
+        self.assertEqual(Path(run.call_args.args[0][-1]), standalone_wav)
+        self.assertEqual(archive.call_args.args[1], standalone_wav)
+        self.assertTrue(cloud_wav.exists())
+        self.assertTrue(cloud_sidecar.exists())
+
+    def test_guided_recheck_releases_cloud_claim_after_mode_switch(self):
+        self.add_family()
+        claim = {
+            "path": self.queue_path / ".inflight" / "0001-cloud.wav",
+            "meta": {"chat": FAMILY, "cloud": True},
+        }
+        session = mock.Mock()
+        button_send.led = FakeLed()
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
+             mock.patch.object(button_send, "claim_oldest", return_value=claim), \
+             mock.patch.object(button_send, "GuidedSession", return_value=session), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "release_claim") as release, \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send, "queued", return_value=[]):
+            button_send.run_guided_once(
+                {"max_recording_seconds": 60, "after_listening": "play_only"}
+            )
+
+        release.assert_called_once_with(claim)
+        session.run.assert_not_called()
+
     def test_cards_block_default_when_reader_or_card_state_is_unsafe(self):
         self.add_grandma()
         self.contacts.assign_card(GRANDMA, CARD)
@@ -158,6 +225,57 @@ class ButtonRoutingTests(unittest.TestCase):
         safe_default = button_send.current_recipient_context(claim=True)
         self.assertEqual(safe_default["contact"]["jid"], GRANDMA)
         self.assertFalse(safe_default["via_card"])
+
+    def test_held_unknown_blocks_default_and_recent_after_announcement_is_consumed(self):
+        self.add_grandma()
+        self.contacts.assign_card(GRANDMA, CARD)
+        self.add_family()
+        self.mark_nfc_healthy()
+        selection = SelectionStore(self.selection_path, clock=lambda: 1000)
+        router = NfcRouter(self.contacts, selection, EnrollmentStore(self.root / "enrollment.json"), self.announcements)
+        reader = NfcRuntime(router, Announcer(self.announcements))
+        self.assertEqual(reader.observe("04:00:00:01", 0).action, "unknown")
+        self.announcements.take()
+        self.assertIsNone(reader.observe("04:00:00:01", 1))
+        self.assertIsNone(self.announcements.pending_action())
+        with mock.patch.object(button_send, "recent_reply_recipient", side_effect=AssertionError("recent route inspected")):
+            self.assertIsNone(button_send.current_recipient_context(claim=True))
+            self.assertIsNone(button_send.recording_recipient_context())
+            self.assertIsNone(reader.observe(None, 1.1))
+            self.assertIsNone(button_send.recording_recipient_context())
+        self.assertEqual(reader.observe(None, 2).action, "removed")
+        self.assertFalse(selection.unknown_present())
+        restored = button_send.recording_recipient_context()
+        self.assertEqual(restored["contact"]["jid"], GRANDMA)
+        self.assertFalse(restored["via_card"])
+
+    def test_zero_tag_setup_keeps_default_independent_of_unknown_reader_marker(self):
+        self.add_grandma()
+        SelectionStore(self.selection_path).block_unknown()
+        default = button_send.recording_recipient_context()
+        self.assertEqual(default["contact"]["jid"], GRANDMA)
+        self.assertFalse(default["via_card"])
+
+    def test_unknown_marker_malformed_or_unavailable_never_permits_fallback(self):
+        self.add_grandma()
+        self.contacts.assign_card(GRANDMA, CARD)
+        self.mark_nfc_healthy()
+        selection = SelectionStore(self.selection_path)
+        selection.unknown_path.write_text("malformed marker")
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.clear_unknown()
+        selection.unknown_path.symlink_to(self.root / "missing-unknown-target")
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.clear_unknown()
+        selection.unknown_path.mkdir()
+        self.assertIsNone(button_send.current_recipient_context(claim=True))
+        self.assertIsNone(button_send.recording_recipient_context())
+        selection.unknown_path.rmdir()
+        with mock.patch.object(button_send.SelectionStore, "unknown_present", side_effect=PermissionError("unavailable")):
+            self.assertIsNone(button_send.current_recipient_context(claim=True))
+            self.assertIsNone(button_send.recording_recipient_context())
 
     def test_short_legacy_press_plays_without_resolving_or_claiming(self):
         button_send.button = types.SimpleNamespace(is_pressed=False)

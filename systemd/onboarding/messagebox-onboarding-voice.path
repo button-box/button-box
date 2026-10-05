@@ -3,6 +3,7 @@ Description=Watch for Button Box setup voice activation
 
 [Path]
 PathChanged=/var/lib/messagebox/state/onboarding-voice-request.json
+PathChanged=/var/lib/messagebox-cloud
 Unit=messagebox-onboarding-voice-gate.service
 
 [Install]
