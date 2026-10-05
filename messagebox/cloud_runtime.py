@@ -227,6 +227,23 @@ class CloudRuntime:
             return changed, None
         self.contacts._mutate(sync)
 
+    def _nfc_inventory(self):
+        snapshot = self.state.get("snapshot")
+        if not snapshot:
+            return None
+        try:
+            document = self.contacts.load()
+        except ContactError:
+            return None
+        cards = []
+        for person in snapshot["people"]:
+            contact = document["contacts"].get(person["wa_id"] + "@s.whatsapp.net")
+            count = len(contact["card_uids"]) if contact else 0
+            if count:
+                cards.append({"recipient_id": person["id"], "count": count})
+        return {"account_scope": snapshot["account_scope"],
+                "revision": document["revision"], "cards": cards}
+
     def heartbeat(self):
         current, warning = self.settings.load()
         if warning:
@@ -240,12 +257,14 @@ class CloudRuntime:
                 or type(settings.get("revision")) is not int
                 or settings["revision"] > current["revision"]):
             raise CloudRuntimeError("physical settings state is invalid")
+        inventory = self._nfc_inventory()
         response = self.client.heartbeat({
             "version": "cloud-mvp-1", "capabilities": capabilities(nfc=NFC_HEALTH_FILE.exists()),
             "settings": settings, "applied_revision": settings["revision"],
             "queue": {"held": bool((self.state.get("snapshot") or {}).get("queue_hold", False)),
                       "count": len(list(self.queue_dir.glob("*.wav"))), "playing_message_id": None},
             "last_error": None,
+            **({"nfc_inventory": inventory} if inventory is not None else {}),
         })
         people = response.get("people")
         entitlement = response.get("entitlement")

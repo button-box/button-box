@@ -202,3 +202,5 @@ Record each result as Passed, Failed, Not run or Inconclusive with its evidence
 layer. Keep device identifiers, credentials, contact details and recordings in
 private acceptance records. Do not publish a final release from automated
 checks alone. Recheck the merged main revision before creating the release tag.
+
+The regular heartbeat reports saved NFC card counts per authorized recipient, scoped to the last verified account and contact-store revision. It never sends card UIDs or local contact labels. Existing cards and subsequent unpairing appear in the authenticated Cloud dashboard after the next heartbeat.

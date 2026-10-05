@@ -119,6 +119,24 @@ class CloudRuntimeTests(unittest.TestCase):
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
 
+    def test_heartbeat_reports_card_counts_without_uids_and_updates_after_unpair(self):
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+            self.assertNotIn("nfc_inventory", send.call_args.args[0])
+            jid = PERSON["wa_id"] + "@s.whatsapp.net"
+            self.runtime.contacts.enroll_card(jid, "04AABBCC", label="Family")
+            self.runtime.heartbeat()
+            inventory = send.call_args.args[0]["nfc_inventory"]
+            self.assertEqual(inventory["cards"], [{"recipient_id": PERSON["id"], "count": 1}])
+            self.assertEqual(inventory["account_scope"], "a" * 64)
+            self.assertNotIn("04AABBCC", json.dumps(inventory))
+            self.assertNotIn(PERSON["wa_id"], json.dumps(inventory))
+            self.runtime.contacts.remove_card("04AABBCC")
+            self.runtime.heartbeat()
+            updated = send.call_args.args[0]["nfc_inventory"]
+            self.assertEqual(updated["cards"], [])
+            self.assertGreater(updated["revision"], inventory["revision"])
+
     def audio_item(self):
         return {"operation_id": OP, "sequence": 1, "kind": "audio",
                 "created_at": NOW - 10, "expires_at": NOW + 3600,
