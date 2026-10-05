@@ -6,6 +6,8 @@ import copy
 import fcntl
 import json
 import os
+import re
+import secrets
 import tempfile
 import time
 import uuid
@@ -26,6 +28,7 @@ from messagebox.runtime_paths import NFC_ANNOUNCEMENT_FILE
 SELECTION_VERSION = 2
 ENROLLMENT_VERSION = 1
 ANNOUNCEMENT_VERSION = 1
+CARD_REFERENCES_VERSION = 1
 DEFAULT_SELECTION_TTL_S = 30.0
 DEFAULT_ENROLLMENT_TTL_S = 300
 
@@ -118,6 +121,69 @@ def _contact_for_uid(document, uid):
         if uid in contact["card_uids"]:
             return jid, contact
     return None, None
+
+
+class CardReferenceStore:
+    """Keep random Cloud-safe references beside the private local card UIDs."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def sync(self, account_scope, cards):
+        if not isinstance(account_scope, str) or not re.fullmatch(r"[a-f0-9]{64}", account_scope):
+            raise NfcError("family card account scope is invalid")
+        with _locked_path(self.path):
+            try:
+                payload = _load_json(self.path)
+            except NfcError:
+                raise
+            if payload is None:
+                references = {}
+            elif (payload.get("version") != CARD_REFERENCES_VERSION
+                    or not isinstance(payload.get("account_scope"), str)
+                    or not isinstance(payload.get("references"), dict)):
+                raise NfcError("family card references have an invalid schema")
+            elif payload["account_scope"] != account_scope:
+                references = {}
+            else:
+                references = payload["references"]
+            uid_to_reference = {}
+            for reference, uid in references.items():
+                if (not isinstance(reference, str) or not re.fullmatch(r"[a-f0-9]{32}", reference)
+                        or not isinstance(uid, str) or normalize_uid(uid) != uid
+                        or uid in uid_to_reference):
+                    raise NfcError("family card references have an invalid schema")
+                uid_to_reference[uid] = reference
+            fresh = {}
+            result = []
+            seen = set()
+            for recipient_id, raw_uid in cards:
+                uid = normalize_uid(raw_uid)
+                if uid in seen:
+                    raise NfcError("a family card is mapped more than once")
+                seen.add(uid)
+                reference = uid_to_reference.get(uid)
+                if reference is None:
+                    reference = secrets.token_hex(16)
+                    while reference in fresh or reference in references:
+                        reference = secrets.token_hex(16)
+                fresh[reference] = uid
+                result.append({"recipient_id": recipient_id, "card_ref": reference})
+            _atomic_json(self.path, {"version": CARD_REFERENCES_VERSION,
+                                     "account_scope": account_scope, "references": fresh})
+            return result
+
+    def resolve(self, account_scope, reference):
+        if not isinstance(account_scope, str) or not re.fullmatch(r"[a-f0-9]{64}", account_scope):
+            raise NfcError("family card account scope is invalid")
+        if not isinstance(reference, str) or not re.fullmatch(r"[a-f0-9]{32}", reference):
+            raise NfcError("family card reference is invalid")
+        with _locked_path(self.path):
+            payload = _load_json(self.path)
+            if payload is None or payload.get("version") != CARD_REFERENCES_VERSION or payload.get("account_scope") != account_scope:
+                return None
+            uid = payload.get("references", {}).get(reference)
+            return normalize_uid(uid) if isinstance(uid, str) else None
 
 
 class SelectionStore:

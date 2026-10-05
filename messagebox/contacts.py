@@ -538,12 +538,16 @@ class ContactStore:
 
         return self._mutate(enroll)
 
-    def remove_card(self, uid) -> bool:
+    def remove_card(self, uid, *, expected_jid=None) -> bool:
         uid = _normalize_uid(uid)
+        if expected_jid is not None:
+            expected_jid = _clean_chat_jid(expected_jid)
 
         def remove(document):
-            for contact in document["contacts"].values():
-                if uid in contact["card_uids"]:
+            contacts = ([document["contacts"].get(expected_jid)] if expected_jid is not None
+                        else document["contacts"].values())
+            for contact in contacts:
+                if contact is not None and uid in contact["card_uids"]:
                     contact["card_uids"].remove(uid)
                     return True, True
             return False, False

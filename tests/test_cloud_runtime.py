@@ -14,7 +14,7 @@ from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
 from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
 from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
 from messagebox.played_history import list_played_history
-from messagebox.nfc_state import EnrollmentStore
+from messagebox.nfc_state import CardReferenceStore, EnrollmentStore
 from messagebox.settings import SettingsStore
 
 gpiozero = types.ModuleType("gpiozero")
@@ -108,7 +108,8 @@ class CloudRuntimeTests(unittest.TestCase):
         intents.start()
         self.addCleanup(intents.stop)
         for name, path in [("NFC_ENROLLMENT_FILE", self.root / "nfc-enrollment.json"),
-                           ("NFC_SELECTION_FILE", self.root / "nfc-selection.json")]:
+                           ("NFC_SELECTION_FILE", self.root / "nfc-selection.json"),
+                           ("NFC_CARD_REFERENCES_FILE", self.root / "family-card-references.json")]:
             patch = mock.patch("messagebox.cloud_runtime." + name, path)
             patch.start()
             self.addCleanup(patch.stop)
@@ -119,7 +120,7 @@ class CloudRuntimeTests(unittest.TestCase):
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
 
-    def test_heartbeat_reports_card_counts_without_uids_and_updates_after_unpair(self):
+    def test_heartbeat_reports_random_per_card_references_without_uids(self):
         with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
             self.runtime.heartbeat()
             self.assertNotIn("nfc_inventory", send.call_args.args[0])
@@ -127,15 +128,72 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime.contacts.enroll_card(jid, "04AABBCC", label="Family")
             self.runtime.heartbeat()
             inventory = send.call_args.args[0]["nfc_inventory"]
-            self.assertEqual(inventory["cards"], [{"recipient_id": PERSON["id"], "count": 1}])
+            self.assertEqual(len(inventory["cards"]), 1)
+            self.assertEqual(inventory["cards"][0]["recipient_id"], PERSON["id"])
+            card_ref = inventory["cards"][0]["card_ref"]
+            self.assertRegex(card_ref, r"^[a-f0-9]{32}$")
             self.assertEqual(inventory["account_scope"], "a" * 64)
             self.assertNotIn("04AABBCC", json.dumps(inventory))
             self.assertNotIn(PERSON["wa_id"], json.dumps(inventory))
-            self.runtime.contacts.remove_card("04AABBCC")
+            self.runtime.heartbeat()
+            self.assertEqual(send.call_args.args[0]["nfc_inventory"]["cards"][0]["card_ref"], card_ref)
+            self.runtime._nfc({"operation_id": "remove-card1234567890", "kind": "nfc_unpair",
+                "payload": {"card_ref": card_ref, "recipient_id": PERSON["id"], "inventory_revision": inventory["revision"]}})
             self.runtime.heartbeat()
             updated = send.call_args.args[0]["nfc_inventory"]
             self.assertEqual(updated["cards"], [])
             self.assertGreater(updated["revision"], inventory["revision"])
+            self.runtime.flush_acks()
+            self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_saved_card_unpair_removes_only_selected_card_and_replays_after_crash(self):
+        self.runtime.heartbeat()
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        self.runtime.contacts.enroll_card(jid, "04AABBCC", label="Family")
+        self.runtime.contacts.enroll_card(jid, "04DDEEFF", label="Family")
+        inventory = self.runtime._nfc_inventory()
+        self.assertEqual(len(inventory["cards"]), 2)
+        references = CardReferenceStore(self.root / "family-card-references.json")
+        selected_ref = inventory["cards"][0]["card_ref"]
+        selected_uid = references.resolve("a" * 64, selected_ref)
+        remaining_uid = next(references.resolve("a" * 64, card["card_ref"])
+                             for card in inventory["cards"] if card["card_ref"] != selected_ref)
+        item = {"operation_id": "remove-crash1234567890", "kind": "nfc_unpair",
+            "payload": {"card_ref": selected_ref, "recipient_id": PERSON["id"], "inventory_revision": inventory["revision"]}}
+        remove = self.runtime.contacts.remove_card
+        attempts = [0]
+        def remove_then_crash(uid, *, expected_jid=None):
+            result = remove(uid, expected_jid=expected_jid)
+            if attempts[0] == 0:
+                attempts[0] += 1
+                raise RuntimeError("simulated restart boundary")
+            return result
+        with mock.patch.object(self.runtime.contacts, "remove_card", side_effect=remove_then_crash), \
+             mock.patch("messagebox.cloud_runtime.INTENT_DIR", self.root / "intents"):
+            with self.assertRaisesRegex(RuntimeError, "restart boundary"):
+                self.runtime._nfc(item)
+            self.runtime._nfc(item)
+        document = self.runtime.contacts.load()
+        self.assertNotIn(selected_uid, document["contacts"][jid]["card_uids"])
+        self.assertIn(remaining_uid, document["contacts"][jid]["card_uids"])
+        self.runtime.flush_acks()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_saved_card_reference_cannot_remove_a_card_reassigned_to_another_person(self):
+        self.runtime.heartbeat()
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        self.runtime.contacts.enroll_card(jid, "04AABBCC", label="Family")
+        inventory = self.runtime._nfc_inventory()
+        ref = inventory["cards"][0]["card_ref"]
+        self.runtime.contacts.add_contact("12025550199@s.whatsapp.net", "Other", card_clip="")
+        self.runtime.contacts.assign_card("12025550199@s.whatsapp.net", "04AABBCC")
+        item = {"operation_id": "remove-stale1234567890", "kind": "nfc_unpair",
+            "payload": {"card_ref": ref, "recipient_id": PERSON["id"], "inventory_revision": inventory["revision"]}}
+        with mock.patch("messagebox.cloud_runtime.INTENT_DIR", self.root / "intents"):
+            with self.assertRaisesRegex(CloudRuntimeError, "changed"):
+                self.runtime._nfc(item)
+        contacts = self.runtime.contacts.load()["contacts"]
+        self.assertIn("04:AA:BB:CC", contacts["12025550199@s.whatsapp.net"]["card_uids"])
 
     def audio_item(self):
         return {"operation_id": OP, "sequence": 1, "kind": "audio",
@@ -579,7 +637,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 self.runtime._nfc(item)
             self.runtime._nfc(item)
         self.assertEqual(self.runtime.contacts.remove_card.call_args_list,
-                         [mock.call("A1B2C3D4"), mock.call("A1B2C3D4")])
+                         [mock.call("A1B2C3D4", expected_jid=None), mock.call("A1B2C3D4", expected_jid=None)])
         self.assertEqual(router.selection.load.call_count, 1)
 
     def test_nfc_cancel_crash_intent_never_cancels_new_enrollment(self):

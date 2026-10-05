@@ -799,11 +799,11 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn('formRequest("/nfc/start")', script)
         self.assertIn('formRequest("/nfc/assign", { token: recipient.token })', script)
         self.assertIn('formRequest("/onboarding/complete", { intent })', script)
-        self.assertIn("Skip NFC setup", html)
+        self.assertIn("Skip pairing", html)
         self.assertIn("Reassign", html)
-        self.assertIn("Pair another tag", html)
+        self.assertIn("Pair another card", html)
         self.assertIn(
-            "recipients, NFC mappings, listener profiles, and voice-test state", html
+            "recipients, Family card mappings, listener profiles, and voice-test state", html
         )
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
