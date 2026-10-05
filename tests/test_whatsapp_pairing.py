@@ -745,7 +745,8 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             'whatsapp.status === "ready"',
         ):
             self.assertIn(status, script)
-        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
+        # Mode-specific destinations are exercised by onboarding-ui.test.js.
+        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp,', script)
         self.assertIn('if (routeName === "whatsapp")', script)
         self.assertIn('routeName === "continue"', script)
         self.assertIn('location.replace("#home")', script)

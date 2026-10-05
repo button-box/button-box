@@ -19,7 +19,7 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="__init__.py business_send.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
+PACKAGE_PYTHON="__init__.py business_send.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py cloud_events.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
 make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py business_receive.py wifi_change.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
@@ -247,7 +247,7 @@ echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   alsa-utils ca-certificates curl ffmpeg gunicorn=23.0.0-1 i2c-tools nftables \
-  liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv swig
+  liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv python3-websocket swig
 
 if ! getent group "$SETTINGS_GROUP" >/dev/null; then
   sudo groupadd --system "$SETTINGS_GROUP"

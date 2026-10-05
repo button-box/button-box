@@ -63,6 +63,36 @@ claim opens the hosted dashboard. Standalone setup and management remain availab
 when the selected transport is wacli. A dashboard link does not prove entitlement,
 message delivery or physical acceptance; those still require independent checks.
 
+The Cloud poller also opens an outbound authenticated WSS connection at the
+configured API origin's `/cloud-api/v1/device/events` path. It sends the existing
+device credential in the Authorization header, never in the URL; redirects are
+rejected. The socket carries only `{"type":"work"}` hints. Commands, audio,
+account scope and authorization still come from the authenticated HTTPS API.
+Only the existing poller thread executes work and writes runtime state. Repeated
+hints coalesce, and a new connection immediately checks the inbox to recover
+notifications missed while offline. A hint received during an HTTP request is
+preserved for the next check. The existing receipts prevent duplicate effects.
+
+An idle connected socket uses a 30-second inbox backup poll. The same runtime
+thread checks local ACKs, preview/NFC/settings completion and outbound recovery every
+2–3 seconds, with fresh authorization and bounded failure backoff. An
+unavailable socket retains the existing 2–3-second successful polling cadence;
+HTTP failures retain bounded backoff. Heartbeats stay on a separate 30-second
+monotonic schedule. The listener sends text `ping` every 20 seconds and expects
+text `pong` within ten seconds, so silent loss returns to polling. Socket retry
+backoff grows from 2 to 60 seconds with jitter; unsupported endpoints, rejected
+credentials and missing dependencies wait five minutes before retrying. The
+Cloud service may close a connection to require fresh authentication. Shutdown
+interrupts the listener and closes the socket; no other service owns this stream.
+
+Set `MSGBOX_CLOUD_EVENTS=0` in `/etc/messagebox/env` to use polling only, then
+restart the poller during an authorized maintenance window. Fresh setup installs
+the distro `python3-websocket` package. Before a bounded update on an existing
+box, install it with `sudo apt-get install python3-websocket`; bounded updates do
+not install OS dependencies. If absent, HTTP polling continues. Repository checks
+pin `websocket-client==1.9.2` for reproducible tests. Socket availability and a
+source test pass do not establish live message delivery or hardware acceptance.
+
 The poller accepts family audio only from a fresh authenticated heartbeat and
 the exact inbox message. It verifies the media hash before publishing a WAV,
 then acknowledges the durable queue entry. The button checks the same fresh
@@ -116,6 +146,14 @@ observation no more than 30 seconds old. Acceptance discovered after a longer ga
 stays silent. Each cue expires 30 seconds after its first verified acceptance
 observation; waiting for a busy button owner never extends that deadline.
 Standalone wacli and business send confirmation behavior is unchanged.
+
+Pending NFC operations retain their original request IDs across restart. The
+poller reports pairing as applied only with a matching committed success receipt.
+If the original enrollment has ended or been replaced without that receipt, it
+records `rejected` with `nfc_enrollment_ended` and clears the pending entry;
+matching pending or claimed requests keep waiting. A durable terminal receipt is
+replayed after a crash before changing any leftover pending entry. Cancellation
+and expiry do not change saved card routes or queued recordings.
 
 Before an attended installation, verify the bounded release manifest and
 rollback, preserve current household files, and run `make check`. On an

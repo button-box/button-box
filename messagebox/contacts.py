@@ -369,12 +369,16 @@ class ContactStore:
 
         return self._mutate(add)
 
-    def remove_contact(self, jid) -> bool:
+    def remove_contact(self, jid, *, protect_default=False) -> bool:
         jid = _clean_chat_jid(jid)
+        if not isinstance(protect_default, bool):
+            raise ContactError("protect_default must be true or false")
 
         def remove(document):
             if jid not in document["contacts"]:
                 return False, False
+            if protect_default and document["default_recipient"] == jid:
+                raise ContactError("default recipient cannot be removed")
             del document["contacts"][jid]
             if document["default_recipient"] == jid:
                 document["default_recipient"] = None

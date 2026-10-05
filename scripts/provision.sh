@@ -87,6 +87,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/qrcodegen.py" \
   "$REPO_DIR/./messagebox/cloud_runtime.py" \
   "$REPO_DIR/./messagebox/audio_requests.py" \
+  "$REPO_DIR/./messagebox/cloud_events.py" \
   "$REPO_DIR/./messagebox/contacts.py" \
   "$REPO_DIR/./messagebox/guided_reply.py" \
   "$REPO_DIR/./messagebox/identity.py" \

@@ -9,6 +9,7 @@ import os
 import random
 import re
 import shutil
+import threading
 import time
 import uuid
 import wave
@@ -18,6 +19,7 @@ from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, 
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
+from messagebox.cloud_events import CloudWorkEvents
 from messagebox.nfc_state import EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_ENROLLMENT_FILE,
@@ -299,6 +301,20 @@ class CloudRuntime:
 
     def _completed_path(self, operation_id):
         return COMPLETED_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
+
+    def _replay_completed(self, operation_id):
+        completed = self._completed_path(operation_id)
+        if not completed.exists():
+            return False
+        try:
+            prior = json.loads(completed.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise CloudRuntimeError("cloud operation ledger is invalid") from exc
+        if prior.get("operation_id") != operation_id:
+            raise CloudRuntimeError("cloud operation ledger conflicts")
+        self._ack(operation_id, prior["state"],
+                  **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        return True
 
     def _intent_path(self, operation_id):
         return INTENT_DIR / (hashlib.sha256(operation_id.encode()).hexdigest() + ".json")
@@ -652,16 +668,7 @@ class CloudRuntime:
             self._ack(item["operation_id"], "applied")
 
     def _command(self, item, server_time):
-        completed = self._completed_path(item["operation_id"])
-        if completed.exists():
-            try:
-                prior = json.loads(completed.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise CloudRuntimeError("cloud operation ledger is invalid") from exc
-            if prior.get("operation_id") != item["operation_id"]:
-                raise CloudRuntimeError("cloud operation ledger conflicts")
-            self._ack(item["operation_id"], prior["state"],
-                      **{key: value for key, value in prior.items() if key not in {"operation_id", "state"}})
+        if self._replay_completed(item["operation_id"]):
             return
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]
@@ -679,7 +686,7 @@ class CloudRuntime:
             document = payload.get("settings")
             candidate = ({key: value for key, value in document.items() if key not in {"version", "revision"}}
                          if isinstance(document, dict) else None)
-            if (warning or type(expected) is not int or type(desired) is not int or desired != expected + 1
+            if (warning or type(expected) is not int or type(desired) is not int or desired <= expected
                     or not isinstance(document, dict) or document.get("version") != 1
                     or document.get("revision") != desired):
                 raise CloudRuntimeError("settings revision is invalid")
@@ -687,7 +694,7 @@ class CloudRuntime:
                 if current != {"version": 1, "revision": desired, **candidate}:
                     raise CloudRuntimeError("settings revision conflicts")
             else:
-                updated = self.settings.update(candidate, expected)
+                updated = self.settings.update(candidate, expected, desired_revision=desired)
                 if updated["revision"] != desired:
                     raise CloudRuntimeError("settings revision conflicts")
             self.state["pending_settings"][item["operation_id"]] = document
@@ -767,13 +774,22 @@ class CloudRuntime:
                 self._save()
 
     def _finish_nfc(self):
+        if not self.state["pending_nfc"]:
+            return
         enrollment = EnrollmentStore(NFC_ENROLLMENT_FILE)
+        # Read active state before the receipt: a tap can commit its receipt and
+        # remove the active request between these reads, and must still succeed.
+        active = enrollment.active()
         for operation_id, request_id in list(self.state["pending_nfc"].items()):
-            outcome = enrollment.outcome(request_id)
-            if outcome is not None:
-                self._ack(operation_id, "applied")
-                del self.state["pending_nfc"][operation_id]
-                self._save()
+            if not self._replay_completed(operation_id):
+                if enrollment.outcome(request_id) is not None:
+                    self._ack(operation_id, "applied")
+                elif active is None or active["request_id"] != request_id:
+                    self._ack(operation_id, "rejected", error_code="nfc_enrollment_ended")
+                else:
+                    continue
+            del self.state["pending_nfc"][operation_id]
+            self._save()
 
     def poll_once(self):
         inbox = self.client.inbox(self.state["cursor"])
@@ -824,23 +840,111 @@ class CloudRuntime:
             self.expire_local()
         self.recover_outbox()
 
-    def run(self):
+    def _maintain_local(self):
+        # Cross-process playback receipts and local completions need no inbox hint.
+        self._snapshot()
+        self.flush_acks()
+        self._finish_previews()
+        self._finish_nfc()
+        self._finish_settings()
+        self.flush_acks()
+        self.recover_outbox()
+
+    def run(self, *, stop=None, events=None):
+        stop = stop if stop is not None else threading.Event()
+        if events is None and os.environ.get("MSGBOX_CLOUD_EVENTS", "1") == "1":
+            events = CloudWorkEvents(self.client)
+        wake = events.wake if events is not None else threading.Event()
         failures = 0
-        last_heartbeat = 0
-        while True:
-            try:
-                if self.clock() - last_heartbeat >= 30 or not self.state.get("snapshot"):
+        last_heartbeat = float("-inf")
+        next_poll = 0
+        earliest_hint_poll = 0
+        next_local_check = 0
+        local_failures = 0
+        if events is not None:
+            events.start()
+        try:
+            while not stop.is_set():
+                now = self.monotonic()
+                hinted = wake.is_set()
+                if now >= next_poll or (hinted and not failures and now >= earliest_hint_poll):
+                    # Clear before HTTP so a hint arriving during the request survives.
+                    wake.clear()
+                    try:
+                        if now - last_heartbeat >= 30 or not self.state.get("snapshot"):
+                            try:
+                                self.heartbeat()
+                            except CloudDeviceError:
+                                pass  # A revoked device may still receive deletion tombstones.
+                            last_heartbeat = self.monotonic()
+                        self.poll_once()
+                        failures = 0
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
+                        print("cloud poll failed; local work remains pending", flush=True)
+                        failures += 1
+                    now = self.monotonic()
+                    connected = events is not None and events.connected.is_set()
+                    interval = 30 if connected else 2 + random.random()
+                    if failures:
+                        interval = min(60, 2 * 2 ** min(failures, 5)) + random.random()
+                    next_poll = now + interval
+                    earliest_hint_poll = now + 0.25
+                    next_local_check = now + (0.1 if self.state.get("pending_settings") else 2 + random.random())
+                    local_failures = 0
+                now = self.monotonic()
+                # Heartbeats stay on their own 30-second cadence, including outages.
+                if now - last_heartbeat >= 30:
                     try:
                         self.heartbeat()
-                    except CloudDeviceError:
-                        pass  # A revoked device may still receive deletion tombstones.
-                    last_heartbeat = self.clock()
-                self.poll_once()
-                failures = 0
-            except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
-                print("cloud poll failed; local work remains pending", flush=True)
-                failures += 1
-            time.sleep(min(60, 2 * 2 ** min(failures, 5)) + random.random())
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
+                        pass
+                    last_heartbeat = self.monotonic()
+                connected = events is not None and events.connected.is_set()
+                if connected and not failures and self.monotonic() >= next_local_check:
+                    try:
+                        self._maintain_local()
+                        local_failures = 0
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
+                        local_failures += 1
+                        print("cloud local work failed; receipts remain pending", flush=True)
+                    delay = min(60, 2 * 2 ** min(local_failures, 5)) + random.random()
+                    next_local_check = self.monotonic() + delay
+                deadline = min(next_poll, last_heartbeat + 30)
+                if connected and not failures:
+                    deadline = min(deadline, next_local_check)
+                if wake.is_set() and not failures:
+                    deadline = min(deadline, earliest_hint_poll)
+                # An external stop is observed within one second; socket shutdown is bounded.
+                timeout = max(0.01, min(1, deadline - self.monotonic()))
+                if wake.is_set():
+                    stop.wait(timeout)  # Coalesced hints must not create a busy loop.
+                else:
+                    wake.wait(timeout)
+        finally:
+            if events is not None:
+                events.stop()
+
+
+def read_snapshot():
+    """Read fresh authorization without creating identity or contacting the service."""
+    snapshot = CloudRuntime(client=object(), state_path=STATE_FILE)._snapshot()
+    people = snapshot.get("people")
+    if (not isinstance(people, list) or len(people) > 100
+            or any(not isinstance(person, dict) or not _valid_id(person.get("id"))
+                   for person in people)):
+        raise CloudRuntimeError("cloud family list is invalid")
+    ids = {person["id"] for person in people}
+    if len(ids) != len(people):
+        raise CloudRuntimeError("cloud family list is invalid")
+    default = snapshot.get("default_recipient_id")
+    if default is not None and (not _valid_id(default) or default not in ids):
+        raise CloudRuntimeError("cloud default recipient is invalid")
+    entitlement = snapshot.get("entitlement")
+    if (not isinstance(entitlement, dict)
+            or any(type(entitlement.get(key)) is not bool for key in ("ingest", "deliver", "send"))
+            or (entitlement.get("until") is not None and not _valid_time(entitlement["until"]))):
+        raise CloudRuntimeError("cloud entitlement is invalid")
+    return snapshot
 
 
 def recipient_id(jid):
