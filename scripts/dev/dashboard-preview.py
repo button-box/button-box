@@ -1,6 +1,6 @@
 """Loopback-only UI preview with synthetic data; never connects to a device.
 
-Run: python3 scripts/dev/dashboard-preview.py [--port 8766] [--state ready|setup|attention]
+Run: python3 scripts/dev/dashboard-preview.py [--port 8766] [--state ready|setup|attention] [--color pink-red]
 Serves the actual shared dashboard assets. Mutations below are in-memory mocks,
 not backend integration tests. Restart to discard all settings changes.
 """
@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from messagebox.identity import BOX_COLORS  # noqa: E402
 from messagebox.settings import defaults  # noqa: E402
 
 
@@ -22,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--state", choices=("ready", "setup", "attention"), default="ready")
+    parser.add_argument("--color", choices=BOX_COLORS, default="yellow")
     args = parser.parse_args()
     settings = defaults({"TZ": "Europe/Lisbon"})
     state = {
@@ -56,6 +58,12 @@ def main():
                 body = (ROOT / "messagebox/onboarding/static" / name).read_bytes()
                 if name == "index.html":
                     body = body.replace(b"__MESSAGEBOX_URL__", b"http://button-box-example.local/")
+                if mime == "text/html":
+                    body = body.replace(
+                        b'<html lang="en">',
+                        f'<html lang="en" data-box-color="{args.color}">'.encode("ascii"),
+                        1,
+                    )
                 return self.send(body, content_type=mime)
             responses = {
                 "/api/state": state,

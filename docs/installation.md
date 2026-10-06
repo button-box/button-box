@@ -60,12 +60,20 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
    maintenance, complete the [Tailscale remote-support procedure](remote-support.md)
    while LAN access is still available. Tailscale is independent of the Button
    Box application install and does not replace ordinary OpenSSH keys.
-4. Configure protected Wi-Fi onboarding with
+4. Set the box color to match the physical box shell:
+
+   ```sh
+   sudo messageboxctl set-color pink-red
+   ```
+
+   Values: `yellow`, `pink-red`, `green`, `blue`, `white`, `black`, `beige`.
+   The default is yellow. Updates and Wi-Fi reset keep the color.
+5. Configure protected Wi-Fi onboarding with
    `sudo messagebox-init-wifi-onboarding`.
-5. Print the displayed box number, hotspot name, password, and setup URL for the
+6. Print the displayed box number, box color, hotspot name, password, and setup URL for the
    matching box. Treat the hotspot password as a credential: do not commit it,
    put it in shared logs, or retain an unprotected digital copy.
-6. Run `sudo messageboxctl reset-wifi`. Verify the hotspot if needed, then run
+7. Run `sudo messageboxctl reset-wifi`. Verify the hotspot if needed, then run
    `sudo shutdown now` and package the printed insert with the powered-down box.
    Do not complete browser onboarding during manufacturing.
 

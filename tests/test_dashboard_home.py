@@ -61,6 +61,18 @@ class DashboardHomeTests(unittest.TestCase):
             self.assertIn('id="setup-url">http://button-box-test.local/</code>', body)
         return body, parser.links
 
+    def test_standalone_and_cloud_html_read_color_per_request(self):
+        from messagebox.identity import BOX_COLORS
+
+        with patch.object(dashboard, "read_box_color") as color_reader:
+            for transport in ("wacli", "cloud"):
+                for color in BOX_COLORS:
+                    with self.subTest(transport=transport, color=color):
+                        color_reader.return_value = color
+                        body, _ = self.home(transport)
+                        self.assertIn(f'<html lang="en" data-box-color="{color}">', body)
+                        self.assertEqual(body.count("data-box-color="), 1)
+
     def test_cloud_runtime_opens_service_management_without_a_local_claim_link(self):
         body, links = self.home("cloud")
         link = links["home-cloud-dashboard"]

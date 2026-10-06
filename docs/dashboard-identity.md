@@ -44,3 +44,21 @@ Never clone an assigned identity onto a different physical unit.
 An assigned ID, working Copy button or queued ringtone request does not prove that
 the unit receives, plays, records or delivers WhatsApp messages. Those remain
 separate physical acceptance checks.
+
+## Box shell color
+
+Manufacturing sets the shell color with `sudo messageboxctl set-color pink-red`.
+It must match the physical shell. `/etc/messagebox-box-color` is a root:root,
+mode-0644 regular file containing one plain ASCII value plus a newline. Accepted
+values are `yellow`, `pink-red`, `green`, `blue`, `white`, `black`, and `beige`.
+Missing, unreadable, malformed, unknown, non-ASCII, oversized (over 32 bytes),
+symlink or non-regular files safely default to `yellow` without exposing contents
+or OS errors.
+
+Like the box ID, this top-level file is outside `/etc/messagebox` and onboarding
+state. Setup, provisioning, updates, Wi-Fi reset and reboot keep it; installers
+never copy a developer's color file. After a full SD-card reimage, run `set-color`
+again to match the shell. The initializer prints the color on the insert, Cloud
+registration sends it as `color`, and each setup or dashboard HTML request reads
+it for the accent theme. Reload the page after changing it. Color is not sent in
+heartbeats.

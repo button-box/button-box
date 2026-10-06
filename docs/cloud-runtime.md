@@ -34,6 +34,11 @@ recording or sending when the cached snapshot lacks the scope. An older Cloud
 heartbeat without the field is rejected. Neither release migrates old pending
 recordings to the new binding; preserve them for private recovery.
 
+Device registration includes the capability fields, `natural_registration_text: true`,
+and `color` read from `/etc/messagebox-box-color`. The exact color values and safe
+yellow default are documented in [dashboard identity](dashboard-identity.md#box-shell-color).
+Manufacturing sets it before registration; heartbeats do not include color.
+
 The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
