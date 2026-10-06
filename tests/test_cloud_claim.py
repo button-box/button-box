@@ -116,6 +116,28 @@ class ClaimTests(unittest.TestCase):
             self.claim.qr_svg()
         self.assertEqual(self.claim.status()["status"], "expired")
 
+    def test_registration_accepts_old_and_friendly_text_only(self):
+        friendly = "Hi! I'd like to register my Button Box. Its code is " + TOKEN
+        cases = [("claim " + TOKEN, True), (friendly, True),
+                 ("join " + TOKEN, False), (friendly + " extra", False),
+                 ("Hi! I'd like to register my Button Box. Its code is other", False)]
+        for text, accepted in cases:
+            with self.subTest(text=text):
+                self.path.unlink(missing_ok=True)
+                seen = []
+                def register(capabilities, text=text):
+                    seen.append(capabilities)
+                    return {"claim_id": ID, "claim_token": TOKEN, "expires_at": NOW + 600,
+                            "whatsapp_url": "https://wa.me/12025550101?text=" + quote(text)}
+                self.client.register = register
+                if accepted:
+                    self.assertEqual(self.claim.start()["status"], "awaiting_button")
+                else:
+                    with self.assertRaises(CloudClaimError):
+                        self.claim.start()
+                    self.assertFalse(self.path.exists())
+                self.assertIs(seen[0]["natural_registration_text"], True)
+
     def test_invalid_or_cross_origin_link_is_never_saved(self):
         self.client.register = lambda _capabilities: {
             "claim_id": ID, "claim_token": TOKEN, "whatsapp_url":
