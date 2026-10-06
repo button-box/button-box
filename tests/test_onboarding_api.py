@@ -454,6 +454,18 @@ class OnboardingAPITests(unittest.TestCase):
         response = self.client.request("GET", "/api/state")
         return response, json.loads(response["body"])
 
+    def test_root_reads_color_per_request_without_changing_cached_html(self):
+        from messagebox.identity import BOX_COLORS
+
+        with mock.patch("messagebox.onboarding.app.read_box_color") as color_reader:
+            for color in BOX_COLORS:
+                with self.subTest(color=color):
+                    color_reader.return_value = color
+                    response = self.client.request("GET", "/")
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertIn(f'<html lang="en" data-box-color="{color}">'.encode(), response["body"])
+                    self.assertEqual(response["body"].count(b"data-box-color="), 1)
+
     def test_root_is_local_asset_page_with_security_headers(self):
         response = self.client.request("GET", "/")
         self.assertEqual(response["status"], "200 OK")

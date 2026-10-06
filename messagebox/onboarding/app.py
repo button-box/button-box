@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from messagebox.identity import read_box_id
+from messagebox.identity import read_box_color, read_box_id
 from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
@@ -860,6 +860,11 @@ def create_app(
                         b"", "302 Found", [("Location", "/cloud-connect")]
                     )(start_response)
                 body, content_type = static_files["index.html"]
+                body = body.replace(
+                    b'<html lang="en">',
+                    f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"),
+                    1,
+                )
                 displayed_url = (
                     expected_origin + "/"
                     if tailscale_host
@@ -877,6 +882,11 @@ def create_app(
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
             if method == "GET" and path == "/cloud-connect" and cloud_mode and selected_mode == "HOME":
                 body, content_type = static_files["cloud-connect.html"]
+                body = body.replace(
+                    b'<html lang="en">',
+                    f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"),
+                    1,
+                )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
             if method == "GET" and path == "/api/cloud-claim" and cloud_mode and selected_mode == "HOME":
                 try:

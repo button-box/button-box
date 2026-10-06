@@ -166,6 +166,18 @@ class CloudOnboardingTests(unittest.TestCase):
             post_worker_init(mock.Mock(wsgi=lazy))
         create.assert_called_once_with(start_claim_watcher=True)
 
+    def test_claim_page_reads_color_per_request(self):
+        from messagebox.identity import BOX_COLORS
+
+        with mock.patch("messagebox.onboarding.app.read_box_color") as color_reader:
+            for color in BOX_COLORS:
+                with self.subTest(color=color):
+                    color_reader.return_value = color
+                    response = self.request("GET", "/cloud-connect")
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertIn(f'<html lang="en" data-box-color="{color}">'.encode(), response["body"])
+                    self.assertEqual(response["body"].count(b"data-box-color="), 1)
+
     def test_claim_page_and_qr_are_local_and_start_requires_same_origin(self):
         home = self.request("GET", "/")
         self.assertEqual(home["status"], "302 Found")

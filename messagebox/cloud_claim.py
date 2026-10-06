@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from messagebox.cloud_device import CLAIM_FILE, CloudDeviceClient, CloudDeviceError, atomic_json, capabilities, open_private_lock
+from messagebox.identity import read_box_color
 from messagebox.runtime_paths import NFC_HEALTH_FILE
 from messagebox.qrcodegen import QrCode
 
@@ -81,7 +82,7 @@ class CloudClaim:
                 nfc = False
             try:
                 # Cloud sends the friendly registration text only to boxes that accept it.
-                result = self.client.register({**capabilities(nfc=nfc), "natural_registration_text": True})
+                result = self.client.register({**capabilities(nfc=nfc), "natural_registration_text": True, "color": read_box_color()})
             except CloudDeviceError as exc:
                 raise CloudClaimError("cloud registration is unavailable") from exc
             if result.get("claimed") is True:

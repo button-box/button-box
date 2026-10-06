@@ -7,12 +7,13 @@ SERVICES="button sync poller dashboard nfc"
 
 usage() {
   cat <<'EOF'
-Usage: messageboxctl COMMAND [SERVICE...]
+Usage: messageboxctl COMMAND [ARGS...]
 
 Commands:
   status                    Show target and service status
   services                  Show enabled and active state for every service
   logs [SERVICE]            Follow all logs or one service log
+  set-color COLOR          Set shell color: yellow|pink-red|green|blue|white|black|beige
   reset-wifi               Delete saved Wi-Fi and restart onboarding
   enter-cloud-claim        Open cloud claim setup without changing Wi-Fi
   start|stop|restart        Operate the Button Box target
@@ -119,6 +120,25 @@ case "$command" in
         -u messagebox-whatsapp-pairing.service \
         -u messagebox-wifi-reset.service
     fi
+    ;;
+  set-color)
+    if [ "$#" -ne 1 ]; then
+      usage >&2
+      exit 2
+    fi
+    case "$1" in
+      yellow|pink-red|green|blue|white|black|beige) ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    require_root
+    color_stage=$(mktemp /etc/.messagebox-box-color.XXXXXX)
+    trap 'rm -f -- "$color_stage"' EXIT
+    trap 'exit 1' HUP INT TERM
+    printf '%s\n' "$1" > "$color_stage"
+    chown root:root "$color_stage"
+    chmod 0644 "$color_stage"
+    # The destination must be a file, never a directory (including a symlink to one).
+    mv -fT -- "$color_stage" /etc/messagebox-box-color
     ;;
   reset-wifi)
     require_root

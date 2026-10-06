@@ -41,7 +41,7 @@ from messagebox.contacts import ContactError, ContactStore, validate_contact
 from messagebox import cloud_runtime
 from messagebox.cloud_device import CloudDeviceError
 from messagebox.cloud_runtime import CloudRuntimeError
-from messagebox.identity import read_box_id
+from messagebox.identity import read_box_color, read_box_id
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
 from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
@@ -1199,15 +1199,21 @@ class Handler(BaseHTTPRequestHandler):
             body, content_type = static
             if url.path == "/":
                 if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
-                    return self._send(200, CLOUD_LOCAL_HTML, content_type)
+                    body = CLOUD_LOCAL_HTML
+                else:
+                    body = body.replace(
+                        b"__MESSAGEBOX_URL__", (self._trusted_origin() + "/").encode("ascii")
+                    ).replace(
+                        b"__CLOUD_CONNECT_LINK__",
+                        (b'<p><a id="home-cloud-dashboard" class="button" '
+                         b'href="https://button.box/dashboard" target="_blank" '
+                         b'rel="noopener noreferrer">Manage Button Box Cloud</a></p>'
+                         if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else b""),
+                    )
                 body = body.replace(
-                    b"__MESSAGEBOX_URL__", (self._trusted_origin() + "/").encode("ascii")
-                ).replace(
-                    b"__CLOUD_CONNECT_LINK__",
-                    (b'<p><a id="home-cloud-dashboard" class="button" '
-                     b'href="https://button.box/dashboard" target="_blank" '
-                     b'rel="noopener noreferrer">Manage Button Box Cloud</a></p>'
-                     if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else b""),
+                    b'<html lang="en">',
+                    f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"),
+                    1,
                 )
             return self._send(200, body, content_type)
         if self._reject_cloud_management(url.path):

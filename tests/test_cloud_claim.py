@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
+from messagebox.identity import read_box_color
 
 NOW = 1_800_000_000
 ID = "claim1234567890123456"
@@ -69,6 +70,22 @@ class ClaimTests(unittest.TestCase):
         self.client.claimed = True
         self.assertEqual(self.claim.status()["status"], "claimed")
         self.assertFalse(self.path.exists())
+
+    def test_registration_uses_manufactured_color_and_missing_file_default(self):
+        path = Path(self.temp.name) / "color"
+        for color in ("pink-red", None):
+            with self.subTest(color=color):
+                self.path.unlink(missing_ok=True)
+                if color is None:
+                    path.unlink()
+                else:
+                    path.write_text(color + "\n", encoding="ascii")
+                with mock.patch("messagebox.cloud_claim.read_box_color",
+                                side_effect=lambda: read_box_color(path)), \
+                     mock.patch.object(self.client, "register", wraps=self.client.register) as register:
+                    self.claim.start()
+                self.assertEqual(register.call_args.args[0]["color"], color or "yellow")
+                self.assertTrue(register.call_args.args[0]["natural_registration_text"])
 
     def test_optional_nfc_health_access_does_not_block_registration(self):
         for observed, expected in [(PermissionError("private runtime directory"), False),
