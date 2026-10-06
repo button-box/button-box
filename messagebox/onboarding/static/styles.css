@@ -11,6 +11,7 @@
   --danger: #a13326;
   --warning: #ffc94d;
   --action-soft: color-mix(in srgb, var(--action) 20%, white);
+  --action-glow: color-mix(in srgb, var(--action) 14%, transparent);
   --green-soft: #dff8e8;
   --green-dark: #128c4a;
   --yellow-soft: #fff3c4;
@@ -49,12 +50,17 @@
   --box-color: #ffffff;
   --action: #1a1a1a;
   --action-text: #ffffff;
+  /* An ink tint reads as gray; white and black boxes use the plain paper tint. */
+  --action-soft: var(--soft);
+  --action-glow: transparent;
 }
 
 :root[data-box-color="black"] {
   --box-color: #1a1a1a;
   --action: #1a1a1a;
   --action-text: #ffffff;
+  --action-soft: var(--soft);
+  --action-glow: transparent;
 }
 
 :root[data-box-color="beige"] {
@@ -70,7 +76,7 @@ body {
   min-width: 280px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--action) 14%, transparent), transparent 25rem),
+    radial-gradient(circle at 88% 0%, var(--action-glow), transparent 25rem),
     var(--background);
 }
 
