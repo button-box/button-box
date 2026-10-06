@@ -80,7 +80,6 @@ rsync -azR \
   "$REPO_DIR/./sounds/" \
   "$REPO_DIR/./messagebox/__init__.py" \
   "$REPO_DIR/./messagebox/button_send.py" \
-  "$REPO_DIR/./messagebox/business_send.py" \
   "$REPO_DIR/./messagebox/device_http.py" \
   "$REPO_DIR/./messagebox/cloud_device.py" \
   "$REPO_DIR/./messagebox/cloud_claim.py" \
@@ -101,7 +100,6 @@ rsync -azR \
   "$REPO_DIR/./messagebox/tailnet.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
-  "$REPO_DIR/./messagebox/business_receive.py" \
   "$REPO_DIR/./messagebox/wifi_change.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \

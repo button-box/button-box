@@ -60,13 +60,14 @@ class ModeTests(unittest.TestCase):
         self.marker.write_bytes(b"enabled\n")
         self.marker.chmod(0o600)
 
-    def cloud_transition_fixture(self):
+    def cloud_transition_fixture(self, transport=b"cloud"):
         configured = self.marker.parent / "configured"
         configured.write_bytes(b"configured\n")
         configured.chmod(0o640)
         env = self.root / "etc/messagebox/env"
         env.parent.mkdir(parents=True)
-        original = b"# preserve other settings\nMSGBOX_TRANSPORT=business\nMSGBOX_CLOUD_API_URL=https://example.invalid/cloud-api/v1\n"
+        original = (b"# preserve other settings\nMSGBOX_TRANSPORT=" + transport
+                    + b"\nMSGBOX_CLOUD_API_URL=https://example.invalid/cloud-api/v1\n")
         env.write_bytes(original)
         env.chmod(0o640)
         cloud_dir = self.root / "var/lib/messagebox-cloud"
@@ -89,8 +90,7 @@ class ModeTests(unittest.TestCase):
         runner = Runner()
         result = mode.enter_cloud_claim(**options, run=runner)
         self.assertEqual(result, mode.Mode.SETUP)
-        self.assertEqual(env.read_bytes(), original.replace(b"MSGBOX_TRANSPORT=business",
-                                                            b"MSGBOX_TRANSPORT=cloud"))
+        self.assertEqual(env.read_bytes(), original)
         self.assertEqual(self.marker.read_bytes(), b"enabled\n")
         self.assertEqual(household.read_bytes(), b"retained family recording")
         commands = [call[0] for call in runner.calls]
@@ -138,6 +138,23 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(env.read_bytes(), before)
         self.assertNotIn(["systemctl", "stop", "messagebox.target"],
                          [call[0] for call in runner.calls])
+
+    @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
+    def test_enter_cloud_claim_requires_cloud_transport(self, _geteuid):
+        for transport in (b"wacli", b"business"):
+            with self.subTest(transport=transport):
+                env, original, household, options = self.cloud_transition_fixture(transport)
+                runner = Runner()
+                with self.assertRaisesRegex(mode.ModeError, "not ready for cloud claim"):
+                    mode.enter_cloud_claim(**options, run=runner)
+                self.assertEqual(env.read_bytes(), original)
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(household.read_bytes(), b"retained family recording")
+                self.assertEqual(runner.calls, [])
+                for path in (env, household, options["configured_path"]):
+                    path.unlink()
+                for directory in (env.parent, options["cloud_dir"], household.parent):
+                    directory.rmdir()
 
     @mock.patch("messagebox.onboarding.mode.os.geteuid", return_value=0)
     def test_enter_cloud_claim_rejects_symlink_env_before_mutation(self, _geteuid):

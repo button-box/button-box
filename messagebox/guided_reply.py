@@ -312,7 +312,9 @@ def valid_account_scope(value):
     return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
 
 
-OUTBOX_TRANSPORTS = {"wacli", "business", "cloud"}
+OUTBOX_TRANSPORTS = {"wacli", "cloud"}
+# Jobs from the removed Business adapter still load so they are kept, unsent.
+RETIRED_OUTBOX_TRANSPORTS = {"business"}
 
 
 @contextmanager
@@ -422,7 +424,8 @@ class OutboxStore:
         # Jobs deployed before transport metadata existed were approved only
         # for the standalone wacli path. Never infer a newer transport.
         transport = data.get("transport", "wacli")
-        if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
+        if (not isinstance(transport, str)
+                or transport not in OUTBOX_TRANSPORTS | RETIRED_OUTBOX_TRANSPORTS):
             raise ValueError("unsupported outbox transport")
         return OutboxJob(
             message_id=data["message_id"],

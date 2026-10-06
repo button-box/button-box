@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 import queue
+import re
 import select
 import signal
 import subprocess
@@ -54,12 +55,6 @@ from messagebox.settings import SettingsReader, ringtone_path
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
 from messagebox import cloud_runtime, cloud_claim
 from messagebox.cloud_runtime import CloudRuntimeError
-from messagebox.business_send import (
-    BusinessSendClient,
-    BusinessSendRejected,
-    BusinessSendUncertain,
-    recipient_number,
-)
 
 
 MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
@@ -308,9 +303,16 @@ def caregiver_settings():
     return settings_reader.snapshot()
 
 
+TRANSPORTS = frozenset({"wacli", "cloud"})
+# The Business bench adapter was removed. Its tag is still read from old
+# recordings so they stay on the box and are never sent through another account.
+RETIRED_TRANSPORTS = frozenset({"business"})
+PERSON_JID = re.compile(r"[1-9][0-9]{6,14}@s\.whatsapp\.net")
+
+
 def transport_mode():
     mode = os.environ.get("MSGBOX_TRANSPORT", "wacli")
-    if mode not in {"wacli", "business", "cloud"}:
+    if mode not in TRANSPORTS:
         raise ValueError("unsupported message transport")
     return mode
 
@@ -599,10 +601,11 @@ def legacy_job_transport(path):
     if metadata is None:
         return None
     # Sidecars deployed before transport metadata existed belong to wacli.
+    # Retired transports stay recognized so their recordings are kept, unsent.
     transport = metadata.get("transport", "wacli")
     return (
         transport
-        if isinstance(transport, str) and transport in {"wacli", "business", "cloud"}
+        if isinstance(transport, str) and transport in TRANSPORTS | RETIRED_TRANSPORTS
         else None
     )
 
@@ -758,7 +761,7 @@ def send_legacy_outbox_file(fname):
     return False
 
 
-def stage_hold_release_business_job(fname):
+def stage_hold_release_cloud_job(fname):
     """Move an approved hold-release WAV into the keyed, durable send queue.
 
     The stable ID makes a crash after approving the job but before removing the
@@ -767,7 +770,7 @@ def stage_hold_release_business_job(fname):
     """
     path = os.path.join(OUTBOX_DIR, fname)
     mode = transport_mode()
-    if mode not in {"business", "cloud"} or legacy_job_transport(path) != mode:
+    if mode != "cloud" or legacy_job_transport(path) != mode:
         log_event("send_blocked", flow="hold_release", reason="transport")
         return False
     recipient = legacy_job_recipient(path)
@@ -775,7 +778,8 @@ def stage_hold_release_business_job(fname):
         log_event("send_blocked", flow="hold_release", reason="missing_recipient")
         return False
     try:
-        recipient_number(recipient)
+        if not PERSON_JID.fullmatch(recipient):
+            raise ValueError("unsupported recipient")
         milliseconds, _, raw_duration = fname[:-4].partition("-")
         duration = float(raw_duration)
         if not milliseconds.isdecimal() or duration <= 0:
@@ -785,7 +789,7 @@ def stage_hold_release_business_job(fname):
         scope = (legacy_job_metadata(path) or {}).get("account_scope")
         outbox_store.approve(path, recipient, "hold_release", duration, message_id,
                              account_scope=scope)
-    except (BusinessSendRejected, OSError, ValueError):
+    except (OSError, ValueError):
         log_event("send_blocked", flow="hold_release", reason="staging")
         return False
     try:
@@ -881,37 +885,6 @@ def _send_guided_job(job):
         finally:
             Path(ogg).unlink(missing_ok=True)
         return _send_cloud_upload(job)
-
-    if mode == "business":
-        try:
-            if job.recipient not in ContactStore(CONTACTS_FILE).allowed_jids():
-                raise BusinessSendRejected("recipient is no longer approved")
-            client = BusinessSendClient.from_environment()
-        except (BusinessSendRejected, ContactError, OSError):
-            os.remove(ogg)
-            outbox_store.set_state(job, "failed", increment_attempts=True)
-            log_event("outbox_failed", flow=job.flow_kind, reason="business_preflight")
-            return True
-
-        # A lost provider response is still ambiguous despite the keyed cloud
-        # reservation, so a child recording is never blindly retried.
-        job = outbox_store.set_state(job, "sending", increment_attempts=True)
-        try:
-            client.send_voice(ogg, job.recipient, job.message_id)
-        except BusinessSendRejected:
-            outbox_store.set_state(job, "failed")
-            log_event("outbox_failed", flow=job.flow_kind, reason="business_rejected")
-            return True
-        except BusinessSendUncertain:
-            outbox_store.set_state(job, "uncertain")
-            log_event("outbox_uncertain", flow=job.flow_kind, reason="business_send")
-            return True
-        finally:
-            os.remove(ogg)
-        outbox_store.complete(job)
-        send_success_notices.put(time.monotonic())
-        log_event("sent", flow=job.flow_kind, transport="business", dur=job.duration)
-        return True
 
     # Persist 'sending' before crossing the external side-effect boundary.  A
     # crash from here until completion becomes uncertain on restart, never an
@@ -1034,9 +1007,9 @@ def compatible_guided_jobs():
 def sender_loop():
     failures = 0
     while True:
-        if transport_mode() in {"business", "cloud"}:
+        if transport_mode() == "cloud":
             staged = all(
-                stage_hold_release_business_job(filename)
+                stage_hold_release_cloud_job(filename)
                 for filename in compatible_legacy_outbox_files()
             )
             if not staged:
@@ -1244,7 +1217,7 @@ def inbound_audio_authorized(metadata):
 def react_played(meta):
     if not meta or not meta.get("msgid") or not meta.get("chat"):
         return
-    if transport_mode() in {"business", "cloud"}:
+    if transport_mode() == "cloud":
         # The Cloud API played reaction is a separate, later integration.
         return
     try:
@@ -1477,7 +1450,7 @@ def play_warning_for_approval(path, session_id=None):
 
 
 def presence(kind, recipient):
-    if transport_mode() in {"business", "cloud"}:
+    if transport_mode() == "cloud":
         return
     subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
     subprocess.Popen(
@@ -1961,13 +1934,13 @@ def main():
 
     if "--drain" in sys.argv:
         ok = True
-        if transport_mode() in {"business", "cloud"}:
+        if transport_mode() == "cloud":
             for filename in compatible_legacy_outbox_files():
-                if not stage_hold_release_business_job(filename):
+                if not stage_hold_release_cloud_job(filename):
                     return 1
         for job in compatible_guided_jobs():
             ok = send_guided_job(job) and ok
-        if transport_mode() not in {"business", "cloud"}:
+        if transport_mode() != "cloud":
             for filename in compatible_legacy_outbox_files():
                 ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1

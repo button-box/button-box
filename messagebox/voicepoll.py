@@ -351,9 +351,6 @@ def main():
     if transport == "cloud":
         from messagebox.cloud_runtime import CloudRuntime
         return CloudRuntime().run()
-    if transport == "business":
-        from messagebox.business_receive import main as business_main
-        return business_main()
     if transport != "wacli":
         raise ValueError("unsupported message transport")
     seen = load_seen()
