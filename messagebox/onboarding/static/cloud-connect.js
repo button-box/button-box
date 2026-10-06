@@ -12,6 +12,7 @@ let actionPending = false;
 let actionVersion = 0;
 let actionError = "";
 let currentStatus = "";
+let autoFinishTried = false;
 
 function render(data) {
   if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed"].includes(data.status)) {
@@ -32,9 +33,15 @@ function render(data) {
     not_started: "Start a connection link when the box is on home Wi-Fi.",
     awaiting_button: "Send the prepared WhatsApp message, then press the physical box button once.",
     waiting_for_whatsapp: "Button press received. Waiting for WhatsApp to finish registering your box.",
-    claimed: "This box is connected. Continue trial setup in WhatsApp or the cloud dashboard.",
+    claimed: "This box is connected. Tap Finish box setup, then send your first voice message in WhatsApp.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] || "Connection status is unavailable. Try again shortly.";
+  // Runtime services start only after completion, so finish once by itself as
+  // soon as the box is registered. The button stays as the manual fallback.
+  if (data.status === "claimed" && !autoFinishTried && !finishing && !actionPending) {
+    autoFinishTried = true;
+    finishSetup();
+  }
 }
 
 async function refresh() {
@@ -79,7 +86,8 @@ copy.addEventListener("click", async () => {
     status.textContent = "Copy is unavailable here. Use Open WhatsApp instead.";
   }
 });
-complete.addEventListener("click", async () => {
+async function finishSetup() {
+  if (finishing || actionPending) return;
   complete.disabled = true;
   actionPending = true;
   actionVersion++;
@@ -93,15 +101,16 @@ complete.addEventListener("click", async () => {
     });
     if (!response.ok) throw new Error("unavailable");
     finishing = true;
-    status.textContent = "Box setup is finishing. The local dashboard will open shortly.";
+    status.textContent = "Box setup is finishing. Now send your first voice message in WhatsApp. The local dashboard will open shortly.";
     window.setTimeout(() => { window.location.href = "/"; }, 5000);
   } catch {
     complete.disabled = false;
-    actionError = "Could not finish setup. Try again shortly.";
+    actionError = "Could not finish setup. Tap Finish box setup to try again.";
     status.textContent = actionError;
   } finally {
     actionPending = false;
   }
-});
+}
+complete.addEventListener("click", finishSetup);
 refresh();
 window.setInterval(refresh, 3000);

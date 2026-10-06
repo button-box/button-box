@@ -16,6 +16,9 @@ The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
 link and QR code. A physical button press confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
+The setup page sends that completion request by itself once the claim status
+becomes claimed, so the first WhatsApp voice message can play without an extra
+tap. The *Finish box setup* button stays as the manual fallback.
 
 In runtime cloud mode, the local Home, Setup and Advanced pages link to
 `https://button.box/dashboard` for cloud connection, recipient and settings
