@@ -261,7 +261,7 @@ def _verify_production_nfc_clear(production):
 
 def _actual_transport_mode():
     mode = os.environ.get("MSGBOX_TRANSPORT")
-    if mode not in {"wacli", "business", "cloud"}:
+    if mode not in {"wacli", "cloud"}:
         raise SimulationError("runtime transport is invalid")
     if mode != "wacli":
         raise SimulationError("scratch receiver requires the actual wacli mode")

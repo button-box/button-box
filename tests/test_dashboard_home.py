@@ -85,7 +85,7 @@ class DashboardHomeTests(unittest.TestCase):
         self.assertNotIn('href="/cloud-connect"', body)
 
     def test_other_runtime_modes_remove_the_cloud_link_placeholder(self):
-        for transport in ("wacli", "business", ""):
+        for transport in ("wacli", ""):
             with self.subTest(transport=transport):
                 body, links = self.home(transport)
                 self.assertNotIn("home-cloud-dashboard", links)

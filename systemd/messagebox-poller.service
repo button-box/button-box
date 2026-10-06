@@ -15,7 +15,7 @@ EnvironmentFile=-/run/messagebox-audio/audio.env
 Environment=HOME=/var/lib/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 UMask=0077
-ExecStartPre=/bin/sh -c 'if [ "$MSGBOX_TRANSPORT" = business ] || [ "$MSGBOX_TRANSPORT" = cloud ]; then exit 0; fi; test -x /usr/local/bin/wacli'
+ExecStartPre=/bin/sh -c 'if [ "$MSGBOX_TRANSPORT" = cloud ]; then exit 0; fi; test -x /usr/local/bin/wacli'
 ExecStart=/usr/bin/python3 -m messagebox.voicepoll
 Restart=always
 RestartSec=5

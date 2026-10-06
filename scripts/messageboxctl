@@ -15,7 +15,7 @@ Commands:
   logs [SERVICE]            Follow all logs or one service log
   set-color COLOR          Set shell color: yellow|pink-red|green|blue|white|black|beige
   reset-wifi               Delete saved Wi-Fi and restart onboarding
-  enter-cloud-claim        Open cloud claim setup without changing Wi-Fi
+  enter-cloud-claim        Reopen cloud claim setup on a cloud box without changing Wi-Fi
   start|stop|restart        Operate the Button Box target
   enable SERVICE...         Select services; start them if the target is active
   disable SERVICE...        Stop and deselect services

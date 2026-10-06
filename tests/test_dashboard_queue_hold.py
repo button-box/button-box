@@ -406,7 +406,7 @@ class DashboardQueueHoldTests(unittest.TestCase):
             for expires_at in (1_700_000_001, 2_000_000_000):
                 metadata["expires_at"] = expires_at
                 metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-                for transport in ("wacli", "business"):
+                for transport in ("wacli",):
                     with self.subTest(transport=transport, expires_at=expires_at):
                         response = {}
                         handler._send = lambda code, body, ctype="application/json": response.update(

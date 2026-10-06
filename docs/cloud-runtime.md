@@ -1,13 +1,16 @@
 # Cloud runtime boundary
 
 `MSGBOX_TRANSPORT=cloud` selects the authenticated Cloud API v1 device path. The
-default `wacli` path remains available. The transitional `business` adapter is
-retained for existing prototype installations and rollback.
+default `wacli` path remains available. These are the only two connection modes.
+The earlier `business` adapter was removed: `MSGBOX_TRANSPORT=business` now stops
+the button and poller services with `unsupported message transport`, and the
+wacli sync service does not start. Recordings tagged `business` stay on the box
+and are never sent through either remaining mode.
 Queued outbound recordings remain bound to the transport that approved them.
 Changing transport preserves other-mode work without sending it; return to its
 original transport to resume eligible pending jobs. For compatibility with older
 standalone releases, missing transport metadata is treated as `wacli`. Older
-business/cloud builds also created untagged hold-release WAVs: inspect and
+cloud builds also created untagged hold-release WAVs: inspect and
 preserve these before changing modes, and do not resume them until their
 original transport is established. Never infer it from the current mode. Cloud
 audio remains subject to cloud authorization and cannot be played through
@@ -170,7 +173,7 @@ acceptance timestamp, so a recovered acceptance must follow a nonaccepted
 observation no more than 30 seconds old. Acceptance discovered after a longer gap
 stays silent. Each cue expires 30 seconds after its first verified acceptance
 observation; waiting for a busy button owner never extends that deadline.
-Standalone wacli and business send confirmation behavior is unchanged.
+Standalone wacli send confirmation behavior is unchanged.
 
 Pending NFC operations retain their original request IDs across restart. The
 poller reports pairing as applied only with a matching committed success receipt.
@@ -185,13 +188,13 @@ rollback, preserve current household files, and run `make check`. On an
 existing box, the bounded updater does not rerun full setup: first create
 `/var/lib/messagebox-cloud` as `messagebox:messagebox-settings` with mode
 `2770` using the reviewed tmpfiles directive, after the baseline backup.
-After applying the bounded release on an already configured business box,
-run `sudo messageboxctl enter-cloud-claim`. It validates the configured
-marker, private transport config and cloud directory, then changes only
-`MSGBOX_TRANSPORT=business` to `cloud`, enters setup mode and starts the
-local claim portal. It preserves Wi-Fi profiles, household recordings/state,
-device identity, credentials and the release marker. An activation failure
-restores the prior transport and runtime mode; check its reported error and
+To reopen the claim portal on a configured box that already has
+`MSGBOX_TRANSPORT=cloud`, run `sudo messageboxctl enter-cloud-claim`. It validates
+the configured marker, private transport config and cloud directory, then enters
+setup mode and starts the local claim portal. It does not change the connection
+mode and refuses any other `MSGBOX_TRANSPORT` value. It preserves Wi-Fi profiles,
+household recordings/state, device identity, credentials and the release marker.
+An activation failure restores the runtime mode; check its reported error and
 service state before retrying. Repeating the command in cloud setup mode
 resumes the portal without resetting Wi-Fi or household data.
 Verify that the setup portal, physical button process, runtime poller and

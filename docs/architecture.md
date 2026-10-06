@@ -37,12 +37,6 @@ pinned client delegates them to the active sync connection immediately.
 Commands that require exclusive store access, such as recipient refresh, pause
 sync and retain their bounded lock wait.
 
-In the transitional Business transport, the same poller service reads an ordered
-Worker audio inbox, commits each WAV and route sidecar locally, then
-acknowledges its exact cursor. The wacli sync service skips startup in this
-mode. Business sends use keyed reservations; Cloud API played reactions are
-still pending.
-
 In cloud mode, the same physical runtime uses an authenticated device client.
 The service supplies scoped family membership, delivery permissions and bounded
 commands. The device owns recording, playback, NFC, durable local queues and

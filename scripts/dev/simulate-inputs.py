@@ -398,7 +398,7 @@ def send_generated(runtime, manifest):
             path = Path(runtime.OUTBOX_DIR) / filename
             if runtime.legacy_job_recipient(str(path)) not in manifest["recipients"]:
                 raise SimulationError("generated recording route does not match authorization")
-            if not runtime.stage_hold_release_business_job(filename):
+            if not runtime.stage_hold_release_cloud_job(filename):
                 raise SimulationError("generated recording staging failed")
     for job in runtime.outbox_store.jobs():
         verify_routes(runtime, manifest)
