@@ -17,6 +17,11 @@ _ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _TOKEN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
+def _registration_texts(token):
+    # Older Cloud releases prefill the bare command; newer ones a friendly request.
+    return ("claim " + token, "Hi! I'd like to register my Button Box. Its code is " + token)
+
+
 class CloudClaimError(Exception):
     """A safe claim error without tokens or device identity."""
 
@@ -62,7 +67,8 @@ class CloudClaim:
             except OSError:
                 nfc = False
             try:
-                result = self.client.register(capabilities(nfc=nfc))
+                # Cloud sends the friendly registration text only to boxes that accept it.
+                result = self.client.register({**capabilities(nfc=nfc), "natural_registration_text": True})
             except CloudDeviceError as exc:
                 raise CloudClaimError("cloud registration is unavailable") from exc
             if result.get("claimed") is True:
@@ -79,7 +85,7 @@ class CloudClaim:
             text = parse_qs(parsed.query).get("text", [])
             if (parsed.scheme != "https" or parsed.netloc != "wa.me"
                     or not re.fullmatch(r"/[1-9][0-9]{6,14}", parsed.path)
-                    or len(text) != 1 or text[0] != "claim " + token
+                    or len(text) != 1 or text[0] not in _registration_texts(token)
                     or parsed.fragment or parsed.username or parsed.password):
                 raise CloudClaimError("cloud claim link is invalid")
             document = {"claim_id": claim_id, "expires_at": expires,

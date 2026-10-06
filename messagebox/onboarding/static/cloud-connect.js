@@ -31,7 +31,7 @@ function render(data) {
   status.textContent = actionError || {
     not_started: "Start a connection link when the box is on home Wi-Fi.",
     awaiting_button: "Send the prepared WhatsApp message, then press the physical box button once.",
-    waiting_for_whatsapp: "Button press received. Waiting for the WhatsApp claim to complete.",
+    waiting_for_whatsapp: "Button press received. Waiting for WhatsApp to finish registering your box.",
     claimed: "This box is connected. Continue trial setup in WhatsApp or the cloud dashboard.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] || "Connection status is unavailable. Try again shortly.";
