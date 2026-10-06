@@ -6,6 +6,8 @@ const qr = document.getElementById("cloud-qr");
 const copy = document.getElementById("cloud-copy");
 const expiry = document.getElementById("cloud-expiry");
 const cancel = document.getElementById("cloud-cancel");
+const title = document.getElementById("cloud-title");
+const intro = document.getElementById("cloud-intro");
 let currentLink = "";
 let currentClaim = "";
 let actionPending = false;
@@ -25,6 +27,8 @@ function render(data) {
   cancel.hidden = !(waiting || cancelling) || !currentClaim;
   cancel.textContent = cancelling ? "Retry cancellation" : "Cancel connection";
   start.hidden = waiting || cancelling || data.status === "claimed";
+  title.textContent = data.status === "claimed" ? "All set!" : "Welcome!";
+  intro.hidden = data.status === "claimed";
   if (waiting) {
     currentLink = data.whatsapp_url;
     link.href = currentLink;
