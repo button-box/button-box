@@ -410,15 +410,15 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
   margin: 0 0 1.5rem;
   border-radius: 50%;
   background: var(--action);
-  box-shadow: 0 0 0 0 rgba(105, 197, 165, 0.55);
+  box-shadow: 0 0 0 0 var(--action-glow);
   animation: pulse 1.8s infinite;
 }
 
 .page-error { margin-top: 1.5rem; font-weight: 700; }
 
 @keyframes pulse {
-  70% { box-shadow: 0 0 0 1rem rgba(105, 197, 165, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(105, 197, 165, 0); }
+  70% { box-shadow: 0 0 0 1rem transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 @media (min-width: 56.25rem) {
@@ -430,7 +430,15 @@ button.compact { min-height: 2.5rem; padding: 0.45rem 0.8rem; }
   .shortcut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-.shell.single-page { display: block; max-width: 44rem; }
+.shell.single-page {
+  display: block;
+  max-width: 36rem;
+  padding: max(2.5rem, env(safe-area-inset-top)) 1.5rem 3rem;
+}
+.single-page .card { display: grid; gap: 1.5rem; }
+.single-page .card > * { margin: 0; }
+.single-page .card > button { width: 100%; }
+.single-page .settings-detail { margin-top: 0.5rem; }
 
 @media (max-width: 24rem) {
   .two-column, .inline-control { grid-template-columns: 1fr; }

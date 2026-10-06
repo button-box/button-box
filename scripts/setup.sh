@@ -20,7 +20,7 @@ SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
 PACKAGE_PYTHON="__init__.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py cloud_events.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
-make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py"
+make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
@@ -51,6 +51,7 @@ done
 for path in \
   config/env.example \
   config/requirements-nfc.txt \
+  config/journald.conf.d/messagebox.conf \
   config/onboarding/comitup.conf.template \
   config/onboarding/comitup-dbus.conf \
   config/onboarding/firewall.nft \
@@ -73,6 +74,8 @@ for path in \
   systemd/messagebox-dash.service \
   systemd/messagebox-wifi-change.service \
   systemd/messagebox-wifi-change.path \
+  systemd/messagebox-wifi-watchdog.service \
+  systemd/messagebox-wifi-watchdog.timer \
   systemd/messagebox-nfc.service \
   systemd/messagebox-mode-generator \
   systemd/messagebox-mode-reconcile.service \
@@ -442,6 +445,16 @@ for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target 
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/onboarding/$name" "/etc/systemd/system/$name"
 done
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d /var/log/journal
+sudo install -o root -g root -m 0644 "$REPO_DIR/config/journald.conf.d/messagebox.conf" /etc/systemd/journald.conf.d/messagebox.conf
+sudo systemctl restart systemd-journald.service
+sudo journalctl --flush
+sudo env PYTHONPATH=/opt/messagebox python3 -m messagebox.wifi_watchdog --configure
+for name in messagebox-wifi-watchdog.service messagebox-wifi-watchdog.timer; do
+  sudo install -o root -g root -m 0644 "$REPO_DIR/systemd/$name" "/etc/systemd/system/$name"
+done
+sudo systemctl daemon-reload
+sudo systemctl enable messagebox-wifi-watchdog.timer
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
 sudo systemctl start messagebox-mode-reconcile.path
@@ -458,6 +471,8 @@ sudo systemd-analyze verify \
   /etc/systemd/system/messagebox-dash.service \
   /etc/systemd/system/messagebox-wifi-change.service \
   /etc/systemd/system/messagebox-wifi-change.path \
+  /etc/systemd/system/messagebox-wifi-watchdog.service \
+  /etc/systemd/system/messagebox-wifi-watchdog.timer \
   /etc/systemd/system/messagebox-nfc.service \
   /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \

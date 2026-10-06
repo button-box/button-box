@@ -1,10 +1,11 @@
 # Dashboard support identity
 
-The shared onboarding and household dashboard show the physical inventory **Box ID**
-in the support footer, not the header. Both `/api/state` implementations return
-`box_id`: an assigned `BOX-` number or JSON `null`. This is public household support
-information, not a credential. It is never derived from the hostname, WhatsApp
-account, NFC card, or message identifiers.
+Both setup and runtime `/api/state` implementations return `box_id`: an assigned
+`BOX-` number or JSON `null`. The Wi-Fi setup screens omit the support footer,
+identity Copy control and owner community link so the flow focuses on getting
+Button Box online. Identity remains available to operator commands and the runtime
+API. It is never derived from the hostname, WhatsApp account, family card, or
+message identifiers.
 
 ## Assign an existing inventory ID
 
@@ -25,13 +26,10 @@ copies a developer's identity file or assigns a sample ID.
 
 Accepted IDs are `BOX-` followed by 1–9 digits, with no leading zero. The entire
 file must be at most 32 bytes, including whitespace. Missing, unreadable, malformed,
-non-ASCII, symlink or non-regular files produce `null`, **Not assigned**, and a
-disabled Copy button. No raw file contents or OS errors are exposed.
+non-ASCII, symlink or non-regular files produce JSON `null`. No raw file contents or OS errors are exposed.
 
-Reload any dashboard route to read a changed assignment. Verify the footer on both
-the setup and runtime interfaces during the unit's acceptance test. Copy uses the
-existing secure clipboard API or plain-HTTP fallback, with manual selection guidance
-if copying is denied.
+Read `/api/state` again to see a changed assignment. Verify the reported assignment against the physical label during the
+unit's acceptance test.
 
 ## Persistence and recovery
 
@@ -41,7 +39,7 @@ SD-card reimage does **not** automatically restore it. Reconcile the physical la
 and inventory record and reinstall the same verified assignment after reimage.
 Never clone an assigned identity onto a different physical unit.
 
-An assigned ID, working Copy button or queued ringtone request does not prove that
+An assigned ID or queued ringtone request does not prove that
 the unit receives, plays, records or delivers WhatsApp messages. Those remain
 separate physical acceptance checks.
 

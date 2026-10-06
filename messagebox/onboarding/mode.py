@@ -256,6 +256,9 @@ def reconcile(
                     check=True,
                     timeout=30,
                 )
+            # Comitup PartOf stops the listener on reset; reapply its own gate.
+            run(["systemctl", "start", "messagebox-onboarding-voice-gate.service"],
+                check=True, timeout=30)
         elif mode is Mode.RUNTIME:
             run(["systemctl", "stop", "comitup.service"], check=True, timeout=30)
             if setup_active or (pending_reason == "completion" and not runtime_active):

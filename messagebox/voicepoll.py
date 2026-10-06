@@ -14,6 +14,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+from messagebox.event_log import append_event
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.runtime_paths import CONTACTS_FILE
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
@@ -92,9 +93,7 @@ def log_event(**ev):
     """Append an analytics event (best-effort; never breaks the pipeline)."""
     try:
         ev["ts"] = time.time()
-        os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
-        with open(EVENTS_FILE, "a") as f:
-            f.write(json.dumps(ev) + "\n")
+        append_event(EVENTS_FILE, ev)
     except Exception:
         print("event log error", flush=True)
 # EQ for the small boxy speaker: cut low-mid mud, lift presence/highs, then

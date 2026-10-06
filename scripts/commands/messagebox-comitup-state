@@ -6,6 +6,7 @@ case "${1:-}" in
     exec /usr/bin/systemctl --no-block start comitup-web.service
     ;;
   CONNECTED)
+    PYTHONPATH=/opt/messagebox /usr/bin/python3 -m messagebox.wifi_watchdog --configure
     exit 0
     ;;
   *)

@@ -123,6 +123,16 @@ class ClaimButtonTests(unittest.TestCase):
                 self.assertEqual(call.args[0][-1], cues[name][0])
                 self.assertEqual(call.kwargs, {"check": True, "timeout": 5})
 
+    def test_registration_failure_reuses_unrecognized_family_card_tone(self):
+        self.assertEqual(button_send.NFC_UNKNOWN_BEEP, "fail")
+        with mock.patch.object(button_send, "caregiver_settings", return_value={"nfc_confirmation_beep": False}), \
+             mock.patch.object(button_send, "beep") as beep, \
+             mock.patch.object(button_send, "nfc_announcement_store"), \
+             mock.patch.object(button_send, "log_event"):
+            self.assertFalse(button_send._play_nfc_prompt("synthetic-card", "unknown", ""))
+            beep.assert_called_once_with(button_send.NFC_UNKNOWN_BEEP)
+        self.assertEqual(self.cues[button_send.NFC_UNKNOWN_BEEP][1:], button_send.BEEPS["fail"][1:])
+
     def test_ffmpeg_and_aplay_failures_never_prevent_confirmation(self):
         for error in (OSError("private"), subprocess.CalledProcessError(1, "audio"),
                       subprocess.TimeoutExpired("audio", 2)):

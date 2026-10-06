@@ -158,6 +158,8 @@ def execute_change(
     try:
         _run(runner, command, input_text=password_input)
         candidate_uuid = _active_uuid(runner)
+        _run(runner, ["nmcli", "connection", "modify", "uuid", candidate_uuid,
+                      "connection.autoconnect-retries", "0"])
         result = (checker or ConnectivityChecker()).check()
         if result.get("ok") is not True or set(result.get("proof", ())) != PROOFS:
             raise WifiChangeError("The new Wi-Fi did not pass connectivity checks")

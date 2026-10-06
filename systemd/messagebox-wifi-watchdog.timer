@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Button Box runtime Wi-Fi every 30 seconds
+ConditionPathExists=!/etc/messagebox-onboarding/enabled
+PartOf=messagebox.target
+
+[Timer]
+OnActiveSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=messagebox.target

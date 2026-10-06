@@ -172,7 +172,7 @@ test("pairing submit exposes pending state and restores its control after succes
   const button = h.node("start-whatsapp-pairing");
   const phone = h.node("whatsapp-phone");
   button.type = "submit";
-  button.textContent = "Get pairing code";
+  button.textContent = "Get WhatsApp code";
   form.children = [button];
   phone.value = "+15555550123";
 
@@ -197,7 +197,7 @@ test("pairing submit exposes pending state and restores its control after succes
   await successRequest;
   expect(button.disabled).toBe(false);
   expect(button.getAttribute("aria-busy")).toBe(null);
-  expect(button.textContent).toBe("Get pairing code");
+  expect(button.textContent).toBe("Get WhatsApp code");
 
   const rejection = deferred();
   h.context.fetch = async (url, options) => {
@@ -218,7 +218,7 @@ test("pairing submit exposes pending state and restores its control after succes
   await rejectedRequest;
   expect(button.disabled).toBe(false);
   expect(button.getAttribute("aria-busy")).toBe(null);
-  expect(button.textContent).toBe("Get pairing code");
+  expect(button.textContent).toBe("Get WhatsApp code");
   expect(h.node("page-error").textContent).toBe("Pairing already in progress");
   expect(phone.focused).toBe(true);
   expect(h.calls.map(call => call.url)).toEqual(["/whatsapp/pair/start", "/whatsapp/pair/start"]);

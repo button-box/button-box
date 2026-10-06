@@ -178,7 +178,7 @@ async function scanNetworks() {
 
 function pairingErrorCopy(error, status) {
   if (status === "expired" || error === "PAIRING_INTERRUPTED") {
-    return "The pairing code expired or the link was interrupted. No account was saved.";
+    return "The WhatsApp code expired or the link was interrupted. No account was saved.";
   }
   const messages = {
     AUTHENTICATION_FAILED: "WhatsApp did not confirm the linked account. No account was saved.",
@@ -316,7 +316,7 @@ function applyWhatsAppState(state, { manage = false } = {}) {
       break;
     case "starting":
       showView("pairing-progress");
-      document.getElementById("pairing-progress-copy").textContent = "Requesting a private pairing code…";
+      document.getElementById("pairing-progress-copy").textContent = "Requesting a WhatsApp connection code…";
       break;
     case "bootstrapping":
       showView("pairing-progress");
@@ -984,19 +984,6 @@ function renderHome(state) {
   }
 }
 
-function renderIdentity(state) {
-  const id = typeof state.box_id === "string" && /^BOX-[1-9][0-9]{0,8}$/.test(state.box_id)
-    ? state.box_id : null;
-  const label = document.getElementById("box-id");
-  const button = document.getElementById("copy-box-id");
-  if (label.textContent !== (id || "Not assigned")) {
-    button.textContent = "Copy";
-    document.getElementById("box-id-status").textContent = "";
-  }
-  label.textContent = id || "Not assigned";
-  button.disabled = !id;
-}
-
 function populateSettings(payload) {
   currentSettings = payload.settings;
   const value = currentSettings;
@@ -1287,7 +1274,6 @@ async function ringNow() {
 }
 
 async function route() {
-  renderIdentity(currentState);
   const routeName = location.hash.slice(1) || "home";
   if (isCloud() && currentState.mode !== "RUNTIME") {
     document.getElementById("primary-nav").hidden = true;
@@ -1563,12 +1549,6 @@ document.getElementById("preview-ringtone").addEventListener("click", async () =
   }
 });
 document.getElementById("ring-now").addEventListener("click", ringNow);
-document.getElementById("copy-box-id").addEventListener("click", () => {
-  const button = document.getElementById("copy-box-id");
-  if (button.disabled) return;
-  return copyText(document.getElementById("box-id").textContent, button,
-    document.getElementById("box-id-status"), "Box ID copied.");
-});
 document.getElementById("skip-link").addEventListener("click", (event) => {
   event.preventDefault();
   document.getElementById("main").focus();

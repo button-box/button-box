@@ -103,6 +103,48 @@ class SendSuccessTests(unittest.TestCase):
             self.assertFalse(button_send.maybe_play_send_success())
         self.assertTrue(self.notices.empty())
 
+    def test_cloud_scope_failure_logs_once_with_reminder_and_resets_on_recovery(self):
+        now = [0]
+        limiter = button_send.UnavailableEvents(clock=lambda: now[0])
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "unavailable_events", limiter), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", side_effect=ValueError("private")) as scope, \
+             mock.patch.object(button_send, "log_event") as event, \
+             mock.patch.object(button_send.cloud_audio_requests, "owner") as owner:
+            for value in (0, 1, 60, 299, 300):
+                now[0] = value
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertEqual(event.call_count, 2)
+            scope.side_effect = None
+            scope.return_value = "a" * 64
+            owner.return_value.__enter__.return_value = False
+            button_send.maybe_play_cloud_sound()
+            scope.side_effect = ValueError("private")
+            button_send.maybe_play_cloud_sound()
+            self.assertEqual(event.call_count, 3)
+            event.assert_called_with("cloud_sound_unavailable")
+
+    def test_missing_receipt_clip_failure_is_throttled_and_resets_after_success(self):
+        limiter = button_send.UnavailableEvents(clock=lambda: 100)
+        notice = types.SimpleNamespace(clip="/synthetic/missing.wav", listener_name="Synthetic listener")
+        store = mock.Mock()
+        store.claim_next.return_value = notice
+        with mock.patch.object(button_send, "unavailable_events", limiter), \
+             mock.patch.object(button_send, "receipt_store", store), \
+             mock.patch.object(button_send, "announcement_gate"), \
+             mock.patch.object(button_send.os.path, "exists", return_value=False) as exists, \
+             mock.patch.object(button_send, "play_audio_ordinary"), \
+             mock.patch.object(button_send, "log_event") as event:
+            button_send.play_pending_listened(limit=1)
+            button_send.play_pending_listened(limit=1)
+            self.assertEqual(event.call_count, 1)
+            exists.return_value = True
+            button_send.play_pending_listened(limit=1)
+            exists.return_value = False
+            button_send.play_pending_listened(limit=1)
+            self.assertEqual([call.args[0] for call in event.call_args_list],
+                             ["listen_announcement_blocked", "listen_announced", "listen_announcement_blocked"])
+
     def test_cloud_success_is_durable_scoped_and_consumed_by_idle_owner_once(self):
         store = button_send.AudioRequests(Path(self.directory.name) / "audio-requests", clock=lambda: 100)
         key = button_send.success_key("a" * 64, "local-test")

@@ -68,6 +68,7 @@ REPO_DIR=.
 rsync -azR \
   "$REPO_DIR/./config/env.example" \
   "$REPO_DIR/./config/onboarding/" \
+  "$REPO_DIR/./config/journald.conf.d/" \
   "$REPO_DIR/./config/requirements-nfc.txt" \
   "$REPO_DIR/./scripts/install/" \
   "$REPO_DIR/./scripts/commands/messagebox-comitup-state" \
@@ -101,6 +102,8 @@ rsync -azR \
   "$REPO_DIR/./messagebox/syncloop.sh" \
   "$REPO_DIR/./messagebox/voicepoll.py" \
   "$REPO_DIR/./messagebox/wifi_change.py" \
+  "$REPO_DIR/./messagebox/wifi_watchdog.py" \
+  "$REPO_DIR/./messagebox/event_log.py" \
   "$REPO_DIR/./messagebox/dashboard/__init__.py" \
   "$REPO_DIR/./messagebox/dashboard/app.py" \
   "$REPO_DIR/./messagebox/onboarding/__init__.py" \

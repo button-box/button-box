@@ -66,6 +66,8 @@ class WifiChangeTests(unittest.TestCase):
         fallback.assert_not_called()
         commands = [command for command, _kwargs in runner.calls]
         self.assertNotIn("private-password", " ".join(" ".join(command) for command in commands))
+        self.assertIn(["nmcli", "connection", "modify", "uuid", "2222-bbbb",
+                       "connection.autoconnect-retries", "0"], commands)
         connect = next(call for call in runner.calls if "connect" in call[0])
         self.assertEqual(connect[1]["input"], "private-password\n")
         self.assertEqual(commands[-1], ["nmcli", "connection", "delete", "uuid", "1111-aaaa"])
