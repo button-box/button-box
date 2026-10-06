@@ -5,16 +5,13 @@ const link = document.getElementById("cloud-link");
 const qr = document.getElementById("cloud-qr");
 const copy = document.getElementById("cloud-copy");
 const expiry = document.getElementById("cloud-expiry");
-const complete = document.getElementById("cloud-complete");
 const cancel = document.getElementById("cloud-cancel");
 let currentLink = "";
 let currentClaim = "";
-let finishing = false;
 let actionPending = false;
 let actionVersion = 0;
 let actionError = "";
 let currentStatus = "";
-let autoFinishTried = false;
 
 function render(data) {
   if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed", "cancelled"].includes(data.status)) {
@@ -28,7 +25,6 @@ function render(data) {
   cancel.hidden = !(waiting || cancelling) || !currentClaim;
   cancel.textContent = cancelling ? "Retry cancellation" : "Cancel connection";
   start.hidden = waiting || cancelling || data.status === "claimed";
-  complete.hidden = data.status !== "claimed";
   if (waiting) {
     currentLink = data.whatsapp_url;
     link.href = currentLink;
@@ -43,37 +39,31 @@ function render(data) {
     not_started: "",
     awaiting_button: "Open WhatsApp and send the message. Then press the button on your box once.",
     waiting_for_whatsapp: "Button press received. Send the message in WhatsApp to finish connecting.",
-    claimed: "You're connected! Continue in WhatsApp to finish setup.",
+    claimed: "Your box is ready. Go back to WhatsApp.",
     cancelled: "Connection cancelled. Get a new connection link when you're ready.",
     cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] ?? "Connection status is unavailable. Try again shortly.");
-  // Runtime services start only after completion, so finish once by itself as
-  // soon as the box is registered. The button stays as the manual fallback.
-  if (data.status === "claimed" && !autoFinishTried && !finishing && !actionPending) {
-    autoFinishTried = true;
-    finishSetup();
-  }
 }
 
 async function refresh() {
-  if (finishing || actionPending) return;
+  if (actionPending) return;
   const version = actionVersion;
   try {
     const response = await fetch("/api/cloud-claim", { cache: "no-store" });
     if (!response.ok) throw new Error("unavailable");
     const data = await response.json();
     // A poll started before a click must not replace that action's result.
-    if (version === actionVersion && !finishing && !actionPending) render(data);
+    if (version === actionVersion && !actionPending) render(data);
   } catch {
-    if (version === actionVersion && !finishing && !actionPending && !actionError) {
+    if (version === actionVersion && !actionPending && !actionError) {
       status.textContent = "Connection status is unavailable. Try again shortly.";
     }
   }
 }
 
 start.addEventListener("click", async () => {
-  if (actionPending || finishing) return;
+  if (actionPending) return;
   start.disabled = true;
   actionPending = true;
   actionVersion++;
@@ -95,7 +85,7 @@ start.addEventListener("click", async () => {
   }
 });
 cancel.addEventListener("click", async () => {
-  if (actionPending || finishing || !currentClaim) return;
+  if (actionPending || !currentClaim) return;
   const claimId = currentClaim;
   cancel.disabled = true;
   actionPending = true;
@@ -132,31 +122,5 @@ copy.addEventListener("click", async () => {
     status.textContent = "Copy is unavailable here. Use Open WhatsApp instead.";
   }
 });
-async function finishSetup() {
-  if (finishing || actionPending) return;
-  complete.disabled = true;
-  actionPending = true;
-  actionVersion++;
-  actionError = "";
-  status.textContent = "Finishing box setup…";
-  try {
-    const response = await fetch("/onboarding/complete", {
-      method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "intent=done"
-    });
-    if (!response.ok) throw new Error("unavailable");
-    finishing = true;
-    status.textContent = "Box setup is finishing. Now send your first voice message in WhatsApp. Your dashboard will open shortly.";
-    window.setTimeout(() => { window.location.href = "https://button.box/dashboard"; }, 5000);
-  } catch {
-    complete.disabled = false;
-    actionError = "Could not finish setup. Tap Finish box setup to try again.";
-    status.textContent = actionError;
-  } finally {
-    actionPending = false;
-  }
-}
-complete.addEventListener("click", finishSetup);
 refresh();
 window.setInterval(refresh, 3000);

@@ -48,9 +48,25 @@ the portal hides the claim link and offers Retry cancellation; restart and
 repeated button presses keep the pending cancellation for recovery. A completed
 connection stays connected, and cancellation reports that outcome separately.
 This control does not unlink an owned box or change its settings or account.
-The setup page sends that completion request by itself once the claim status
-becomes claimed, so the first WhatsApp voice message can play without an extra
-tap. The *Finish box setup* button stays as the manual fallback.
+The HOME setup portal starts a server-side claim watcher in its Gunicorn worker,
+without waiting for a browser request. Every five seconds, while WhatsApp setup
+is pending or ready, it checks the Cloud claim. Once claimed, it requests the
+same guarded root completion as the operator-only `POST /onboarding/complete`.
+Normal claim polling then stops. If the setup marker remains after 60 seconds,
+it retries the guarded request at most twice, 60 seconds apart, then stops until
+portal restart. Status and filesystem failures keep setup pending without
+logging claim contents. The root gate still independently verifies setup mode
+and the live Cloud claim before starting runtime. Leaving the page for WhatsApp
+does not delay activation. The claimed page says **Your box is ready. Go back to
+WhatsApp.** and stays there; it does not POST completion or redirect away.
+
+The registration press plays the runtime press cue before confirming possession.
+Missing, expired, invalid or failed confirmations also play the failure cue;
+already confirmed/claimed presses and pending cancellation do not. Setup creates
+these cues in its own `/run/messagebox-button` directory (systemd's
+`RUNTIME_DIRECTORY`, or the current directory outside systemd), using the runtime
+cue definitions and the detected speaker. Audio generation/playback failures
+remain content-free and never prevent claim confirmation.
 
 In runtime cloud mode, the local page opens the hosted dashboard at
 `https://button.box/dashboard`. Family, WhatsApp and settings management belongs
@@ -61,9 +77,10 @@ settings and message APIs retain their contracts for device controls.
 Cloud setup state never queries the retained standalone WhatsApp, recipient or
 NFC store, and those management routes reject requests in both setup and runtime.
 After durable home internet proof, the local setup root opens the Cloud claiming
-page. That page keeps an explicit Wi-Fi recovery action. Finishing the confirmed
-claim opens the hosted dashboard. Standalone setup and management remain available
-when the selected transport is wacli. A dashboard link does not prove entitlement,
+page. That page keeps an explicit Wi-Fi recovery action. Claim completion activates
+runtime without a browser; the runtime local page opens the hosted dashboard.
+Standalone setup and management remain available when the selected transport is
+wacli. A dashboard link does not prove entitlement,
 message delivery or physical acceptance; those still require independent checks.
 
 The Cloud poller also opens an outbound authenticated WSS connection at the

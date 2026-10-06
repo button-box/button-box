@@ -6,8 +6,6 @@ function harness() {
   const nodes = new Map();
   const requests = [];
   let poll;
-  let finish;
-  const location = { href: "" };
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {
       hidden: false, disabled: false, textContent: "", handlers: {},
@@ -18,7 +16,7 @@ function harness() {
   };
   vm.runInNewContext(fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/cloud-connect.js`, "utf8"), {
     document: { getElementById: node },
-    window: { setInterval(fn) { poll = fn; }, setTimeout(fn) { finish = fn; }, location },
+    window: { setInterval(fn) { poll = fn; } },
     fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
   });
   const respond = async (request, data, ok = true) => {
@@ -27,7 +25,6 @@ function harness() {
   };
   return {
     node, requests, respond,
-    finishNavigation: () => { finish(); return location.href; },
     beginPoll: () => poll(),
     async poll(data, ok = true) {
       const pending = poll();
@@ -112,33 +109,16 @@ test("a poll already in flight cannot replace a successful connection start", as
   expect(h.node("cloud-claim").hidden).toBe(false);
 });
 
-test("a claimed box finishes setup by itself once", async () => {
+test("claimed shows the ready message without a completion request", async () => {
   const h = harness();
   await h.respond(h.requests[0], { status: "claimed" });
-  const finish = h.requests.at(-1);
-  expect(finish.url).toBe("/onboarding/complete");
-  expect(finish.options.method).toBe("POST");
-  expect(finish.options.body).toBe("intent=done");
-  await h.respond(finish, { status: "complete" });
-  expect(h.node("cloud-status").textContent).toContain("Box setup is finishing");
-  expect(h.requests.filter(request => request.url === "/onboarding/complete")).toHaveLength(1);
-});
-
-test("failed automatic completion stays visible and the button retries it", async () => {
-  const h = harness();
-  await h.respond(h.requests[0], { status: "claimed" });
-  await h.respond(h.requests.at(-1), {}, false);
   await h.poll({ status: "claimed" });
-  expect(h.node("cloud-status").textContent).toBe("Could not finish setup. Tap Finish box setup to try again.");
-  const complete = h.node("cloud-complete");
-  expect(complete.hidden).toBe(false);
-  expect(complete.disabled).toBe(false);
-  expect(h.requests.filter(request => request.url === "/onboarding/complete")).toHaveLength(1);
-  const retry = complete.handlers.click();
-  await h.respond(h.requests.at(-1), { status: "complete" });
-  await retry;
-  expect(h.node("cloud-status").textContent).toContain("Box setup is finishing");
-  expect(h.finishNavigation()).toBe("https://button.box/dashboard");
+  expect(h.node("cloud-status").textContent).toBe("Your box is ready. Go back to WhatsApp.");
+  expect(h.node("cloud-start").hidden).toBe(true);
+  expect(h.node("cloud-claim").hidden).toBe(true);
+  expect(h.requests.some(request => request.url === "/onboarding/complete")).toBe(false);
+  const page = fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/cloud-connect.html`, "utf8");
+  expect(page.includes('id="cloud-complete"')).toBe(false);
 });
 
 test("cancel hides the link, binds the exact claim and rejects an old pending poll", async () => {
@@ -184,5 +164,5 @@ test("uncertain cancellation stays retryable after status readback and does not 
   await retry;
   expect(h.node("cloud-status").textContent).toContain("connected before cancellation finished");
   expect(h.node("cloud-cancel").hidden).toBe(true);
-  expect(h.node("cloud-complete").hidden).toBe(false);
+  expect(h.requests.some(request => request.url === "/onboarding/complete")).toBe(false);
 });

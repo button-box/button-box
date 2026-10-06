@@ -30,8 +30,6 @@ class SettingsStoreTests(unittest.TestCase):
         store = SettingsStore(
             self.path,
             environ={
-                "MSGBOX_GUIDED_REPLY": "0",
-                "MSGBOX_AUTO_RECORD_AFTER_INCOMING": "0",
                 "MSGBOX_MAX_SECONDS": "120",
                 "MSGBOX_RING_WAV": "/opt/messagebox/ringtones/ring4.wav",
                 "MSGBOX_SPEAKER_VOLUME": "65%",
@@ -51,6 +49,21 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "21:00", "end": "06:00"})
         self.assertFalse(document["nfc_confirmation_beep"])
         self.assertTrue(document["swoosh_sound_enabled"])
+
+    def test_fresh_store_uses_new_defaults_and_saved_choices_are_unchanged(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        fresh, warning = store.load()
+        self.assertFalse(warning)
+        self.assertEqual((fresh["recording_mode"], fresh["after_listening"]),
+                         ("hold_release", "play_only"))
+        saved = {**fresh, "revision": 7, "recording_mode": "tap_review",
+                 "after_listening": "invite_reply"}
+        self.path.write_text(json.dumps(saved), encoding="utf-8")
+        before = self.path.read_bytes()
+        loaded, warning = SettingsStore(self.path, environ={"TZ": "UTC"}).load()
+        self.assertFalse(warning)
+        self.assertEqual(loaded, saved)
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_old_settings_document_keeps_existing_send_cue_enabled(self):
         initial = defaults({"TZ": "UTC"})
@@ -128,8 +141,8 @@ class SettingsStoreTests(unittest.TestCase):
 
     def test_safe_defaults_match_caregiver_contract(self):
         document = defaults({"TZ": "UTC"})
-        self.assertEqual(document["recording_mode"], "tap_review")
-        self.assertEqual(document["after_listening"], "invite_reply")
+        self.assertEqual(document["recording_mode"], "hold_release")
+        self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 60)
         self.assertEqual(document["ringtone_id"], "ding_dong")
         self.assertEqual(document["arrival_signal"], "ring_and_lamp")

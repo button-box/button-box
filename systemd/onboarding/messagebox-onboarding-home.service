@@ -21,7 +21,7 @@ EnvironmentFile=/run/messagebox-audio/audio.env
 UMask=0077
 # Idle browser connections wait in the selector, not the request pool.
 # Concurrent requests keep status and pages available during bounded I/O.
-ExecStart=/usr/bin/gunicorn --workers 1 --worker-class gthread --threads 4 --worker-connections 64 --timeout 60 --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
+ExecStart=/usr/bin/gunicorn --config python:messagebox.onboarding.app --workers 1 --worker-class gthread --threads 4 --worker-connections 64 --timeout 60 --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE
