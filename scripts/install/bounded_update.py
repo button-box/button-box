@@ -25,6 +25,7 @@ MODE_MARKER = "/etc/messagebox-onboarding/enabled"
 LEGACY_WANTS = "/etc/systemd/system/multi-user.target.wants"
 SELECTOR_PATHS = (
     MODE_MARKER,
+    "/etc/systemd/system/messagebox.target.wants/messagebox-wifi-watchdog.timer",
     f"{LEGACY_WANTS}/messagebox.target",
     f"{LEGACY_WANTS}/comitup.service",
     f"{LEGACY_WANTS}/messagebox-mode-reconcile.path",
@@ -52,6 +53,8 @@ UNITS = (
     "messagebox-nfc.service",
     "messagebox-wifi-change.service",
     "messagebox-wifi-change.path",
+    "messagebox-wifi-watchdog.service",
+    "messagebox-wifi-watchdog.timer",
     "messagebox-mode-reconcile.service",
     "messagebox-mode-reconcile.path",
     "comitup.service",
@@ -89,11 +92,14 @@ START_ORDER = (
     "messagebox-onboarding-complete.path",
     "messagebox-onboarding-voice.path",
     "messagebox-wifi-change.path",
+    "messagebox-wifi-watchdog.service",
+    "messagebox-wifi-watchdog.timer",
     "messagebox-mode-reconcile.path",
     "messagebox.target",
 )
 
 EXPLICIT_TARGETS = {
+    "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
     "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
     "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
     "scripts/install/messagebox-mode-migrate.py": MODE_MIGRATION,
@@ -165,7 +171,7 @@ def _expected_target(source):
             return f"/etc/systemd/system/{path.parent.name}/messagebox.conf"
         if (
             path.name == "messagebox.target" or path.name.startswith("messagebox-")
-        ) and path.suffix in {".path", ".service", ".target"}:
+        ) and path.suffix in {".path", ".service", ".target", ".timer"}:
             return "/etc/systemd/system/" + path.name
     return None
 
@@ -904,6 +910,13 @@ def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
             run=run,
             trusted_uid=trusted_uid,
         )
+        _run(["systemctl", "enable", "messagebox-wifi-watchdog.timer"], run, check=True)
+        if root == Path("/"):
+            _run(["env", "PYTHONPATH=/opt/messagebox", "python3", "-m",
+                  "messagebox.wifi_watchdog", "--configure"], run, check=True)
+            Path("/var/log/journal").mkdir(mode=0o755, parents=True, exist_ok=True)
+            _run(["systemctl", "restart", "systemd-journald.service"], run, check=True)
+            _run(["journalctl", "--flush"], run, check=True)
         metadata = {
             "commit": manifest["commit"],
             "manifest_sha256": manifest_hash,
@@ -923,11 +936,15 @@ def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
             if stat.S_IMODE(entry["destination"].stat().st_mode) != entry["mode"]:
                 raise UpdateError("installed file mode does not match policy")
         _restore_active(
-            states, run, also_active={"messagebox-mode-reconcile.path"}
+            states, run, also_active={"messagebox-mode-reconcile.path"} | (
+                {"messagebox-wifi-watchdog.timer"} if not _rooted(root, MODE_MARKER).exists() else set())
         )
+        if not _rooted(root, MODE_MARKER).exists():
+            _run(["systemctl", "--job-mode=ignore-dependencies", "start", "messagebox-wifi-watchdog.timer"], run, check=True)
         _restore_auxiliary_active(auxiliary_units, run)
         _verify_active(
-            states, run, also_active={"messagebox-mode-reconcile.path"},
+            states, run, also_active={"messagebox-mode-reconcile.path"} | (
+                {"messagebox-wifi-watchdog.timer"} if not _rooted(root, MODE_MARKER).exists() else set()),
             auxiliary_units=auxiliary_units,
         )
     except BaseException as update_error:

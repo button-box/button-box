@@ -71,29 +71,12 @@ test("Cloud Home directs management to the service and keeps message acceptance 
   expect(h.node("home-runtime").textContent).toBe("Ready");
 });
 
-test("Footer never copies missing or invalid identity; reassignment clears stale feedback", async () => {
+test("Setup does not register identity or community footer controls", () => {
   const h = harness();
-  for (const id of [null, "hostname", "BOX-0", "<script>", 42]) {
-    h.run(`renderIdentity({box_id:${JSON.stringify(id)}})`);
-    expect(h.node("box-id").textContent).toBe("Not assigned");
-    await h.node("copy-box-id").handlers.click();
-    expect(h.copied).toBe(null);
-  }
-  h.run('renderIdentity({box_id:"BOX-42"})');
-  await h.node("copy-box-id").handlers.click();
-  expect(h.copied).toBe("BOX-42");
-  expect(h.node("box-id-status").textContent).toBe("Box ID copied.");
-  h.run('renderIdentity({box_id:null})');
-  expect(h.node("copy-box-id").disabled).toBe(true);
-  expect(h.node("box-id-status").textContent).toBe("");
-});
-
-test("Copy failure leaves selectable ID and manual-copy guidance", async () => {
-  const h = harness(); h.fail = true;
-  h.run('renderIdentity({box_id:"BOX-42"})');
-  await h.node("copy-box-id").handlers.click();
-  expect(h.node("box-id").textContent).toBe("BOX-42");
-  expect(h.node("box-id-status").textContent).toContain("manually");
+  expect(h.node("copy-box-id").handlers.click).toBeUndefined();
+  const markup = fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/index.html`, "utf8");
+  expect(markup).not.toContain("support-footer");
+  expect(markup).not.toContain("owner-community");
 });
 
 test("Ringtone is runtime-only, reports requested not played, and surfaces failure", async () => {

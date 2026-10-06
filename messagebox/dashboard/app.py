@@ -37,6 +37,7 @@ from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from messagebox.event_log import append_event
 from messagebox.contacts import ContactError, ContactStore, validate_contact
 from messagebox import cloud_runtime
 from messagebox.cloud_device import CloudDeviceError
@@ -330,9 +331,7 @@ def preview_ringtone(ringtone_id):
 
 def log_event(**ev):
     ev["ts"] = time.time()
-    os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
-    with open(EVENTS_FILE, "a") as f:
-        f.write(json.dumps(ev) + "\n")
+    append_event(EVENTS_FILE, ev)
 
 
 def contacts_store():
@@ -1194,6 +1193,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_trusted_host():
             return
         url = urllib.parse.urlparse(self.path)
+        if url.path == "/cloud-connect" and "text/html" in self.headers.get("Accept", "").lower():
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         static = DASHBOARD_STATIC.get(url.path)
         if static is not None:
             body, content_type = static

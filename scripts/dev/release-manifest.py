@@ -21,7 +21,7 @@ def installed_paths(root):
         if not source.is_file():
             continue
         relative = source.relative_to(root).as_posix()
-        if source.suffix in {".service", ".target", ".path"}:
+        if source.suffix in {".service", ".target", ".path", ".timer"}:
             paths[relative] = "/etc/systemd/system/" + source.name
         elif source.name == "messagebox.tmpfiles.conf":
             paths[relative] = "/etc/tmpfiles.d/messagebox.conf"
@@ -33,6 +33,7 @@ def installed_paths(root):
         source = f"sounds/guided-reply/{name}.wav"
         paths[source] = "/opt/messagebox/" + source
     paths.update({
+        "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
         "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
         "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
         "scripts/install/messagebox-mode-migrate.py": "/usr/lib/messagebox/messagebox-mode-migrate.py",

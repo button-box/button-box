@@ -342,6 +342,7 @@ reconcile(enabled_path=sys.argv[1], lock_path=sys.argv[2], pending_path=sys.argv
                     "messagebox-onboarding-voice.target",
                 ]
                 self.assertEqual(voice_restart in commands, expected_start)
+                self.assertIn(["systemctl", "start", "messagebox-onboarding-voice-gate.service"], commands)
 
     def test_unit_contract_watches_exact_marker_and_transient_request(self):
         path_unit = (ROOT / "systemd/messagebox-mode-reconcile.path").read_text()

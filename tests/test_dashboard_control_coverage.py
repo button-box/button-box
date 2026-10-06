@@ -12,8 +12,6 @@ MATRIX = ROOT / "docs" / "box-acceptance.md"
 
 CONTROL_CASES = {
     "skip-link": ["BB-LAYOUT-01"],
-    "copy-box-id": ["BB-LAYOUT-01"],
-    "owner-community": ["BB-LAYOUT-01"],
     "manual-default-name": ["BB-RECIP-11"],
     "manual-allow-name": ["BB-RECIP-11"],
     "change-test-recipient": ["BB-RECIP-01"],
@@ -122,6 +120,12 @@ class InteractiveParser(HTMLParser):
 
 
 class DashboardControlCoverageTests(unittest.TestCase):
+    def test_wifi_setup_has_no_support_identity_or_community_footer(self):
+        markup = INDEX.read_text()
+        for removed in ("Need a hand?", "Not assigned", "copy-box-id", "owner-community"):
+            self.assertNotIn(removed, markup)
+        self.assertNotIn("renderIdentity", APP.read_text())
+
     def test_every_static_control_maps_to_a_canonical_case(self):
         parser = InteractiveParser()
         parser.feed(INDEX.read_text(encoding="utf-8"))

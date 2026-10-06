@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
+from messagebox.event_log import append_event, UnavailableEvents
 from messagebox.guided_reply import (
     EnergyVAD,
     GuidedSession,
@@ -141,6 +142,10 @@ BEEPS = {
 }
 
 
+# Registration failures share the unrecognized family-card tone.
+NFC_UNKNOWN_BEEP = "fail"
+
+
 def log(msg):
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -150,9 +155,7 @@ def log_event(event_type, **fields):
     try:
         fields["type"] = event_type
         fields["ts"] = time.time()
-        os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
-        with open(EVENTS_FILE, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(fields, sort_keys=True) + "\n")
+        append_event(EVENTS_FILE, fields)
     except Exception as exc:
         log(f"event log error: {exc}")
 
@@ -538,7 +541,7 @@ def _play_nfc_prompt(uid, action, card_clip):
         nfc_announcement_store.acknowledge(uid)
     else:
         nfc_announcement_store.clear_acknowledgement()
-        beep("fail")
+        beep(NFC_UNKNOWN_BEEP)
     return played
 
 
@@ -1291,28 +1294,23 @@ def play_pending_listened(limit=4):
         if not os.path.isabs(clip) or not os.path.exists(clip):
             receipt_store.release(notice)
             announcement_gate.blocked()
-            log_event(
-                "listen_announcement_blocked",
-                listener=notice.listener_name,
-                reason="missing_clip",
-            )
-            log(f"listen announcement blocked: missing {clip}")
+            if unavailable_events.unavailable("listen_announcement"):
+                log_event("listen_announcement_blocked", reason="missing_clip")
+                log("listen announcement blocked: missing clip")
             break
         try:
             play_audio_ordinary(clip)
             receipt_store.complete(notice)
             played += 1
+            unavailable_events.available("listen_announcement")
             log_event("listen_announced", listener=notice.listener_name)
             log(f"announced listened receipt: {notice.listener_name}")
         except Exception as exc:
             receipt_store.release(notice)
             announcement_gate.blocked()
-            log_event(
-                "listen_announcement_blocked",
-                listener=notice.listener_name,
-                reason=type(exc).__name__,
-            )
-            log(f"listen announcement error: {exc}")
+            if unavailable_events.unavailable("listen_announcement"):
+                log_event("listen_announcement_blocked", reason=type(exc).__name__)
+                log("listen announcement audio unavailable")
             break
     return played
 
@@ -1349,6 +1347,9 @@ def play_send_success_cue():
     return play_idle_sound(SEND_SUCCESS_WAV, 5)
 
 
+unavailable_events = UnavailableEvents()
+
+
 def maybe_play_cloud_sound():
     """Only this main-loop owner starts cloud sounds, never the poller."""
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
@@ -1357,8 +1358,10 @@ def maybe_play_cloud_sound():
         scope = cloud_runtime.account_scope(fresh=True)
         with cloud_audio_requests.owner() as acquired:
             if not acquired:
+                unavailable_events.available("cloud_scope")
                 return False
             request = cloud_audio_requests.claim_next(scope)
+            unavailable_events.available("cloud_scope")
             if request is None:
                 return False
             try:
@@ -1370,12 +1373,15 @@ def maybe_play_cloud_sound():
                 else:
                     played = False
                 cloud_audio_requests.finish(request, "played" if played else "rejected")
+                unavailable_events.available("cloud_playback")
                 return played
             except (OSError, subprocess.SubprocessError, CloudRuntimeError):
                 cloud_audio_requests.finish(request, "rejected")
-                log_event("cloud_sound_unavailable")
+                if unavailable_events.unavailable("cloud_playback"):
+                    log_event("cloud_sound_unavailable")
     except (OSError, ValueError, CloudRuntimeError):
-        log_event("cloud_sound_unavailable")
+        if unavailable_events.unavailable("cloud_scope"):
+            log_event("cloud_sound_unavailable")
     return False
 
 
@@ -1852,7 +1858,7 @@ def claim_button_press(cues):
     play("press")
     result = cloud_claim.claim_press_result()
     if result in {cloud_claim.ClaimPressResult.NOT_ACTIVE, cloud_claim.ClaimPressResult.RETRY}:
-        play("fail")
+        play(NFC_UNKNOWN_BEEP)
 
 
 def claim_only_loop():

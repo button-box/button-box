@@ -39,6 +39,7 @@ class Systemctl:
             unit: {"active": "inactive", "enabled": "static"}
             for unit in bounded_update.UNITS
         }
+        self.states["messagebox-wifi-watchdog.timer"]["enabled"] = "disabled"
         if fixture.mode == "runtime":
             self.states["messagebox.target"] = {"active": "active", "enabled": "enabled"}
             self.states["messagebox-dash.service"] = {
@@ -661,7 +662,9 @@ class BoundedUpdateTests(unittest.TestCase):
                     stat.S_IMODE((fixture.backup / "state.json").stat().st_mode),
                     0o600,
                 )
-                expected_direct_starts = expected_active - (
+                added_runtime_units = {"messagebox-wifi-watchdog.timer"} if mode == "runtime" else set()
+                expected_direct_starts = expected_active | added_runtime_units
+                expected_direct_starts -= (
                     {fixture.systemctl.comitup_portal} if mode == "setup" else set()
                 )
                 self.assertEqual(
@@ -669,7 +672,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     set(fixture.systemctl.ever_activated),
-                    expected_active | {"messagebox-mode-reconcile.path"},
+                    expected_active | {"messagebox-mode-reconcile.path"} | added_runtime_units,
                 )
                 direct_start_commands = [
                     command
@@ -703,7 +706,7 @@ class BoundedUpdateTests(unittest.TestCase):
                     run=fixture.systemctl,
                 )
                 fixture.assert_original_state(self)
-                self.assertEqual(set(fixture.systemctl.started), expected_direct_starts)
+                self.assertEqual(set(fixture.systemctl.started), expected_direct_starts - added_runtime_units)
                 self.assertEqual(
                     set(fixture.systemctl.ever_activated), expected_active
                 )

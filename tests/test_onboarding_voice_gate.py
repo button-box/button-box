@@ -97,12 +97,13 @@ class VoiceGateTests(unittest.TestCase):
         claim.write_text(json.dumps({"expires_at": 1_800_000_600,
                                      "physical_confirmed": False}), encoding="utf-8")
         claim.chmod(0o600)
-        with (mock.patch.object(voice_gate, "CLAIM_FILE", claim),
-              mock.patch.object(voice_gate.time, "time", return_value=1_800_000_000),
-              mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"})):
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
             result, calls = self.run_gate()
         self.assertEqual(result, 0)
         self.assertEqual(calls, [(["systemctl", "start", "messagebox-onboarding-button.service"], {"check": True})])
+        claim.unlink()
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+            self.assertEqual(self.run_gate(), (result, calls))
 
 
 if __name__ == "__main__":

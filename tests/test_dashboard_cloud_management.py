@@ -20,6 +20,25 @@ class CloudManagementTests(unittest.TestCase):
         getattr(handler, f"do_{method}")()
         return responses[0]
 
+    def test_runtime_cloud_connect_browser_redirect_and_json_contract(self):
+        for accept in ("text/html,application/xhtml+xml", "application/json"):
+            with self.subTest(accept=accept):
+                handler = dashboard.Handler.__new__(dashboard.Handler)
+                handler.path = "/cloud-connect"
+                handler.headers = {"Accept": accept}
+                handler._require_trusted_host = lambda: True
+                handler.send_response = Mock()
+                handler.send_header = Mock()
+                handler.end_headers = Mock()
+                handler._send = Mock()
+                handler.do_GET()
+                if "text/html" in accept:
+                    handler.send_response.assert_called_once_with(303)
+                    handler.send_header.assert_any_call("Location", "/")
+                    handler._send.assert_not_called()
+                else:
+                    handler._send.assert_called_once_with(404, "{}")
+
     def test_cloud_rejects_legacy_reads_before_accessing_the_account_or_store(self):
         with patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), patch.object(
             dashboard, "pairing_engine"

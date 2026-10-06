@@ -120,3 +120,33 @@ rollback from running. Keep the original staging tree and completed backup;
 after access is restored, run the explicit rollback command before retrying an
 interrupted update. Verify installed hashes, boot selection and service state
 again. An interrupted process is not a successful installation.
+
+Runtime Wi-Fi recovery and diagnostics
+------------------------------------
+
+Installation and bounded updates set `connection.autoconnect-retries=0` on saved
+infrastructure Wi-Fi profiles for wlan0 (including profiles without an interface
+binding). The Comitup CONNECTED callback applies the same setting to newly saved
+home Wi-Fi. The local Wi-Fi change command also sets it on its new profile. AP and other-interface profiles are excluded.
+
+`messagebox-wifi-watchdog.timer` belongs to `messagebox.target` and checks every
+30 seconds. It uses NetworkManager's wlan0 state and a wlan0 default route. After
+120 seconds without connectivity, it requests one saved autoconnect infrastructure
+profile, with retries after 120, 240, 480 and then 900 seconds. Multiple profiles
+are tried in turn. Outage/backoff state survives oneshot restarts in `/run` and
+resets on recovery, setup, or reboot. Setup transitions and reconnect requests
+share the mode-transition lock. The watchdog never starts the setup hotspot or
+changes Comitup or Tailscale. Inspect `journalctl -u messagebox-wifi-watchdog.service`
+after a router outage; verify reconnection on a real box without a power cycle.
+
+Installation and bounded updates install the journald drop-in with persistent
+storage capped at 50 MB, create `/var/log/journal`, restart journald and flush it.
+Verify evidence survives a reboot using `journalctl -b -1` on the box. Operational
+`events.jsonl` appends share a sidecar lock, rotate before exceeding 5 MB and retain
+two archives. Cloud audio availability failures emit a transition event and at
+most one reminder every five minutes until availability returns.
+
+The setup mode reconciler reapplies the onboarding button gate after starting
+Comitup. In Cloud setup, the listener also runs before a registration request
+exists; its press handler owns request validation and expiry. Verify a registration
+press after `messageboxctl reset-wifi` without manually starting a service.

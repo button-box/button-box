@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover Button Box runtime Wi-Fi
+ConditionPathExists=!/etc/messagebox-onboarding/enabled
+After=NetworkManager.service
+PartOf=messagebox.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/opt/messagebox
+ExecStart=/usr/bin/python3 -m messagebox.wifi_watchdog
+RuntimeDirectory=messagebox-wifi-watchdog
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=90
+UMask=0077
