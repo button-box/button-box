@@ -57,7 +57,7 @@ def main():
                 name, mime = assets[path]
                 body = (ROOT / "messagebox/onboarding/static" / name).read_bytes()
                 if name == "index.html":
-                    body = body.replace(b"__MESSAGEBOX_URL__", b"http://button-box-example.local/")
+                    body = body.replace(b"__MESSAGEBOX_URL__", b"http://button-box-example.local/").replace(b"__CLOUD_CONNECT_LINK__", b"")
                 if mime == "text/html":
                     body = body.replace(
                         b'<html lang="en">',
