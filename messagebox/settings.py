@@ -68,8 +68,6 @@ def _env_int(environ, name, default):
 
 def defaults(environ=None):
     environ = os.environ if environ is None else environ
-    guided = _env_flag(environ, "MSGBOX_GUIDED_REPLY", True)
-    auto_reply = _env_flag(environ, "MSGBOX_AUTO_RECORD_AFTER_INCOMING", True)
     maximum = _env_int(environ, "MSGBOX_MAX_SECONDS", 60)
     if maximum not in MAX_RECORDING_SECONDS:
         maximum = 60
@@ -87,8 +85,8 @@ def defaults(environ=None):
         "version": SCHEMA_VERSION,
         "revision": 0,
         "timezone": timezone,
-        "recording_mode": "tap_review" if guided else "hold_release",
-        "after_listening": "invite_reply" if auto_reply else "play_only",
+        "recording_mode": "hold_release",
+        "after_listening": "play_only",
         "max_recording_seconds": maximum,
         "ringtone_id": ringtone,
         "master_volume_percent": volume,

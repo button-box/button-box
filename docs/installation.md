@@ -71,6 +71,12 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
 
 ## Recipient setup
 
+Fresh boxes default to **Hold and release** recording and **play only** after
+listening. Existing saved interaction choices are retained. The guided two-way
+proof below is the standalone setup flow; it does not change saved runtime
+settings. For Cloud claiming and automatic server-side activation, see
+[Cloud runtime](cloud-runtime.md).
+
 1. Power on Button Box.
 2. Join its setup hotspot with the supplied password and open the printed URL.
 3. Copy the setup URL before submitting Wi-Fi credentials. The setup hotspot

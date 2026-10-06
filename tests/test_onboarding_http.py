@@ -59,7 +59,7 @@ def server(service):
         command[-1] = "test_onboarding_http:fixture_app"
         environment = dict(os.environ)
         environment.pop("GUNICORN_CMD_ARGS", None)
-        environment["PYTHONPATH"] = str(ROOT / "tests")
+        environment["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(ROOT / "tests")))
         environment["MSGBOX_HTTP_TEST_DIR"] = directory
         with tempfile.TemporaryFile() as log:
             process = subprocess.Popen(

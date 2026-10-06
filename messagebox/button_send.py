@@ -214,8 +214,8 @@ def apply_master_volume(settings=None):
     return False
 
 
-def make_beeps():
-    for path, frequency, duration, gain_db in BEEPS.values():
+def make_beeps(beeps=None, *, timeout=None):
+    for path, frequency, duration, gain_db in (BEEPS if beeps is None else beeps).values():
         # These files are generated assets, so rewrite them at startup. Keeping
         # an existing file would silently retain an older duration or gain after
         # a software update.
@@ -234,6 +234,7 @@ def make_beeps():
                 path,
             ],
             check=True,
+            timeout=timeout,
         )
 
 
@@ -1855,8 +1856,35 @@ def validate_prompts():
         )
 
 
+def claim_beeps():
+    directory = Path(os.environ.get("RUNTIME_DIRECTORY") or ".")
+    cues = {name: (str(directory / Path(BEEPS[name][0]).name), *BEEPS[name][1:])
+            for name in ("press", "fail")}
+    for name, cue in cues.items():
+        try:
+            make_beeps({name: cue}, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            log("claim audio generation unavailable")
+    return cues
+
+
+def claim_button_press(cues):
+    def play(name):
+        try:
+            subprocess.run(["aplay", "-q", "-D", SPK_DEV, cues[name][0]],
+                           check=True, timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            log("claim audio playback unavailable")
+
+    play("press")
+    result = cloud_claim.claim_press_result()
+    if result in {cloud_claim.ClaimPressResult.NOT_ACTIVE, cloud_claim.ClaimPressResult.RETRY}:
+        play("fail")
+
+
 def claim_only_loop():
     """Physical possession confirmation without any household audio/outbox work."""
+    cues = claim_beeps()
     switch = Button(BUTTON_PIN)
     lamp = LED(LED_PIN)
     lamp.off()
@@ -1869,7 +1897,7 @@ def claim_only_loop():
         while switch.is_pressed and time.monotonic() - started < CONFIRM_PRESS_S:
             time.sleep(POLL_S)
         if switch.is_pressed:
-            cloud_claim.consume_claim_press()
+            claim_button_press(cues)
         while switch.is_pressed:
             time.sleep(POLL_S)
 

@@ -6,6 +6,7 @@ import fcntl
 import json
 import re
 import time
+from enum import Enum
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -28,6 +29,13 @@ class CloudClaimError(Exception):
 
 class CloudClaimClockError(CloudClaimError):
     """Home Wi-Fi is ready but the box clock is still catching up."""
+
+
+class ClaimPressResult(Enum):
+    NOT_ACTIVE = "not_active"
+    ACCEPTED = "accepted"
+    CANCELLING = "cancelling"
+    RETRY = "retry"
 
 
 class CloudClaim:
@@ -173,20 +181,22 @@ class CloudClaim:
                 f'role="img" aria-label="WhatsApp claim QR code"><rect width="100%" height="100%" '
                 f'fill="white"/><path d="{path}" fill="black"/></svg>').encode("ascii")
 
-    def consume_press(self):
-        """Return true only while explicit claim mode owns this button press."""
+    def consume_press_result(self):
+        """Distinguish a recorded press from claim ownership and retry failure."""
         with self._locked():
             document = self._read()
             if document is not None and document.get("cancel_pending"):
-                return True
+                return ClaimPressResult.CANCELLING
             if document is None or document["expires_at"] <= self.clock():
-                return False
+                return ClaimPressResult.NOT_ACTIVE
             if document["physical_confirmed"]:
-                return True
+                return ClaimPressResult.ACCEPTED
             try:
                 result = self.client.confirm_claim(document["claim_id"])
             except CloudDeviceError:
-                return True  # Keep claim mode; a later press may retry safely.
+                return ClaimPressResult.RETRY
+            if not isinstance(result, dict):
+                raise CloudClaimError("cloud claim confirmation is invalid")
             if result.get("claimed") is True:
                 self.path.unlink(missing_ok=True)
             elif result.get("claimed") is False:
@@ -194,7 +204,11 @@ class CloudClaim:
                 atomic_json(self.path, document)
             else:
                 raise CloudClaimError("cloud claim confirmation is invalid")
-            return True
+            return ClaimPressResult.ACCEPTED
+
+    def consume_press(self):
+        """Keep the runtime contract: failed active claims still own the press."""
+        return self.consume_press_result() is not ClaimPressResult.NOT_ACTIVE
 
 
 def consume_claim_press():
@@ -204,3 +218,13 @@ def consume_claim_press():
         return CloudClaim().consume_press()
     except (CloudClaimError, CloudDeviceError, OSError):
         return True  # A corrupt active claim never becomes a recording press.
+
+
+def claim_press_result():
+    """Setup feedback must never turn a corrupt claim into runtime work."""
+    try:
+        if not CLAIM_FILE.exists():
+            return ClaimPressResult.NOT_ACTIVE
+        return CloudClaim().consume_press_result()
+    except (CloudClaimError, CloudDeviceError, OSError):
+        return ClaimPressResult.RETRY

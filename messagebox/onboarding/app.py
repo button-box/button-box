@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -18,7 +19,7 @@ from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
 from messagebox.onboarding.nfc import NfcOnboardingClient, NfcOnboardingError
-from messagebox.onboarding.paths import ONBOARDING_CONFIG_PATH, ONBOARDING_STATE_PATH
+from messagebox.onboarding.paths import ONBOARDING_CONFIG_PATH, ONBOARDING_STATE_PATH, ONBOARDING_ENABLED_PATH
 from messagebox.onboarding.state import (
     PROOFS,
     SAFE_ERRORS,
@@ -319,6 +320,41 @@ def _require_same_origin(environ, expected_origin):
         raise RequestError("403 Forbidden", "Cross-site request rejected")
 
 
+def watch_cloud_claim(request, *, setup_pending, sleep=time.sleep,
+                      interval=5, retry_delay=60, max_requests=3):
+    """Request the root handoff without a browser; retries stay bounded."""
+    def pending():
+        try:
+            return setup_pending()
+        except OSError:
+            logging.getLogger(__name__).warning("Cloud setup state unavailable")
+            return True  # Root still owns the fail-closed setup-mode gate.
+
+    def attempt():
+        try:
+            request()
+            return True
+        except RequestError:
+            return False  # HOME/phase/claim is not ready yet.
+        except Exception as exc:
+            # This thread is the only completion path; an identity or client
+            # error must not end it. Log the type only, never server data.
+            logging.getLogger(__name__).warning("Cloud setup completion unavailable: %s", type(exc).__name__)
+            return False
+
+    while pending():
+        if attempt():
+            # Stop normal Cloud polling after the request. Only retry the same
+            # guarded handoff if root has not removed the setup marker in time.
+            for _ in range(max_requests - 1):
+                sleep(retry_delay)
+                if not pending():
+                    return
+                attempt()
+            return
+        sleep(interval)
+
+
 def create_app(
     mode=None,
     *,
@@ -330,6 +366,8 @@ def create_app(
     connectivity_checker=None,
     whatsapp_client=None,
     cloud_claim=None,
+    start_claim_watcher=False,
+    setup_pending=lambda: ONBOARDING_ENABLED_PATH.exists(),
     nfc_client=None,
     caregiver_settings=None,
     completion_request=request_completion,
@@ -376,6 +414,14 @@ def create_app(
         if cloud is None:
             cloud = CloudClaim()
         return cloud
+
+    def request_cloud_completion():
+        if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+        if claim_client().status().get("status") != "claimed":
+            raise RequestError("409 Conflict", "Cloud claim is incomplete")
+        completion_request(transport="cloud")
+
     nfc = nfc_client or NfcOnboardingClient()
     settings = caregiver_settings or SettingsStore()
 
@@ -864,18 +910,13 @@ def create_app(
                     raise RequestError("503 Service Unavailable", str(exc)) from exc
             if method == "POST" and path == "/onboarding/complete" and cloud_mode:
                 _require_same_origin(environ, expected_origin)
-                if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
-                    raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
                 document = _form(environ, body_limit)
                 if document != {"intent": "done"}:
                     raise RequestError("400 Bad Request", "Invalid completion request")
                 try:
-                    claim_state = claim_client().status()
+                    request_cloud_completion()
                 except CloudClaimError as exc:
                     raise RequestError("503 Service Unavailable", str(exc)) from exc
-                if claim_state.get("status") != "claimed":
-                    raise RequestError("409 Conflict", "Cloud claim is incomplete")
-                completion_request(transport="cloud")
                 return _json_response({"status": "complete"}, "202 Accepted")(start_response)
             if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/cloud-connect.js", "/static/styles.css"}:
                 name = path.rsplit("/", 1)[-1]
@@ -1238,6 +1279,12 @@ def create_app(
                 {"error": "Onboarding state is unavailable"}, "503 Service Unavailable"
             )(start_response)
 
+    if start_claim_watcher and cloud_mode and selected_mode == "HOME":
+        threading.Thread(
+            target=watch_cloud_claim,
+            kwargs={"request": request_cloud_completion, "setup_pending": setup_pending, "sleep": sleep},
+            name="cloud-claim-watcher", daemon=True,
+        ).start()
     return application
 
 
@@ -1283,12 +1330,21 @@ class _LazyApplication:
         self._application = None
         self._lock = threading.Lock()
 
-    def __call__(self, environ, start_response):
+    def initialize(self):
         if self._application is None:
             with self._lock:
                 if self._application is None:
-                    self._application = create_app()
+                    self._application = create_app(start_claim_watcher=True)
+
+    def __call__(self, environ, start_response):
+        self.initialize()
         return self._application(environ, start_response)
 
 
 app = _LazyApplication()
+
+
+def post_worker_init(worker):
+    """Gunicorn starts the watcher even if no browser ever visits the portal."""
+    if worker.wsgi is app:
+        app.initialize()

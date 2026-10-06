@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox.onboarding.app import create_app
-from messagebox.cloud_claim import CloudClaim, CloudClaimClockError
+from messagebox.onboarding.app import create_app, _LazyApplication, post_worker_init
+from messagebox.cloud_claim import CloudClaim, CloudClaimClockError, CloudClaimError
 from messagebox.cloud_device import CloudDeviceError
 from messagebox.onboarding.state import PROOFS, WHATSAPP_PROOFS, StateStore
 from messagebox.settings import SettingsStore
@@ -81,6 +81,90 @@ class CloudOnboardingTests(unittest.TestCase):
             if hasattr(response, "close"):
                 response.close()
         return captured
+
+    def run_watcher(self, *, claim=None, setup_pending=lambda: True, sleep=lambda _: None,
+                    mode="HOME", transport="cloud"):
+        from messagebox.onboarding.completion import request_completion
+        path = Path(self.temp.name) / "completion-request.json"
+        write = mock.Mock(side_effect=lambda **kwargs: request_completion(path, **kwargs))
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": transport}), \
+             mock.patch("messagebox.onboarding.app.threading.Thread") as thread:
+            create_app(mode=mode, config={"device_id": "A7K2"},
+                       state_store=self.state, cloud_claim=claim or self.cloud,
+                       completion_request=write, start_claim_watcher=True,
+                       setup_pending=setup_pending, sleep=sleep)
+        if thread.called:
+            thread.return_value.start.assert_called_once_with()
+            self.assertTrue(thread.call_args.kwargs["daemon"])
+            args = thread.call_args.kwargs
+            args["target"](**args["kwargs"])
+        return write, path, thread
+
+    def test_watcher_claimed_without_local_claim_or_browser_writes_once(self):
+        from test_cloud_claim import FakeClient, NOW
+        client = FakeClient()
+        client.claimed = True
+        claim = CloudClaim(client, path=Path(self.temp.name) / "absent-claim.json", clock=lambda: NOW)
+        pending = [True]
+        with mock.patch.object(client, "claim", wraps=client.claim) as status:
+            write, path, _ = self.run_watcher(claim=claim, setup_pending=lambda: pending[0],
+                                            sleep=lambda _: pending.__setitem__(0, False))
+        write.assert_called_once_with(transport="cloud")
+        self.assertEqual(json.loads(path.read_text()), {"version": 1, "complete": True, "transport": "cloud"})
+        status.assert_called_once_with()
+
+    def test_watcher_waiting_and_status_errors_keep_polling_without_completion(self):
+        for result in ({"status": "not_started"}, CloudClaimError("private"), OSError("private")):
+            with self.subTest(result=type(result).__name__):
+                self.cloud.status = mock.Mock(side_effect=result if isinstance(result, Exception) else None,
+                                              return_value=result)
+                pending = [True]
+                write, path, _ = self.run_watcher(setup_pending=lambda: pending[0],
+                                                sleep=lambda _: pending.__setitem__(0, False))
+                write.assert_not_called()
+                self.assertFalse(path.exists())
+                self.cloud.status.assert_called_once_with()
+
+    def test_watcher_retries_are_bounded_and_restart_before_completion_requests_again(self):
+        self.cloud.claimed = True
+        waits = []
+        write, path, _ = self.run_watcher(sleep=waits.append)
+        self.assertEqual(write.call_count, 3)
+        self.assertEqual(waits, [60, 60])
+        pending = [True]
+        write, _, _ = self.run_watcher(setup_pending=lambda: pending[0],
+                                     sleep=lambda _: pending.__setitem__(0, False))
+        write.assert_called_once_with(transport="cloud")
+        path.unlink()
+        write, _, _ = self.run_watcher(setup_pending=lambda: False)
+        write.assert_not_called()
+        self.assertFalse(path.exists())
+        self.state.reconcile_hotspot()
+        pending = [True]
+        with mock.patch.object(self.cloud, "status") as status:
+            write, _, _ = self.run_watcher(setup_pending=lambda: pending[0],
+                                         sleep=lambda _: pending.__setitem__(0, False))
+        write.assert_not_called()
+        status.assert_not_called()
+
+    def test_watcher_is_opt_in_and_only_runs_in_cloud_home_mode(self):
+        with mock.patch("messagebox.onboarding.app.threading.Thread") as thread:
+            with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
+                create_app(mode="HOME", config={"device_id": "A7K2"}, state_store=self.state)
+            thread.assert_not_called()
+        for mode, transport in (("HOTSPOT", "cloud"), ("HOME", "wacli")):
+            _, _, thread = self.run_watcher(mode=mode, transport=transport)
+            thread.assert_not_called()
+
+    def test_worker_hook_initializes_lazy_app_once_without_http(self):
+        lazy = _LazyApplication()
+        with mock.patch("messagebox.onboarding.app.app", lazy), \
+             mock.patch("messagebox.onboarding.app.create_app") as create:
+            post_worker_init(mock.Mock(wsgi=object()))
+            create.assert_not_called()
+            post_worker_init(mock.Mock(wsgi=lazy))
+            post_worker_init(mock.Mock(wsgi=lazy))
+        create.assert_called_once_with(start_claim_watcher=True)
 
     def test_claim_page_and_qr_are_local_and_start_requires_same_origin(self):
         home = self.request("GET", "/")
@@ -211,7 +295,7 @@ class CloudOnboardingTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request("POST", "/api/cloud-claim/cancel", f"http://{HOST}", body)["body"]), {"status": "claimed"})
 
     def test_actual_claim_cancel_route_readback_and_uncertain_retry_use_one_synthetic_claim(self):
-        from tests.test_cloud_claim import FakeClient, ID, NOW
+        from test_cloud_claim import FakeClient, ID, NOW
         root = Path(self.temp.name)
         client = FakeClient()
         claim = CloudClaim(client, path=root / "claim.json", clock=lambda: NOW)

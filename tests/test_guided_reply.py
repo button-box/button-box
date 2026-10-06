@@ -36,17 +36,10 @@ def write_wav(path, seconds=0.25, level=1000, rate=16000):
 
 
 class PressPolicyTests(unittest.TestCase):
-    def test_feature_flag_defaults_off_and_rolls_back(self):
-        self.assertFalse(env_flag("MSGBOX_GUIDED_REPLY", environ={}))
-        self.assertTrue(env_flag("MSGBOX_GUIDED_REPLY", environ={"MSGBOX_GUIDED_REPLY": "1"}))
-        self.assertFalse(env_flag("MSGBOX_GUIDED_REPLY", environ={"MSGBOX_GUIDED_REPLY": "0"}))
-        self.assertFalse(env_flag("MSGBOX_AUTO_RECORD_AFTER_INCOMING", environ={}))
-        self.assertTrue(
-            env_flag(
-                "MSGBOX_AUTO_RECORD_AFTER_INCOMING",
-                environ={"MSGBOX_AUTO_RECORD_AFTER_INCOMING": "1"},
-            )
-        )
+    def test_env_flag_defaults_off_and_parses_boolean_values(self):
+        self.assertFalse(env_flag("FEATURE", environ={}))
+        self.assertTrue(env_flag("FEATURE", environ={"FEATURE": "1"}))
+        self.assertFalse(env_flag("FEATURE", environ={"FEATURE": "0"}))
 
     def test_prompt_gate_rejects_missing_and_non_audio_assets(self):
         with tempfile.TemporaryDirectory() as directory:
