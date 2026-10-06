@@ -112,16 +112,28 @@ test("a poll already in flight cannot replace a successful connection start", as
   expect(h.node("cloud-claim").hidden).toBe(false);
 });
 
-test("failed completion remains visible while the box stays claimed and can be retried", async () => {
+test("a claimed box finishes setup by itself once", async () => {
   const h = harness();
   await h.respond(h.requests[0], { status: "claimed" });
-  const complete = h.node("cloud-complete");
-  const attempt = complete.handlers.click();
+  const finish = h.requests.at(-1);
+  expect(finish.url).toBe("/onboarding/complete");
+  expect(finish.options.method).toBe("POST");
+  expect(finish.options.body).toBe("intent=done");
+  await h.respond(finish, { status: "complete" });
+  expect(h.node("cloud-status").textContent).toContain("Box setup is finishing");
+  expect(h.requests.filter(request => request.url === "/onboarding/complete")).toHaveLength(1);
+});
+
+test("failed automatic completion stays visible and the button retries it", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], { status: "claimed" });
   await h.respond(h.requests.at(-1), {}, false);
-  await attempt;
   await h.poll({ status: "claimed" });
-  expect(h.node("cloud-status").textContent).toBe("Could not finish setup. Try again shortly.");
+  expect(h.node("cloud-status").textContent).toBe("Could not finish setup. Tap Finish box setup to try again.");
+  const complete = h.node("cloud-complete");
+  expect(complete.hidden).toBe(false);
   expect(complete.disabled).toBe(false);
+  expect(h.requests.filter(request => request.url === "/onboarding/complete")).toHaveLength(1);
   const retry = complete.handlers.click();
   await h.respond(h.requests.at(-1), { status: "complete" });
   await retry;

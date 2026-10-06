@@ -14,6 +14,7 @@ let actionPending = false;
 let actionVersion = 0;
 let actionError = "";
 let currentStatus = "";
+let autoFinishTried = false;
 
 function render(data) {
   if (data.status !== currentStatus && ["awaiting_button", "waiting_for_whatsapp", "claimed", "cancelled"].includes(data.status)) {
@@ -47,6 +48,12 @@ function render(data) {
     cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] ?? "Connection status is unavailable. Try again shortly.");
+  // Runtime services start only after completion, so finish once by itself as
+  // soon as the box is registered. The button stays as the manual fallback.
+  if (data.status === "claimed" && !autoFinishTried && !finishing && !actionPending) {
+    autoFinishTried = true;
+    finishSetup();
+  }
 }
 
 async function refresh() {
@@ -125,8 +132,8 @@ copy.addEventListener("click", async () => {
     status.textContent = "Copy is unavailable here. Use Open WhatsApp instead.";
   }
 });
-complete.addEventListener("click", async () => {
-  if (actionPending || finishing) return;
+async function finishSetup() {
+  if (finishing || actionPending) return;
   complete.disabled = true;
   actionPending = true;
   actionVersion++;
@@ -140,15 +147,16 @@ complete.addEventListener("click", async () => {
     });
     if (!response.ok) throw new Error("unavailable");
     finishing = true;
-    status.textContent = "Box setup is finishing. Your dashboard will open shortly.";
+    status.textContent = "Box setup is finishing. Now send your first voice message in WhatsApp. Your dashboard will open shortly.";
     window.setTimeout(() => { window.location.href = "https://button.box/dashboard"; }, 5000);
   } catch {
     complete.disabled = false;
-    actionError = "Could not finish setup. Try again shortly.";
+    actionError = "Could not finish setup. Tap Finish box setup to try again.";
     status.textContent = actionError;
   } finally {
     actionPending = false;
   }
-});
+}
+complete.addEventListener("click", finishSetup);
 refresh();
 window.setInterval(refresh, 3000);

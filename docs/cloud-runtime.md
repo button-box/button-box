@@ -48,6 +48,9 @@ the portal hides the claim link and offers Retry cancellation; restart and
 repeated button presses keep the pending cancellation for recovery. A completed
 connection stays connected, and cancellation reports that outcome separately.
 This control does not unlink an owned box or change its settings or account.
+The setup page sends that completion request by itself once the claim status
+becomes claimed, so the first WhatsApp voice message can play without an extra
+tap. The *Finish box setup* button stays as the manual fallback.
 
 In runtime cloud mode, the local page opens the hosted dashboard at
 `https://button.box/dashboard`. Family, WhatsApp and settings management belongs
