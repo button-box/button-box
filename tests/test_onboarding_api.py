@@ -490,6 +490,24 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
 
+    def test_wifi_step_points_cloud_boxes_to_the_setup_card(self):
+        local = self.client.request("GET", "/")["body"]
+        self.assertIn(b'id="copy-setup-url"', local)
+        self.assertNotIn(b"scan the QR code on your setup card", local)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
+            app = create_app(
+                mode="HOTSPOT", config={"device_id": "A7K2"}, state_store=self.store,
+                adapter=self.adapter, connectivity_checker=self.checker,
+                caregiver_settings=self.settings, clock=self.clock,
+                sleep=self.sleeps.append, handoff_delay=0.25, start_claim_watcher=False,
+            )
+            cloud = WSGIHarness(app).request("GET", "/")["body"]
+        self.assertIn(b"Choose Wi-Fi for your box", cloud)
+        self.assertIn(b"scan the QR code on your setup card", cloud)
+        self.assertNotIn(b'id="copy-setup-url"', cloud)
+        self.assertNotIn(b"Copy this address first", cloud)
+        self.assertNotIn(b"SETUP-", cloud)
+
     def test_clipboard_asset_is_served_by_setup_and_runtime(self):
         from messagebox.dashboard.app import DASHBOARD_STATIC
 
