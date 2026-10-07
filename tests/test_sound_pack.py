@@ -156,7 +156,9 @@ class SoundPackTests(unittest.TestCase):
             self.assertEqual(order, ["listened", expected])
             receipts.complete.assert_called_once_with(notice)
 
-    def test_limit_warning_at_five_seconds_for_all_limits_and_pcm_exclusion(self):
+    def test_limit_warning_at_five_seconds_for_all_limits_stays_in_the_recording(self):
+        # Dan, 2026-10-07: keep the warning in the recording so no words are lost.
+        self.assertFalse(hasattr(sound_pack, "mute_pcm"))
         for maximum in (30, 60, 120):
             with self.subTest(maximum=maximum), mock.patch.object(runtime.subprocess, "Popen") as popen:
                 process = popen.return_value
@@ -165,17 +167,11 @@ class SoundPackTests(unittest.TestCase):
                 cue.update(10 + maximum - 5.01)
                 popen.assert_not_called()
                 cue.update(10 + maximum - 5)
+                popen.assert_called_once()
+                self.assertEqual(Path(popen.call_args.args[0][-1]).name, "cue-rec_limit.wav")
                 cue.update(10 + maximum - 4.45)
                 self.assertEqual(cue.intervals[0][0], maximum - 5)
                 self.assertAlmostEqual(cue.intervals[0][1], maximum - 4.45)
-                rate = 16000
-                pcm = struct.pack("<h", 5000) * (maximum * rate)
-                muted = sound_pack.mute_pcm(pcm, rate, cue.intervals)
-                self.assertEqual(len(muted), len(pcm))
-                self.assertEqual(muted[(maximum - 5) * rate * 2:int((maximum - 4.45) * rate) * 2],
-                                 bytes(int(0.55 * rate) * 2))
-                self.assertEqual(muted[:rate * 2], pcm[:rate * 2])
-                self.assertEqual(muted[-rate * 2:], pcm[-rate * 2:])
 
     def test_rec_go_playback_completes_before_arecord_starts(self):
         order = []
@@ -253,7 +249,7 @@ class SoundPackTests(unittest.TestCase):
                 self.assertEqual((send_guided if guided else send_legacy).call_count, 4)
                 beep.assert_not_called()
 
-    def test_guided_saved_wav_excludes_warning_before_trim_and_approval(self):
+    def test_guided_saved_wav_keeps_warning_and_words(self):
         pcm = struct.pack("<h", 5000) * (60 * 16000)
         recorder = mock.Mock()
         recorder.poll.return_value = None
@@ -272,14 +268,11 @@ class SoundPackTests(unittest.TestCase):
             result = runtime.capture_guided_recording("synthetic", max_seconds=60)
         with wave.open(result.path, "rb") as saved:
             actual = saved.readframes(saved.getnframes())
-        span = actual[55 * 32000:int(55.55 * 32000)]
-        self.assertEqual(span, bytes(len(span)))
-        self.assertEqual(actual[:32000], pcm[:32000])
-        self.assertEqual(actual[-32000:], pcm[-32000:])
-        self.assertEqual(len(actual), len(pcm))
-        self.assertEqual(vad.start.call_count, 2)  # Re-evaluated without warning audio.
+        # The recording is saved unchanged; speech during the warning is kept.
+        self.assertEqual(actual, pcm)
+        self.assertEqual(vad.start.call_count, 1)
 
-    def test_hold_release_saved_outbox_wav_excludes_warning(self):
+    def test_hold_release_saved_outbox_wav_keeps_warning_and_words(self):
         pcm = struct.pack("<h", 5000) * (30 * 48000)
         recorder = mock.Mock()
         recorder.poll.return_value = 0
@@ -307,8 +300,5 @@ class SoundPackTests(unittest.TestCase):
         saved = next(self.root.glob("*.wav"))
         with wave.open(str(saved), "rb") as source:
             actual = source.readframes(source.getnframes())
-        span = actual[25 * 96000:int(25.55 * 96000)]
-        self.assertEqual(span, bytes(len(span)))
-        self.assertEqual(actual[:96000], pcm[:96000])
-        self.assertEqual(actual[-96000:], pcm[-96000:])
-        self.assertEqual(len(actual), len(pcm))
+        # The recording is saved unchanged; speech during the warning is kept.
+        self.assertEqual(actual, pcm)

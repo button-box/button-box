@@ -21,7 +21,7 @@ review or send-approval prompts.
 | Every incoming message starts | `GuidedSession.run` incoming intro paths; `play_next_legacy`; unroutable-but-authorized inbound path: msg_start then msg-start voice then family audio. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply countdown. |
 | Microphone opens after countdown | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
-| Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; mute its interval in retained PCM. |
+| Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; it stays in the recording (Dan, 7 Oct: no words are cut). |
 | Review starts | `PiGuidedIO.play_review_for_approval`: review voice then child recording. |
 | Silent guided capture | `run_guided_once.session_event("guided_recording_empty")`: oops then empty voice. No outgoing job is created. |
 | Three send failures | `sender_loop` counts by current message in both modes, queues a notice; idle `maybe_play_still_trying` checks job still pending, then still_trying + stuck voice once durably per job. |
@@ -29,21 +29,13 @@ review or send-approval prompts.
 | Setup finishes | Root `onboarding.completion` queues a sound request after successful handoff; idle `announce_all_set` plays all_set + all-set voice once per box. |
 | Cloud unreachable | `maybe_play_connectivity` reads existing current-boot snapshot verification age; offline once after 180 s, resets on freshness, durable outage receipt. No additional network probes. |
 
-## Recording exclusions
+## Recording rules
 
-The go tick finishes before opening the microphone. No recording subprocess
-exists during that tick. The 5 s warning plays while capture continues, leaving
-the configured 30/60/120 s wall-clock limit unchanged. After the recorder stops,
-the saved 16-bit PCM is replaced with silence from 250 ms before warning playback
-starts through 250 ms after playback completes. This guards speaker decay and
-capture buffering; speech in that same short interval is also excluded. Internal
-silence retains the original timeline. Guided VAD is rebuilt from this muted PCM
-before deciding meaningful speech and trimming. Hold/release applies the same
-exclusion to its WAV before publication to the outbox. A warning process is
-bounded and stopped before later prompts or playback.
-
-The hardware acceptance check must confirm the exclusion guard covers actual
-ALSA buffering and speaker decay on both boxes; extend it if that check fails.
+The go tick (rec_go) plays to completion before the microphone opens, so it is
+never recorded. The 5 s limit warning (rec_limit) plays while capture continues
+and stays in the recording as two soft taps: removing it would also remove the
+child's words that overlap it (Dan, 7 October 2026). The hardware acceptance
+check confirms the go tick is absent from sent audio.
 
 ## Quiet hours and first-use receipts
 

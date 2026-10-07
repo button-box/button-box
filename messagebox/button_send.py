@@ -13,7 +13,6 @@ import sys
 import threading
 import time
 import uuid
-import wave
 from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
@@ -1664,13 +1663,6 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
             acknowledge_guided_press("stop_recording", session_id)
             wait_for_stable_open()
 
-    if warning.intervals:
-        pcm = sound_pack.mute_pcm(raw_path.read_bytes(), 16000, warning.intervals)
-        raw_path.write_bytes(pcm)
-        vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
-        vad.start(started)
-        for offset in range(0, len(pcm), 4096):
-            vad.feed(pcm[offset:offset + 4096], now=started + offset / 32000)
     bounds = vad.trim_bounds()
     if bounds is None:
         raw_path.unlink(missing_ok=True)
@@ -1836,13 +1828,6 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         recorder.send_signal(signal.SIGINT)
         recorder.wait()
         warning.finish(time.monotonic())
-        if warning.intervals:
-            with wave.open(part, "rb") as source:
-                parameters = source.getparams()
-                pcm = source.readframes(source.getnframes())
-            with wave.open(part, "wb") as output:
-                output.setparams(parameters)
-                output.writeframes(sound_pack.mute_pcm(pcm, parameters.framerate, warning.intervals))
         if presence_last:
             presence("paused", recipient)
         final_path = part[:-5] + f"-{held:.1f}.wav"
