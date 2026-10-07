@@ -23,6 +23,9 @@ class FakeCloudClaim:
     def status(self):
         return {"status": "claimed" if self.claimed else "not_started"}
 
+    def setup_checkin(self):
+        return {"claimed": self.claimed, "pending_claim": None}
+
     def start(self):
         self.started += 1
         return {"status": "awaiting_button", "whatsapp_url": "https://wa.me/12025550101?text=claim",
@@ -83,7 +86,7 @@ class CloudOnboardingTests(unittest.TestCase):
         return captured
 
     def run_watcher(self, *, claim=None, setup_pending=lambda: True, sleep=lambda _: None,
-                    mode="HOME", transport="cloud"):
+                    mode="HOME", transport="cloud", online_cue=None):
         from messagebox.onboarding.completion import request_completion
         path = Path(self.temp.name) / "completion-request.json"
         write = mock.Mock(side_effect=lambda **kwargs: request_completion(path, **kwargs))
@@ -92,6 +95,8 @@ class CloudOnboardingTests(unittest.TestCase):
             create_app(mode=mode, config={"device_id": "A7K2"},
                        state_store=self.state, cloud_claim=claim or self.cloud,
                        completion_request=write, start_claim_watcher=True,
+                       online_cue=online_cue or mock.Mock(),
+                       connectivity_checker=self.checker,
                        setup_pending=setup_pending, sleep=sleep)
         if thread.called:
             thread.return_value.start.assert_called_once_with()
@@ -106,7 +111,7 @@ class CloudOnboardingTests(unittest.TestCase):
         client.claimed = True
         claim = CloudClaim(client, path=Path(self.temp.name) / "absent-claim.json", clock=lambda: NOW)
         pending = [True]
-        with mock.patch.object(client, "claim", wraps=client.claim) as status:
+        with mock.patch.object(client, "setup_checkin", wraps=client.setup_checkin) as status:
             write, path, _ = self.run_watcher(claim=claim, setup_pending=lambda: pending[0],
                                             sleep=lambda _: pending.__setitem__(0, False))
         write.assert_called_once_with(transport="cloud")
@@ -114,16 +119,26 @@ class CloudOnboardingTests(unittest.TestCase):
         status.assert_called_once_with()
 
     def test_watcher_waiting_and_status_errors_keep_polling_without_completion(self):
-        for result in ({"status": "not_started"}, CloudClaimError("private"), OSError("private")):
+        for result in ({"claimed": False, "pending_claim": None}, CloudClaimError("private"), OSError("private")):
             with self.subTest(result=type(result).__name__):
-                self.cloud.status = mock.Mock(side_effect=result if isinstance(result, Exception) else None,
+                self.cloud.setup_checkin = mock.Mock(side_effect=result if isinstance(result, Exception) else None,
                                               return_value=result)
                 pending = [True]
                 write, path, _ = self.run_watcher(setup_pending=lambda: pending[0],
                                                 sleep=lambda _: pending.__setitem__(0, False))
                 write.assert_not_called()
                 self.assertFalse(path.exists())
-                self.cloud.status.assert_called_once_with()
+                self.cloud.setup_checkin.assert_called_once_with()
+
+    def test_online_cue_failure_does_not_block_claimed_completion(self):
+        self.cloud.claimed = True
+        for error in (OSError("private"), CloudDeviceError("private")):
+            with self.subTest(error=type(error).__name__):
+                pending = [True]
+                write, _, _ = self.run_watcher(setup_pending=lambda: pending[0],
+                                              sleep=lambda _: pending.__setitem__(0, False),
+                                              online_cue=mock.Mock(side_effect=error))
+                write.assert_called_once_with(transport="cloud")
 
     def test_watcher_retries_are_bounded_and_restart_before_completion_requests_again(self):
         self.cloud.claimed = True
@@ -140,8 +155,9 @@ class CloudOnboardingTests(unittest.TestCase):
         write.assert_not_called()
         self.assertFalse(path.exists())
         self.state.reconcile_hotspot()
+        self.checker.return_value = {"ok": False, "proof": [], "error": "CONNECTION_LOST"}
         pending = [True]
-        with mock.patch.object(self.cloud, "status") as status:
+        with mock.patch.object(self.cloud, "setup_checkin") as status:
             write, _, _ = self.run_watcher(setup_pending=lambda: pending[0],
                                          sleep=lambda _: pending.__setitem__(0, False))
         write.assert_not_called()
@@ -165,6 +181,36 @@ class CloudOnboardingTests(unittest.TestCase):
             post_worker_init(mock.Mock(wsgi=lazy))
             post_worker_init(mock.Mock(wsgi=lazy))
         create.assert_called_once_with(start_claim_watcher=True)
+
+    def test_checkin_phase_gate_ready_phase_and_raced_wifi_change(self):
+        for phase in ("WIFI_SELECT", "WHATSAPP_PENDING", "WHATSAPP_READY"):
+            with self.subTest(phase=phase):
+                store = mock.Mock()
+                store.load.return_value = {"phase": phase}
+                pending = [True]
+                cloud = mock.Mock()
+                cloud.setup_checkin.return_value = {"claimed": False, "pending_claim": None}
+                online = mock.Mock()
+                with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+                     mock.patch("messagebox.onboarding.app.threading.Thread") as thread:
+                    create_app(mode="HOME", config={"device_id": "A7K2"}, state_store=store,
+                               cloud_claim=cloud, start_claim_watcher=True, online_cue=online,
+                               setup_pending=lambda: pending[0],
+                               sleep=lambda _: pending.__setitem__(0, False))
+                args = thread.call_args.kwargs
+                args["target"](**args["kwargs"])
+                self.assertEqual(cloud.setup_checkin.call_count, int(phase != "WIFI_SELECT"))
+                self.assertEqual(online.call_count, int(phase != "WIFI_SELECT"))
+
+        pending = [True]
+        def changed():
+            self.state.reconcile_hotspot()
+            return {"claimed": True}
+        self.cloud.setup_checkin = changed
+        self.checker.return_value = {"ok": False, "proof": [], "error": "CONNECTION_LOST"}
+        write, _, _ = self.run_watcher(setup_pending=lambda: pending[0],
+                                      sleep=lambda _: pending.__setitem__(0, False))
+        write.assert_not_called()
 
     def test_claim_page_reads_color_per_request(self):
         from messagebox.identity import BOX_COLORS
@@ -272,6 +318,22 @@ class CloudOnboardingTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request("GET", "/api/state")["body"])["transport"], "cloud")
         self.assertEqual(self.whatsapp.mock_calls, [])
         self.assertEqual(self.nfc.mock_calls, [])
+
+    def test_cloud_handoff_uses_setup_card_copy_small_fallback_and_box_color(self):
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
+            self.app = create_app(mode="HOTSPOT", config={"device_id": "A7K2"},
+                                  state_store=self.state, adapter=self.adapter,
+                                  sleep=lambda _: None)
+        with mock.patch("messagebox.onboarding.app.read_box_color", return_value="blue"):
+            response = self.request("POST", "/wifi/connect", f"http://{HOST}",
+                                    b"ssid=Home&security=protected&password=synthetic-password")
+        self.assertEqual(response["status"], "202 Accepted")
+        self.assertIn(b"Your box is joining your Wi-Fi. When it beeps, scan the QR code on your setup card to finish in WhatsApp.", response["body"])
+        self.assertIn(b"No card? Join the same Wi-Fi and open", response["body"])
+        self.assertIn(b'class="field-help"', response["body"])
+        self.assertIn(f'href="http://{HOST}/cloud-connect"'.encode(), response["body"])
+        self.assertIn(b'data-box-color="blue"', response["body"])
+        self.assertNotIn(b"__HANDOFF_CONTENT__", response["body"])
 
     def test_completion_requires_live_claim_and_preserves_legacy_setup_gate(self):
         body = b"intent=done"

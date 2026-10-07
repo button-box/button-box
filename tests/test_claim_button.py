@@ -116,8 +116,8 @@ class ClaimButtonTests(unittest.TestCase):
                  mock.patch.dict(button_send.os.environ, {"RUNTIME_DIRECTORY": directory}), \
                  mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
                 cues = button_send.claim_beeps()
-            self.assertEqual(set(cues), {"press", "fail"})
-            for name, call in zip(("press", "fail"), run.call_args_list):
+            self.assertEqual(set(cues), {"press", "fail", "online"})
+            for name, call in zip(("press", "fail", "online"), run.call_args_list):
                 self.assertEqual(cues[name][1:], button_send.BEEPS[name][1:])
                 self.assertEqual(Path(cues[name][0]).parent, Path(directory or "."))
                 self.assertEqual(call.args[0][-1], cues[name][0])
@@ -132,6 +132,21 @@ class ClaimButtonTests(unittest.TestCase):
             self.assertFalse(button_send._play_nfc_prompt("synthetic-card", "unknown", ""))
             beep.assert_called_once_with(button_send.NFC_UNKNOWN_BEEP)
         self.assertEqual(self.cues[button_send.NFC_UNKNOWN_BEEP][1:], button_send.BEEPS["fail"][1:])
+
+    def test_online_cue_is_played_once_by_idle_button_owner_even_after_audio_failure(self):
+        cues = {**self.cues, "online": button_send.BEEPS["online"]}
+        queue_cue = cloud_claim.setup_online_cue
+        def cue(**kwargs):
+            return queue_cue(directory=self.root, session="setup-1", **kwargs)
+        cue()
+        with mock.patch.object(cloud_claim, "setup_online_cue", side_effect=cue), \
+             mock.patch.object(button_send.subprocess, "run", side_effect=OSError("private")) as run:
+            button_send.play_setup_online(cues)
+            button_send.play_setup_online(cues)
+        run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, cues["online"][0]],
+                                    check=True, timeout=2)
+        self.assertNotEqual(cues["online"][1:], self.cues["press"][1:])
+        self.assertNotEqual(cues["online"][1:], self.cues["fail"][1:])
 
     def test_ffmpeg_and_aplay_failures_never_prevent_confirmation(self):
         for error in (OSError("private"), subprocess.CalledProcessError(1, "audio"),

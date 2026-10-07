@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from messagebox.identity import read_box_color, read_box_id
-from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError
+from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError, setup_online_cue
+from messagebox.cloud_device import CloudDeviceError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
@@ -101,15 +102,21 @@ _HANDOFF_HTML = b"""<!doctype html>
       <section class="card handoff" aria-labelledby="handoff-title">
         <p class="eyebrow">Wi-Fi setup</p>
         <div class="pulse" aria-hidden="true"></div>
-        <h1 id="handoff-title">Join the same Wi-Fi</h1>
-        <p class="lede">Join the Wi-Fi you chose for your Button Box, then open this link to continue:</p>
-        <p><a class="button" href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a></p>
+        __HANDOFF_CONTENT__
       </section>
     </main>
   </div>
 </body>
 </html>
 """
+
+_QR_HANDOFF_CONTENT = b"""<h1 id="handoff-title">Finish with your setup card</h1>
+<p class="lede">Your box is joining your Wi-Fi. When it beeps, scan the QR code on your setup card to finish in WhatsApp.</p>
+<p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>"""
+
+_LOCAL_HANDOFF_CONTENT = b"""<h1 id="handoff-title">Join the same Wi-Fi</h1>
+<p class="lede">Join the Wi-Fi you chose for your Button Box, then open this link to continue:</p>
+<p><a class="button" href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a></p>"""
 
 _CHANGE_HTML = b"""<!doctype html>
 <html lang="en">
@@ -330,7 +337,7 @@ def _require_same_origin(environ, expected_origin):
 
 def watch_cloud_claim(request, *, setup_pending, sleep=time.sleep,
                       interval=5, retry_delay=60, max_requests=3):
-    """Request the root handoff without a browser; retries stay bounded."""
+    """Check in without a browser, backing off failures up to thirty seconds."""
     def pending():
         try:
             return setup_pending()
@@ -340,18 +347,19 @@ def watch_cloud_claim(request, *, setup_pending, sleep=time.sleep,
 
     def attempt():
         try:
-            request()
-            return True
+            return request()
         except RequestError:
-            return False  # HOME/phase/claim is not ready yet.
+            return False  # HOME/phase is not ready yet; no Cloud request.
         except Exception as exc:
             # This thread is the only completion path; an identity or client
             # error must not end it. Log the type only, never server data.
             logging.getLogger(__name__).warning("Cloud setup completion unavailable: %s", type(exc).__name__)
-            return False
+            return None
 
+    delay = interval
     while pending():
-        if attempt():
+        result = attempt()
+        if result:
             # Stop normal Cloud polling after the request. Only retry the same
             # guarded handoff if root has not removed the setup marker in time.
             for _ in range(max_requests - 1):
@@ -360,7 +368,8 @@ def watch_cloud_claim(request, *, setup_pending, sleep=time.sleep,
                     return
                 attempt()
             return
-        sleep(interval)
+        delay = min(delay * 2, 30) if result is None else interval
+        sleep(delay)
 
 
 def create_app(
@@ -379,6 +388,7 @@ def create_app(
     nfc_client=None,
     caregiver_settings=None,
     completion_request=request_completion,
+    online_cue=setup_online_cue,
     clock=time.time,
     sleep=time.sleep,
     handoff_delay=HANDOFF_DELAY,
@@ -467,8 +477,8 @@ def create_app(
 
     if selected_mode == "HOTSPOT":
         store.reconcile_hotspot()
-    # Home connectivity checks belong to /api/state, not application startup:
-    # the page and static files must load even while internet checks are slow.
+    # Connectivity checks run in /api/state and the background setup watcher,
+    # never on the thread loading the page or static files.
 
     static_files = {}
     for name, content_type in (
@@ -748,6 +758,9 @@ def create_app(
     def handoff(start_response, callback=None, body=None):
         if body is None:
             body = _HANDOFF_HTML
+            body = body.replace(b"__HANDOFF_CONTENT__", _QR_HANDOFF_CONTENT if cloud_mode else _LOCAL_HANDOFF_CONTENT)
+            if cloud_mode:
+                body = body.replace(b"__MESSAGEBOX_URL__", (canonical_url + "cloud-connect").encode("ascii"))
         # Embed the shared styles before the hotspot can disappear.
         body = body.replace(b"__MESSAGEBOX_URL__", canonical_url.encode("ascii"))
         body = body.replace(b"__STYLES__", static_files["styles.css"][0])
@@ -1300,10 +1313,29 @@ def create_app(
                 {"error": "Onboarding state is unavailable"}, "503 Service Unavailable"
             )(start_response)
 
+    def setup_checkin():
+        state = store.load()
+        if state["phase"] in {WIFI_CONNECTING, WIFI_ASSOCIATED, WIFI_FAILED}:
+            state = reconcile_home()
+        if state["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+        result = claim_client().setup_checkin()
+        # A Wi-Fi change or completion can race the bounded Cloud request.
+        if not setup_pending() or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            return False
+        try:
+            online_cue()
+        except (OSError, ValueError, CloudClaimError, CloudDeviceError) as exc:
+            logging.getLogger(__name__).warning("Setup online cue unavailable: %s", type(exc).__name__)
+        if result["claimed"]:
+            completion_request(transport="cloud")
+            return True
+        return False
+
     if start_claim_watcher and cloud_mode and selected_mode == "HOME":
         threading.Thread(
             target=watch_cloud_claim,
-            kwargs={"request": request_cloud_completion, "setup_pending": setup_pending, "sleep": sleep},
+            kwargs={"request": setup_checkin, "setup_pending": setup_pending, "sleep": sleep},
             name="cloud-claim-watcher", daemon=True,
         ).start()
     return application
