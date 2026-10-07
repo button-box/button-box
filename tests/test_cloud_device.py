@@ -119,11 +119,19 @@ class CloudIdentityTests(unittest.TestCase):
                     CloudDeviceClient(unsafe, identity)
             for unsafe in (
                 "https://other.invalid/cloud-api/v1/device/media/a",
+                "https://other.invalid/cloud-api/v1/device/listened-media/a",
                 "https://example.invalid/cloud-api/v1/boxes/a",
                 "https://example.invalid/cloud-api/v1/device/media/a?token=x",
+                "https://example.invalid/cloud-api/v1/device/listened-media/a?token=x",
+                "https://example.invalid/cloud-api/v1/device/listened-media/a#fragment",
             ):
                 with self.subTest(url=unsafe), self.assertRaises(CloudDeviceError):
                     client.media(unsafe)
+
+            client.media("https://example.invalid/cloud-api/v1/device/listened-media/" + "a" * 64)
+            self.assertEqual(requests[-1].full_url,
+                "https://example.invalid/cloud-api/v1/device/listened-media/" + "a" * 64)
+            self.assertEqual(requests[-1].get_header("Authorization"), "Bearer " + identity["credential"])
 
     def test_voice_upload_uses_one_scoped_target_and_key(self):
         with tempfile.TemporaryDirectory() as directory:

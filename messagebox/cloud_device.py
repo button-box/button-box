@@ -289,7 +289,8 @@ class CloudDeviceClient:
         if (
             parsed.scheme != "https"
             or parsed.netloc != urlsplit(self.api_url).netloc
-            or not parsed.path.startswith("/cloud-api/v1/device/media/")
+            or not parsed.path.startswith(("/cloud-api/v1/device/media/",
+                                           "/cloud-api/v1/device/listened-media/"))
             or parsed.username is not None
             or parsed.password is not None
             or parsed.query
@@ -388,4 +389,5 @@ def capabilities(*, nfc=False) -> dict:
         "nfc": bool(nfc),
         "settings_version": 1,
         "swoosh_sound_enabled": True,
+        "listened_announcements": True,
     }

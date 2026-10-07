@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import io
 import json
 import os
 import random
@@ -20,10 +21,11 @@ from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
+from messagebox.listened_receipts import ReceiptStore
 from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
-    NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE)
+    NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE, STATE_DIR)
 from messagebox.settings import (
     SettingsError, SettingsStore, RINGTONES, normalize_ringtone_id, validate as validate_settings,
 )
@@ -39,6 +41,9 @@ _ID = re.compile(r"^[A-Za-z0-9:._-]{1,240}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _PHONE = re.compile(r"^[1-9][0-9]{6,14}$")
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
+MAX_LISTENED_CLIP_BYTES = 1024 * 1024
+MAX_LISTENED_CLIPS = 32
+LISTENED_DIR = STATE_DIR / "listened-receipts"
 LEDGER_SECONDS = 90 * 86400
 RINGTONE_DIR = Path("/opt/messagebox/ringtones")
 RINGTONE_PREVIEW_MIN_SECONDS = 17
@@ -123,11 +128,14 @@ class CloudRuntime:
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
 
+    def _receipt_store(self):
+        return ReceiptStore(str(LISTENED_DIR))
+
     def _load(self):
         try:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {"version": 1, "cursor": 0, "acks": {}, "seen": {}, "deleted": [], "pending_nfc": {}, "pending_settings": {}, "outbox_status_cursor": 0, "pending_previews": {}}
+            return {"version": 1, "cursor": 0, "acks": {}, "seen": {}, "deleted": [], "pending_nfc": {}, "pending_settings": {}, "outbox_status_cursor": 0, "pending_previews": {}, "pending_listened": {}}
         except (OSError, ValueError) as exc:
             raise CloudRuntimeError("cloud state is unavailable") from exc
         if (not isinstance(state, dict) or state.get("version") != 1
@@ -143,6 +151,8 @@ class CloudRuntime:
                 or state.get("queue_hold_sequence", -1) < -1):
             raise CloudRuntimeError("cloud state is invalid")
         if not isinstance(state.setdefault("pending_previews", {}), dict):
+            raise CloudRuntimeError("cloud state is invalid")
+        if not isinstance(state.setdefault("pending_listened", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
         return state
 
@@ -314,6 +324,7 @@ class CloudRuntime:
         self._sync_contacts(snapshot)
         self.state["snapshot"] = snapshot
         self._save()
+        self._prune_listened_clips()
         return response
 
     def _ack_paths(self, operation_id):
@@ -714,16 +725,160 @@ class CloudRuntime:
                     raise CloudRuntimeError("selected saved card changed")
             self._ack(item["operation_id"], "applied")
 
+    def _listened_prefix(self, scope, listener_id):
+        return hashlib.sha256((scope + ":" + listener_id).encode()).hexdigest()
+
+    def _prune_listened_clips(self):
+        directory = self.state_path.parent / "listened-clips"
+        # Only the poller writes this directory; discard interrupted downloads.
+        for temporary in directory.glob(".*.part"):
+            temporary.unlink(missing_ok=True)
+        snapshot = self.state.get("snapshot") or {}
+        allowed = {self._listened_prefix(snapshot.get("account_scope", ""), person["id"])
+                   for person in snapshot.get("people", [])}
+        paths = sorted(directory.glob("*.wav"), key=lambda path: path.stat().st_mtime,
+                       reverse=True)
+        retained = 0
+        for path in paths:
+            if (path.name.split("-", 1)[0] not in allowed
+                    or path.stat().st_size > MAX_LISTENED_CLIP_BYTES
+                    or retained >= MAX_LISTENED_CLIPS):
+                path.unlink(missing_ok=True)
+            else:
+                retained += 1
+
+    def _listened_clip(self, payload, scope):
+        """A failed optional clip always leaves the bundled voice available."""
+        fields = ("text_hash", "media_url", "sha256", "content_type")
+        if not any(field in payload for field in fields):
+            return ""
+        if (not isinstance(payload.get("text_hash"), str)
+                or not _SHA.fullmatch(payload["text_hash"])
+                or not isinstance(payload.get("sha256"), str)
+                or not _SHA.fullmatch(payload["sha256"])
+                or not isinstance(payload.get("media_url"), str)
+                or payload.get("content_type") != "audio/wav"):
+            return ""
+        directory = self.state_path.parent / "listened-clips"
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+        prefix = self._listened_prefix(scope, payload["listener_identity_id"])
+        path = directory / f"{prefix}-{payload['text_hash']}.wav"
+        # A changed name/text invalidates the listener's previous cached voice.
+        for prior in directory.glob(prefix + "-*.wav"):
+            if prior != path:
+                prior.unlink(missing_ok=True)
+        temporary = directory / f".{uuid.uuid4().hex}.part"
+        try:
+            if path.exists() and path.stat().st_size <= MAX_LISTENED_CLIP_BYTES:
+                audio = path.read_bytes()
+            else:
+                audio = self.client.media(payload["media_url"], limit=MAX_LISTENED_CLIP_BYTES)
+            if (not audio or len(audio) > MAX_LISTENED_CLIP_BYTES
+                    or hashlib.sha256(audio).hexdigest() != payload["sha256"]):
+                raise CloudRuntimeError("listened clip hash is invalid")
+            with wave.open(io.BytesIO(audio), "rb") as source:
+                frames = source.getnframes()
+                if (source.getnchannels() != 1 or source.getsampwidth() != 2
+                        or source.getframerate() != 48000 or source.getcomptype() != "NONE"
+                        or frames <= 0 or frames * 2 > MAX_LISTENED_CLIP_BYTES
+                        or len(source.readframes(frames)) != frames * 2):
+                    raise CloudRuntimeError("listened clip format is invalid")
+            with temporary.open("wb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(audio)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            self._prune_listened_clips()
+            return str(path)
+        except (CloudDeviceError, CloudRuntimeError, OSError, ValueError, EOFError, wave.Error):
+            path.unlink(missing_ok=True)
+            return ""
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def listened_status(self, metadata):
+        snapshot = self._snapshot()
+        if (not isinstance(metadata, dict) or not _valid_id(metadata.get("operation_id"))
+                or not _valid_id(metadata.get("message_id"))
+                or not _valid_id(metadata.get("listener_id"))
+                or not _valid_time(metadata.get("expires_at"))):
+            return "rejected"
+        if self.server_now() >= metadata["expires_at"]:
+            return "expired"
+        if (metadata.get("account_scope") != snapshot["account_scope"]
+                or metadata["listener_id"] not in self._people()
+                or metadata["message_id"] in self.state["deleted"]):
+            return "rejected"
+        if (snapshot["queue_hold"] or not snapshot["entitlement"]["deliver"]
+                or not snapshot["entitlement"]["send"]
+                or snapshot["entitlement"].get("until") is not None
+                and self.server_now() >= snapshot["entitlement"]["until"]):
+            return "pending"
+        return "ready"
+
+    def _listened(self, item, server_time):
+        payload = item["payload"]
+        if (not _valid_id(payload.get("message_id"))
+                or not _valid_id(payload.get("listener_identity_id"))
+                or not isinstance(payload.get("listener_first_name"), str)
+                or len(payload["listener_first_name"]) > 24):
+            raise CloudRuntimeError("listened notice is invalid")
+        snapshot = self._snapshot()
+        metadata = {"operation_id": item["operation_id"], "message_id": payload["message_id"],
+                    "listener_id": payload["listener_identity_id"],
+                    "account_scope": snapshot["account_scope"], "expires_at": item["expires_at"]}
+        status = self.listened_status(metadata)
+        if server_time >= item["expires_at"] or status == "expired":
+            self._ack(item["operation_id"], "expired")
+            return
+        if status == "rejected":
+            raise CloudRuntimeError("listened listener is no longer authorized")
+        if status == "pending":
+            raise CloudCommandDeferred("listened notice is paused")
+        store = self._receipt_store()
+        notice_id = store.cloud_notice_id(item["operation_id"])
+        if not store.cloud_exists(notice_id):
+            clip = self._listened_clip(payload, snapshot["account_scope"])
+            store.enqueue_cloud(item["operation_id"], payload["message_id"],
+                payload["listener_identity_id"], payload["listener_first_name"], clip,
+                account_scope=snapshot["account_scope"], expires_at=item["expires_at"],
+                received_at=server_time)
+        self.state["pending_listened"][item["operation_id"]] = notice_id
+        self._save()  # Queue and deduplication are durable before receipt ACK.
+        self._ack(item["operation_id"], "received")
+        self._finish_listened()
+
+    def _finish_listened(self):
+        if not self.state["pending_listened"]:
+            return
+        store = self._receipt_store()
+        for operation_id, notice_id in list(self.state["pending_listened"].items()):
+            outcome = store.cloud_outcome(notice_id)
+            if outcome in {"applied", "rejected", "expired"}:
+                self._ack(operation_id, outcome)
+                del self.state["pending_listened"][operation_id]
+                self._save()
+
     def _command(self, item, server_time):
         if self._replay_completed(item["operation_id"]):
             return
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]
-                or item["operation_id"] in self.state["pending_previews"]):
+                or item["operation_id"] in self.state["pending_previews"]
+                or item["operation_id"] in self.state["pending_listened"]):
             return
         kind, payload = item["kind"], item["payload"]
         if kind == "audio":
             return self._audio(item, server_time)
+        if kind == "listened":
+            return self._listened(item, server_time)
         if kind == "delete_message":
             self._delete(payload.get("message_id"))
             self._ack(item["operation_id"], "applied")
@@ -878,6 +1033,7 @@ class CloudRuntime:
         if deletion_only:
             self.state["snapshot"] = None
             self._save()
+            self._prune_listened_clips()
         elif inbox.get("box_id") != self._snapshot()["box_id"]:
             raise CloudRuntimeError("cloud inbox box does not match")
         if not _valid_time(inbox.get("server_time")) or not isinstance(inbox.get("items"), list):
@@ -887,6 +1043,7 @@ class CloudRuntime:
                         and item.get("kind") == "delete_message"}
         self.flush_acks(deletion_ids if deletion_only else None)
         if not deletion_only:
+            self._finish_listened()
             self._finish_previews()
             self._finish_nfc()
             self._finish_settings()
@@ -894,7 +1051,7 @@ class CloudRuntime:
         for item in sorted(items, key=lambda entry: (entry.get("kind") != "delete_message", entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"audio", "settings", "preview_ringtone", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
+                    or item.get("kind") not in {"audio", "listened", "settings", "preview_ringtone", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (
@@ -911,7 +1068,9 @@ class CloudRuntime:
             now = inbox["server_time"]
             if not deletion_only:
                 self._snapshot()
-            if now >= item["expires_at"] and item["kind"] != "delete_message":
+            if item["kind"] == "listened" and self._replay_completed(item["operation_id"]):
+                pass  # Expiry must not replace an already reported playback result.
+            elif now >= item["expires_at"] and item["kind"] != "delete_message":
                 self._ack(item["operation_id"], "expired")
             else:
                 try:
@@ -933,6 +1092,7 @@ class CloudRuntime:
         # Cross-process playback receipts and local completions need no inbox hint.
         self._snapshot()
         self.flush_acks()
+        self._finish_listened()
         self._finish_previews()
         self._finish_nfc()
         self._finish_settings()
@@ -1048,6 +1208,11 @@ def record_played(metadata):
     if metadata and metadata.get("cloud") is True and _valid_id(metadata.get("cloud_operation_id")):
         runtime = CloudRuntime()
         runtime._ack(metadata["cloud_operation_id"], "played")
+
+
+def listened_status(metadata):
+    """Check local authorization only; the button owner never downloads media."""
+    return CloudRuntime(client=object()).listened_status(metadata)
 
 
 def account_scope(*, fresh=False):

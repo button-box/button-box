@@ -1340,14 +1340,31 @@ def play_audio_ordinary(path):
 
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
-    if quiet_hours():
+    if _recording or _guided_active or button.is_pressed or quiet_hours():
         return 0
     played = 0
     for _ in range(max(0, limit)):
+        if _recording or _guided_active or button.is_pressed or quiet_hours():
+            break
         notice = receipt_store.claim_next()
         if notice is None:
             break
+        if getattr(notice, "cloud", None):
+            try:
+                status = (cloud_runtime.listened_status(notice.cloud)
+                          if transport_mode() == "cloud" else "pending")
+            except (CloudRuntimeError, OSError, ValueError):
+                status = "pending"
+            if status in {"expired", "rejected"}:
+                receipt_store.complete(notice, cloud_result=status)
+                continue
+            if status != "ready":
+                receipt_store.release(notice)
+                break
         clip = notice.clip or LISTENED_FALLBACK_WAV
+        if getattr(notice, "cloud", None) and not os.path.isfile(clip):
+            # A bounded cache can evict a voice while its notice waits for idle.
+            clip = LISTENED_FALLBACK_WAV
         # Pending receipts from prior releases persist the old bundled default.
         if clip == str(APP_DIR / "sounds/listen-receipts/someone-listened.wav"):
             clip = LISTENED_FALLBACK_WAV
@@ -1364,8 +1381,8 @@ def play_pending_listened(limit=4):
             receipt_store.complete(notice)
             played += 1
             unavailable_events.available("listen_announcement")
-            log_event("listen_announced", listener=notice.listener_name)
-            log(f"announced listened receipt: {notice.listener_name}")
+            log_event("listen_announced")
+            log("announced listened receipt")
         except Exception as exc:
             receipt_store.release(notice)
             announcement_gate.blocked()
@@ -1949,9 +1966,6 @@ def run_guided_once(settings=None):
     _guided_active = True
     outcome = None
     try:
-        # Catch a receipt that arrived after the idle loop saw this press. The
-        # announcement finishes before the requested child interaction begins.
-        play_pending_listened()
         if claim and not inbound_audio_authorized(metadata):
             release_claim(claim)
             return
