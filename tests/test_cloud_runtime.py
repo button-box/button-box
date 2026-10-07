@@ -687,7 +687,7 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime._command(item, NOW)
             self.runtime._finish_settings()
             self.assertFalse(button_send.maybe_play_cloud_sound())
-        play.assert_called_once_with()  # Volume changed: the ringtone plays at the new level.
+        play.assert_called_once_with(None)  # Ringtone changed too: the whole new ringtone at the new level.
 
     def test_volume_change_previews_the_ringtone_instead_of_the_saved_cue(self):
         self.runtime.heartbeat()
@@ -702,10 +702,10 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime._finish_settings()
             self.mono[0] += 3
             self.assertTrue(button_send.maybe_play_cloud_sound())
-        snippet.assert_called_once_with()
+        snippet.assert_called_once_with(button_send.VOLUME_PREVIEW_SECONDS)
         cue.assert_not_called()
 
-    def test_ringtone_change_previews_the_new_ringtone(self):
+    def test_ringtone_change_plays_the_whole_new_ringtone(self):
         self.runtime.heartbeat()
         item = self.settings_command(ringtone_id="island")
         with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
@@ -718,7 +718,7 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime._finish_settings()
             self.mono[0] += 3
             self.assertTrue(button_send.maybe_play_cloud_sound())
-        snippet.assert_called_once_with()
+        snippet.assert_called_once_with(None)  # whole ringtone
         cue.assert_not_called()
 
     def test_settings_saved_noop_boot_adoption_and_local_echo_are_silent(self):
@@ -1274,7 +1274,7 @@ class CloudRuntimeTests(unittest.TestCase):
             play.assert_not_called()
             self.assertTrue(button_send.maybe_play_cloud_sound())
             self.assertFalse(button_send.maybe_play_cloud_sound())
-        play.assert_called_once_with(ringtone_dir / "hello_piano.wav", 17.0)
+        play.assert_called_once_with(ringtone_dir / "hello_piano.wav", 17.0, lamp_ringtone="hello_piano")
         self.runtime._finish_previews()
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
         self.assertEqual(self.runtime.state["pending_previews"], {})

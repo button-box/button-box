@@ -1396,21 +1396,26 @@ def play_pending_listened(limit=4):
 VOLUME_PREVIEW_SECONDS = 3
 
 
-def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS):
-    """Play the start of the chosen ringtone at the current volume; a press stops it."""
-    ringtone_id = normalize_ringtone_id(caregiver_settings().get("ringtone_id"))
+def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS, ringtone_id=None):
+    """Play a ringtone at the current volume (whole when seconds is None), lamp in rhythm; a press stops it."""
+    ringtone_id = normalize_ringtone_id(ringtone_id or caregiver_settings().get("ringtone_id"))
     path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES.get(ringtone_id, "")
     if ringtone_id not in cloud_runtime.RINGTONES or not path.is_file() or button.is_pressed:
         return False
-    process = subprocess.Popen(["aplay", "-q", "-d", str(seconds), "-D", SPK_DEV, str(path)])
-    deadline = time.monotonic() + seconds + 2
+    limit = ["-d", str(seconds)] if seconds else []
+    process = subprocess.Popen(["aplay", "-q", *limit, "-D", SPK_DEV, str(path)])
+    started = time.monotonic()
+    deadline = started + (seconds or cloud_runtime._ringtone_preview_timeout(path)) + 2
     try:
         while process.poll() is None:
             if button.is_pressed or time.monotonic() >= deadline:
                 return False
+            # Previews flash the lamp to the ringtone's rhythm, like a real ring.
+            (led.on if ring_lamp_on(time.monotonic() - started, ringtone_id) else led.off)()
             time.sleep(POLL_S)
         return process.returncode == 0
     finally:
+        led.off()
         if process.poll() is None:
             process.terminate()
             try:
@@ -1420,7 +1425,7 @@ def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS):
                 process.wait(timeout=0.5)
 
 
-def play_idle_sound(path, timeout):
+def play_idle_sound(path, timeout, lamp_ringtone=None):
     """Yield to a press and release the speaker before recording can start."""
     if button.is_pressed:
         return False
@@ -1432,11 +1437,16 @@ def play_idle_sound(path, timeout):
                 return False
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired("aplay", timeout)
+            if lamp_ringtone:
+                # Ringtone previews flash the lamp to the ringtone's rhythm, like a real ring.
+                (led.on if ring_lamp_on(timeout - (deadline - time.monotonic()), lamp_ringtone) else led.off)()
             time.sleep(POLL_S)
         if code:
             raise subprocess.CalledProcessError(code, "aplay")
         return True
     finally:
+        if lamp_ringtone:
+            led.off()
         if process.poll() is None:
             process.terminate()
             try:
@@ -1476,14 +1486,17 @@ def maybe_play_cloud_sound():
                     # The main loop applies volume before consuming these requests.
                     # A volume change previews the ringtone so the owner hears the new level.
                     played = (not quiet_hours() and apply_master_volume()
-                              and (play_ringtone_snippet() if request.get("volume_changed")
+                              and (play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
+                                   if request.get("volume_changed")
                                    else play_idle_sound(sound_pack.cue_path("card_saved"), 5)))
                     if not played and not quiet_hours():
                         cloud_audio_requests.finish(request, "pending")
                         return False
                 elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
-                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[normalize_ringtone_id(request["ringtone_id"])]
-                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                    ringtone_id = normalize_ringtone_id(request["ringtone_id"])
+                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[ringtone_id]
+                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path),
+                                             lamp_ringtone=ringtone_id)
                 else:
                     played = False
                 cloud_audio_requests.finish(request, "played" if played else "rejected")
