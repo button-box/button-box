@@ -410,6 +410,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.client.items = [item]
         self.runtime.poll_once()
         self.assertEqual(SettingsStore(self.root / "settings.json").load()[0]["master_volume_percent"], 40)
+
         self.assertFalse(SettingsStore(self.root / "settings.json").load()[0]["swoosh_sound_enabled"])
         self.assertEqual(self.client.acks[-1]["state"], "received")
         (self.root / "applied-settings.json").write_text(json.dumps({"revision": 1, "settings": candidate}))
@@ -425,6 +426,190 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "rejected")
         self.assertEqual(SettingsStore(self.root / "settings.json").load()[0]["master_volume_percent"], 40)
+
+    def settings_command(self, **changes):
+        current, _ = self.runtime.settings.load()
+        desired = {**current, **changes, "revision": current["revision"] + 1}
+        return {"operation_id": f"settings_operation_{desired['revision']}", "kind": "settings",
+                "payload": {"settings": desired, "expected_revision": current["revision"],
+                            "desired_revision": desired["revision"]}}
+
+    def settings_audio_owner(self, revision=0):
+        return mock.patch.multiple(button_send,
+            cloud_audio_requests=self.runtime.audio_requests,
+            caregiver_settings=lambda: self.runtime.settings.load()[0],
+            _applied_volume_revision=revision, _recording=False, _guided_active=False,
+            button=types.SimpleNamespace(is_pressed=False), create=True)
+
+    def apply_settings_on_button(self):
+        with mock.patch.object(button_send.time, "monotonic", side_effect=lambda: self.mono[0]), \
+             mock.patch.object(button_send.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)):
+            self.assertTrue(button_send.apply_master_volume())
+
+    def test_settings_saved_queues_after_apply_and_plays_once_at_new_volume(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(master_volume_percent=40, ringtone_id="sunshine")
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+            self.runtime._command(item, NOW)
+            self.runtime._finish_settings()
+            self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.assertEqual(len(list(self.runtime.audio_requests.directory.glob("*.json"))), 1)
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.mono[0] += 3
+            def hear_new_volume(*_args):
+                self.assertEqual(button_send._applied_volume_revision, 1)
+                self.assertEqual(button_send.caregiver_settings()["master_volume_percent"], 40)
+                return True
+            play.side_effect = hear_new_volume
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.runtime._command(item, NOW)
+            self.runtime._finish_settings()
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        play.assert_called_once_with(button_send.sound_pack.cue_path("card_saved"), 5)
+
+    def test_settings_saved_noop_boot_adoption_and_local_echo_are_silent(self):
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False):
+            # A revision-only Cloud change is acknowledged without a sound.
+            self.runtime._command(self.settings_command(), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            # First adoption after boot is silent even if values changed.
+            button_send._applied_volume_revision = None
+            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            # A box-originated revision echoed by Cloud has no remote-change intent.
+            item = self.settings_command(master_volume_percent=60)
+            desired = item["payload"]["settings"]
+            self.runtime.settings.update({k: v for k, v in desired.items() if k not in {"version", "revision"}},
+                                         item["payload"]["expected_revision"])
+            self.runtime._command(item, NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+        self.assertEqual(self.runtime.state["pending_settings"], {})
+        self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
+
+    def test_settings_saved_failed_apply_and_command_restart_preserve_order(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(master_volume_percent=40)
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False):
+            self.runtime._command(item, NOW)
+            # Simulate a crash after settings mutation, before pending persistence.
+            self.runtime.state["pending_settings"].clear()
+            self.runtime._save()
+            self.runtime = CloudRuntime(self.client, state_path=self.runtime.state_path,
+                contacts_path=self.runtime.contacts.path, queue_dir=self.runtime.queue_dir,
+                outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+                clock=self.runtime.clock, monotonic=lambda: self.mono[0], boot_id="test-boot")
+            self.runtime._command(item, NOW)
+            with mock.patch.object(button_send.subprocess, "run", return_value=types.SimpleNamespace(returncode=1)):
+                self.assertFalse(button_send.apply_master_volume())
+            self.runtime._finish_settings()
+            self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.assertEqual(len(list(self.runtime.audio_requests.directory.glob("*.json"))), 1)
+
+    def test_settings_saved_interrupted_press_keeps_original_deadline(self):
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound", side_effect=[False, True]) as play:
+            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.mono[0] += 3
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertEqual(self.runtime.audio_requests.outcome("settings_saved:settings_operation_1"), "pending")
+            self.mono[0] += 1
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.assertEqual(play.call_count, 2)
+
+    def test_settings_saved_coalesces_across_restart_without_extending_deadline(self):
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False):
+            for volume in (40, 60, 80):
+                self.runtime._command(self.settings_command(master_volume_percent=volume), NOW)
+                self.apply_settings_on_button()
+                self.runtime._finish_settings()
+                self.mono[0] += 1
+        requests = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW - 100,
+                                monotonic=lambda: self.mono[0], boot_id="test-boot")
+        self.assertEqual(len(list(requests.directory.glob("*.json"))), 1)
+        with requests.owner():
+            self.assertIsNone(requests.claim_next("a" * 64))
+            self.mono[0] = 105
+            request = requests.claim_next("a" * 64)
+            self.assertEqual(request["kind"], "settings_saved")
+            self.assertEqual(request["expires_mono"], 130)
+            requests.finish(request, "played")
+            self.assertIsNone(requests.claim_next("a" * 64))
+        for revision in (1, 2, 3):
+            requests.enqueue_settings_saved(f"settings_saved:settings_operation_{revision}", "a" * 64, 30)
+        self.assertFalse(list(requests.directory.glob("*.json")))
+        requests.enqueue_settings_saved("settings_saved:later_save", "a" * 64, 30)
+        self.mono[0] += 3
+        with requests.owner():
+            self.assertIsNotNone(requests.claim_next("a" * 64))
+
+    def test_settings_saved_defers_recording_guided_and_press_then_expires(self):
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            key = "settings_saved:settings_operation_1"
+            self.mono[0] += 3
+            for flag in ("_recording", "_guided_active"):
+                with mock.patch.object(button_send, flag, True):
+                    self.assertFalse(button_send.maybe_play_cloud_sound())
+                    self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
+            with mock.patch.object(button_send.button, "is_pressed", True):
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+                self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
+            play.assert_not_called()
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.runtime._command(self.settings_command(master_volume_percent=60), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.mono[0] += 30
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertEqual(self.runtime.audio_requests.outcome("settings_saved:settings_operation_2"), "expired")
+            self.assertEqual(play.call_count, 1)
+
+    def test_settings_saved_quiet_hours_drop_without_late_playback(self):
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=True) as quiet, \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound") as play:
+            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
+            quiet.return_value = False
+            self.runtime._command(self.settings_command(master_volume_percent=60), NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.mono[0] += 3
+            quiet.return_value = True
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            quiet.return_value = False
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            play.assert_not_called()
 
     def test_pre_swoosh_queued_settings_command_keeps_existing_send_cue_default(self):
         self.runtime.heartbeat()

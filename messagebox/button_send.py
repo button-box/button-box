@@ -192,6 +192,9 @@ def apply_master_volume(settings=None):
             try:
                 cloud_runtime.atomic_json(cloud_runtime.APPLIED_FILE, {
                     "revision": settings["revision"], "settings": settings,
+                    "boot_id": cloud_audio_requests.boot_id,
+                    "applied_mono": time.monotonic(),
+                    "settings_sound": _applied_volume_revision is not None and not quiet_hours(settings),
                 })
             except OSError:
                 return False
@@ -1425,6 +1428,13 @@ def maybe_play_cloud_sound():
             try:
                 if request["kind"] == "success":
                     played = play_send_success_cue()
+                elif request["kind"] == "settings_saved":
+                    # The main loop applies volume before consuming these requests.
+                    played = (not quiet_hours() and apply_master_volume()
+                              and play_idle_sound(sound_pack.cue_path("card_saved"), 5))
+                    if not played and not quiet_hours():
+                        cloud_audio_requests.finish(request, "pending")
+                        return False
                 elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
                     path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[normalize_ringtone_id(request["ringtone_id"])]
                     played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))

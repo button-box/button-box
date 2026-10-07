@@ -113,6 +113,23 @@ After the guarded setup completion succeeds, it queues a group-readable
 request. All bundled assets are in the release manifest and bounded updater;
 private sound receipts and requests are excluded.
 
+When the physical-button owner applies changed Cloud settings successfully,
+the poller queues a `settings_saved` audio request before acknowledging that
+revision as applied. The idle button owner plays `cue-card_saved.wav` after
+the new master volume takes effect. Consecutive saves within three seconds
+share one confirmation, played after that debounce window. Ringtone changes
+use this confirmation; the dashboard's explicit ringtone preview stays separate.
+Recording, guided sessions, message playback and held presses defer the cue
+for at most 30 seconds from application, using a current-boot monotonic deadline.
+Playback runs synchronously on the same main-loop audio owner, so it cannot
+overlap a message. A press interrupts the cue and leaves it pending within its
+original deadline. Quiet hours discard confirmations, including saves applied
+during quiet hours; they do not sound later. First settings adoption after button
+service startup, unchanged values and box-originated revisions echoed by Cloud
+stay silent. Private apply markers and command intents retain the boot, origin
+and changed-values evidence; request receipts prevent replay after restart.
+No Cloud API change, new setting ID or new sound asset is required.
+
 B20 needs a real-box check for the captive-page handoff, online beep audibility
 and one-shot behavior, QR-to-WhatsApp-to-button completion, connection errors,
 Wi-Fi retries, NTP catch-up, reboot, and the `.local` fallback. Offline tests do

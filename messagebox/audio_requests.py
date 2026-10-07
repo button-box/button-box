@@ -35,7 +35,7 @@ class AudioRequests:
         request = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(request, dict) or not isinstance(request.get("key"), str)
                 or self._path(request["key"]).name != path.name
-                or request.get("kind") not in {"success", "preview"}
+                or request.get("kind") not in {"success", "preview", "settings_saved"}
                 or (request.get("kind") == "preview" and normalize_ringtone_id(request.get("ringtone_id")) not in RINGTONES)
                 or not isinstance(request.get("account_scope"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", request["account_scope"])
@@ -45,6 +45,8 @@ class AudioRequests:
                     or "expires_mono" not in request))
                 or ("expires_mono" in request and (type(request["expires_mono"]) not in (int, float)
                     or not math.isfinite(request["expires_mono"])))
+                or any(type(request[field]) not in (int, float) or not math.isfinite(request[field])
+                       for field in ("ready_at", "ready_mono") if field in request)
                 or request.get("state") not in {"pending", "claimed", "played", "rejected", "unknown", "expired"}):
             raise ValueError("audio request is invalid")
         return request
@@ -89,6 +91,31 @@ class AudioRequests:
                                "expires_at": expires_at, "expires_mono": expires_mono,
                                "boot_id": self.boot_id, "state": "pending", **fields})
 
+    def enqueue_settings_saved(self, key, scope, seconds):
+        """Debounce saves, retaining the first request's bounded lifetime."""
+        with self._locked(self.directory / "settings-saved.json"):
+            path = self._path(key)
+            if path.exists() or self._completed(path).exists():
+                return
+            now, mono = self.clock(), self.monotonic()
+            for pending_path in self.directory.glob("*.json"):
+                with self._locked(pending_path):
+                    if not pending_path.exists():
+                        continue
+                    request = self._read(pending_path)
+                    ready = request.get("ready_mono", 0) if request.get("boot_id") else request.get("ready_at", 0)
+                    if (request["kind"] == "settings_saved" and request["state"] == "pending"
+                            and request["account_scope"] == scope and not self._expired(request)
+                            and ready >= (mono if request.get("boot_id") else now)):
+                        request.update(ready_at=now + 3, ready_mono=mono + 3)
+                        # A receipt for every merged operation prevents replay after restart.
+                        with self._locked(path):
+                            self._save(path, {**request, "key": key, "state": "rejected"})
+                        self._save(pending_path, request)
+                        return
+            self.enqueue_for(key, "settings_saved", scope, seconds,
+                             ready_at=now + 3, ready_mono=mono + 3)
+
     @contextmanager
     def owner(self):
         """Hold through playback so recovery can distinguish a live player."""
@@ -105,6 +132,11 @@ class AudioRequests:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     def claim_next(self, scope):
+        # Serialize a claim with debounce updates from the cloud poller.
+        with self._locked(self.directory / "settings-saved.json"):
+            return self._claim_next(scope)
+
+    def _claim_next(self, scope):
         # The caller holds owner() until finish(). Commit the claim before sound.
         for path in sorted(self.directory.glob("*.json")):
             with self._locked(path):
@@ -121,6 +153,9 @@ class AudioRequests:
                     request["state"] = "rejected"
                 elif self._expired(request):
                     request["state"] = "expired"
+                elif (request.get("ready_mono", 0) > self.monotonic() if request.get("boot_id")
+                      else request.get("ready_at", 0) > self.clock()):
+                    continue
                 else:
                     request["state"] = "claimed"
                 self._save(path, request)
