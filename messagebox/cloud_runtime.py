@@ -749,8 +749,9 @@ class CloudRuntime:
                 if not intent_path.exists():
                     atomic_json(intent_path, {"settings_changed": any(current[key] != value
                         for key, value in candidate.items()),
-                        "volume_changed": ("master_volume_percent" in candidate
-                                           and current.get("master_volume_percent") != candidate["master_volume_percent"]),
+                        # Volume and ringtone changes preview the ringtone instead of the saved cue.
+                        "volume_changed": any(key in candidate and current.get(key) != candidate[key]
+                                              for key in ("master_volume_percent", "ringtone_id")),
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)

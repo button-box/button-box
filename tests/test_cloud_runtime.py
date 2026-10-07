@@ -488,6 +488,22 @@ class CloudRuntimeTests(unittest.TestCase):
         snippet.assert_called_once_with()
         cue.assert_not_called()
 
+    def test_ringtone_change_previews_the_new_ringtone(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(ringtone_id="island")
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as cue, \
+             mock.patch.object(button_send, "play_ringtone_snippet", return_value=True) as snippet:
+            self.runtime._command(item, NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.mono[0] += 3
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+        snippet.assert_called_once_with()
+        cue.assert_not_called()
+
     def test_settings_saved_noop_boot_adoption_and_local_echo_are_silent(self):
         self.runtime.heartbeat()
         with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
@@ -514,7 +530,7 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def test_settings_saved_failed_apply_and_command_restart_preserve_order(self):
         self.runtime.heartbeat()
-        item = self.settings_command(ringtone_id="sunshine")
+        item = self.settings_command(swoosh_sound_enabled=False)
         with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(button_send, "quiet_hours", return_value=False):
             self.runtime._command(item, NOW)
@@ -540,7 +556,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send, "play_idle_sound", side_effect=[False, True]) as play:
-            self.runtime._command(self.settings_command(ringtone_id="sunshine"), NOW)
+            self.runtime._command(self.settings_command(swoosh_sound_enabled=False), NOW)
             self.apply_settings_on_button()
             self.runtime._finish_settings()
             self.mono[0] += 3
@@ -558,7 +574,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 self.runtime._command(self.settings_command(master_volume_percent=volume), NOW)
                 self.apply_settings_on_button()
                 self.runtime._finish_settings()
-                self.mono[0] += 1
+                self.mono[0] += 0.5  # within the 1 s merge window
         requests = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW - 100,
                                 monotonic=lambda: self.mono[0], boot_id="test-boot")
         self.assertEqual(len(list(requests.directory.glob("*.json"))), 1)
@@ -584,7 +600,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
-            self.runtime._command(self.settings_command(ringtone_id="sunshine"), NOW)
+            self.runtime._command(self.settings_command(swoosh_sound_enabled=False), NOW)
             self.apply_settings_on_button()
             self.runtime._finish_settings()
             key = "settings_saved:settings_operation_1"
