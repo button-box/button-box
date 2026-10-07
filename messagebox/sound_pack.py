@@ -3,7 +3,6 @@
 import fcntl
 import hashlib
 import json
-import math
 import wave
 from pathlib import Path
 
@@ -98,19 +97,6 @@ def next_send_prompt(path=SOUND_STATE):
         atomic_json(path, document)
     return voice_path(f"ask-send-{index + 1}")
 
-
-def mute_pcm(data, rate, intervals):
-    """Replace warning playback plus a 250 ms acoustic/buffer guard with silence.
-
-    Keep elapsed recording time and words outside the window unchanged. Speech
-    overlapping the warning is also excluded; this is not echo cancellation.
-    """
-    pcm = bytearray(data)
-    for start, end in intervals:
-        first = max(0, math.floor((start - 0.25) * rate)) * 2
-        last = min(len(pcm), math.ceil((end + 0.25) * rate) * 2)
-        pcm[first:last] = b"\0" * max(0, last - first)
-    return bytes(pcm)
 
 
 if __name__ == "__main__":
