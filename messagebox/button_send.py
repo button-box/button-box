@@ -1411,11 +1411,13 @@ def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS, ringtone_id=None):
             if button.is_pressed or time.monotonic() >= deadline:
                 return False
             # Previews flash the lamp to the ringtone's rhythm, like a real ring.
-            (led.on if ring_lamp_on(time.monotonic() - started, ringtone_id) else led.off)()
+            if led is not None:
+                (led.on if ring_lamp_on(time.monotonic() - started, ringtone_id) else led.off)()
             time.sleep(POLL_S)
         return process.returncode == 0
     finally:
-        led.off()
+        if led is not None:
+            led.off()
         if process.poll() is None:
             process.terminate()
             try:
@@ -1437,7 +1439,7 @@ def play_idle_sound(path, timeout, lamp_ringtone=None):
                 return False
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired("aplay", timeout)
-            if lamp_ringtone:
+            if lamp_ringtone and led is not None:
                 # Ringtone previews flash the lamp to the ringtone's rhythm, like a real ring.
                 (led.on if ring_lamp_on(timeout - (deadline - time.monotonic()), lamp_ringtone) else led.off)()
             time.sleep(POLL_S)
@@ -1445,7 +1447,7 @@ def play_idle_sound(path, timeout, lamp_ringtone=None):
             raise subprocess.CalledProcessError(code, "aplay")
         return True
     finally:
-        if lamp_ringtone:
+        if lamp_ringtone and led is not None:
             led.off()
         if process.poll() is None:
             process.terminate()
