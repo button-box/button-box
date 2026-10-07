@@ -87,22 +87,31 @@ WhatsApp.** and stays there; it does not POST completion or redirect away.
 
 The registration press plays the runtime press cue before confirming possession.
 Missing, expired, invalid or failed confirmations also play the failure cue;
-already confirmed/claimed presses and pending cancellation do not. Setup creates
-these cues in its own `/run/messagebox-button` directory (systemd's
-`RUNTIME_DIRECTORY`, or the current directory outside systemd), using the runtime
-cue definitions and the detected speaker. Audio generation/playback failures
-remain content-free and never prevent claim confirmation.
+already confirmed/claimed presses and pending cancellation do not. Setup plays
+bundled `cue-press.wav` and `cue-oops.wav` through the detected speaker; audio
+failures remain content-free and never prevent claim confirmation.
 
-The first successful setup check-in queues a short 1760 Hz, 180 ms **online**
-beep, distinct from the press and unpaired-card failure cues. The shared,
+The first successful setup check-in queues `cue-connected.wav`. The shared,
 group-restricted `/var/lib/messagebox-cloud/setup-online.json` keeps one receipt
 per setup marker. The idle setup button listener marks it played before bounded
-playback, so polling, portal/button restarts and audio failure cannot replay it
-in the same session. Audio stays with the button service, preserving portal
-device isolation and serializing it with button feedback. The online tone is
-generated from `BEEPS` at listener startup; there is no new bundled WAV or unit.
-The existing release manifest and bounded updater already include every changed
-runtime file and exclude these private state files.
+playback, so polling and restarts cannot replay it in the same session. After
+the connected cue finishes, `voice-online.wav` ("I'm here!") plays only once in
+the box's lifetime, with a durable receipt in the private runtime sound state.
+The runtime also plays connected after a fresh heartbeat on boot or recovery.
+Quiet hours defer these unsolicited welcomes.
+
+The existing snapshot's boot ID and monotonic verification time provide the
+reachability signal. After three minutes without verification, the idle button
+owner plays `cue-offline.wav` once for that outage. A receipt prevents repeat on
+service restart; a fresh snapshot resets the outage. There are no added network
+probes. Unclaimed boxes, snapshots from another boot and wacli mode do not imply
+offline. Quiet hours, recording, prompts and button presses suppress it.
+
+After the guarded setup completion succeeds, it queues a group-readable
+`setup-complete-sound.json` request. The runtime plays `cue-all_set.wav` then
+`voice-all-set.wav` once per box. Program updates do not themselves create this
+request. All bundled assets are in the release manifest and bounded updater;
+private sound receipts and requests are excluded.
 
 B20 needs a real-box check for the captive-page handoff, online beep audibility
 and one-shot behavior, QR-to-WhatsApp-to-button completion, connection errors,

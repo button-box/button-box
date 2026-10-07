@@ -1,0 +1,127 @@
+{
+ "voice": "ElevenLabs ready-made voice Jessica (cgSgspJ2msm6clMCkdW9)",
+ "model": "eleven_v3, seed 7",
+ "made": "2026-10-07, paid plan",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "cue": "BX-ALL-SET",
+   "text": "Hi! I'm Button Box! I'll bring you messages from everyone who loves you.",
+   "seconds": 5.2,
+   "sha256": "46381920b24fd3c364513879451cdc4f267c45caa0b995f2f92bec9204605bb6"
+  },
+  {
+   "file": "voice-online.wav",
+   "cue": "BX-ONLINE (first time only)",
+   "text": "I'm here!",
+   "seconds": 1.36,
+   "sha256": "f36530c6c883ff72c522acc38cf5cc51275f0cc6da63cc95ce8561cc81d1b4cb"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "cue": "BX-MSG-START",
+   "text": "Ooh! A message for you!",
+   "seconds": 2.0,
+   "sha256": "56aed67472e4115c4dc3e4ad6de1e547b37dacdb960ba32a7ce65b5d05988316"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "cue": "BX-COUNT-REPLY",
+   "text": "Your turn! Three... two... one...",
+   "seconds": 4.48,
+   "sha256": "ed23489966a613f697afdd80e68e0dc4b2a13ae9d1771e7d1ddf04bf4f72ea1f"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "cue": "BX-COUNT-NEW",
+   "text": "Ready? Three... two... one...",
+   "seconds": 3.92,
+   "sha256": "ad167106ab0b07ef1ff83a8bbb5d910747ef3b6634c9c4c1a92f8821022e573a"
+  },
+  {
+   "file": "voice-review.wav",
+   "cue": "BX-REVIEW",
+   "text": "Listen!",
+   "seconds": 0.88,
+   "sha256": "34536ef05e2fd07cd4acb765baeefc66005f6c32432a1b626a5689eec3fed624"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "cue": "BX-ASK-SEND take 1",
+   "text": "Love it! Press to send.",
+   "seconds": 2.32,
+   "sha256": "46a927871aaee2d69a546abbf5f076c164011885fde00722b7700eaa9dd570b2"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "cue": "BX-ASK-SEND take 2",
+   "text": "Nice one! Press to send.",
+   "seconds": 2.56,
+   "sha256": "910446c1d5b39aba1e0a92e8ce657f34c75e9e8fcd0fa6c0af0bc99d2714fdc1"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "cue": "BX-ASK-SEND take 3",
+   "text": "Ooh, good one! Press to send.",
+   "seconds": 2.72,
+   "sha256": "74fca67a775dd25a7ffd82e62b4a1754e6fb07401cf996241544e0a0acf89b04"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "cue": "BX-LAST-CHANCE",
+   "text": "Want to send it? Press the button!",
+   "seconds": 2.16,
+   "sha256": "daf99fa14ba581d93841c56691689a77236da32a111f7f7261fbaa3e5f066e23"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "cue": "BX-NOT-SENT",
+   "text": "Okay, I won't send that one.",
+   "seconds": 2.0,
+   "sha256": "7263e55f82c4e157d6973f2779441b07832f04368ebb9d2cb289da136296ab4a"
+  },
+  {
+   "file": "voice-empty.wav",
+   "cue": "BX-EMPTY",
+   "text": "Hmm, I didn't hear you. Try again?",
+   "seconds": 2.32,
+   "sha256": "c163593249d2550d614f4956c109a6da6d127ecfe3d37c18467e7bd184253ce7"
+  },
+  {
+   "file": "voice-listened.wav",
+   "cue": "BX-LISTENED",
+   "text": "They heard your message!",
+   "seconds": 1.76,
+   "sha256": "b9f50660ddc329d93c9bff9b6ffb29915ece8e0d42b01a57f31431c9f627096e"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "cue": "BX-CARD-NEEDED",
+   "text": "Who's it for? Pick a family card!",
+   "seconds": 2.24,
+   "sha256": "eba27a44bfcb785a8968978152b3e7f5f1568ab17008991f7d85a17103dffb83"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "cue": "BX-CARD-UNKNOWN",
+   "text": "Ooh, a new card! Ask a grown-up to add it.",
+   "seconds": 3.44,
+   "sha256": "72a7fa0693c8cfaf867911e6f046fb103495de52b837c5ab052258f6774ed7eb"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "cue": "BX-STUCK",
+   "text": "It's taking a while. I'll keep trying!",
+   "seconds": 2.72,
+   "sha256": "da982d80d7d2e457b6b9670ef51b77b5e4bac8f91062c9cb1ba513a633fb52ff"
+  },
+  {
+   "file": "voice-fail.wav",
+   "cue": "BX-FAIL (not set up)",
+   "text": "I need a grown-up to set me up!",
+   "seconds": 2.24,
+   "sha256": "7762af2059b9de90f297ff1a1a6ee0fc5441c8eda1061ea6f55ca80567710c02"
+  }
+ ]
+}

@@ -19,7 +19,7 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="__init__.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py cloud_events.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
+PACKAGE_PYTHON="__init__.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py cloud_events.py sound_pack.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
 nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
@@ -27,7 +27,6 @@ onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.p
 onboarding/completion.py onboarding/mode.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
 STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/cloud-connect.html onboarding/static/cloud-connect.js onboarding/static/cloud-local.html onboarding/static/cloud-local.js onboarding/static/index.html onboarding/static/styles.css"
-GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
 
 case "$SSH_TARGET" in
   '') ;;
@@ -101,40 +100,7 @@ for path in \
   fi
 done
 
-PYTHONDONTWRITEBYTECODE=1 python3 - "$GUIDED_PROMPT_DIR" <<'PY'
-import sys
-import wave
-from pathlib import Path
-
-root = Path(sys.argv[1])
-invalid = []
-for name in (
-    "reply-countdown.wav",
-    "standalone-countdown.wav",
-    "press-to-send.wav",
-    "delete-warning.wav",
-    "not-sent.wav",
-):
-    path = root / name
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise OSError
-        with wave.open(str(path), "rb") as prompt:
-            if prompt.getnframes() <= 0 or prompt.getnchannels() != 1:
-                raise wave.Error
-    except (OSError, EOFError, wave.Error):
-        invalid.append(name)
-if invalid:
-    print(
-        "Missing or invalid guided-reply prompts: " + ", ".join(invalid),
-        file=sys.stderr,
-    )
-    print(
-        "Supply a complete licensed prompt set before running setup.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-PY
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 -m messagebox.sound_pack "$REPO_DIR/sounds"
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 \
   "$SCRIPT_DIR/install/ringtones.py" "$REPO_DIR/sounds/ringtones"
@@ -275,10 +241,8 @@ sudo install -d -o root -g root -m 0755 \
   "$PACKAGE_DIR/onboarding" \
   "$PACKAGE_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
-  "$APP_DIR/sounds/guided-reply" \
-  "$APP_DIR/sounds/listen-receipts" \
-  "$APP_DIR/sounds/nfc" \
-  "$APP_DIR/sounds/feedback"
+  "$APP_DIR/sounds/cues" \
+  "$APP_DIR/sounds/voice"
 sudo install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
 sudo install -d -o root -g "$ONBOARDING_GROUP" -m 0750 "$ONBOARDING_CONFIG_DIR"
 sudo install -d -o "$ONBOARDING_USER" -g "$ONBOARDING_GROUP" -m 0700 "$ONBOARDING_DATA_DIR"
@@ -327,13 +291,19 @@ sudo rm -f "$ONBOARDING_DATA_DIR/session.key"
 
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/config/requirements-nfc.txt" "$APP_DIR/config/requirements-nfc.txt"
-for directory in guided-reply listen-receipts nfc feedback; do
+for directory in cues voice; do
   for source in "$REPO_DIR/sounds/$directory"/*; do
     if [ -f "$source" ]; then
       sudo install -o root -g root -m 0644 "$source" "$APP_DIR/sounds/$directory/$(basename "$source")"
     fi
   done
 done
+
+# Retired bundled prompts; custom family media is never removed.
+for name in reply-countdown standalone-countdown press-to-send delete-warning not-sent; do
+  sudo rm -f "$APP_DIR/sounds/guided-reply/$name.wav"
+done
+sudo rm -f "$APP_DIR/sounds/feedback/sent-swoosh.wav"
 
 sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   "$REPO_DIR/config/env.example" "$CONFIG_DIR/env.example"

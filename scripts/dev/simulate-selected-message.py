@@ -631,7 +631,7 @@ def execute(plan, manifest, scratch, runtime_bound_s):
     runtime.receipt_store = runtime.ReceiptStore(runtime.LISTENED_DIR)
     Path(runtime.TEMP_DIR).mkdir(parents=True, exist_ok=True)
     runtime.validate_prompts()
-    invalid_beeps = runtime.invalid_prompt_files(value[0] for value in runtime.BEEPS.values())
+    invalid_beeps = runtime.invalid_prompt_files(value[0] for value in ((path,) for path in runtime.CUES.values()))
     if invalid_beeps:
         raise SimulationError("installed runtime feedback audio is unavailable")
     trace = shared.InputTrace(runtime, route_manifest)

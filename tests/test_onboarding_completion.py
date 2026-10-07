@@ -17,6 +17,9 @@ class Clock:
 
 class CompletionTests(unittest.TestCase):
     def setUp(self):
+        sound = mock.patch("messagebox.onboarding.completion.request_all_set_sound")
+        self.sound_request = sound.start()
+        self.addCleanup(sound.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.enabled = self.root / "enabled"

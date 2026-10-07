@@ -319,6 +319,40 @@ class BoundedUpdateTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_retired_audio_removed_and_restored_without_touching_family_media(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            retired = [fixture.root / path.removeprefix("/") for path in bounded_update.RETIRED_SOUNDS]
+            for path in retired:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"old bundled audio")
+            custom = fixture.root / "opt/messagebox/sounds/nfc/family.wav"
+            custom.parent.mkdir(parents=True)
+            custom.write_bytes(b"synthetic family clip")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertTrue(all(not path.exists() for path in retired))
+            self.assertEqual(custom.read_bytes(), b"synthetic family clip")
+            for relative in bounded_update.SOUND_SOURCES:
+                self.assertEqual((fixture.root / "opt/messagebox" / relative).read_bytes(), (ROOT / relative).read_bytes())
+            bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+            self.assertTrue(all(path.read_bytes() == b"old bundled audio" for path in retired))
+            self.assertFalse((fixture.root / "opt/messagebox/sounds/cues/cue-press.wav").exists())
+            self.assertEqual(custom.read_bytes(), b"synthetic family clip")
+
+    def test_retired_symlink_rejected_before_service_or_file_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            retired = fixture.root / bounded_update.RETIRED_SOUNDS[0].removeprefix("/")
+            retired.parent.mkdir(parents=True)
+            retired.symlink_to(fixture.private_files[0])
+            with self.assertRaisesRegex(bounded_update.UpdateError, "retired sound"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertFalse(fixture.backup.exists())
+            self.assertFalse(fixture.systemctl.commands)
+            fixture.assert_private_unchanged(self)
+
     def add_auxiliary(self, fixture, *, active="active", nested=False):
         unit = "example-analytics.service"
         parent = "messagebox.target"

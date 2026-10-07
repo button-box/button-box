@@ -29,6 +29,9 @@ class FakeLed:
 
 class ButtonRoutingTests(unittest.TestCase):
     def setUp(self):
+        moments = mock.patch.object(button_send, "play_moment")
+        moments.start()
+        self.addCleanup(moments.stop)
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
         self.root = root

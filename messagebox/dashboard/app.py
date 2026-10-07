@@ -111,7 +111,7 @@ WACLI_BIN = "/usr/local/bin/wacli"
 LISTENED_DIR = str(STATE_DIR / "listened-receipts")
 LISTENED_FALLBACK_WAV = os.environ.get(
     "MSGBOX_LISTENED_FALLBACK_WAV",
-    str(APP_DIR / "sounds" / "listen-receipts" / "someone-listened.wav"),
+    str(APP_DIR / "sounds" / "voice" / "voice-listened.wav"),
 )
 WACLI_WEBHOOK_SECRET = os.environ.get("MSGBOX_WACLI_WEBHOOK_SECRET", "")
 TAILSCALE_HOST_SETTING = os.environ.get("MSGBOX_TAILSCALE_HOST", "")
