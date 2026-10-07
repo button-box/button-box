@@ -1376,6 +1376,33 @@ def play_pending_listened(limit=4):
     return played
 
 
+VOLUME_PREVIEW_SECONDS = 3
+
+
+def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS):
+    """Play the start of the chosen ringtone at the current volume; a press stops it."""
+    ringtone_id = normalize_ringtone_id(caregiver_settings().get("ringtone_id"))
+    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES.get(ringtone_id, "")
+    if ringtone_id not in cloud_runtime.RINGTONES or not path.is_file() or button.is_pressed:
+        return False
+    process = subprocess.Popen(["aplay", "-q", "-d", str(seconds), "-D", SPK_DEV, str(path)])
+    deadline = time.monotonic() + seconds + 2
+    try:
+        while process.poll() is None:
+            if button.is_pressed or time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_S)
+        return process.returncode == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
 def play_idle_sound(path, timeout):
     """Yield to a press and release the speaker before recording can start."""
     if button.is_pressed:
@@ -1430,8 +1457,10 @@ def maybe_play_cloud_sound():
                     played = play_send_success_cue()
                 elif request["kind"] == "settings_saved":
                     # The main loop applies volume before consuming these requests.
+                    # A volume change previews the ringtone so the owner hears the new level.
                     played = (not quiet_hours() and apply_master_volume()
-                              and play_idle_sound(sound_pack.cue_path("card_saved"), 5))
+                              and (play_ringtone_snippet() if request.get("volume_changed")
+                                   else play_idle_sound(sound_pack.cue_path("card_saved"), 5)))
                     if not played and not quiet_hours():
                         cloud_audio_requests.finish(request, "pending")
                         return False
