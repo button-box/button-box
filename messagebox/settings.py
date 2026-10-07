@@ -10,6 +10,7 @@ import os
 import re
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -64,6 +65,21 @@ class SettingsError(ValueError):
 
 class RevisionConflict(SettingsError):
     """The settings changed after a caregiver loaded the form."""
+
+
+def in_quiet_hours(settings, now=None):
+    quiet = settings["quiet_hours"]
+    if not quiet["enabled"]:
+        return False
+    current = now or datetime.now(ZoneInfo(settings["timezone"]))
+    minute = current.hour * 60 + current.minute
+    start, end = (int(value[:2]) * 60 + int(value[3:])
+                  for value in (quiet["start"], quiet["end"]))
+    if start == end:
+        return True
+    if start < end:
+        return start <= minute < end
+    return minute >= start or minute < end
 
 
 def _env_flag(environ, name, default):

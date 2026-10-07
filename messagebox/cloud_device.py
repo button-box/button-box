@@ -392,4 +392,5 @@ def capabilities(*, nfc=False) -> dict:
         "settings_version": 1,
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
+        "box_link": True,
     }

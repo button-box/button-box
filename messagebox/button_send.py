@@ -14,9 +14,7 @@ import threading
 import time
 import uuid
 from functools import lru_cache
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
@@ -41,7 +39,7 @@ from messagebox.guided_reply import (
 from messagebox.audio_requests import AudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
-from messagebox.contacts import ContactError, ContactStore
+from messagebox.contacts import _BOX_JID, ContactError, ContactStore
 from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, active_selection, claim_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
@@ -54,7 +52,7 @@ from messagebox.runtime_paths import (
     STATE_DIR as DEFAULT_STATE_DIR,
 )
 from messagebox.settings import (
-    RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
+    in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
 )
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
 from messagebox import cloud_runtime, cloud_claim, sound_pack
@@ -149,21 +147,7 @@ def log_event(event_type, **fields):
 
 
 def quiet_hours(settings=None, now=None):
-    settings = settings or caregiver_settings()
-    quiet = settings["quiet_hours"]
-    if not quiet["enabled"]:
-        return False
-    current = now or datetime.now(ZoneInfo(settings["timezone"]))
-    minute = current.hour * 60 + current.minute
-    start_hour, start_minute = (int(value) for value in quiet["start"].split(":"))
-    end_hour, end_minute = (int(value) for value in quiet["end"].split(":"))
-    start = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-    if start == end:
-        return True
-    if start < end:
-        return start <= minute < end
-    return minute >= start or minute < end
+    return in_quiet_hours(settings or caregiver_settings(), now)
 
 
 _applied_volume_revision = None
@@ -584,7 +568,7 @@ def legacy_job_recipient(path):
             isinstance(recipient, str)
             and recipient
             and recipient.strip() == recipient
-            and "@" in recipient
+            and ("@" in recipient or _BOX_JID.fullmatch(recipient))
             and not any(character.isspace() for character in recipient)
         ):
             return recipient
@@ -775,7 +759,7 @@ def stage_hold_release_cloud_job(fname):
         log_event("send_blocked", flow="hold_release", reason="missing_recipient")
         return False
     try:
-        if not PERSON_JID.fullmatch(recipient):
+        if not (PERSON_JID.fullmatch(recipient) or _BOX_JID.fullmatch(recipient)):
             raise ValueError("unsupported recipient")
         milliseconds, _, raw_duration = fname[:-4].partition("-")
         duration = float(raw_duration)
@@ -1341,23 +1325,46 @@ def play_audio_ordinary(path):
 
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
-    if _recording or _guided_active or button.is_pressed or quiet_hours():
+    if quiet_hours():
+        receipt_store.expire_box_notices()
+        return 0
+    if _recording or _guided_active or button.is_pressed:
         return 0
     played = 0
     for _ in range(max(0, limit)):
-        if _recording or _guided_active or button.is_pressed or quiet_hours():
+        if quiet_hours():
+            receipt_store.expire_box_notices()
+            break
+        if _recording or _guided_active or button.is_pressed:
             break
         notice = receipt_store.claim_next()
         if notice is None:
+            break
+        box_listener = bool(getattr(notice, "cloud", None)
+                            and notice.cloud.get("listener_kind") == "box")
+        if quiet_hours() and not box_listener:
+            receipt_store.release(notice)
             break
         if getattr(notice, "cloud", None):
             try:
                 status = (cloud_runtime.listened_status(notice.cloud)
                           if transport_mode() == "cloud" else "pending")
             except (CloudRuntimeError, OSError, ValueError):
-                status = "pending"
+                status = "expired" if box_listener else "pending"
+            if box_listener and quiet_hours():
+                status = "expired"
             if status in {"expired", "rejected"}:
                 receipt_store.complete(notice, cloud_result=status)
+                continue
+            if box_listener and status == "lamp_only":
+                try:
+                    ring_alert(source="listened", settings={**caregiver_settings(), "arrival_signal": "lamp_only"})
+                    receipt_store.complete(notice)
+                    played += 1
+                except Exception:
+                    receipt_store.release(notice)
+                    announcement_gate.blocked()
+                    break
                 continue
             if status != "ready":
                 receipt_store.release(notice)
@@ -1552,6 +1559,9 @@ def maybe_play_send_success():
 
 def maybe_play_pending_listened():
     """Announce new played receipts promptly whenever the speaker is idle."""
+    if quiet_hours():
+        receipt_store.expire_box_notices()
+        return 0
     busy = _recording or _guided_active or button.is_pressed
     if not announcement_gate.ready(busy=busy):
         return 0

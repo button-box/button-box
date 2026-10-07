@@ -190,7 +190,8 @@ class ReceiptStore:
 
     def enqueue_cloud(self, operation_id: str, message_id: str, listener_id: str,
                       listener_name: str, clip: str, *, account_scope: str,
-                      expires_at: float, received_at: float, voice_pack: str | None = None) -> str:
+                      expires_at: float, received_at: float, voice_pack: str | None = None,
+                      listener_kind: str | None = None) -> str:
         """Cloud already correlates the outbound message and verified listener."""
         notice_id = self.cloud_notice_id(operation_id)
         if not self.cloud_exists(notice_id):
@@ -200,7 +201,8 @@ class ReceiptStore:
                 "clip": clip, "received_at": received_at,
                 "cloud": {"operation_id": operation_id, "message_id": message_id,
                           "listener_id": listener_id, "account_scope": account_scope,
-                          "expires_at": expires_at, "voice_pack": voice_pack},
+                          "expires_at": expires_at, "voice_pack": voice_pack,
+                          **({"listener_kind": listener_kind} if listener_kind is not None else {})},
             })
         return notice_id
 
@@ -328,6 +330,19 @@ class ReceiptStore:
                 continue
             return self.load(target)
         return None
+
+    def expire_box_notices(self):
+        """Quiet hours discard box feedback without claiming identity notices."""
+        for source in self.pending.glob("*.json"):
+            try:
+                notice = self.load(source)
+                if not notice.cloud or notice.cloud.get("listener_kind") != "box":
+                    continue
+                target = self.inflight / source.name
+                os.replace(source, target)
+            except FileNotFoundError:
+                continue
+            self.complete(self.load(target), cloud_result="expired")
 
     def complete(self, notice: PlayedNotice, announced_at: float | None = None,
                  *, cloud_result: str = "applied") -> None:
