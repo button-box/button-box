@@ -448,6 +448,40 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.flush_acks()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
 
+    def test_old_cloud_ringtones_migrate_replay_and_ack_after_restart(self):
+        from messagebox.settings import LEGACY_RINGTONES
+        self.runtime.heartbeat()
+        for index, old_id in enumerate(sorted(LEGACY_RINGTONES)):
+            with self.subTest(old_id=old_id):
+                current, _ = self.runtime.settings.load()
+                desired = {**current, "revision": current["revision"] + 1, "ringtone_id": old_id}
+                operation_id = f"legacy_ringtone_operation_{index}"
+                item = {"operation_id": operation_id, "sequence": index + 1,
+                        "kind": "settings", "created_at": NOW, "expires_at": NOW + 100,
+                        "payload": {"settings": desired, "expected_revision": current["revision"],
+                                    "desired_revision": desired["revision"]}}
+                self.runtime._command(item, NOW)
+                saved, warning = self.runtime.settings.load()
+                self.assertFalse(warning)
+                self.assertEqual(saved, {**desired, "ringtone_id": "hello_piano"})
+                # A crash between settings write and pending-state persistence
+                # replays the same old command without a revision conflict.
+                self.runtime.state["pending_settings"].pop(operation_id)
+                self.runtime._command(item, NOW)
+                # Also accept a pending intent saved by pre-update software.
+                self.runtime.state["pending_settings"][operation_id] = desired
+                self.runtime._save()
+                restarted = CloudRuntime(self.client, state_path=self.runtime.state_path,
+                    contacts_path=self.runtime.contacts.path, queue_dir=self.runtime.queue_dir,
+                    outbox_dir=self.runtime.outbox_dir, settings_path=self.runtime.settings.path,
+                    clock=self.runtime.clock, boot_id="test-boot")
+                (self.root / "applied-settings.json").write_text(json.dumps({"revision": saved["revision"], "settings": saved}))
+                restarted._finish_settings()
+                restarted.flush_acks()
+                self.assertEqual(self.client.acks[-1]["state"], "applied")
+                self.assertNotIn(operation_id, restarted.state["pending_settings"])
+                self.runtime = restarted
+
     def test_settings_recovers_skipped_generations_without_claiming_early_success(self):
         self.runtime.heartbeat()
         document, _ = self.runtime.settings.load()
@@ -793,7 +827,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "received")
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
-        write_pcm_wav(ringtone_dir / "ring1.wav", 1)
+        write_pcm_wav(ringtone_dir / "hello_piano.wav", 1)
         with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
@@ -806,7 +840,7 @@ class CloudRuntimeTests(unittest.TestCase):
             play.assert_not_called()
             self.assertTrue(button_send.maybe_play_cloud_sound())
             self.assertFalse(button_send.maybe_play_cloud_sound())
-        play.assert_called_once_with(ringtone_dir / "ring1.wav", 6.0)
+        play.assert_called_once_with(ringtone_dir / "hello_piano.wav", 17.0)
         self.runtime._finish_previews()
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
         self.assertEqual(self.runtime.state["pending_previews"], {})
@@ -842,7 +876,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.heartbeat()
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
-        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        write_pcm_wav(ringtone_dir / "hello_piano.wav", 19.8)
         self.runtime._command(self.preview("ding_dong"), NOW)
         process = mock.Mock()
         process.poll.return_value = 0
@@ -853,9 +887,9 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send.subprocess, "Popen", return_value=process) as play:
             self.assertTrue(button_send.maybe_play_cloud_sound())
         play.assert_called_once_with(["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
-                                     str(ringtone_dir / "ring3.wav")])
+                                     str(ringtone_dir / "hello_piano.wav")])
         from messagebox.cloud_runtime import _ringtone_preview_timeout
-        self.assertAlmostEqual(_ringtone_preview_timeout(ringtone_dir / "ring3.wav"), 24.8)
+        self.assertAlmostEqual(_ringtone_preview_timeout(ringtone_dir / "hello_piano.wav"), 24.8)
 
     def test_expired_preview_never_plays_and_is_acknowledged_expired(self):
         self.runtime.heartbeat()
@@ -871,7 +905,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.heartbeat()
         ringtone_dir = self.root / "ringtones"
         ringtone_dir.mkdir()
-        write_pcm_wav(ringtone_dir / "ring3.wav", 19.8)
+        write_pcm_wav(ringtone_dir / "hello_piano.wav", 19.8)
         self.client.items = [self.preview("ding_dong"),
             {"operation_id": "hold_operation_123456789", "sequence": 2,
              "kind": "queue_hold", "created_at": NOW, "expires_at": NOW + 60,

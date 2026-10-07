@@ -40,7 +40,7 @@ from messagebox.onboarding.whatsapp import (
     normalize_pair_code,
     normalize_phone,
 )
-from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path
+from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path, normalize_ringtone_id
 from messagebox.tailnet import normalize_tailscale_host, request_origin
 
 
@@ -796,6 +796,7 @@ def create_app(
                 pass
 
     def preview_ringtone(ringtone_id):
+        ringtone_id = normalize_ringtone_id(ringtone_id)
         if ringtone_id not in RINGTONES:
             raise RequestError("400 Bad Request", "Ringtone is invalid")
         document, _warning = settings.load()

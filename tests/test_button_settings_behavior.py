@@ -17,7 +17,7 @@ gpiozero.Button = object
 gpiozero.LED = object
 with patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
-from messagebox.settings import defaults  # noqa: E402
+from messagebox.settings import RINGTONES, defaults  # noqa: E402
 
 
 class FakeLed:
@@ -86,6 +86,52 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
             side_effect=AssertionError("player started"),
         ):
             self.assertFalse(button_send.ring_alert(source="dashboard", settings={}))
+
+    def test_lamp_schedules_use_each_assets_note_boundaries(self):
+        import json
+        pack = Path(__file__).resolve().parents[1] / "sounds"
+        button_send.ring_lamp_schedule.cache_clear()
+        self.addCleanup(button_send.ring_lamp_schedule.cache_clear)
+        with patch.object(button_send, "APP_DIR", pack):
+            for ringtone_id in RINGTONES:
+                with self.subTest(ringtone_id=ringtone_id):
+                    schedule = json.loads((pack / "ringtones" / f"{ringtone_id}.lamp.json").read_text())
+                    start, end = schedule["lamp_on"][0]
+                    self.assertFalse(button_send.ring_lamp_on(start - 0.001, ringtone_id))
+                    self.assertTrue(button_send.ring_lamp_on(start, ringtone_id))
+                    self.assertFalse(button_send.ring_lamp_on(end, ringtone_id))
+                    self.assertFalse(button_send.ring_lamp_on(schedule["seconds"], ringtone_id))
+            self.assertTrue(button_send.ring_lamp_on(0.05, "ding_dong"))
+
+    def test_missing_and_invalid_lamp_schedules_keep_the_previous_pattern(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(button_send, "APP_DIR", Path(directory)):
+            lamp_dir = Path(directory) / "ringtones"
+            lamp_dir.mkdir()
+            for content in (None, "not json", '{}',
+                            '{"ringtone_id":"sunshine","seconds":15.5,"lamp_on":[[0,"bad"]]}'):
+                if content is not None:
+                    (lamp_dir / "sunshine.lamp.json").write_text(content)
+                button_send.ring_lamp_schedule.cache_clear()
+                self.assertTrue(button_send.ring_lamp_on(0.1, "sunshine"))
+                self.assertFalse(button_send.ring_lamp_on(0.5, "sunshine"))
+        button_send.ring_lamp_schedule.cache_clear()
+
+    def test_button_press_terminates_a_long_ringtone_without_waiting_for_its_end(self):
+        process = types.SimpleNamespace(returncode=-15, stopped=False)
+        process.poll = lambda: -15 if process.stopped else None
+        def terminate():
+            process.stopped = True
+        process.terminate = terminate
+        process.wait = lambda: self.fail("waited for full ringtone")
+        with patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             patch.object(button_send, "led", FakeLed(), create=True), \
+             patch.object(button_send, "ringtone_path", return_value=Path(__file__)), \
+             patch.object(button_send.subprocess, "Popen", return_value=process), \
+             patch.object(button_send, "refresh_led"), patch.object(button_send, "log"), \
+             patch.object(button_send, "log_event"), patch.object(button_send.time, "sleep") as sleep:
+            button_send.ring_alert(settings={**defaults({}), "ringtone_id": "sunshine"})
+        self.assertTrue(process.stopped)
+        sleep.assert_not_called()
 
     def test_review_approval_requires_a_new_press_after_recording_release(self):
         for fresh_press in (False, True):

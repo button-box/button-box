@@ -22,6 +22,7 @@ Endpoints:
   POST /api/delete     ?f=<file>   queue -> trash
   POST /api/reinstate  ?f=<file>   trash -> queue
 """
+
 import json
 import fcntl
 import os
@@ -63,6 +64,7 @@ from messagebox.played_history import (
     requeue_played_file,
 )
 from messagebox.settings import (
+    normalize_ringtone_id,
     RINGTONES,
     RevisionConflict,
     SettingsError,
@@ -307,6 +309,7 @@ def runtime_state():
 
 
 def preview_ringtone(ringtone_id):
+    ringtone_id = normalize_ringtone_id(ringtone_id)
     document, _warning = settings_store().load()
     if ringtone_id not in RINGTONES:
         raise SettingsError("ringtone is invalid")

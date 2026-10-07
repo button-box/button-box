@@ -95,6 +95,17 @@ class DashboardSettingsTests(unittest.TestCase):
                 self.assertEqual(payload["mode"], "RUNTIME")
                 self.assertEqual(payload["health"]["runtime"], "attention")
 
+    def test_every_new_ringtone_preview_uses_its_asset_and_a_long_enough_bound(self):
+        from messagebox.settings import RINGTONES
+        root = Path(__file__).resolve().parents[1] / "sounds"
+        with patch("messagebox.settings.APP_DIR", root), patch.object(
+            dashboard, "settings_store", return_value=self.store
+        ), patch.object(dashboard.subprocess, "run") as run:
+            for ringtone_id, filename in RINGTONES.items():
+                dashboard.preview_ringtone(ringtone_id)
+                self.assertEqual(run.call_args.args[0][-1], str(root / "ringtones" / filename))
+                self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
+
     def test_ringtone_preview_reports_playback_failure(self):
         with patch.object(dashboard, "preview_ringtone", side_effect=SettingsError("Button Box audio could not play")):
             code, payload = self.request(

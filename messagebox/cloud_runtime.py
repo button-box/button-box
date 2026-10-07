@@ -24,7 +24,9 @@ from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcError, 
 from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE)
-from messagebox.settings import SettingsError, SettingsStore, RINGTONES
+from messagebox.settings import (
+    SettingsError, SettingsStore, RINGTONES, normalize_ringtone_id, validate as validate_settings,
+)
 from messagebox.voicepoll import queue_message
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
@@ -39,6 +41,7 @@ _PHONE = re.compile(r"^[1-9][0-9]{6,14}$")
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 LEDGER_SECONDS = 90 * 86400
 RINGTONE_DIR = Path("/opt/messagebox/ringtones")
+RINGTONE_PREVIEW_MIN_SECONDS = 17
 RINGTONE_PREVIEW_MAX_SECONDS = 30
 RINGTONE_PREVIEW_GRACE_SECONDS = 5
 RINGTONE_PREVIEW_MAX_PCM_BYTES = 32 * 1024 * 1024
@@ -99,7 +102,7 @@ def _ringtone_preview_timeout(path):
                 raise CloudRuntimeError("ringtone preview failed")
     except (EOFError, OSError, OverflowError, wave.Error) as exc:
         raise CloudRuntimeError("ringtone preview failed") from exc
-    return duration + RINGTONE_PREVIEW_GRACE_SECONDS
+    return max(RINGTONE_PREVIEW_MIN_SECONDS, duration + RINGTONE_PREVIEW_GRACE_SECONDS)
 
 
 class CloudRuntime:
@@ -728,18 +731,14 @@ class CloudRuntime:
             current, warning = self.settings.load()
             expected, desired = payload.get("expected_revision"), payload.get("desired_revision")
             document = payload.get("settings")
-            candidate = ({key: value for key, value in document.items() if key not in {"version", "revision"}}
-                         if isinstance(document, dict) else None)
-            # A queued command from before Swoosh sound existed keeps the old
-            # behavior when it reaches a newly updated box.
-            if isinstance(candidate, dict):
-                candidate.setdefault("swoosh_sound_enabled", True)
-                if isinstance(document, dict) and "swoosh_sound_enabled" not in document:
-                    document = {**document, "swoosh_sound_enabled": True}
             if (warning or type(expected) is not int or type(desired) is not int or desired <= expected
                     or not isinstance(document, dict) or document.get("version") != 1
                     or document.get("revision") != desired):
                 raise CloudRuntimeError("settings revision is invalid")
+            # Normalize pre-update commands before replay comparison and ACKs.
+            document = validate_settings(document)
+            candidate = {key: value for key, value in document.items()
+                         if key not in {"version", "revision"}}
             if current["revision"] == desired:
                 if current != {"version": 1, "revision": desired, **candidate}:
                     raise CloudRuntimeError("settings revision conflicts")
@@ -774,7 +773,7 @@ class CloudRuntime:
                 self._save()
             self._ack(item["operation_id"], "applied")
         elif kind == "preview_ringtone":
-            ringtone = payload.get("ringtone_id")
+            ringtone = normalize_ringtone_id(payload.get("ringtone_id"))
             if ringtone not in RINGTONES:
                 raise CloudRuntimeError("ringtone is invalid")
             # Old releases left this marker before crossing aplay. Its result is
@@ -814,6 +813,8 @@ class CloudRuntime:
             return
         revision = marker.get("revision") if isinstance(marker, dict) else None
         for operation_id, document in list(self.state["pending_settings"].items()):
+            if isinstance(document, dict) and "ringtone_id" in document:
+                document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"])}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 if marker.get("settings") == document:

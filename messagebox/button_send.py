@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import uuid
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -52,7 +53,9 @@ from messagebox.runtime_paths import (
     RUNTIME_DIR,
     STATE_DIR as DEFAULT_STATE_DIR,
 )
-from messagebox.settings import SettingsReader, ringtone_path
+from messagebox.settings import (
+    RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
+)
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
 from messagebox import cloud_runtime, cloud_claim
 from messagebox.cloud_runtime import CloudRuntimeError
@@ -1067,7 +1070,22 @@ def ring_windows():
 
 
 RING_WINS = ring_windows()
+
+
+@lru_cache(maxsize=len(RINGTONES))
+def ring_lamp_schedule(ringtone_id):
+    if ringtone_id not in RINGTONES:
+        return None
+    try:
+        return load_ring_lamp_schedule(APP_DIR / "ringtones" / f"{ringtone_id}.lamp.json", ringtone_id)
+    except (OSError, ValueError):
+        return None
+
+
 def ring_lamp_on(elapsed, ringtone_id):
+    schedule = ring_lamp_schedule(normalize_ringtone_id(ringtone_id))
+    if schedule is not None:
+        return any(start <= elapsed < end for start, end in schedule)
     if ringtone_id != "ding_dong":
         return (elapsed % 0.9) < 0.45
     return any(start <= elapsed < end for start, end in RING_WINS)
@@ -1368,8 +1386,8 @@ def maybe_play_cloud_sound():
             try:
                 if request["kind"] == "success":
                     played = play_send_success_cue()
-                elif request["kind"] == "preview" and request["ringtone_id"] in cloud_runtime.RINGTONES:
-                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[request["ringtone_id"]]
+                elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
+                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[normalize_ringtone_id(request["ringtone_id"])]
                     played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
                 else:
                     played = False

@@ -20,7 +20,7 @@ SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
 PACKAGE_PYTHON="__init__.py device_http.py cloud_device.py cloud_claim.py cloud_runtime.py audio_requests.py cloud_events.py qrcodegen.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
-make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
+nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
@@ -57,6 +57,7 @@ for path in \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
   scripts/install/audio_config.py \
+  scripts/install/ringtones.py \
   scripts/install/messagebox-mode-migrate.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
@@ -134,6 +135,9 @@ if invalid:
     )
     raise SystemExit(1)
 PY
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 \
+  "$SCRIPT_DIR/install/ringtones.py" "$REPO_DIR/sounds/ringtones"
 
 for destination in \
   /usr/local/bin/messagebox-contact \
@@ -361,8 +365,9 @@ else
   printf '%s\n' 'MSGBOX_DASH_PORT=80' | sudo tee -a "$CONFIG_DIR/env" >/dev/null
 fi
 
-(cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
-sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
+for source in "$REPO_DIR/sounds/ringtones"/*.wav "$REPO_DIR/sounds/ringtones"/*.lamp.json "$REPO_DIR/sounds/ringtones/manifest.json"; do
+  sudo install -o root -g root -m 0644 "$source" "$APP_DIR/ringtones/$(basename "$source")"
+done
 "$SCRIPT_DIR/install/wacli.sh"
 
 # Stage the selector inputs before Comitup installation. The package installer

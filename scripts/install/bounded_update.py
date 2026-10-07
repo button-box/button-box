@@ -111,6 +111,11 @@ EXPLICIT_TARGETS = {
     "scripts/dev/hardware-test.sh": "/opt/messagebox/dev/hardware-test.sh",
     "config/requirements-nfc.txt": "/opt/messagebox/config/requirements-nfc.txt",
 }
+for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
+    for suffix in (".wav", ".lamp.json"):
+        EXPLICIT_TARGETS[f"sounds/ringtones/{name}{suffix}"] = f"/opt/messagebox/ringtones/{name}{suffix}"
+EXPLICIT_TARGETS["sounds/ringtones/manifest.json"] = "/opt/messagebox/ringtones/manifest.json"
+
 EXECUTABLE_TARGETS = {
     MODE_GENERATOR,
     "/usr/local/bin/messageboxctl",
