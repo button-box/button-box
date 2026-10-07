@@ -339,6 +339,18 @@ class OnboardingAPITests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def test_each_new_ringtone_preview_uses_the_bundled_asset(self):
+        from messagebox.settings import RINGTONES
+        root = Path(__file__).resolve().parents[1] / "sounds"
+        with patch("messagebox.settings.APP_DIR", root), patch("messagebox.onboarding.app.subprocess.run") as run:
+            for ringtone_id, filename in RINGTONES.items():
+                with self.subTest(ringtone_id=ringtone_id):
+                    response = self.client.json("POST", "/api/ringtone-preview",
+                        {"ringtone_id": ringtone_id}, headers={"Origin": f"http://{HOST}"})
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertEqual(run.call_args.args[0][-1], str(root / "ringtones" / filename))
+                    self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
+
     def test_ringtone_preview_reports_speaker_success_and_failure(self):
         ringtone = Path(self.directory.name) / "ringtone.wav"
         ringtone.touch()

@@ -307,3 +307,25 @@ and physical switch/audio/delivery evidence separate.
 Run the [combined-release cloud acceptance checks](cloud-runtime.md#combined-release-acceptance)
 in addition to the existing standalone checks. Validate both modes on the exact
 candidate revision before accepting a combined release.
+
+## Bundled ringtones
+
+The seven approved masters, their lamp schedules, checksums and developer
+sources are documented in [sounds/ringtones/README.md](../sounds/ringtones/README.md).
+`tests/test_ringtones.py` validates the actual pack, picker order, capabilities,
+preview deadlines, and failure before installation side effects. Settings tests
+cover each old ID on load and Cloud updates. Button tests cover lamp boundaries,
+fallback blinking and immediate press interruption. Bounded updater tests install
+and roll back the new WAV/lamp files in both runtime and setup boot modes.
+
+Physical acceptance still requires every ringtone on a Pi speaker with the lamp
+in time, an interrupting press, and the Cloud dashboard/WhatsApp setting and
+preview paths. Run bounded updates on the intended existing boxes and check the
+installed pack and service health without running full setup. An old software
+box must retain its legacy Cloud picker and commands. The companion Cloud owner
+also checks English output and Portuguese keyword routing and updates Flow Atlas.
+
+For an offline check, use the pinned tools already in the local cache. Run all
+`make check` targets with local wrappers for `uv`, `uvx` and `bunx` that execute
+those cached versions directly; do not fetch missing packages. The Python suite
+needs loopback socket access for its HTTP tests, but uses no external network.

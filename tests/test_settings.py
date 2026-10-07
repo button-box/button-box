@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox.settings import RevisionConflict, SettingsError, SettingsStore, defaults, validate
+from messagebox.settings import LEGACY_RINGTONES, RINGTONES, RevisionConflict, SettingsError, SettingsStore, defaults, validate
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(document["recording_mode"], "hold_release")
         self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 120)
-        self.assertEqual(document["ringtone_id"], "cuckoo_clock")
+        self.assertEqual(document["ringtone_id"], "hello_piano")
         self.assertEqual(document["master_volume_percent"], 65)
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "21:00", "end": "06:00"})
         self.assertFalse(document["nfc_confirmation_beep"])
@@ -73,6 +73,32 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertFalse(warning)
         self.assertTrue(document["swoosh_sound_enabled"])
         self.assertEqual(document["revision"], initial["revision"])
+
+    def test_each_legacy_ringtone_loads_and_cloud_update_maps_without_revision_loss(self):
+        for old_id in LEGACY_RINGTONES:
+            with self.subTest(old_id=old_id):
+                saved = {**defaults({"TZ": "UTC"}), "revision": 7,
+                         "ringtone_id": old_id, "master_volume_percent": 63}
+                self.path.write_text(json.dumps(saved))
+                store = SettingsStore(self.path, environ={"TZ": "UTC"})
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(loaded, {**saved, "ringtone_id": "hello_piano"})
+                updated = store.update(self.candidate(loaded, ringtone_id=old_id),
+                                       7, desired_revision=9)
+                self.assertEqual(updated["ringtone_id"], "hello_piano")
+                self.assertEqual(updated["revision"], 9)
+                self.assertEqual(SettingsStore(self.path).load(), (updated, False))
+
+    def test_each_new_ringtone_round_trips_and_unknown_id_is_rejected(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for ringtone_id in RINGTONES:
+            current, _warning = store.load()
+            saved = store.update(self.candidate(current, ringtone_id=ringtone_id),
+                                 current["revision"])
+            self.assertEqual(SettingsStore(self.path).load(), (saved, False))
+        with self.assertRaises(SettingsError):
+            validate({**saved, "ringtone_id": "unknown"})
 
     def test_swoosh_setting_requires_boolean(self):
         document = defaults({"TZ": "UTC"})
@@ -144,7 +170,7 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(document["recording_mode"], "hold_release")
         self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 60)
-        self.assertEqual(document["ringtone_id"], "ding_dong")
+        self.assertEqual(document["ringtone_id"], "hello_piano")
         self.assertEqual(document["arrival_signal"], "ring_and_lamp")
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "22:00", "end": "07:00"})
 

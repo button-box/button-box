@@ -644,6 +644,12 @@ class BoundedUpdateTests(unittest.TestCase):
                     run=fixture.systemctl,
                 )
 
+                for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
+                    for suffix in (".wav", ".lamp.json"):
+                        installed = fixture.root / f"opt/messagebox/ringtones/{name}{suffix}"
+                        self.assertEqual(installed.read_bytes(), (ROOT / f"sounds/ringtones/{name}{suffix}").read_bytes())
+                        self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o644)
+
                 self.assertEqual(
                     fixture.sample.read_text(), '"""Synthetic updated package."""\n'
                 )
@@ -705,6 +711,7 @@ class BoundedUpdateTests(unittest.TestCase):
                     root=fixture.root,
                     run=fixture.systemctl,
                 )
+                self.assertEqual(list((fixture.root / "opt/messagebox/ringtones").iterdir()), [])
                 fixture.assert_original_state(self)
                 self.assertEqual(set(fixture.systemctl.started), expected_direct_starts - added_runtime_units)
                 self.assertEqual(

@@ -44,6 +44,9 @@ for name in $GUIDED_PROMPT_NAMES; do
   fi
 done
 
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 \
+  "$SCRIPT_DIR/install/ringtones.py" "$REPO_DIR/sounds/ringtones"
+
 REMOTE_SOURCE=$(ssh "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
 case "$REMOTE_SOURCE" in
   /tmp/messagebox-provision.*) ;;
@@ -93,7 +96,6 @@ rsync -azR \
   "$REPO_DIR/./messagebox/identity.py" \
   "$REPO_DIR/./messagebox/listened_receipts.py" \
   "$REPO_DIR/./messagebox/played_history.py" \
-  "$REPO_DIR/./messagebox/make_ringtones.py" \
   "$REPO_DIR/./messagebox/nfc.py" \
   "$REPO_DIR/./messagebox/nfc_state.py" \
   "$REPO_DIR/./messagebox/runtime_paths.py" \

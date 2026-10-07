@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from messagebox.cloud_device import atomic_json
-from messagebox.settings import RINGTONES
+from messagebox.settings import RINGTONES, normalize_ringtone_id
 
 
 def _boot_id():
@@ -36,7 +36,7 @@ class AudioRequests:
         if (not isinstance(request, dict) or not isinstance(request.get("key"), str)
                 or self._path(request["key"]).name != path.name
                 or request.get("kind") not in {"success", "preview"}
-                or (request.get("kind") == "preview" and request.get("ringtone_id") not in RINGTONES)
+                or (request.get("kind") == "preview" and normalize_ringtone_id(request.get("ringtone_id")) not in RINGTONES)
                 or not isinstance(request.get("account_scope"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", request["account_scope"])
                 or type(request.get("expires_at")) not in (int, float)
