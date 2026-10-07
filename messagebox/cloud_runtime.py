@@ -907,6 +907,8 @@ class CloudRuntime:
                         # Volume and ringtone changes preview the ringtone instead of the saved cue.
                         "volume_changed": any(key in candidate and current.get(key) != candidate[key]
                                               for key in ("master_volume_percent", "ringtone_id")),
+                        "ringtone_changed": ("ringtone_id" in candidate
+                                             and current.get("ringtone_id") != candidate["ringtone_id"]),
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)
@@ -1007,7 +1009,8 @@ class CloudRuntime:
             return
         self.audio_requests.enqueue_settings_saved("settings_saved:" + operation_id,
             intent["account_scope"], 30 - (self.monotonic() - applied),
-            volume_changed=intent.get("volume_changed") is True)
+            volume_changed=intent.get("volume_changed") is True,
+            ringtone_changed=intent.get("ringtone_changed") is True)
 
     def _finish_nfc(self):
         if not self.state["pending_nfc"]:
