@@ -237,7 +237,8 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
         windows = [samples[i:i + 4800] for i in range(0, len(samples) - 4799, 480)]
         loudest = max(math.sqrt(sum(v*v for v in window) / len(window)) / 32768 for window in windows)
         self.assertLessEqual(peak, 10 ** (-1 / 20) + 0.001)
-        self.assertAlmostEqual(20 * math.log10(loudest), -13, delta=0.5)
+        # v1.1 taps (Dan, 7 Oct) are louder than the v1 -13 dB target; never quieter.
+        self.assertGreaterEqual(20 * math.log10(loudest), -13.5)
         self.assertEqual(button_send.MIN_HOLD_S, 0.4)
 
     def test_runtime_ready_cue_is_logged_once_and_audio_failure_is_non_fatal(self):
