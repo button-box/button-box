@@ -39,6 +39,30 @@ class ContactStoreTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def test_connected_box_kind_and_key_validation(self):
+        jid = "box:link-123"
+        contact = self.store.add_contact(jid, "Example Box", make_default=True)
+        self.assertEqual(contact["kind"], "box")
+        self.store.assign_card(jid, CARD_ONE)
+        self.assertEqual(self.store.resolve_card(CARD_ONE)["jid"], jid)
+        document = self.store.load()
+        document["contacts"][jid]["kind"] = "person"
+        self.path.write_text(json.dumps(document))
+        with self.assertRaises(ContactError):
+            self.store.load()
+        self.path.unlink()
+        for invalid in ("box:", "box:bad/id", "box:bad@id", "box:" + "a" * 241):
+            with self.subTest(invalid=invalid), self.assertRaises(ContactError):
+                self.store.add_contact(invalid, "Box")
+
+    def test_removing_connected_box_removes_cards_and_default(self):
+        jid = "box:link-123"
+        self.store.add_contact(jid, "Example Box", make_default=True)
+        self.store.assign_card(jid, CARD_ONE)
+        self.store.remove_contact(jid)
+        self.assertIsNone(self.store.resolve_card(CARD_ONE))
+        self.assertIsNone(self.store.load()["default_recipient"])
+
     def test_rename_changes_only_the_display_label(self):
         self.store.add_contact(PERSON, "Original", receive_after=123, make_default=True)
         self.store.assign_card(PERSON, CARD_ONE)

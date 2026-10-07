@@ -345,10 +345,10 @@ function recipientRow(recipient, actions = []) {
   row.className = "recipient-row";
   const copy = document.createElement("div");
   const name = document.createElement("strong");
-  name.textContent = recipient.label;
+  name.textContent = recipient.kind === "box" ? `${recipient.label} (connected box)` : recipient.label;
   const meta = document.createElement("span");
   const tagCopy = recipient.card_count
-    ? ` · ${recipient.card_count} card${recipient.card_count === 1 ? "" : "s"}`
+    ? ` · ${recipient.card_count} family card${recipient.card_count === 1 ? "" : "s"}`
     : "";
   const identity = recipient.secondary_label && recipient.secondary_label !== recipient.label
     ? ` · ${recipient.secondary_label}`
