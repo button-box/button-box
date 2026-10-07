@@ -110,6 +110,12 @@ _HANDOFF_HTML = b"""<!doctype html>
 </html>
 """
 
+_QR_WIFI_NEXT = b"""        <aside class="notice">
+          <strong>Next</strong>
+          <span>Your phone leaves this page when Button Box joins your Wi-Fi. That is normal.</span>
+          <span>When Button Box beeps, scan the QR code on your setup card to finish in WhatsApp.</span>
+        </aside>
+"""
 _QR_HANDOFF_CONTENT = b"""<h1 id="handoff-title">Finish with your setup card</h1>
 <p class="lede">Your box is joining your Wi-Fi. When it beeps, scan the QR code on your setup card to finish in WhatsApp.</p>
 <p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>"""
@@ -899,6 +905,9 @@ def create_app(
                 body = body.replace(
                     b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
+                # Cloud boxes finish from the setup card QR code; only wacli boxes need the local address.
+                if cloud_mode:
+                    body = re.sub(rb"<!--SETUP-LOCAL-->.*?<!--/SETUP-LOCAL-->\n", _QR_WIFI_NEXT, body, count=1, flags=re.S)
                 body = body.replace(
                     b"__CLOUD_CONNECT_LINK__",
                     (b'<p><a class="button" href="/cloud-connect">Connect your box to WhatsApp</a></p>'

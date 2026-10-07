@@ -1455,7 +1455,7 @@ for (const radio of document.querySelectorAll('input[name="security"]')) {
   });
 }
 document.getElementById("whatsapp-form").addEventListener("submit", pairWhatsApp);
-document.getElementById("copy-setup-url").addEventListener("click", copySetupUrl);
+document.getElementById("copy-setup-url")?.addEventListener("click", copySetupUrl);
 document.getElementById("copy-pairing-code").addEventListener("click", copyPairingCode);
 document.getElementById("cancel-pairing").addEventListener("click", cancelPairing);
 document.getElementById("cancel-progress").addEventListener("click", cancelPairing);
