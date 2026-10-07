@@ -14,8 +14,8 @@ from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
 from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
 from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
-from messagebox.played_history import list_played_history
-from messagebox.nfc_state import CardReferenceStore, EnrollmentStore
+from messagebox.played_history import list_played_history, recent_reply_recipient
+from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcRouter, SelectionStore
 from messagebox.settings import SettingsStore
 
 gpiozero = types.ModuleType("gpiozero")
@@ -26,6 +26,8 @@ with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
 
 
 NOW = 1_800_000_000
+BOX = {"id": "link1234567890123456", "box_name": "Example Box"}
+BOX_JID = "box:" + BOX["id"]
 PERSON = {"id": "person1234567890123456", "wa_id": "12025550101", "display_name": "Family", "role": "family"}
 OP = "operation1234567890123456"
 MID = "message1234567890123456"
@@ -44,7 +46,8 @@ class FakeClient:
         self.retention_days = 30
 
     def heartbeat(self, state):
-        return {"box_id": "box1234567890123456", "account_scope": "a" * 64, "server_time": self.server_time,
+        return {**({"connected_boxes": self.connected_boxes} if hasattr(self, "connected_boxes") else {}),
+                "box_id": "box1234567890123456", "account_scope": "a" * 64, "server_time": self.server_time,
                 "people": self.people, "default_recipient_id": self.people[0]["id"] if self.people else None,
                 "entitlement": {"ingest": True, "deliver": self.deliver, "send": self.send,
                                 "until": getattr(self, "heartbeat_until", NOW + 3600)}, "queue_hold": False,
@@ -124,6 +127,352 @@ class CloudRuntimeTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
+
+    def update_settings(self, **changes):
+        current, _ = self.runtime.settings.load()
+        candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
+        self.runtime.settings.update({**candidate, **changes}, current["revision"])
+
+    def connect_box(self):
+        self.client.connected_boxes = [BOX.copy()]
+        self.runtime.heartbeat()
+
+    def box_listened_item(self, *, clip=True, operation_id="listened:box"):
+        item = self.listened_item(clip=clip, operation_id=operation_id)
+        item["expires_at"] = NOW + 1800
+        payload = item["payload"]
+        payload.pop("listener_identity_id")
+        payload.pop("listener_first_name")
+        payload.update(listener_link_id=BOX["id"], listener_name=BOX["box_name"])
+        return item
+
+    def box_audio_item(self):
+        item = self.audio_item()
+        item["payload"].update(sender_id=BOX["id"], sender_kind="box",
+                               sender_name=BOX["box_name"], reply_to=None)
+        return item
+
+    def nfc_router(self):
+        return NfcRouter(self.runtime.contacts,
+            SelectionStore(self.root / "nfc-selection.json", clock=self.runtime.clock),
+            EnrollmentStore(self.root / "nfc-enrollment.json", clock=self.runtime.clock))
+
+    def test_connected_boxes_capability_and_invalid_entries_are_dropped(self):
+        self.client.connected_boxes = [None, {}, {"id": "bad/id", "box_name": "Box"},
+            {"id": "bad-name", "box_name": "x" * 61}, {"id": "empty", "box_name": " "},
+            {"id": "control", "box_name": "Box\0"}, {"id": [], "box_name": "Box"},
+            {"id": "type", "box_name": 1}, BOX, BOX.copy(),
+            {"id": PERSON["id"], "box_name": "Collision"}]
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as heartbeat:
+            self.runtime.heartbeat()
+        self.assertTrue(heartbeat.call_args.args[0]["capabilities"]["box_link"])
+        self.assertEqual(self.runtime.state["snapshot"]["connected_boxes"], [BOX])
+        self.assertEqual(self.runtime.state["snapshot"]["people"], [PERSON])
+        self.assertEqual(self.runtime.contacts.contact(BOX_JID)["kind"], "box")
+        self.assertEqual(self.runtime.contacts.contact(BOX_JID)["label"], BOX["box_name"])
+
+    def test_connected_boxes_limit_and_malformed_list_do_not_fail_heartbeat(self):
+        self.client.connected_boxes = [{"id": f"link-{i}", "box_name": "Box"} for i in range(51)]
+        self.runtime.heartbeat()
+        self.assertEqual(len(self.runtime.state["snapshot"]["connected_boxes"]), 50)
+        self.assertNotIn("box:link-50", self.runtime.contacts.load()["contacts"])
+        for value in (None, "bad", {}, 1):
+            self.client.connected_boxes = value
+            self.runtime.heartbeat()
+            self.assertEqual(self.runtime.state["snapshot"]["connected_boxes"], [])
+
+    def test_old_cloud_heartbeat_preserves_people_and_removes_box_cards_and_default(self):
+        self.connect_box()
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        self.runtime.contacts.assign_card(jid, "01AABBCC")
+        self.runtime.contacts.assign_card(BOX_JID, "04AABBCC")
+        self.runtime.contacts.choose_default_recipient(BOX_JID)
+        self.client.people = []
+        del self.client.connected_boxes
+        self.runtime.heartbeat()
+        document = self.runtime.contacts.load()
+        self.assertEqual(document["contacts"], {})
+        self.assertIsNone(document["default_recipient"])
+        result = self.nfc_router().card_seen("04AABBCC")
+        self.assertEqual(result.action, "unknown")
+        self.assertTrue(result.announce)
+        with self.assertRaises(CloudRuntimeError):
+            self.runtime.recipient_id(BOX_JID)
+        self.client.people = [PERSON.copy()]
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.recipient_id(jid), PERSON["id"])
+
+    def test_link_removal_preserves_people_cards_and_rejects_pending_box_audio(self):
+        self.connect_box()
+        self.runtime.contacts.assign_card(BOX_JID, "04AABBCC")
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        self.runtime.contacts.assign_card(jid, "01AABBCC")
+        self.runtime._audio(self.box_audio_item(), NOW)
+        metadata = json.loads(next(self.runtime.queue_dir.glob("*.json")).read_text())
+        self.client.connected_boxes = []
+        self.runtime.heartbeat()
+        self.assertFalse(self.runtime.playable(metadata))
+        self.assertIsNone(self.runtime.contacts.resolve_card("04AABBCC"))
+        self.assertEqual(self.runtime.contacts.resolve_card("01AABBCC")["jid"], jid)
+
+    def test_box_family_card_enroll_inventory_and_targeted_remove_are_replay_safe(self):
+        self.connect_box()
+        item = self.nfc_item()
+        item["payload"]["recipient_id"] = BOX["id"]
+        self.runtime._nfc(item)
+        active = self.nfc_router().enrollment.active()
+        self.assertEqual((active["jid"], active["label"]), (BOX_JID, BOX["box_name"]))
+        self.assertEqual(self.nfc_router().card_seen("04AABBCC").action, "enrolled")
+        self.runtime._finish_nfc()
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
+        self.runtime.contacts.assign_card(BOX_JID, "05AABBCC")
+        inventory = self.runtime._nfc_inventory()
+        self.assertEqual([card["recipient_id"] for card in inventory["cards"]], [BOX["id"], BOX["id"]])
+        card = inventory["cards"][0]
+        remove = {"operation_id": "remove-box-card", "kind": "nfc_unpair", "payload": {
+            **card, "inventory_revision": inventory["revision"]}}
+        self.runtime._nfc(remove)
+        self.runtime._nfc(remove)
+        self.assertEqual(len(self.runtime.contacts.contact(BOX_JID)["card_uids"]), 1)
+        self.assertNotIn("04:AA:BB:CC", json.dumps(inventory))
+
+    def test_incoming_box_audio_plays_normally_and_reply_targets_box(self):
+        self.connect_box()
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as media:
+            self.runtime._audio(self.box_audio_item(), NOW)
+            self.runtime._audio(self.box_audio_item(), NOW)
+        media.assert_called_once()
+        [path] = list(self.runtime.queue_dir.glob("*.wav"))
+        metadata = json.loads(Path(str(path) + ".json").read_text())
+        self.assertEqual(metadata["chat"], BOX_JID)
+        self.assertEqual(metadata["sender_kind"], "box")
+        self.assertTrue(self.runtime.playable(metadata))
+        self.assertEqual(path.read_bytes(), self.client.audio)
+        with self.listened_playback(), \
+             mock.patch.object(button_send, "QUEUE_DIR", str(self.runtime.queue_dir)), \
+             mock.patch.object(button_send, "EVENTS_FILE", str(self.root / "events.jsonl")), \
+             mock.patch.object(button_send.cloud_runtime, "playable", side_effect=self.runtime.playable), \
+             mock.patch.object(button_send.cloud_runtime, "record_played") as played_ack, \
+             mock.patch.object(button_send, "play_moment") as cues, \
+             mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as playback, \
+             mock.patch.object(button_send, "wait_for_stable_open"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send.time, "time", return_value=NOW):
+            button_send.play_next_legacy()
+        self.assertEqual(playback.call_args.args[0][-1], str(path))
+        self.assertEqual(cues.call_args_list, [mock.call("msg_start", "msg-start"), mock.call("msg_end")])
+        played_ack.assert_called_once_with(metadata)
+        self.assertEqual(recent_reply_recipient(self.runtime.queue_dir,
+            self.runtime.contacts.allowed_jids(), now=NOW), ("route", BOX_JID))
+        with mock.patch.object(button_send, "CONTACTS_FILE", self.runtime.contacts.path), \
+             mock.patch.object(button_send, "QUEUE_DIR", str(self.runtime.queue_dir)), \
+             mock.patch.object(button_send, "nfc_idle_routing_is_safe", return_value=True), \
+             mock.patch.object(button_send, "NFC_SELECTION_FILE", self.root / "no-selection"), \
+             mock.patch.object(button_send.time, "time", return_value=NOW):
+            self.assertEqual(button_send.recording_recipient_context()["contact"]["jid"], BOX_JID)
+
+    def test_incoming_box_audio_requires_current_link_and_explicit_sender_kind(self):
+        self.connect_box()
+        for sender, kind in ((BOX["id"], None), ("removed-link", "box"), (PERSON["id"], "box")):
+            item = self.box_audio_item()
+            item["payload"].update(sender_id=sender, sender_kind=kind)
+            with self.subTest(sender=sender, kind=kind), \
+                 mock.patch.object(self.client, "media") as media, self.assertRaises(CloudRuntimeError):
+                self.runtime._audio(item, NOW)
+            media.assert_not_called()
+
+    def test_box_recording_upload_uses_link_id_and_recovery_keeps_exact_route(self):
+        self.connect_box()
+        source, encoded = self.root / "record.wav", self.root / "record.ogg"
+        source.write_bytes(b"synthetic WAV")
+        encoded.write_bytes(b"OggS exact bytes")
+        store = OutboxStore(self.runtime.outbox_dir, transport="cloud")
+        job = store.approve(str(source), BOX_JID, "reply", 1.25,
+                            message_id="box-recording", account_scope="a" * 64)
+        store.prepare_cloud_upload(job, encoded, self.runtime.recipient_id(job.recipient), NOW + 1800)
+        client = mock.Mock()
+        client.send_voice.return_value = {"message_id": "sent-box", "state": "queued",
+                                         "server_time": NOW, "expires_at": NOW + 1800}
+        with mock.patch.object(button_send, "outbox_store", store), \
+             mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=client), \
+             mock.patch.object(button_send.cloud_runtime, "recipient_id", side_effect=self.runtime.recipient_id), \
+             mock.patch.object(button_send.cloud_runtime, "outbox_now", side_effect=self.runtime.server_now), \
+             mock.patch.object(button_send, "log"), mock.patch.object(button_send, "log_event"):
+            self.assertTrue(button_send._send_cloud_upload(job))
+        self.assertEqual(client.send_voice.call_args.args[1], BOX["id"])
+        store.set_state(job, "sending")
+        metadata = json.loads((job.path / "job.json").read_text())
+        metadata.pop("cloud_message_id")
+        atomic_json(job.path / "job.json", metadata)
+        self.client.voice_status = mock.Mock(side_effect=CloudVoiceNotFound("missing"))
+        self.runtime.recover_outbox()
+        self.assertEqual(store.load(job.path).state, "pending")
+        self.assertEqual((job.path / "audio.ogg").read_bytes(), b"OggS exact bytes")
+        store.set_state(job, "sending")
+        self.client.connected_boxes = []
+        self.runtime.heartbeat()
+        self.runtime.recover_outbox()
+        self.assertEqual(store.load(job.path).state, "sending")
+
+    def test_hold_release_box_recording_is_staged_with_bound_recipient(self):
+        self.connect_box()
+        name = f"{NOW * 1000}-1.25.wav"
+        path = self.runtime.outbox_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic WAV")
+        store = OutboxStore(self.runtime.outbox_dir, transport="cloud")
+        with mock.patch.object(button_send, "OUTBOX_DIR", str(self.runtime.outbox_dir)), \
+             mock.patch.object(button_send, "outbox_store", store), \
+             mock.patch.object(button_send, "transport_mode", return_value="cloud"), \
+             mock.patch.object(button_send, "log_event"):
+            button_send.bind_legacy_job_recipient(str(path), BOX_JID, account_scope="a" * 64)
+            self.assertEqual(button_send.legacy_job_recipient(str(path)), BOX_JID)
+            self.assertTrue(button_send.stage_hold_release_cloud_job(name))
+        [job] = store.jobs()
+        self.assertEqual(job.recipient, BOX_JID)
+
+    def test_box_listened_clip_playback_dedup_and_restart_ack(self):
+        self.connect_box()
+        item = self.box_listened_item()
+        self.client.items = [item]
+        self.runtime.poll_once()
+        self.runtime.state = self.runtime._load()
+        self.runtime.poll_once()
+        store = self.runtime._receipt_store()
+        self.assertEqual(store.pending_count(), 1)
+        notice = store.load(next(store.pending.glob("*.json")))
+        self.assertEqual(notice.cloud["listener_kind"], "box")
+        self.assertEqual(Path(notice.clip).read_bytes(), self.client.audio)
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+             mock.patch.object(button_send, "play_audio_ordinary") as play:
+            self.assertEqual(button_send.play_pending_listened(), 1)
+            play.assert_called_once_with(notice.clip)
+        self.runtime.state = self.runtime._load()
+        self.runtime._maintain_local()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
+        self.runtime.poll_once()
+        self.assertEqual(store.pending_count(), 0)
+        self.client.connected_boxes = []
+        self.runtime.heartbeat()
+        self.assertEqual(list((self.root / "listened-clips").glob("*.wav")), [])
+
+    def test_box_listened_expired_quiet_and_silent_never_queue_or_download(self):
+        self.connect_box()
+        for index, gate in enumerate(("expired", "quiet", "silent")):
+            with self.subTest(gate=gate):
+                item = self.box_listened_item(operation_id=f"listened:gate{index}")
+                current, _ = self.runtime.settings.load()
+                self.update_settings(arrival_signal="silent" if gate == "silent" else "ring_and_lamp",
+                    quiet_hours={"enabled": gate == "quiet", "start": "00:00", "end": "00:00"})
+                if gate == "expired":
+                    item["expires_at"] = NOW
+                self.client.items = [item]
+                with mock.patch.object(self.client, "media") as download:
+                    self.runtime.poll_once()
+                download.assert_not_called()
+                self.assertEqual(self.client.acks[-1]["state"], "expired")
+                self.assertEqual(self.runtime._receipt_store().pending_count(), 0)
+        current, _ = self.runtime.settings.load()
+        self.update_settings(arrival_signal="ring_and_lamp",
+            quiet_hours={"enabled": False, "start": "00:00", "end": "00:00"})
+        self.runtime.poll_once()
+        self.assertEqual(self.runtime._receipt_store().pending_count(), 0)
+
+    def test_box_listened_lamp_only_pulses_without_any_audio(self):
+        self.connect_box()
+        current, _ = self.runtime.settings.load()
+        self.update_settings(arrival_signal="lamp_only")
+        self.runtime._command(self.box_listened_item(), NOW)
+        with self.listened_playback(), mock.patch.object(button_send, "ring_alert") as pulse, \
+             mock.patch.object(button_send, "play_moment") as cue, \
+             mock.patch.object(button_send, "play_audio_ordinary") as audio:
+            self.assertEqual(button_send.play_pending_listened(), 1)
+        self.assertEqual(pulse.call_args.kwargs["settings"]["arrival_signal"], "lamp_only")
+        cue.assert_not_called()
+        audio.assert_not_called()
+        self.runtime._finish_listened()
+        self.runtime.flush_acks()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_quiet_hours_discard_box_notices_behind_identity_even_while_busy(self):
+        self.connect_box()
+        self.runtime._command(self.listened_item(clip=False), NOW)
+        self.runtime._command(self.box_listened_item(clip=False), NOW)
+        store = self.runtime._receipt_store()
+        with self.listened_playback(quiet=True), \
+             mock.patch.object(button_send, "_recording", True), \
+             mock.patch.object(store, "claim_next") as claim, \
+             mock.patch.object(button_send, "play_moment") as cue:
+            self.assertEqual(button_send.maybe_play_pending_listened(), 0)
+        claim.assert_not_called()
+        cue.assert_not_called()
+        self.assertEqual(store.pending_count(), 1)
+        self.runtime._finish_listened()
+        self.runtime.flush_acks()
+        states = {ack["operation_id"]: ack["state"] for ack in self.client.acks}
+        self.assertEqual(states["listened:box"], "expired")
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+             mock.patch.object(button_send, "play_audio_ordinary"):
+            self.assertEqual(button_send.play_pending_listened(), 1)
+
+    def test_box_listened_lamp_failure_retains_notice_without_success_ack(self):
+        self.connect_box()
+        self.update_settings(arrival_signal="lamp_only")
+        self.runtime._command(self.box_listened_item(clip=False), NOW)
+        with self.listened_playback(), \
+             mock.patch.object(button_send, "ring_alert", side_effect=OSError("lamp unavailable")):
+            self.assertEqual(button_send.play_pending_listened(), 0)
+        self.assertEqual(self.runtime._receipt_store().pending_count(), 1)
+        self.runtime._finish_listened()
+        self.runtime.flush_acks()
+        self.assertEqual(self.client.acks[-1]["state"], "received")
+
+    def test_box_listened_rechecks_expiry_quiet_silent_and_unlink_before_playback(self):
+        self.connect_box()
+        for index, gate in enumerate(("expired", "quiet", "silent", "unlinked")):
+            with self.subTest(gate=gate):
+                self.client.connected_boxes = [BOX.copy()]
+                current, _ = self.runtime.settings.load()
+                self.update_settings(arrival_signal="ring_and_lamp")
+                self.runtime.heartbeat()
+                self.runtime._command(self.box_listened_item(clip=False, operation_id=f"listened:later{index}"), NOW)
+                if gate == "expired":
+                    self.client.server_time = NOW + 1800
+                    with mock.patch.object(self.runtime, "clock", return_value=NOW + 1800):
+                        self.runtime.heartbeat()
+                    self.runtime.clock = lambda: self.client.server_time
+                elif gate == "silent":
+                    current, _ = self.runtime.settings.load()
+                    self.update_settings(arrival_signal="silent")
+                elif gate == "unlinked":
+                    self.client.connected_boxes = []
+                    self.runtime.heartbeat()
+                with self.listened_playback(quiet=gate == "quiet"), \
+                     mock.patch.object(button_send, "play_moment") as cue, \
+                     mock.patch.object(button_send, "play_audio_ordinary") as audio:
+                    self.assertEqual(button_send.play_pending_listened(), 0)
+                cue.assert_not_called()
+                audio.assert_not_called()
+                self.runtime._finish_listened()
+                self.runtime.flush_acks()
+                self.assertEqual(self.client.acks[-1]["state"], "rejected" if gate == "unlinked" else "expired")
+                self.client.server_time = NOW
+                self.runtime.clock = lambda: NOW
+
+    def test_box_listened_missing_invalid_clip_and_long_name_use_generic_voice(self):
+        self.connect_box()
+        for index, failure in enumerate(("absent", "invalid", "long-name")):
+            item = self.box_listened_item(clip=failure != "absent", operation_id=f"listened:fallback{index}")
+            if failure == "invalid":
+                item["payload"]["sha256"] = "invalid"
+            elif failure == "long-name":
+                item["payload"]["listener_name"] = "x" * 60
+            self.runtime._command(item, NOW)
+            with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+                 mock.patch.object(button_send, "play_audio_ordinary") as play:
+                self.assertEqual(button_send.play_pending_listened(), 1)
+            play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
+            self.runtime._finish_listened()
 
     def listened_item(self, *, clip=True, operation_id="listened:" + "b" * 64):
         payload = {"message_id": MID, "listener_identity_id": PERSON["id"],

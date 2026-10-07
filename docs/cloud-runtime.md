@@ -306,6 +306,40 @@ name once, cue/voice order and volume, missing-clip fallback, quiet-hours deferr
 recording/guided/family-playback deferral, restart/ACK recovery and expiry or
 membership removal while a receipt waits.
 
+## Connected Boxes
+
+The device advertises `box_link: true`. Heartbeats may include up to 50 ready
+`connected_boxes` entries (`id`, `box_name`). Invalid entries are dropped;
+an absent or malformed list means no connected boxes. Existing `people` entries
+retain their WhatsApp routing. Connected box contacts use `kind: box` and
+`box:{link_id}` keys. Removal deletes that contact and its family card mappings,
+and clears the default when no authorized default remains. Setup recipient lists
+show "{box name} (connected box)" without an additional setup step.
+
+A connected box family card enrolls through the existing `nfc_enroll` command.
+Inventory uses the link ID and opaque card reference. Both recording modes send
+the link ID as `recipient_id`; durable retries retain the exact original upload
+bytes, account scope and route. A removed link cannot authorize a retry or a
+queued inbound message. Presenting its old family card uses the existing
+unrecognized card feedback.
+
+Inbound `sender_kind: box` audio uses the same playback path and ordinary cues,
+with no spoken box name. Its local chat route is `box:{sender_id}`, so both invited
+replies and recent-message replies target the sending box. The current heartbeat
+list authorizes playback and reply sending.
+
+A box `listened` notice contains `listener_link_id` and `listener_name`, with
+optional voice clip fields. Its expiry comes from Cloud (30 minutes after
+playback). Quiet hours or `arrival_signal: silent` expire the notice immediately;
+`lamp_only` pulses the lamp without either cue or voice. These gates are rechecked
+before playback. Box notices never defer through quiet hours; identity notices
+keep the existing quiet-hours deferral. A missing or invalid clip, or a box name
+longer than 24 characters, uses the bundled generic listened voice. Removed links
+lose cached clips and cannot authorize pending announcements.
+
+Real-box acceptance still requires recording, delivery, playback, reply routing,
+heard feedback, dashboard states and unlink/card rejection on both boxes.
+
 ## Combined-release acceptance
 
 Run `make check` on the exact candidate revision and retain its installed-file

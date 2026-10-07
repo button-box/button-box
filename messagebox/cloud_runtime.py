@@ -14,7 +14,9 @@ import threading
 import time
 import uuid
 import wave
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
@@ -27,7 +29,7 @@ from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE, STATE_DIR)
 from messagebox.settings import (
-    SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
+    in_quiet_hours, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
 
@@ -74,6 +76,24 @@ def _valid_id(value):
 
 def _valid_time(value):
     return type(value) in (int, float) and 1_700_000_000 <= value < 4_102_444_800
+
+
+def _connected_boxes(value):
+    if not isinstance(value, list):
+        return []
+    boxes, ids = [], set()
+    for box in value:
+        if (not isinstance(box, dict) or not _valid_id(box.get("id"))
+                or box["id"] in ids or not isinstance(box.get("box_name"), str)
+                or not box["box_name"].strip() or box["box_name"] != box["box_name"].strip()
+                or len(box["box_name"]) > 60 or any(ord(char) < 32 or ord(char) == 127
+                                                     for char in box["box_name"])):
+            continue
+        ids.add(box["id"])
+        boxes.append({"id": box["id"], "box_name": box["box_name"]})
+        if len(boxes) == 50:
+            break
+    return boxes
 
 
 def _effective_expiry(metadata, snapshot):
@@ -191,11 +211,28 @@ class CloudRuntime:
         snapshot = self._snapshot()
         return {person["id"]: person for person in snapshot["people"]}
 
+    def _boxes(self):
+        return {box["id"]: box for box in self._snapshot().get("connected_boxes", [])}
+
+    def _recipient(self, recipient_id):
+        if not _valid_id(recipient_id):
+            raise CloudRuntimeError("recipient is no longer authorized")
+        box = self._boxes().get(recipient_id)
+        if box is not None:
+            return "box:" + box["id"], box["box_name"]
+        person = self._people().get(recipient_id)
+        if person is not None:
+            return person["wa_id"] + "@s.whatsapp.net", person["display_name"] or person["wa_id"]
+        raise CloudRuntimeError("recipient is no longer authorized")
+
     def recipient_id(self, jid):
         snapshot = self._snapshot()
         if (not snapshot["entitlement"]["send"] or
                 (snapshot["entitlement"].get("until") is not None and self.trusted_now() >= snapshot["entitlement"]["until"])):
             raise CloudRuntimeError("cloud sending is paused")
+        for box in snapshot.get("connected_boxes", []):
+            if "box:" + box["id"] == jid:
+                return box["id"]
         for person in snapshot["people"]:
             if person["wa_id"] + "@s.whatsapp.net" == jid:
                 return person["id"]
@@ -210,7 +247,7 @@ class CloudRuntime:
                 and not snapshot["queue_hold"]
                 # A fresh heartbeat may authorize previously accepted inbound audio
                 # during payment suspension, up to the message expiry.
-                and metadata.get("sender_id") in self._people()
+                and metadata.get("sender_id") in (self._boxes() if metadata.get("sender_kind") == "box" else self._people())
                 and self.trusted_now() < _effective_expiry(metadata, snapshot)
                 and metadata.get("cloud_message_id") not in self.state["deleted"]
             )
@@ -220,8 +257,10 @@ class CloudRuntime:
     def _sync_contacts(self, snapshot):
         people = snapshot["people"]
         wanted = {p["wa_id"] + "@s.whatsapp.net": p for p in people}
-        default = next((p["wa_id"] + "@s.whatsapp.net" for p in people
-                        if p["id"] == snapshot["default_recipient_id"]), None)
+        wanted.update({"box:" + box["id"]: {"id": box["id"], "display_name": box["box_name"]}
+                       for box in snapshot.get("connected_boxes", [])})
+        default = next((jid for jid, person in wanted.items()
+                        if person["id"] == snapshot["default_recipient_id"]), None)
         now = snapshot["server_time"]
         def sync(document):
             old = document["contacts"]
@@ -230,7 +269,7 @@ class CloudRuntime:
                 prior = old.get(jid, {})
                 contacts[jid] = {
                     "label": (person["display_name"][:80] or jid.split("@", 1)[0]),
-                    "kind": "person", "receive_after": prior.get("receive_after", now),
+                    "kind": "box" if jid.startswith("box:") else "person", "receive_after": prior.get("receive_after", now),
                     "card_uids": prior.get("card_uids", []), "card_clip": prior.get("card_clip", ""),
                 }
             changed = contacts != old or default != document["default_recipient"]
@@ -253,6 +292,10 @@ class CloudRuntime:
             contact = document["contacts"].get(person["wa_id"] + "@s.whatsapp.net")
             if contact:
                 cards.extend((person["id"], uid) for uid in contact["card_uids"])
+        for box in snapshot.get("connected_boxes", []):
+            contact = document["contacts"].get("box:" + box["id"])
+            if contact:
+                cards.extend((box["id"], uid) for uid in contact["card_uids"])
         cards = CardReferenceStore(NFC_CARD_REFERENCES_FILE).sync(snapshot["account_scope"], cards)
         return {"account_scope": snapshot["account_scope"],
                 "revision": document["revision"], "cards": cards}
@@ -307,6 +350,9 @@ class CloudRuntime:
             ids.add(person["id"])
             numbers.add(person["wa_id"])
             safe_people.append({key: person[key] for key in ("id", "wa_id", "display_name", "role")})
+        boxes = [box for box in _connected_boxes(response.get("connected_boxes"))
+                 if box["id"] not in ids]
+        ids.update(box["id"] for box in boxes)
         default = response.get("default_recipient_id")
         if default is not None and default not in ids:
             raise CloudRuntimeError("cloud default recipient is invalid")
@@ -318,7 +364,7 @@ class CloudRuntime:
                     "verified_at": self.clock(), "verified_mono": self.monotonic(),
                     "boot_id": self.boot_id,
                     "retention_days": response["retention_days"],
-                    "people": safe_people, "default_recipient_id": default,
+                    "people": safe_people, "connected_boxes": boxes, "default_recipient_id": default,
                     "entitlement": {**{key: entitlement[key] for key in ("ingest", "deliver", "send")}, "until": until},
                     "queue_hold": response["queue_hold"]}
         self._sync_contacts(snapshot)
@@ -554,8 +600,10 @@ class CloudRuntime:
         sender_id = payload.get("sender_id")
         expires_at = payload.get("expires_at")
         message_created_at = payload.get("message_created_at")
-        if (not _valid_id(message_id) or not _valid_time(expires_at)
-                or expires_at > item["expires_at"] or sender_id not in self._people()
+        if (not _valid_id(message_id) or not _valid_time(expires_at) or not _valid_id(sender_id)
+                or expires_at > item["expires_at"]
+                or payload.get("sender_kind") not in {None, "person", "box"}
+                or sender_id not in (self._boxes() if payload.get("sender_kind") == "box" else self._people())
                 or (message_created_at is not None and not _valid_time(message_created_at))
                 or not isinstance(payload.get("sha256"), str) or not _SHA.fullmatch(payload["sha256"])
                 or payload.get("content_type") not in {"audio/ogg", "audio/opus", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr", "audio/wav", "audio/x-wav"}
@@ -575,13 +623,14 @@ class CloudRuntime:
         if digest in self.state["seen"]:
             self._ack(item["operation_id"], "received")
             return
-        person = self._people()[sender_id]
-        jid = person["wa_id"] + "@s.whatsapp.net"
+        jid, _label = self._recipient(sender_id)
         name = f"{int(item['created_at'] * 1000):013d}-{digest[:24]}.wav"
         metadata = {"version": 1, "chat": jid, "msgid": payload.get("reply_to") or message_id,
                     "sender_jid": jid, "media_type": "audio", "cloud": True,
                     "cloud_message_id": message_id, "cloud_operation_id": item["operation_id"],
                     "sender_id": sender_id, "expires_at": expires_at}
+        if payload.get("sender_kind") == "box":
+            metadata["sender_kind"] = "box"
         if message_created_at is not None:
             metadata["cloud_created_at"] = message_created_at
         for folder in (self.queue_dir, *(self.queue_dir / part for part in (".inflight", ".hold", ".played"))):
@@ -650,15 +699,13 @@ class CloudRuntime:
         router = NfcRouter(self.contacts, SelectionStore(NFC_SELECTION_FILE),
                            EnrollmentStore(NFC_ENROLLMENT_FILE))
         if kind == "nfc_enroll":
-            person = self._people().get(payload.get("recipient_id"))
-            if person is None:
-                raise CloudRuntimeError("NFC recipient is no longer authorized")
+            jid, label = self._recipient(payload.get("recipient_id"))
             active = router.enrollment.active()
             if active is None:
-                active = router.begin_enrollment(label=person["display_name"] or person["wa_id"],
-                    jid=person["wa_id"] + "@s.whatsapp.net", ttl_s=min(120, item["expires_at"] - self.trusted_now()),
+                active = router.begin_enrollment(label=label,
+                    jid=jid, ttl_s=min(120, item["expires_at"] - self.trusted_now()),
                     create_contact=False)
-            elif active["jid"] != person["wa_id"] + "@s.whatsapp.net":
+            elif active["jid"] != jid:
                 raise CloudRuntimeError("another NFC enrollment is active")
             self.state["pending_nfc"][item["operation_id"]] = active["request_id"]
             self._save()
@@ -696,13 +743,12 @@ class CloudRuntime:
             else:
                 if targeted:
                     recipient_id = payload.get("recipient_id")
-                    person = self._people().get(recipient_id)
+                    jid, _label = self._recipient(recipient_id)
                     snapshot = self.state.get("snapshot") or {}
                     uid = CardReferenceStore(NFC_CARD_REFERENCES_FILE).resolve(
                         snapshot.get("account_scope"), payload.get("card_ref"))
-                    if person is None or uid is None:
+                    if uid is None:
                         raise CloudRuntimeError("selected saved card is no longer available")
-                    jid = person["wa_id"] + "@s.whatsapp.net"
                     document = self.contacts.load()
                     if uid not in document["contacts"].get(jid, {}).get("card_uids", []):
                         raise CloudRuntimeError("selected saved card changed")
@@ -735,7 +781,7 @@ class CloudRuntime:
             temporary.unlink(missing_ok=True)
         snapshot = self.state.get("snapshot") or {}
         allowed = {self._listened_prefix(snapshot.get("account_scope", ""), person["id"])
-                   for person in snapshot.get("people", [])}
+                   for person in [*snapshot.get("people", []), *snapshot.get("connected_boxes", [])]}
         paths = sorted(directory.glob("*.wav"), key=lambda path: path.stat().st_mtime,
                        reverse=True)
         retained = 0
@@ -762,7 +808,7 @@ class CloudRuntime:
         directory = self.state_path.parent / "listened-clips"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
-        prefix = self._listened_prefix(scope, payload["listener_identity_id"])
+        prefix = self._listened_prefix(scope, payload.get("listener_link_id", payload.get("listener_identity_id")))
         voice_key = hashlib.sha256(json.dumps(payload.get("voice_pack"),
                                              separators=(",", ":")).encode()).hexdigest()[:16]
         prefix += "-" + voice_key
@@ -816,27 +862,38 @@ class CloudRuntime:
         if self.server_now() >= metadata["expires_at"]:
             return "expired"
         if (metadata.get("account_scope") != snapshot["account_scope"]
-                or metadata["listener_id"] not in self._people()
+                or metadata["listener_id"] not in (self._boxes() if metadata.get("listener_kind") == "box" else self._people())
                 or metadata["message_id"] in self.state["deleted"]):
             return "rejected"
+        if metadata.get("listener_kind") == "box":
+            settings, warning = self.settings.load()
+            now = datetime.fromtimestamp(self.server_now(), ZoneInfo(settings["timezone"]))
+            if warning or in_quiet_hours(settings, now) or settings["arrival_signal"] == "silent":
+                return "expired"
         if (snapshot["queue_hold"] or not snapshot["entitlement"]["deliver"]
                 or not snapshot["entitlement"]["send"]
                 or snapshot["entitlement"].get("until") is not None
                 and self.server_now() >= snapshot["entitlement"]["until"]):
-            return "pending"
+            return "expired" if metadata.get("listener_kind") == "box" else "pending"
+        if metadata.get("listener_kind") == "box" and settings["arrival_signal"] == "lamp_only":
+            return "lamp_only"
         return "ready"
 
     def _listened(self, item, server_time):
         payload = item["payload"]
-        if (not _valid_id(payload.get("message_id"))
-                or not _valid_id(payload.get("listener_identity_id"))
-                or not isinstance(payload.get("listener_first_name"), str)
-                or len(payload["listener_first_name"]) > 24):
+        box_listener = "listener_link_id" in payload
+        listener_id = payload.get("listener_link_id" if box_listener else "listener_identity_id")
+        listener_name = payload.get("listener_name" if box_listener else "listener_first_name")
+        if (not _valid_id(payload.get("message_id")) or not _valid_id(listener_id)
+                or not isinstance(listener_name, str) or len(listener_name) > (60 if box_listener else 24)
+                or box_listener and "listener_identity_id" in payload):
             raise CloudRuntimeError("listened notice is invalid")
         snapshot = self._snapshot()
         metadata = {"operation_id": item["operation_id"], "message_id": payload["message_id"],
-                    "listener_id": payload["listener_identity_id"],
+                    "listener_id": listener_id,
                     "account_scope": snapshot["account_scope"], "expires_at": item["expires_at"]}
+        if box_listener:
+            metadata["listener_kind"] = "box"
         status = self.listened_status(metadata)
         if server_time >= item["expires_at"] or status == "expired":
             self._ack(item["operation_id"], "expired")
@@ -848,11 +905,13 @@ class CloudRuntime:
         store = self._receipt_store()
         notice_id = store.cloud_notice_id(item["operation_id"])
         if not store.cloud_exists(notice_id):
-            clip = self._listened_clip(payload, snapshot["account_scope"])
+            clip = (self._listened_clip(payload, snapshot["account_scope"])
+                    if len(listener_name) <= 24 and status != "lamp_only" else "")
             store.enqueue_cloud(item["operation_id"], payload["message_id"],
-                payload["listener_identity_id"], payload["listener_first_name"], clip,
+                listener_id, listener_name, clip,
                 account_scope=snapshot["account_scope"], expires_at=item["expires_at"],
-                received_at=server_time, voice_pack=payload.get("voice_pack"))
+                received_at=server_time, voice_pack=payload.get("voice_pack"),
+                listener_kind="box" if box_listener else None)
         self.state["pending_listened"][item["operation_id"]] = notice_id
         self._save()  # Queue and deduplication are durable before receipt ACK.
         self._ack(item["operation_id"], "received")
@@ -1205,6 +1264,7 @@ def read_snapshot():
     ids = {person["id"] for person in people}
     if len(ids) != len(people):
         raise CloudRuntimeError("cloud family list is invalid")
+    ids.update(box["id"] for box in snapshot.get("connected_boxes", []))
     default = snapshot.get("default_recipient_id")
     if default is not None and (not _valid_id(default) or default not in ids):
         raise CloudRuntimeError("cloud default recipient is invalid")

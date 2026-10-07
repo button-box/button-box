@@ -32,6 +32,7 @@ ENV_FILE = Path("/etc/messagebox/env")
 
 _GROUP_JID = re.compile(r"^[0-9]+(?:-[0-9]+)?@g\.us$")
 _PERSON_JID = re.compile(r"^[0-9]+@s\.whatsapp\.net$")
+_BOX_JID = re.compile(r"^box:[A-Za-z0-9:._-]{1,240}$")
 _UID = re.compile(r"^[0-9A-F]+$")
 _LEGACY_ROOT_KEYS = {"version", "revision", "contacts", "listeners"}
 _ROOT_KEYS = _LEGACY_ROOT_KEYS | {"default_recipient"}
@@ -63,6 +64,8 @@ def _empty_document() -> JsonObject:
 def _chat_kind(value: object) -> str:
     if not isinstance(value, str):
         raise ContactError("contact JID is invalid")
+    if _BOX_JID.fullmatch(value):
+        return "box"
     if _GROUP_JID.fullmatch(value):
         return "group"
     if _PERSON_JID.fullmatch(value):

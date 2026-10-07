@@ -657,7 +657,7 @@ def create_app(
                     )
                 )
                 or recipient["metadata_status"] not in {"ready", "unavailable"}
-                or recipient["kind"] not in {"person", "group"}
+                or recipient["kind"] not in {"person", "group", "box"}
                 or any(
                     not isinstance(recipient[key], bool)
                     for key in ("configured", "is_default", "available")
@@ -726,7 +726,7 @@ def create_app(
                 or not isinstance(recipient["label"], str)
                 or not recipient["label"].strip()
                 or len(recipient["label"]) > 80
-                or recipient["kind"] not in {"person", "group"}
+                or recipient["kind"] not in {"person", "group", "box"}
                 or not isinstance(recipient["is_default"], bool)
                 or type(recipient["card_count"]) is not int
                 or recipient["card_count"] < 0
@@ -740,7 +740,7 @@ def create_app(
             or not isinstance(selected["label"], str)
             or not selected["label"].strip()
             or len(selected["label"]) > 80
-            or selected["kind"] not in {"person", "group"}
+            or selected["kind"] not in {"person", "group", "box"}
         ):
             raise NfcOnboardingError("Family card setup response is invalid")
         if (
