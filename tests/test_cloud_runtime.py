@@ -452,7 +452,7 @@ class CloudRuntimeTests(unittest.TestCase):
         with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
-             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+             mock.patch.object(button_send, "play_ringtone_snippet", return_value=True) as play:
             self.runtime._command(item, NOW)
             self.runtime._finish_settings()
             self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
@@ -470,7 +470,23 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime._command(item, NOW)
             self.runtime._finish_settings()
             self.assertFalse(button_send.maybe_play_cloud_sound())
-        play.assert_called_once_with(button_send.sound_pack.cue_path("card_saved"), 5)
+        play.assert_called_once_with()  # Volume changed: the ringtone plays at the new level.
+
+    def test_volume_change_previews_the_ringtone_instead_of_the_saved_cue(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(master_volume_percent=35)
+        with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as cue, \
+             mock.patch.object(button_send, "play_ringtone_snippet", return_value=True) as snippet:
+            self.runtime._command(item, NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.mono[0] += 3
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+        snippet.assert_called_once_with()
+        cue.assert_not_called()
 
     def test_settings_saved_noop_boot_adoption_and_local_echo_are_silent(self):
         self.runtime.heartbeat()
@@ -498,7 +514,7 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def test_settings_saved_failed_apply_and_command_restart_preserve_order(self):
         self.runtime.heartbeat()
-        item = self.settings_command(master_volume_percent=40)
+        item = self.settings_command(ringtone_id="sunshine")
         with self.settings_audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(button_send, "quiet_hours", return_value=False):
             self.runtime._command(item, NOW)
@@ -524,7 +540,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send, "play_idle_sound", side_effect=[False, True]) as play:
-            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.runtime._command(self.settings_command(ringtone_id="sunshine"), NOW)
             self.apply_settings_on_button()
             self.runtime._finish_settings()
             self.mono[0] += 3
@@ -568,7 +584,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
-            self.runtime._command(self.settings_command(master_volume_percent=40), NOW)
+            self.runtime._command(self.settings_command(ringtone_id="sunshine"), NOW)
             self.apply_settings_on_button()
             self.runtime._finish_settings()
             key = "settings_saved:settings_operation_1"

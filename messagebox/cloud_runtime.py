@@ -748,7 +748,10 @@ class CloudRuntime:
                 # and whether values changed, rather than just its revision.
                 if not intent_path.exists():
                     atomic_json(intent_path, {"settings_changed": any(current[key] != value
-                        for key, value in candidate.items()), "boot_id": self.boot_id,
+                        for key, value in candidate.items()),
+                        "volume_changed": ("master_volume_percent" in candidate
+                                           and current.get("master_volume_percent") != candidate["master_volume_percent"]),
+                        "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)
                 if updated["revision"] != desired:
@@ -847,7 +850,8 @@ class CloudRuntime:
         if type(applied) not in (int, float) or not 0 <= self.monotonic() - applied < 30:
             return
         self.audio_requests.enqueue_settings_saved("settings_saved:" + operation_id,
-            intent["account_scope"], 30 - (self.monotonic() - applied))
+            intent["account_scope"], 30 - (self.monotonic() - applied),
+            volume_changed=intent.get("volume_changed") is True)
 
     def _finish_nfc(self):
         if not self.state["pending_nfc"]:

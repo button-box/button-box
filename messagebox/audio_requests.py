@@ -91,7 +91,7 @@ class AudioRequests:
                                "expires_at": expires_at, "expires_mono": expires_mono,
                                "boot_id": self.boot_id, "state": "pending", **fields})
 
-    def enqueue_settings_saved(self, key, scope, seconds):
+    def enqueue_settings_saved(self, key, scope, seconds, *, volume_changed=False):
         """Debounce saves, retaining the first request's bounded lifetime."""
         with self._locked(self.directory / "settings-saved.json"):
             path = self._path(key)
@@ -107,14 +107,15 @@ class AudioRequests:
                     if (request["kind"] == "settings_saved" and request["state"] == "pending"
                             and request["account_scope"] == scope and not self._expired(request)
                             and ready >= (mono if request.get("boot_id") else now)):
-                        request.update(ready_at=now + 3, ready_mono=mono + 3)
+                        request.update(ready_at=now + 3, ready_mono=mono + 3,
+                                       volume_changed=bool(request.get("volume_changed") or volume_changed))
                         # A receipt for every merged operation prevents replay after restart.
                         with self._locked(path):
                             self._save(path, {**request, "key": key, "state": "rejected"})
                         self._save(pending_path, request)
                         return
             self.enqueue_for(key, "settings_saved", scope, seconds,
-                             ready_at=now + 3, ready_mono=mono + 3)
+                             ready_at=now + 3, ready_mono=mono + 3, volume_changed=bool(volume_changed))
 
     @contextmanager
     def owner(self):
