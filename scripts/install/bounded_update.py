@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
+import sys
 import json
 import os
 import re
@@ -325,6 +326,24 @@ def _load_module(name, path):
     return module
 
 
+def _candidate_sound_pack(source_root):
+    """Load the staged validator with the staged package importable, then forget it.
+
+    The updater runs from the staging tree, where `messagebox` is not on sys.path.
+    """
+    saved_path = list(sys.path)
+    saved = {name: module for name, module in sys.modules.items()
+             if name == "messagebox" or name.startswith("messagebox.")}
+    sys.path.insert(0, str(source_root))
+    try:
+        return _load_module("messagebox_candidate_sound_pack", source_root / "messagebox/sound_pack.py")
+    finally:
+        sys.path[:] = saved_path
+        for name in [name for name in sys.modules if name == "messagebox" or name.startswith("messagebox.")]:
+            del sys.modules[name]
+        sys.modules.update(saved)
+
+
 @contextlib.contextmanager
 def _update_lock(root):
     root = Path(root)
@@ -431,8 +450,8 @@ def load_candidate(source_root, manifest_path, root):
         if sound_entries != set(SOUND_SOURCES):
             raise UpdateError("release sound pack is incomplete")
         try:
-            _load_module("messagebox_candidate_sound_pack", source_root / "messagebox/sound_pack.py").validate_sounds(source_root / "sounds")
-        except (OSError, ValueError) as exc:
+            _candidate_sound_pack(source_root).validate_sounds(source_root / "sounds")
+        except (OSError, ValueError, ImportError) as exc:
             raise UpdateError("release sound assets are invalid") from exc
     for absolute in RETIRED_SOUNDS:
         destination = _rooted(root, absolute)
