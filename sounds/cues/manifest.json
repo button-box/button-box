@@ -5,19 +5,19 @@
    "file": "cue-press.wav",
    "seconds": 0.4,
    "meaning": "A high five. One bright wooden tap on the motif's home note.",
-   "sha256": "47a6732593e490f162a81ff0282ce42c33cecdec87dbb7bdff446cffd437e847"
+   "sha256": "ba608d3d3494e719e97dac330b31d05a000502e01a1fe624d3ef236a50e2a91e"
   },
   {
    "file": "cue-card.wav",
-   "seconds": 0.45,
+   "seconds": 0.55,
    "meaning": "Picking someone up. A quick upward flick, different from the press.",
-   "sha256": "53cbc9a5d818ce8f6b87c4e6055a8526e497492a8df810dbc72a7f3c620d1fdc"
+   "sha256": "36c115d9c9bfe5278ccb901b95d558dd77829f768389a9a4acbf7dd16179419e"
   },
   {
    "file": "cue-rec_go.wav",
-   "seconds": 0.25,
+   "seconds": 0.32,
    "meaning": "Go! A tiny bright tick right after \u201cone\u201d.",
-   "sha256": "2d56c963a0534b7e973c0e9f7d405d0d851d472925b7b8055faed6cfc3308c5d"
+   "sha256": "db90ed0cbbba363c93c1bef38be2a4e8507cf51ff15672e4c50b9ab50ffeac62"
   },
   {
    "file": "cue-rec_limit.wav",
@@ -39,9 +39,9 @@
   },
   {
    "file": "cue-oops.wav",
-   "seconds": 0.6,
+   "seconds": 0.65,
    "meaning": "A playful shrug. A bouncy \u201cuh-oh\u201d, two notes down. As loud as the press.",
-   "sha256": "71361aa1c64584284285c1a8df2d9e03052233dd74460e2991893fa5ceef4f00"
+   "sha256": "fd0f8d219dd77cf970109cd49ef0bc8d19d218f4189acde9e99a7ceb1ae0b1fa"
   },
   {
    "file": "cue-still_trying.wav",

@@ -8,7 +8,7 @@
   "seconds": 0.45
  },
  "rec_go": {
-  "desc": "Go! A tiny bright tick right after \u201cone\u201d.",
+  "desc": "Go! A tiny bright tick right after “one”.",
   "seconds": 0.25
  },
  "rec_limit": {
@@ -20,11 +20,11 @@
   "seconds": 0.6
  },
  "msg_end": {
-  "desc": "That's all. The \u201cBox!\u201d note, warm and settled.",
+  "desc": "That's all. The “Box!” note, warm and settled.",
   "seconds": 0.75
  },
  "oops": {
-  "desc": "A playful shrug. A bouncy \u201cuh-oh\u201d, two notes down. As loud as the press.",
+  "desc": "A playful shrug. A bouncy “uh-oh”, two notes down. As loud as the press.",
   "seconds": 0.6
  },
  "still_trying": {
@@ -36,7 +36,7 @@
   "seconds": 0.75
  },
  "ready": {
-  "desc": "I'm awake. A quick \u201cBut-ton Box!\u201d",
+  "desc": "I'm awake. A quick “But-ton Box!”",
   "seconds": 0.95
  },
  "connected": {
@@ -52,11 +52,11 @@
   "seconds": 1.3
  },
  "listened": {
-  "desc": "They heard it! The happiest small sound: a sparkle and the \u201cBox!\u201d chord.",
+  "desc": "They heard it! The happiest small sound: a sparkle and the “Box!” chord.",
   "seconds": 1.2
  },
  "card_saved": {
-  "desc": "Card saved. The pick-up flick, then a happy \u201cyes\u201d.",
+  "desc": "Card saved. The pick-up flick, then a happy “yes”.",
   "seconds": 0.9
  }
 }
