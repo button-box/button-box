@@ -1,4 +1,5 @@
 import hashlib
+import contextlib
 import json
 import subprocess
 import tempfile
@@ -55,7 +56,8 @@ class FakeClient:
                 "cursor": len(self.items), "items": self.items, "deleted": self.deleted}
 
     def media(self, url, *, limit):
-        assert url.startswith("https://button.box/cloud-api/v1/device/media/")
+        assert url.startswith(("https://button.box/cloud-api/v1/device/media/",
+                               "https://button.box/cloud-api/v1/device/listened-media/"))
         return self.audio
 
     def ack(self, ack):
@@ -93,6 +95,9 @@ class CloudRuntimeTests(unittest.TestCase):
             settings_path=self.root / "settings.json", clock=lambda: NOW,
             monotonic=lambda: self.mono[0], boot_id="test-boot",
             converter=queued_audio)
+        receipts = mock.patch("messagebox.cloud_runtime.LISTENED_DIR", self.root / "listened-receipts")
+        receipts.start()
+        self.addCleanup(receipts.stop)
         self.ack_dir = self.root / "acks"
         patch = mock.patch("messagebox.cloud_runtime.ACK_DIR", self.ack_dir)
         patch.start()
@@ -119,6 +124,218 @@ class CloudRuntimeTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
+
+    def listened_item(self, *, clip=True, operation_id="listened:" + "b" * 64):
+        payload = {"message_id": MID, "listener_identity_id": PERSON["id"],
+                   "listener_first_name": "Avery"}
+        if clip:
+            path = self.root / "name.wav"
+            write_pcm_wav(path, 0.1, sample_rate=48000)
+            self.client.audio = path.read_bytes()
+            payload.update(text_hash="c" * 64,
+                media_url="https://button.box/cloud-api/v1/device/listened-media/" + "c" * 64,
+                sha256=hashlib.sha256(self.client.audio).hexdigest(), content_type="audio/wav")
+        return {"operation_id": operation_id, "sequence": 1, "kind": "listened",
+                "created_at": NOW, "expires_at": NOW + 3600, "payload": payload}
+
+    def listened_playback(self, *, quiet=False):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(button_send, "receipt_store", self.runtime._receipt_store()))
+        stack.enter_context(mock.patch.object(button_send, "button", types.SimpleNamespace(is_pressed=False), create=True))
+        stack.enter_context(mock.patch.object(button_send, "_recording", False))
+        stack.enter_context(mock.patch.object(button_send, "_guided_active", False))
+        stack.enter_context(mock.patch.object(button_send, "announcement_gate", button_send.AnnouncementGate()))
+        stack.enter_context(mock.patch.object(button_send, "transport_mode", return_value="cloud"))
+        stack.enter_context(mock.patch.object(button_send, "quiet_hours", return_value=quiet))
+        stack.enter_context(mock.patch.object(button_send, "LISTENED_FALLBACK_WAV", str(self.root / "fallback.wav")))
+        (self.root / "fallback.wav").write_bytes(b"synthetic fallback")
+        stack.enter_context(mock.patch.object(button_send.cloud_runtime, "listened_status", side_effect=self.runtime.listened_status))
+        stack.enter_context(mock.patch.object(button_send, "log"))
+        stack.enter_context(mock.patch.object(button_send, "log_event"))
+        return stack
+
+    def test_listened_clip_receipt_replay_and_playback_ack_survive_restart(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        self.client.items = [item]
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as download:
+            self.runtime.poll_once()
+            store = self.runtime._receipt_store()
+            [path] = list(store.pending.glob("*.json"))
+            notice = store.load(path)
+            self.assertEqual(notice.listener_name, "Avery")
+            self.assertEqual(Path(notice.clip).read_bytes(), self.client.audio)
+            self.assertEqual(Path(notice.clip).stat().st_mode & 0o777, 0o600)
+            self.assertEqual(Path(notice.clip).parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(self.client.acks[-1]["state"], "received")
+            self.runtime.state = self.runtime._load()
+            self.runtime.poll_once()
+            download.assert_called_once()
+            self.assertEqual(store.pending_count(), 1)
+            order = []
+            with self.listened_playback(), \
+                 mock.patch.object(button_send, "play_moment", side_effect=lambda cue: order.append(cue)), \
+                 mock.patch.object(button_send, "play_audio_ordinary", side_effect=lambda clip: order.append(clip)):
+                self.assertEqual(button_send.maybe_play_pending_listened(), 1)
+            self.assertEqual(order, ["listened", notice.clip])
+            self.runtime.state = self.runtime._load()
+            self.runtime._maintain_local()
+            self.assertEqual(self.client.acks[-1]["state"], "applied")
+            self.runtime.poll_once()
+            self.assertEqual(store.pending_count(), 0)
+            download.assert_called_once()
+            self.assertNotIn("played", [ack["state"] for ack in self.client.acks])
+            self.assertEqual(list(self.runtime.queue_dir.glob("*.wav")), [])
+            self.runtime.clock = lambda: NOW + 3600
+            self.client.server_time = NOW + 3600
+            self.runtime.heartbeat()
+            self.runtime.poll_once()
+            self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_listened_receipt_deduplicates_crash_before_state_save(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        with mock.patch.object(self.runtime, "_save", side_effect=OSError("crash")):
+            with self.assertRaises(OSError):
+                self.runtime._command(item, NOW)
+        self.runtime.state = self.runtime._load()
+        with mock.patch.object(self.client, "media") as download:
+            self.runtime._command(item, NOW)
+            download.assert_not_called()
+        self.assertEqual(self.runtime._receipt_store().pending_count(), 1)
+
+    def test_listened_missing_failed_or_corrupt_clip_uses_fallback(self):
+        self.runtime.heartbeat()
+        for index, failure in enumerate(("absent", "sha", "download", "format")):
+            with self.subTest(failure=failure):
+                item = self.listened_item(clip=failure != "absent", operation_id=f"listened:case{index}")
+                if failure == "sha":
+                    item["payload"]["sha256"] = "0" * 64
+                if failure == "format":
+                    self.client.audio = b"not a wave"
+                    item["payload"]["sha256"] = hashlib.sha256(self.client.audio).hexdigest()
+                with mock.patch.object(self.client, "media", side_effect=CloudDeviceError("unavailable")) if failure == "download" else contextlib.nullcontext():
+                    self.runtime._command(item, NOW)
+                store = self.runtime._receipt_store()
+                [path] = list(store.pending.glob("*.json"))
+                self.assertEqual(store.load(path).clip, "")
+                with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+                     mock.patch.object(button_send, "play_audio_ordinary") as play:
+                    self.assertEqual(button_send.play_pending_listened(), 1)
+                    play.assert_called_once_with(str(self.root / "fallback.wav"))
+                self.runtime._maintain_local()
+                self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def test_listened_quiet_hours_and_busy_owner_defer_then_expire(self):
+        self.runtime.heartbeat()
+        self.runtime._command(self.listened_item(clip=False), NOW)
+        store = self.runtime._receipt_store()
+        with self.listened_playback(quiet=True), mock.patch.object(button_send, "play_moment") as cue:
+            self.assertEqual(button_send.play_pending_listened(), 0)
+            cue.assert_not_called()
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment") as cue:
+            for flag in ("_recording", "_guided_active"):
+                with mock.patch.object(button_send, flag, True):
+                    self.assertEqual(button_send.play_pending_listened(), 0)
+            with mock.patch.object(button_send.button, "is_pressed", True):
+                self.assertEqual(button_send.play_pending_listened(), 0)
+            self.assertEqual(store.pending_count(), 1)
+            self.runtime.clock = lambda: NOW + 3600
+            self.client.server_time = NOW + 3600
+            self.runtime.heartbeat()
+            self.assertEqual(button_send.play_pending_listened(), 0)
+            cue.assert_not_called()
+        self.runtime._maintain_local()
+        self.assertEqual(store.pending_count(), 0)
+        self.assertEqual(self.client.acks[-1]["state"], "expired")
+
+    def test_listened_cache_reuses_clip_invalidates_text_and_clears_revocation(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as download:
+            first = self.runtime._listened_clip(item["payload"], "a" * 64)
+            self.assertEqual(self.runtime._listened_clip(item["payload"], "a" * 64), first)
+            download.assert_called_once()
+            item["payload"]["text_hash"] = "d" * 64
+            second = self.runtime._listened_clip(item["payload"], "a" * 64)
+            self.assertFalse(Path(first).exists())
+            self.assertTrue(Path(second).exists())
+        self.client.people = []
+        self.runtime.heartbeat()
+        self.assertFalse(Path(second).exists())
+
+    def test_listened_cache_bounds_and_evicted_notice_fallback(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        self.runtime._command(item, NOW)
+        directory = self.root / "listened-clips"
+        prefix = self.runtime._listened_prefix("a" * 64, PERSON["id"])
+        for index in range(4):
+            (directory / f"{prefix}-{index:064x}.wav").write_bytes(b"synthetic")
+        with mock.patch("messagebox.cloud_runtime.MAX_LISTENED_CLIPS", 2):
+            self.runtime._prune_listened_clips()
+        self.assertEqual(len(list(directory.glob("*.wav"))), 2)
+        for path in directory.glob("*.wav"):
+            path.unlink()
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+             mock.patch.object(button_send, "play_audio_ordinary") as play:
+            self.assertEqual(button_send.play_pending_listened(), 1)
+            play.assert_called_once_with(str(self.root / "fallback.wav"))
+
+    def test_listened_capability_is_reported_by_heartbeat(self):
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        self.assertIs(send.call_args.args[0]["capabilities"]["listened_announcements"], True)
+
+    def test_listened_stale_authorization_waits_then_revoked_listener_is_rejected(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        self.runtime._command(item, NOW)
+        store = self.runtime._receipt_store()
+        self.mono[0] += 91
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment") as cue:
+            self.assertEqual(button_send.play_pending_listened(), 0)
+            self.assertEqual(store.pending_count(), 1)
+            self.client.people = []
+            self.runtime.heartbeat()
+            self.assertEqual(button_send.play_pending_listened(), 0)
+            cue.assert_not_called()
+        self.runtime._maintain_local()
+        self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertEqual(list((self.root / "listened-clips").glob("*.wav")), [])
+
+    def test_listened_expired_and_invalid_commands_never_download(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        item["expires_at"] = NOW
+        self.client.items = [item]
+        with mock.patch.object(self.client, "media") as download:
+            self.runtime.poll_once()
+            self.assertEqual(self.client.acks[-1]["state"], "expired")
+            item = self.listened_item(operation_id="listened:invalid")
+            item["payload"]["listener_identity_id"] = "unknown-listener"
+            self.client.items = [item]
+            self.runtime.poll_once()
+            self.assertEqual(self.client.acks[-1]["state"], "rejected")
+            download.assert_not_called()
+        self.assertEqual(self.runtime._receipt_store().pending_count(), 0)
+
+    def test_listened_playback_failure_releases_receipt_without_applied_ack(self):
+        self.runtime.heartbeat()
+        item = self.listened_item(clip=False)
+        self.runtime._command(item, NOW)
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+             mock.patch.object(button_send, "play_audio_ordinary", side_effect=OSError("speaker unavailable")):
+            self.assertEqual(button_send.play_pending_listened(), 0)
+        self.assertEqual(self.runtime._receipt_store().pending_count(), 1)
+        self.runtime._maintain_local()
+        self.assertEqual(self.client.acks[-1]["state"], "received")
+        with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
+             mock.patch.object(button_send, "play_audio_ordinary"):
+            self.assertEqual(button_send.play_pending_listened(), 1)
+        self.runtime._maintain_local()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
 
     def test_heartbeat_reports_random_per_card_references_without_uids(self):
         with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:

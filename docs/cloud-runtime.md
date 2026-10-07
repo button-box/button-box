@@ -264,6 +264,48 @@ revision and NFC flows, deletion/expiry retention, restart/ACK recovery, and
 the existing wacli path remaining intact. Automated tests and service health
 alone do not establish physical or household acceptance.
 
+## Cloud listening announcements (B26)
+
+Registration and heartbeat advertise `listened_announcements: true`. A `listened`
+command carries the outbound message ID, listener identity and first name, with
+optional `text_hash`, authenticated `media_url`, `sha256` and `content_type`.
+Cloud can issue the notice for WhatsApp `played`, or `read` when playback status
+is unavailable; a read status does not prove the person heard the recording.
+
+The poller verifies SHA-256 and PCM WAV format (16-bit mono, 48 kHz), then caches
+the voice under `/var/lib/messagebox-cloud/listened-clips`. Cache keys bind
+the household, listener and text hash. Changed text invalidates the older voice;
+verified roster removal (including opt-out), household change and account deletion
+remove ineligible cached voices. The cache holds at most 32 clips of 1 MiB each, with
+0700 directory and 0600 files. Interrupted downloads are removed on housekeeping.
+No name audio is generated on the Pi.
+
+Missing clips, failed downloads, invalid hashes or invalid WAVs enqueue an empty
+clip and use the bundled `voice-listened.wav` fallback. Evicted clips also fall
+back at playback. The notice uses the existing private `listened-receipts` store,
+separate from incoming family audio. Queue and operation deduplication are durable
+before `received`; the poller sends `applied` only after the button owner records
+successful announcement playback. Playback failures retain the receipt for retry.
+No `played` ACK is used for a listening notice.
+
+Only the main button loop plays `cue-listened.wav`, followed by the name voice
+or fallback. Recording, guided interaction, a held button and synchronous family
+playback defer unsolicited notices. Quiet hours keep receipts pending under the
+existing rules. Before starting a Cloud notice, fresh local authorization must
+match its household and listener, service and queue hold. Expired or deleted
+messages and removed listeners cannot start an announcement; stale authorization
+waits for the existing heartbeat. Result ACKs survive restart.
+
+No new bundled assets, runtime modules, environment settings or updater targets
+are required: the existing manifest includes the changed Python files and the
+existing listened cue and fallback. Generated private clips are state, outside
+the program release manifest.
+
+Real-box acceptance must verify a Cloud read/play event produces the correct
+name once, cue/voice order and volume, missing-clip fallback, quiet-hours deferral,
+recording/guided/family-playback deferral, restart/ACK recovery and expiry or
+membership removal while a receipt waits.
+
 ## Combined-release acceptance
 
 Run `make check` on the exact candidate revision and retain its installed-file

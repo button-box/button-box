@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Durable WhatsApp voice-note played receipts for Button Box.
+"""Durable voice-note listening receipts for Button Box.
 
 The wacli process posts signed receipt events to the dashboard.  This module
 correlates those events with voice notes sent by the box and creates a separate
 acknowledgement queue for the button/audio owner.  It intentionally never puts
-an acknowledgement into the incoming family-message queue.
+an acknowledgement into the incoming family-message queue. Cloud commands use
+the same announcement queue after the server verifies the message and listener.
 """
 
 from __future__ import annotations
@@ -117,6 +118,7 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     with open(temporary, "w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), 0o600)
         json.dump(payload, handle, sort_keys=True)
         handle.flush()
         os.fsync(handle.fileno())
@@ -130,6 +132,7 @@ def _create_json_once(path: Path, payload: dict) -> bool:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with open(temporary, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             json.dump(payload, handle, sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())
@@ -160,6 +163,7 @@ class PlayedNotice:
     listener_name: str
     clip: str
     received_at: float
+    cloud: dict | None = None
 
 
 class ReceiptStore:
@@ -171,8 +175,41 @@ class ReceiptStore:
         self.pending = self.root / "pending"
         self.inflight = self.root / "inflight"
         self.seen = self.root / "seen"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.chmod(0o700)
         for path in (self.sent, self.pending, self.inflight, self.seen):
             path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o700)
+
+    def cloud_notice_id(self, operation_id: str) -> str:
+        return _key("cloud", operation_id)
+
+    def cloud_exists(self, notice_id: str) -> bool:
+        return any((directory / f"{notice_id}.json").exists()
+                   for directory in (self.pending, self.inflight, self.seen))
+
+    def enqueue_cloud(self, operation_id: str, message_id: str, listener_id: str,
+                      listener_name: str, clip: str, *, account_scope: str,
+                      expires_at: float, received_at: float) -> str:
+        """Cloud already correlates the outbound message and verified listener."""
+        notice_id = self.cloud_notice_id(operation_id)
+        if not self.cloud_exists(notice_id):
+            _create_json_once(self.pending / f"{notice_id}.json", {
+                "version": 1, "notice_id": notice_id, "whatsapp_id": message_id,
+                "listener_jid": "", "listener_name": _safe_text(listener_name, "Someone"),
+                "clip": clip, "received_at": received_at,
+                "cloud": {"operation_id": operation_id, "message_id": message_id,
+                          "listener_id": listener_id, "account_scope": account_scope,
+                          "expires_at": expires_at},
+            })
+        return notice_id
+
+    def cloud_outcome(self, notice_id: str) -> str | None:
+        try:
+            data = json.loads((self.seen / f"{notice_id}.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        return data.get("cloud_result")
 
     def track_sent(
         self,
@@ -276,6 +313,7 @@ class ReceiptStore:
             listener_name=_safe_text(data.get("listener_name"), "Someone"),
             clip=str(data.get("clip") or ""),
             received_at=float(data.get("received_at") or 0),
+            cloud=data.get("cloud"),
         )
 
     def pending_count(self) -> int:
@@ -291,10 +329,13 @@ class ReceiptStore:
             return self.load(target)
         return None
 
-    def complete(self, notice: PlayedNotice, announced_at: float | None = None) -> None:
+    def complete(self, notice: PlayedNotice, announced_at: float | None = None,
+                 *, cloud_result: str = "applied") -> None:
         with open(notice.path, encoding="utf-8") as handle:
             payload = json.load(handle)
         payload["announced_at"] = time.time() if announced_at is None else float(announced_at)
+        if notice.cloud:
+            payload["cloud_result"] = cloud_result
         _write_json_atomic(notice.path, payload)
         os.replace(notice.path, self.seen / notice.path.name)
         _fsync_dir(self.seen)
