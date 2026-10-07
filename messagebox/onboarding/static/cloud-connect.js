@@ -22,14 +22,19 @@ function render(data) {
   currentStatus = data.status;
   const waiting = data.status === "awaiting_button" || data.status === "waiting_for_whatsapp";
   const cancelling = data.status === "cancellation_pending";
+  const hasLink = waiting && Boolean(data.whatsapp_url);
   currentClaim = data.claim_id || "";
   claim.hidden = !waiting;
   cancel.hidden = !(waiting || cancelling) || !currentClaim;
   cancel.textContent = cancelling ? "Retry cancellation" : "Cancel connection";
-  start.hidden = waiting || cancelling || data.status === "claimed";
+  start.hidden = hasLink || cancelling || data.status === "claimed";
   title.textContent = data.status === "claimed" ? "All set!" : "Welcome!";
   intro.hidden = data.status === "claimed";
-  if (waiting) {
+  link.hidden = !hasLink;
+  qr.hidden = !hasLink;
+  copy.hidden = !hasLink;
+  expiry.hidden = !hasLink;
+  if (hasLink) {
     currentLink = data.whatsapp_url;
     link.href = currentLink;
     qr.src = `/api/cloud-claim/qr?t=${encodeURIComponent(data.expires_at)}`;
@@ -48,6 +53,11 @@ function render(data) {
     cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
   }[data.status] ?? "Connection status is unavailable. Try again shortly.");
+  if (waiting && !hasLink && !actionError) {
+    status.textContent = data.status === "waiting_for_whatsapp"
+      ? "Button press received. Send the message in WhatsApp to finish connecting."
+      : "Scan the QR code on your setup card and send the message in WhatsApp. Then press the button on your Button Box once. No card? Use Connect WhatsApp here.";
+  }
 }
 
 async function refresh() {

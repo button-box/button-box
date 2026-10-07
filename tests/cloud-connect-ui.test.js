@@ -41,6 +41,22 @@ const waiting = {
   expires_at: 1_800_000_600,
 };
 
+test("setup-card connection has no token link or QR and keeps the local fallback available", async () => {
+  const h = harness();
+  await h.respond(h.requests[0], { ...waiting, whatsapp_url: "" });
+  expect(h.node("cloud-start").hidden).toBe(false);
+  for (const id of ["cloud-link", "cloud-qr", "cloud-copy", "cloud-expiry"]) {
+    expect(h.node(id).hidden).toBe(true);
+  }
+  expect(h.node("cloud-qr").src).toBeUndefined();
+  expect(h.node("cloud-status").textContent).toContain("setup card");
+  const attempt = h.node("cloud-start").handlers.click();
+  await h.respond(h.requests.at(-1), waiting);
+  await attempt;
+  expect(h.node("cloud-link").hidden).toBe(false);
+  expect(h.node("cloud-link").href).toBe(waiting.whatsapp_url);
+});
+
 test("failed connection start stays visible across unchanged and failed polls, then clears on retry", async () => {
   const h = harness();
   await h.respond(h.requests[0], { status: "not_started" });

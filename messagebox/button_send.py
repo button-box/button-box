@@ -138,6 +138,7 @@ BEEPS = {
     "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
     "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "880", "0.40", "12"),
     "ready": (str(RUNTIME_DIR / "beep-ready.wav"), "1320", "0.24", "8"),
+    "online": (str(RUNTIME_DIR / "beep-online.wav"), "1760", "0.18", "8"),
     "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
 }
 
@@ -1838,7 +1839,7 @@ def validate_prompts():
 def claim_beeps():
     directory = Path(os.environ.get("RUNTIME_DIRECTORY") or ".")
     cues = {name: (str(directory / Path(BEEPS[name][0]).name), *BEEPS[name][1:])
-            for name in ("press", "fail")}
+            for name in ("press", "fail", "online")}
     for name, cue in cues.items():
         try:
             make_beeps({name: cue}, timeout=5)
@@ -1847,18 +1848,27 @@ def claim_beeps():
     return cues
 
 
-def claim_button_press(cues):
-    def play(name):
-        try:
-            subprocess.run(["aplay", "-q", "-D", SPK_DEV, cues[name][0]],
-                           check=True, timeout=2)
-        except (OSError, subprocess.SubprocessError):
-            log("claim audio playback unavailable")
+def play_claim_cue(cues, name):
+    try:
+        subprocess.run(["aplay", "-q", "-D", SPK_DEV, cues[name][0]],
+                       check=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        log("claim audio playback unavailable")
 
-    play("press")
+
+def claim_button_press(cues):
+    play_claim_cue(cues, "press")
     result = cloud_claim.claim_press_result()
     if result in {cloud_claim.ClaimPressResult.NOT_ACTIVE, cloud_claim.ClaimPressResult.RETRY}:
-        play(NFC_UNKNOWN_BEEP)
+        play_claim_cue(cues, NFC_UNKNOWN_BEEP)
+
+
+def play_setup_online(cues):
+    try:
+        if cloud_claim.setup_online_cue(consume=True):
+            play_claim_cue(cues, "online")
+    except (OSError, ValueError, CloudDeviceError):
+        log("setup online audio unavailable")
 
 
 def claim_only_loop():
@@ -1871,6 +1881,7 @@ def claim_only_loop():
         while switch.is_pressed:
             time.sleep(POLL_S)
         while not switch.is_pressed:
+            play_setup_online(cues)
             time.sleep(POLL_S)
         started = time.monotonic()
         while switch.is_pressed and time.monotonic() - started < CONFIRM_PRESS_S:

@@ -71,7 +71,8 @@ class CloudClaim:
     def start(self):
         with self._locked():
             prior = self._read()
-            if prior and (prior.get("cancel_pending") or prior["expires_at"] > self.clock()):
+            if prior and (prior.get("cancel_pending") or
+                          (prior["expires_at"] > self.clock() and prior["whatsapp_url"])):
                 return self._public(prior)
             # Setup cannot read the runtime user's private health directory.
             # Optional hardware discovery must not prevent claiming the box;
@@ -110,6 +111,41 @@ class CloudClaim:
                         "whatsapp_url": link, "physical_confirmed": False}
             atomic_json(self.path, document)
             return self._public(document)
+
+    def setup_checkin(self):
+        # Compare again after I/O: a browser or button may have changed the file.
+        with self._locked():
+            prior = self._read()
+        try:
+            result = self.client.setup_checkin()
+        except CloudDeviceError as exc:
+            raise CloudClaimError("cloud setup check-in is unavailable") from exc
+        if (not isinstance(result, dict) or type(result.get("claimed")) is not bool
+                or (result["claimed"] is False and "pending_claim" not in result)):
+            raise CloudClaimError("cloud setup response is invalid")
+        pending = result.get("pending_claim")
+        if not result["claimed"] and pending is not None:
+            if (not isinstance(pending, dict) or set(pending) != {"claim_id", "expires_at"}
+                    or not isinstance(pending["claim_id"], str)
+                    or not _ID.fullmatch(pending["claim_id"])
+                    or type(pending["expires_at"]) is not int):
+                raise CloudClaimError("cloud setup response is invalid")
+            if pending["expires_at"] > self.clock() + 605:
+                raise CloudClaimClockError("cloud clock is not ready")
+        with self._locked():
+            current = self._read()
+            if current != prior:
+                return result
+            if result["claimed"]:
+                self.path.unlink(missing_ok=True)
+            elif pending and pending["expires_at"] > self.clock():
+                if current and (current["claim_id"] == pending["claim_id"]
+                                or current.get("cancel_pending")
+                                or current["expires_at"] >= pending["expires_at"]):
+                    return result
+                # No token or prefilled URL reaches the Pi through this endpoint.
+                atomic_json(self.path, {**pending, "whatsapp_url": "", "physical_confirmed": False})
+        return result
 
     def _public(self, document):
         if document.get("cancel_pending"):
@@ -168,7 +204,8 @@ class CloudClaim:
 
     def qr_svg(self):
         document = self._read()
-        if document is None or document.get("cancel_pending") or document["expires_at"] <= self.clock():
+        if (document is None or document.get("cancel_pending")
+                or document["expires_at"] <= self.clock() or not document["whatsapp_url"]):
             raise CloudClaimError("claim is unavailable")
         qr = QrCode.encode_text(document["whatsapp_url"], QrCode.Ecc.MEDIUM)
         size = qr.get_size()
@@ -229,3 +266,36 @@ def claim_press_result():
         return CloudClaim().consume_press_result()
     except (CloudClaimError, CloudDeviceError, OSError):
         return ClaimPressResult.RETRY
+
+
+def setup_session():
+    from messagebox.onboarding.paths import ONBOARDING_ENABLED_PATH
+    try:
+        return str(ONBOARDING_ENABLED_PATH.stat().st_mtime_ns)
+    except FileNotFoundError:
+        return None
+
+
+def setup_online_cue(*, consume=False, directory=None, session=None):
+    """Persist one cue per setup marker; only the button owner consumes it."""
+    directory = Path(directory) if directory is not None else CLAIM_FILE.parent
+    session = setup_session() if session is None else session
+    if session is None:
+        return False
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "setup-online.json"
+    with open_private_lock(directory / ".setup-online.lock") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            document = None
+        if consume:
+            if document != {"session": session, "played": False}:
+                return False
+            # Receipt first prevents replay after a service restart or audio failure.
+            atomic_json(path, {"session": session, "played": True})
+            return True
+        if not isinstance(document, dict) or document.get("session") != session:
+            atomic_json(path, {"session": session, "played": False})
+        return False

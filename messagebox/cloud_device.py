@@ -231,6 +231,10 @@ class CloudDeviceClient:
     def claim(self) -> dict:
         return self.json("/device/claim")
 
+    def setup_checkin(self) -> dict:
+        return self.json("/device/setup-checkin", method="POST",
+                         body={"device_id": self.identity["device_id"]})
+
     def confirm_claim(self, claim_id: str) -> dict:
         if not isinstance(claim_id, str) or not _ID.fullmatch(claim_id):
             raise CloudDeviceError("claim ID is invalid")

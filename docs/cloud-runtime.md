@@ -42,8 +42,12 @@ and `color` read from `/etc/messagebox-box-color`. The exact color values and sa
 yellow default are documented in [dashboard identity](dashboard-identity.md#box-shell-color).
 Manufacturing sets it before registration; heartbeats do not include color.
 
-The setup portal on home Wi-Fi provides a ten-minute local WhatsApp claim
-link and QR code. A physical button press confirms possession. The root
+After home Wi-Fi setup, the handoff page asks the family to wait for the online
+beep and scan the QR code on their setup card. The printed URL opens the Cloud's
+WhatsApp connection flow without requiring phone support for `.local` names.
+The small `.local` fallback opens the home setup portal, which can still create
+a ten-minute WhatsApp connection link and QR code. A physical button press
+confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
 If the box clock is still catching up after joining Wi-Fi, the portal asks the
@@ -56,10 +60,23 @@ the portal hides the claim link and offers Retry cancellation; restart and
 repeated button presses keep the pending cancellation for recovery. A completed
 connection stays connected, and cancellation reports that outcome separately.
 This control does not unlink an owned box or change its settings or account.
-The HOME setup portal starts a server-side claim watcher in its Gunicorn worker,
-without waiting for a browser request. Every five seconds, while WhatsApp setup
-is pending or ready, it checks the Cloud claim. Once claimed, it requests the
-same guarded root completion as the operator-only `POST /onboarding/complete`.
+The HOME setup portal starts a setup watcher in its Gunicorn worker without
+waiting for a browser request. It reconciles pending Wi-Fi connectivity proofs
+in the background. In `WHATSAPP_PENDING` or `WHATSAPP_READY`, it POSTs
+`/cloud-api/v1/device/setup-checkin` every five seconds using the existing
+Bearer credential and stable `device_id`. Failed checks back off to 10, 20,
+then at most 30 seconds; success resets the interval to five seconds. Other
+phases make no check-in request, and removing the setup marker stops the watcher.
+Check-ins update Cloud online freshness without creating a connection request.
+An unexpired `pending_claim` is atomically written to the same private
+`/var/lib/messagebox-cloud/claim.json` used by local registration, with
+`physical_confirmed: false` and an empty `whatsapp_url`: no token is returned
+to the Pi. Existing physical confirmation, cancellation intent, newer local
+requests and local changes during the HTTP request are retained. The local
+fallback can explicitly create its own connection link; its existing button
+confirmation and cancellation paths still apply.
+Once owned, the watcher requests the same guarded root completion as the
+operator-only `POST /onboarding/complete`.
 Normal claim polling then stops. If the setup marker remains after 60 seconds,
 it retries the guarded request at most twice, 60 seconds apart, then stops until
 portal restart. Status and filesystem failures keep setup pending without
@@ -75,6 +92,22 @@ these cues in its own `/run/messagebox-button` directory (systemd's
 `RUNTIME_DIRECTORY`, or the current directory outside systemd), using the runtime
 cue definitions and the detected speaker. Audio generation/playback failures
 remain content-free and never prevent claim confirmation.
+
+The first successful setup check-in queues a short 1760 Hz, 180 ms **online**
+beep, distinct from the press and unpaired-card failure cues. The shared,
+group-restricted `/var/lib/messagebox-cloud/setup-online.json` keeps one receipt
+per setup marker. The idle setup button listener marks it played before bounded
+playback, so polling, portal/button restarts and audio failure cannot replay it
+in the same session. Audio stays with the button service, preserving portal
+device isolation and serializing it with button feedback. The online tone is
+generated from `BEEPS` at listener startup; there is no new bundled WAV or unit.
+The existing release manifest and bounded updater already include every changed
+runtime file and exclude these private state files.
+
+B20 needs a real-box check for the captive-page handoff, online beep audibility
+and one-shot behavior, QR-to-WhatsApp-to-button completion, connection errors,
+Wi-Fi retries, NTP catch-up, reboot, and the `.local` fallback. Offline tests do
+not establish speaker, GPIO, phone, Cloud compatibility or WhatsApp acceptance.
 
 In runtime cloud mode, the local page opens the hosted dashboard at
 `https://button.box/dashboard`. Family, WhatsApp and settings management belongs

@@ -32,6 +32,9 @@ class FakeClient:
     def claim(self):
         return {"claimed": self.claimed}
 
+    def setup_checkin(self):
+        return {"claimed": self.claimed, "pending_claim": None}
+
     def confirm_claim(self, claim_id):
         assert claim_id == ID
         self.confirm_calls += 1
