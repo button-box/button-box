@@ -1,0 +1,114 @@
+{
+ "voice": "Button Box Alien",
+ "voice_key": "alien",
+ "elevenlabs_voice_id": "1lBdzc49f7ucESWH9KUr",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "Cloud may render name lines with this voice id, model, and seed",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Greetings, Earthling! I am Button Box! I will bring you messages from everyone who loves you!",
+   "seconds": 6.8,
+   "sha256": "21f65815f086008eefae9a725fd8fff728e43b7956ed2240ab47cbecde110511"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "I have landed!",
+   "seconds": 2.16,
+   "sha256": "121f2c0eb53a492170b91b5716026d2e3aeac9f5e0a89cdfa58fc7743ad5ca87"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Beep boop! A message for you!",
+   "seconds": 2.96,
+   "sha256": "0042601777f65327c2c2053e8f59fad0f10dd1fa37aaa1df5af7ca0e6eea7978"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "Your turn, Earthling! Three... two... one...",
+   "seconds": 3.92,
+   "sha256": "022b1a01ed9b1e40e21d03c61580852b327b7d46573234710dad1b3ab0cc7a7b"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "Ready, Earthling? Three... two... one...",
+   "seconds": 3.44,
+   "sha256": "628f8702b8712fc0e56aef07636f616d720fe9f12dfd5a58e21f6686497ffc83"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "Listen!",
+   "seconds": 1.04,
+   "sha256": "693ebcd173f09298fd74b9be435f40f3eb8888384ec9539983815addfd55c27c"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "Excellent Earth sounds! Press to send!",
+   "seconds": 2.88,
+   "sha256": "c238652322824dde59094bf28bc7d955c637639fffe0f63661f1484b154b41ce"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Perfect for my plan! Press to send!",
+   "seconds": 2.8,
+   "sha256": "b7217e3e3e87b0ddad615213e21a3aa3e772d3dceabb1c510f097ca8c92375c5"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "My antennas love it! Press to send!",
+   "seconds": 3.12,
+   "sha256": "92439de9b703b4cc3d4950c175661bae0edfa8fe090531d0771ce159d415b77e"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "Send it to the stars? Press the button!",
+   "seconds": 2.4,
+   "sha256": "42bf98b6830fe660e7e8e1d6813970592de2a71f0b3f43b053dee69cc8793aaa"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "Okay. I won't send that one.",
+   "seconds": 3.04,
+   "sha256": "e2525c088533f99de085a5f47aeac7127083857d13de711141649d8c1341892d"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "My antennas heard nothing. Try again?",
+   "seconds": 3.2,
+   "sha256": "1d177f0d02f129b3c6185389f2da9297c8dc1b15e69c2c16708e0a1bfa004c30"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "They heard your message! Phase one complete!",
+   "seconds": 2.88,
+   "sha256": "3a1370143a689e15de3e074d63aef42ac9e99a671cff00f639285b048d81af41"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "Who is it for? Pick a family card!",
+   "seconds": 3.04,
+   "sha256": "6aed465475362b3d7aa8d6848a35c02517c749a4035ef1a85c1b8273e5e97c42"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "A new card! Ask a grown-up to add it.",
+   "seconds": 2.96,
+   "sha256": "6bf32093b740b8b753d94ed606ba3e7f1da411015a5f563a9976011fd43f6d7d"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "Space traffic! I'll keep trying!",
+   "seconds": 2.96,
+   "sha256": "e3c49e7dd354523a090889981ecd6528f1de1bf0b59697b43402d73f9c18dd1a"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "I need a grown-up to set me up!",
+   "seconds": 2.88,
+   "sha256": "2ca4e5cb0052257b79db8ba0d6928d361763e35ec8840fddcec3628fda29a559"
+  }
+ ]
+}

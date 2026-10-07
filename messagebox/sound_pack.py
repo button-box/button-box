@@ -3,11 +3,13 @@
 import fcntl
 import hashlib
 import json
+import logging
 import wave
 from pathlib import Path
 
 from messagebox.cloud_device import atomic_json, open_private_lock
 from messagebox.runtime_paths import APP_DIR, STATE_DIR
+from messagebox.settings import SettingsReader, VOICE_PACKS, normalize_voice_pack
 
 CUE_NAMES = (
     "press", "card", "rec_go", "rec_limit", "msg_start", "msg_end", "oops",
@@ -27,37 +29,81 @@ def cue_path(name):
     return SOUND_DIR / "cues" / f"cue-{name}.wav"
 
 
-def voice_path(name):
-    return SOUND_DIR / "voice" / f"voice-{name}.wav"
+_settings = SettingsReader()
+_missing_voice_files = set()
 
 
-def validate_sounds(root=SOUND_DIR):
-    root = Path(root)
-    for pack, names, key, prefix in (("cues", CUE_NAMES, "cues", "cue"),
-                                     ("voice", VOICE_NAMES, "lines", "voice")):
+def current_voice_pack():
+    return normalize_voice_pack(_settings.snapshot().get("voice_pack"))
+
+
+def voice_path(name, pack=None):
+    if name not in VOICE_NAMES:
+        raise ValueError("unknown voice line")
+    pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
+    fallback = SOUND_DIR / "voice" / f"voice-{name}.wav"
+    if pack == "jessica":
+        return fallback
+    path = SOUND_DIR / "voices" / pack / fallback.name
+    if path.is_file() and not path.is_symlink():
+        return path
+    key = (pack, name)
+    if key not in _missing_voice_files:
+        _missing_voice_files.add(key)
+        logging.getLogger(__name__).warning("Missing %s voice line %s; using jessica", pack, name)
+    return fallback
+
+
+def _validate_pack(directory, names, key, prefix):
+    try:
+        if directory.is_symlink() or directory.parent.is_symlink():
+            raise ValueError
+        manifest_path = directory / "manifest.json"
+        if manifest_path.is_symlink():
+            raise ValueError
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if directory.parent.name == "voices" and manifest.get("voice_key") != directory.name:
+            raise ValueError
+        rows = manifest[key]
+        expected = {f"{prefix}-{name}.wav" for name in names}
+        if len(rows) != len(expected) or {row["file"] for row in rows} != expected:
+            raise ValueError
+        for row in rows:
+            path = directory / row["file"]
+            if path.is_symlink() or not path.is_file():
+                raise ValueError
+            with wave.open(str(path), "rb") as sound:
+                frames = sound.getnframes()
+                if (frames <= 0 or sound.getnchannels() != 1 or sound.getsampwidth() != 2
+                        or sound.getframerate() != 48000 or sound.getcomptype() != "NONE"
+                        or len(sound.readframes(frames)) != frames * 2
+                        or (path.name == "cue-press.wav" and frames != 19200)):
+                    raise ValueError
+            if hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
+                raise ValueError
+    except (OSError, EOFError, wave.Error, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Missing or invalid {directory.name} sound pack") from exc
+
+
+def installed_voice_packs(root=None):
+    root = SOUND_DIR if root is None else Path(root)
+    installed = ["jessica"]
+    for pack in VOICE_PACKS[1:]:
         try:
-            manifest_path = root / pack / "manifest.json"
-            if manifest_path.is_symlink():
-                raise ValueError
-            rows = json.loads(manifest_path.read_text(encoding="utf-8"))[key]
-            expected = {f"{prefix}-{name}.wav" for name in names}
-            if len(rows) != len(expected) or {row["file"] for row in rows} != expected:
-                raise ValueError
-            for row in rows:
-                path = root / pack / row["file"]
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError
-                with wave.open(str(path), "rb") as sound:
-                    frames = sound.getnframes()
-                    if (frames <= 0 or sound.getnchannels() != 1 or sound.getsampwidth() != 2
-                            or sound.getframerate() != 48000 or sound.getcomptype() != "NONE"
-                            or len(sound.readframes(frames)) != frames * 2
-                            or (path.name == "cue-press.wav" and frames != 19200)):
-                        raise ValueError
-                if hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
-                    raise ValueError
-        except (OSError, EOFError, wave.Error, ValueError, KeyError, TypeError) as exc:
-            raise ValueError(f"Missing or invalid {pack} sound pack") from exc
+            _validate_pack(root / "voices" / pack, VOICE_NAMES, "lines", "voice")
+        except ValueError:
+            continue
+        installed.append(pack)
+    return installed
+
+
+def validate_sounds(root=None, *, require_voice_packs=True):
+    root = SOUND_DIR if root is None else Path(root)
+    _validate_pack(root / "cues", CUE_NAMES, "cues", "cue")
+    _validate_pack(root / "voice", VOICE_NAMES, "lines", "voice")
+    if require_voice_packs:
+        for pack in VOICE_PACKS[1:]:
+            _validate_pack(root / "voices" / pack, VOICE_NAMES, "lines", "voice")
 
 
 def consume_moment(name, path=SOUND_STATE, *, token=True):

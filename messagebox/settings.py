@@ -31,6 +31,11 @@ RINGTONES = {
 }
 LEGACY_RINGTONES = frozenset({"gentle_music_box", "playful_chiptune", "ding_dong", "cuckoo_clock"})
 DEFAULT_RINGTONE = "hello_piano"
+VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie")
+
+
+def normalize_voice_pack(value):
+    return value if isinstance(value, str) and value in VOICE_PACKS else "jessica"
 
 
 ARRIVAL_SIGNALS = frozenset({"ring_and_lamp", "ring_only", "lamp_only", "silent"})
@@ -43,13 +48,14 @@ _ROOT_KEYS = {
     "after_listening",
     "max_recording_seconds",
     "ringtone_id",
+    "voice_pack",
     "master_volume_percent",
     "arrival_signal",
     "quiet_hours",
     "nfc_confirmation_beep",
     "swoosh_sound_enabled",
 }
-_LEGACY_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled"}
+_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack"}
 
 
 class SettingsError(ValueError):
@@ -113,15 +119,17 @@ def defaults(environ=None):
         },
         "nfc_confirmation_beep": _env_flag(environ, "MSGBOX_NFC_DETECTION_BEEP", True),
         "swoosh_sound_enabled": True,
+        "voice_pack": "jessica",
     }
 
 
 def validate(document):
     if not isinstance(document, dict):
         raise SettingsError("settings have an invalid schema")
-    if set(document) == _LEGACY_ROOT_KEYS:
-        # Existing boxes keep the successful-send cue until an owner changes it.
-        document = {**document, "swoosh_sound_enabled": True}
+    if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
+        # Persisted settings from earlier releases retain their cue and default voice.
+        document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", **document}
+        document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
         raise SettingsError("settings have an invalid schema")
     if document["version"] != SCHEMA_VERSION:
@@ -267,6 +275,7 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
+        candidate = {"voice_pack": "jessica", **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
         if set(candidate) != value_keys:
             raise SettingsError("settings request has an invalid schema")

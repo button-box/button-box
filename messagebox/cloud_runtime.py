@@ -27,7 +27,7 @@ from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE, STATE_DIR)
 from messagebox.settings import (
-    SettingsError, SettingsStore, RINGTONES, normalize_ringtone_id, validate as validate_settings,
+    SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
 
@@ -763,8 +763,11 @@ class CloudRuntime:
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
         prefix = self._listened_prefix(scope, payload["listener_identity_id"])
+        voice_key = hashlib.sha256(json.dumps(payload.get("voice_pack"),
+                                             separators=(",", ":")).encode()).hexdigest()[:16]
+        prefix += "-" + voice_key
         path = directory / f"{prefix}-{payload['text_hash']}.wav"
-        # A changed name/text invalidates the listener's previous cached voice.
+        # Changed text invalidates this listener's cached clip in the same pack.
         for prior in directory.glob(prefix + "-*.wav"):
             if prior != path:
                 prior.unlink(missing_ok=True)
@@ -849,7 +852,7 @@ class CloudRuntime:
             store.enqueue_cloud(item["operation_id"], payload["message_id"],
                 payload["listener_identity_id"], payload["listener_first_name"], clip,
                 account_scope=snapshot["account_scope"], expires_at=item["expires_at"],
-                received_at=server_time)
+                received_at=server_time, voice_pack=payload.get("voice_pack"))
         self.state["pending_listened"][item["operation_id"]] = notice_id
         self._save()  # Queue and deduplication are durable before receipt ACK.
         self._ack(item["operation_id"], "received")
@@ -909,6 +912,7 @@ class CloudRuntime:
                                               for key in ("master_volume_percent", "ringtone_id")),
                         "ringtone_changed": ("ringtone_id" in candidate
                                              and current.get("ringtone_id") != candidate["ringtone_id"]),
+                        "voice_changed": current.get("voice_pack") != candidate["voice_pack"],
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)
@@ -940,6 +944,17 @@ class CloudRuntime:
                 self.state["queue_hold_sequence"] = item["sequence"]
                 self._save()
             self._ack(item["operation_id"], "applied")
+        elif kind == "voice_preview":
+            pack = payload.get("voice_pack")
+            if not isinstance(pack, str) or pack not in VOICE_PACKS:
+                raise CloudRuntimeError("voice pack is invalid")
+            scope = self._snapshot()["account_scope"]
+            key = preview_key(item["operation_id"])
+            self.audio_requests.enqueue_for(key, "voice_preview", scope,
+                min(item["expires_at"], server_time + 30) - self.server_now(), voice_pack=pack)
+            self.state["pending_previews"][item["operation_id"]] = key
+            self._save()
+            self._ack(item["operation_id"], "received")
         elif kind == "preview_ringtone":
             ringtone = normalize_ringtone_id(payload.get("ringtone_id"))
             if ringtone not in RINGTONES:
@@ -982,7 +997,8 @@ class CloudRuntime:
         revision = marker.get("revision") if isinstance(marker, dict) else None
         for operation_id, document in list(self.state["pending_settings"].items()):
             if isinstance(document, dict) and "ringtone_id" in document:
-                document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"])}
+                document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"]),
+                            "voice_pack": normalize_voice_pack(document.get("voice_pack"))}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 if marker.get("settings") == document:
@@ -1010,7 +1026,8 @@ class CloudRuntime:
         self.audio_requests.enqueue_settings_saved("settings_saved:" + operation_id,
             intent["account_scope"], 30 - (self.monotonic() - applied),
             volume_changed=intent.get("volume_changed") is True,
-            ringtone_changed=intent.get("ringtone_changed") is True)
+            ringtone_changed=intent.get("ringtone_changed") is True,
+            voice_changed=intent.get("voice_changed") is True)
 
     def _finish_nfc(self):
         if not self.state["pending_nfc"]:
@@ -1054,7 +1071,7 @@ class CloudRuntime:
         for item in sorted(items, key=lambda entry: (entry.get("kind") != "delete_message", entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"audio", "listened", "settings", "preview_ringtone", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
+                    or item.get("kind") not in {"audio", "listened", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (

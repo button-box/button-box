@@ -78,7 +78,7 @@ TEMP_DIR = os.path.join(str(RUNTIME_DIR), "guided-reply-tmp")
 EVENTS_FILE = os.path.join(STATE_DIR, "events.jsonl")
 LISTENED_DIR = os.path.join(STATE_DIR, "listened-receipts")
 LISTENED_FALLBACK_WAV = os.environ.get(
-    "MSGBOX_LISTENED_FALLBACK_WAV", str(sound_pack.voice_path("listened")),
+    "MSGBOX_LISTENED_FALLBACK_WAV", str(sound_pack.voice_path("listened", "jessica")),
 )
 SEND_SUCCESS_WAV = str(sound_pack.cue_path("sent"))
 send_success_notices = queue.SimpleQueue()
@@ -94,7 +94,7 @@ NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
 )
 NFC_HEALTH_MAX_AGE_S = float(os.environ.get("MSGBOX_NFC_HEALTH_MAX_AGE_S", "5"))
-PLACE_TOKEN_WAV = os.environ.get("MSGBOX_PLACE_TOKEN_WAV", str(sound_pack.voice_path("card-needed")))
+PLACE_TOKEN_WAV = os.environ.get("MSGBOX_PLACE_TOKEN_WAV", str(sound_pack.voice_path("card-needed", "jessica")))
 GUIDED_SILENCE_SECONDS = float(os.environ.get("MSGBOX_GUIDED_SILENCE_SECONDS", "20"))
 PROMPT_DIR = Path(os.environ.get("MSGBOX_PROMPT_DIR", str(sound_pack.SOUND_DIR / "voice")))
 PROMPTS = {
@@ -204,7 +204,8 @@ def apply_master_volume(settings=None):
 
 
 def validate_sounds():
-    sound_pack.validate_sounds()
+    # Missing optional choices must not prevent Jessica fallback after restart.
+    sound_pack.validate_sounds(require_voice_packs=False)
 
 
 def beep(name):
@@ -485,7 +486,7 @@ def acknowledge_and_classify_legacy_press(pressed_at=None):
 def prompt_for_token():
     """Refuse outbound recording without leaking the previous selection."""
     log_event("nfc_token_required")
-    if PLACE_TOKEN_WAV == str(sound_pack.voice_path("card-needed")):
+    if PLACE_TOKEN_WAV == str(sound_pack.voice_path("card-needed", "jessica")):
         play_moment(voice="card-needed")
     else:
         play_audio_ordinary(PLACE_TOKEN_WAV)
@@ -1361,13 +1362,19 @@ def play_pending_listened(limit=4):
             if status != "ready":
                 receipt_store.release(notice)
                 break
-        clip = notice.clip or LISTENED_FALLBACK_WAV
+        fallback = (str(sound_pack.voice_path("listened"))
+                    if getattr(notice, "cloud", None)
+                    or LISTENED_FALLBACK_WAV == str(sound_pack.voice_path("listened", "jessica"))
+                    else LISTENED_FALLBACK_WAV)
+        clip = notice.clip or fallback
+        if getattr(notice, "cloud", None) and notice.cloud.get("voice_pack") != sound_pack.current_voice_pack():
+            clip = fallback
         if getattr(notice, "cloud", None) and not os.path.isfile(clip):
             # A bounded cache can evict a voice while its notice waits for idle.
-            clip = LISTENED_FALLBACK_WAV
+            clip = fallback
         # Pending receipts from prior releases persist the old bundled default.
         if clip == str(APP_DIR / "sounds/listen-receipts/someone-listened.wav"):
-            clip = LISTENED_FALLBACK_WAV
+            clip = fallback
         if not os.path.isabs(clip) or not os.path.exists(clip):
             receipt_store.release(notice)
             announcement_gate.blocked()
@@ -1485,15 +1492,24 @@ def maybe_play_cloud_sound():
                 if request["kind"] == "success":
                     played = play_send_success_cue()
                 elif request["kind"] == "settings_saved":
-                    # The main loop applies volume before consuming these requests.
-                    # A volume change previews the ringtone so the owner hears the new level.
-                    played = (not quiet_hours() and apply_master_volume()
-                              and (play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
-                                   if request.get("volume_changed")
-                                   else play_idle_sound(sound_pack.cue_path("card_saved"), 5)))
+                    # Voice switches sample the new pack at the newly applied volume.
+                    played = False
+                    if not quiet_hours() and apply_master_volume():
+                        if request.get("voice_changed"):
+                            path = sound_pack.voice_path("msg-start", caregiver_settings().get("voice_pack"))
+                            led.off()
+                            played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                        elif request.get("volume_changed"):
+                            played = play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
+                        else:
+                            played = play_idle_sound(sound_pack.cue_path("card_saved"), 5)
                     if not played and not quiet_hours():
                         cloud_audio_requests.finish(request, "pending")
                         return False
+                elif request["kind"] == "voice_preview":
+                    path = sound_pack.voice_path("msg-start", request["voice_pack"])
+                    led.off()
+                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
                 elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
                     ringtone_id = normalize_ringtone_id(request["ringtone_id"])
                     path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[ringtone_id]
@@ -1749,9 +1765,18 @@ class PiGuidedIO:
         self.session_id = session_id
         self.max_seconds = max_seconds
 
+    def voice_prompt(self, path):
+        if PROMPT_DIR == sound_pack.SOUND_DIR / "voice" and str(path) in {str(p) for p in PROMPTS.values()}:
+            return sound_pack.voice_path(Path(path).stem.removeprefix("voice-"))
+        return path
+
     def play_ordinary(self, path):
         if str(path) == str(PROMPTS["send"]):
-            path = PROMPT_DIR / sound_pack.next_send_prompt().name
+            selected = sound_pack.next_send_prompt()
+            path = (selected if PROMPT_DIR == sound_pack.SOUND_DIR / "voice"
+                    else PROMPT_DIR / selected.name)
+        else:
+            path = self.voice_prompt(path)
         play_audio_ordinary(path)
 
     def play_review_for_approval(self, path):
@@ -1767,7 +1792,7 @@ class PiGuidedIO:
         return wait_for_approval(timeout, self.session_id)
 
     def play_warning_for_approval(self, path):
-        return play_warning_for_approval(path, self.session_id)
+        return play_warning_for_approval(self.voice_prompt(path), self.session_id)
 
     def delete(self, path):
         try:

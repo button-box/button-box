@@ -60,6 +60,102 @@ class SoundPackTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cues"):
                     sound_pack.validate_sounds(target)
 
+    def test_current_pack_paths_unknown_default_and_missing_file_logs_once(self):
+        with mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
+             mock.patch.object(sound_pack._settings, "snapshot", return_value={"voice_pack": "dj"}):
+            self.assertEqual(sound_pack.voice_path("count-new"), ROOT / "sounds/voices/dj/voice-count-new.wav")
+            self.assertEqual(sound_pack.voice_path("listened", "unknown"), ROOT / "sounds/voice/voice-listened.wav")
+        with mock.patch.object(sound_pack, "SOUND_DIR", self.root), \
+             mock.patch.object(sound_pack, "_missing_voice_files", set()), \
+             self.assertLogs("messagebox.sound_pack", level="WARNING") as logs:
+            for _ in range(2):
+                self.assertEqual(sound_pack.voice_path("msg-start", "alien"), self.root / "voice/voice-msg-start.wav")
+            self.assertEqual(len(logs.output), 1)
+        with self.assertRaises(ValueError):
+            sound_pack.voice_path("../private")
+
+    def test_capabilities_only_advertise_complete_validated_packs(self):
+        from messagebox.cloud_device import capabilities
+        import importlib
+        capability_sounds = importlib.import_module("messagebox.sound_pack")
+        from messagebox.settings import VOICE_PACKS
+        target = self.root / "sounds"
+        shutil.copytree(ROOT / "sounds", target)
+        with mock.patch.object(capability_sounds, "SOUND_DIR", target):
+            self.assertEqual(capabilities()["voice_packs"], list(VOICE_PACKS))
+            (target / "voices/dj/voice-count-new.wav").unlink()
+            (target / "voices/alien/voice-online.wav").write_bytes(b"damaged")
+            self.assertEqual(capabilities()["voice_packs"], ["jessica", "pirate", "robot", "french", "charlie"])
+            shutil.rmtree(target / "voices")
+            self.assertEqual(capabilities()["voice_packs"], ["jessica"])
+
+    def test_install_requires_valid_audio_and_manifest_for_every_voice_pack(self):
+        from messagebox.settings import VOICE_PACKS
+        target = self.root / "sounds"
+        shutil.copytree(ROOT / "sounds", target)
+        sound_pack.validate_sounds(target)
+        for pack in VOICE_PACKS[1:]:
+            for name in ("manifest.json", "voice-count-new.wav"):
+                with self.subTest(pack=pack, file=name):
+                    path = target / "voices" / pack / name
+                    original = path.read_bytes()
+                    path.write_bytes(b"invalid")
+                    with self.assertRaisesRegex(ValueError, pack):
+                        sound_pack.validate_sounds(target)
+                    path.write_bytes(original)
+
+    def test_runtime_can_restart_with_missing_optional_pack_but_install_rejects_it(self):
+        target = self.root / "sounds"
+        shutil.copytree(ROOT / "sounds", target)
+        shutil.rmtree(target / "voices/dj")
+        with mock.patch.object(sound_pack, "SOUND_DIR", target):
+            runtime.validate_sounds()
+            with self.assertRaisesRegex(ValueError, "dj"):
+                sound_pack.validate_sounds()
+            (target / "voice/voice-listened.wav").unlink()
+            with self.assertRaisesRegex(ValueError, "voice"):
+                runtime.validate_sounds()
+
+    def test_dj_countdown_and_go_tick_finish_before_microphone_and_timers_start(self):
+        for flow in ("reply", "standalone"):
+            now = [0.0]
+            order = []
+            recorder = mock.Mock()
+            recorder.communicate.return_value = (b"", b"")
+            vad = mock.Mock(meaningful=False)
+            vad.silence_expired.return_value = True
+            vad.trim_bounds.return_value = None
+            def play(command, **kwargs):
+                self.assertEqual(command[0], "aplay")
+                path = Path(command[-1])
+                with wave.open(str(path), "rb") as source:
+                    now[0] += source.getnframes() / source.getframerate()
+                order.append(path.name)
+                return types.SimpleNamespace(returncode=0)
+            def open_mic(command, **kwargs):
+                self.assertEqual(command[0], "arecord")
+                order.append("mic")
+                return recorder
+            with mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
+                 mock.patch.object(sound_pack._settings, "snapshot", return_value={"voice_pack": "dj"}), \
+                 mock.patch.object(runtime, "PROMPT_DIR", ROOT / "sounds/voice"), \
+                 mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
+                 mock.patch.object(runtime.subprocess, "run", side_effect=play), \
+                 mock.patch.object(runtime.subprocess, "Popen", side_effect=open_mic), \
+                 mock.patch.object(runtime.time, "monotonic", side_effect=lambda: now[0]), \
+                 mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
+                 mock.patch.object(runtime.select, "select", return_value=([], [], [])):
+                io = runtime.PiGuidedIO("synthetic", "session", 60)
+                session = GuidedSession(io, OutboxStore(self.root / flow), lambda *a, **kw: None)
+                result = session.run(recipient="synthetic", flow_kind=flow,
+                    countdown_path=str(runtime.PROMPTS[flow]), send_prompt_path=str(runtime.PROMPTS["send"]),
+                    delete_warning_path=str(runtime.PROMPTS["delete_warning"]), not_sent_path=str(runtime.PROMPTS["not_sent"]))
+            self.assertEqual(result, "empty")
+            self.assertEqual(order, ["voice-count-reply.wav" if flow == "reply" else "voice-count-new.wav", "cue-rec_go.wav", "mic"])
+            with wave.open(str(ROOT / "sounds/voice" / order[0]), "rb") as jessica:
+                self.assertGreater(now[0], jessica.getnframes() / jessica.getframerate() + 0.7)
+            vad.start.assert_called_once_with(now[0])
+
     def test_online_voice_follows_connected_once_across_restart(self):
         with mock.patch.object(runtime.cloud_claim, "setup_online_cue", return_value=True), \
              mock.patch.object(runtime.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)) as run:

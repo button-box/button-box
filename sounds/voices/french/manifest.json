@@ -1,0 +1,114 @@
+{
+ "voice": "Button Box French",
+ "voice_key": "french",
+ "elevenlabs_voice_id": "RVmMpjVtG0IZQGybeX5Q",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "Cloud may render name lines with this voice id, model, and seed",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Bonjour! I am Button Box! I bring you messages from everyone who loves you!",
+   "seconds": 5.52,
+   "sha256": "9f2e1f457cb1d38c13fcc0503e4babb3b1ff9c5a41723359bc40758d47ebd9cf"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "Voil\u00e0! I am here!",
+   "seconds": 1.6,
+   "sha256": "d2cce81b9ee6a1955ffba1bb134a903c815fec0e3f72caf5f3acfa4b7ab6d509"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Ooh la la! A message for you!",
+   "seconds": 2.48,
+   "sha256": "cdc6706ea12df679fd6249a0c8f110ab26de48ccdc64c7feeb8f726bc4af914f"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "Your turn, mon ami! Three... two... one...",
+   "seconds": 3.36,
+   "sha256": "cb11089f3a3bcedc5b5f83beff699c011f531950c109967e7f1c5dedb058a7c7"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "Ready, mon ami? Three... two... one...",
+   "seconds": 2.88,
+   "sha256": "e6e256aad8e291f10201f495b9ec6576d49c18c570e16979984ef8345350ed71"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "\u00c9coute! Listen!",
+   "seconds": 1.52,
+   "sha256": "986f500e8b2785a11d3239d3af6d309cde281f72412a9563fbe5357f0a6f8aa8"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "Magnifique! Press to send!",
+   "seconds": 1.68,
+   "sha256": "2bf89ddf9449484d716ac63d1633bf4700718d82a9bae6fa89d88d012a6fe546"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Tr\u00e8s bien! Press to send!",
+   "seconds": 1.68,
+   "sha256": "ed7408d95db992b451d6ae88f60b1dca8300dd7422667f5e8214038378f8ad0b"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "C'est parfait! Press to send!",
+   "seconds": 2.32,
+   "sha256": "5af8a91a377ce7d559afd9a33ddda7cbe31b500af1320d1e52455925bfe289d7"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "You want to send it? Press the button!",
+   "seconds": 2.32,
+   "sha256": "6771a99337d8e99138260d1e21dba33b31e4794f1fda4a6416d281361eb8255a"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "D'accord, I won't send that one.",
+   "seconds": 2.24,
+   "sha256": "16b4c5a3821422a203785985c920842873d1cf929246c5fbf65a58c3ea808bc3"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "Hmm, I heard nothing, mon ami. Try again?",
+   "seconds": 2.48,
+   "sha256": "7a9384dab53ad872425d3874259424f5c146e7b979b53f5cadea6e7967ba143a"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "Voil\u00e0! They heard your message!",
+   "seconds": 2.24,
+   "sha256": "fdaf4ecc2b939b9f1f63c517ddbbc6ba6741fa7b756f00b5afc80841efef3fbe"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "Who is it for? Pick a family card!",
+   "seconds": 2.48,
+   "sha256": "5bb327664485f61fdd9411a5d51b40c77859602a806eb108bf0852647e4aac4d"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "Ooh, a new card! Ask a grown-up to add it.",
+   "seconds": 3.52,
+   "sha256": "dac1429cbc46517cccdb737542c3459dcc1d93aff100578087d20a2f37409525"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "It is taking a while. I keep trying!",
+   "seconds": 3.36,
+   "sha256": "cb41129b06c07cdb2592b0f4ff2f42e45570a2a84e037977cff4ea02ba7cc768"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "I need a grown-up to set me up!",
+   "seconds": 2.4,
+   "sha256": "9387d825688e715a93fd8196365d925038eeef90bc698a8ce97cf913f5183977"
+  }
+ ]
+}

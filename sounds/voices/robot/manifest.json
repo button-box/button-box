@@ -1,0 +1,114 @@
+{
+ "voice": "Button Box Robot",
+ "voice_key": "robot",
+ "elevenlabs_voice_id": "YGVSqecbSMffjnWzr7NH",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "ffmpeg robotize: [0:a]aresample=48000,asplit=2[d][w];[w]afftfilt=real='hypot(re,im)':imag='0':win_size=512:overlap=0.75,volume=1.0[r];[d]volume=0.8[dd];[r][dd]amix=inputs=2:normalize=0,aecho=0.8:0.5:12:0.18,loudnorm=I=-16:TP=-1.5:LRA=11[o]",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "fixed fallback only (voice-listened.wav)",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Hello, human friend! I am Button Box. I will bring you messages from everyone who loves you. Beep!",
+   "seconds": 6.89,
+   "sha256": "3097bf868e66d2819ff58e21de8fffc8d13b2e03bec553747d507705aa44c519"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "System online. I am here!",
+   "seconds": 2.57,
+   "sha256": "9de17ea21e1f3e42bf06f86d871426f4a8916a0713da37819853ba4466baa3f3"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Beep beep! A message for you!",
+   "seconds": 2.01,
+   "sha256": "f3ebdab7b68a6103c4b89bc37d0a0f2e05947033acc84be57ba9977ada8b6058"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "Your turn, friend. Three. Two. One.",
+   "seconds": 3.77,
+   "sha256": "d70cd40d398afbfc9e0e649b82bb060ad03c8fde978b5c8ab2070d68b6a62e5f"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "Ready. Three. Two. One.",
+   "seconds": 2.81,
+   "sha256": "83558ded23d18f0f861dd3ab97289a573bff9099d37a265de89612e6910d307c"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "Playback mode. Listen!",
+   "seconds": 1.85,
+   "sha256": "57aa38d882ef2ca5e88cad33e2c6b08ef2a1562336c47454c0ce7ce520c4a5ed"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "One hundred percent awesome! Press to send.",
+   "seconds": 3.61,
+   "sha256": "4066d179fe6f69d04cd93a0b2236d3a8f11e673d8463a86f939935ed2fee7cd1"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Excellent recording! Press to send.",
+   "seconds": 3.05,
+   "sha256": "8475c773bcf2067d696b5611e68f9b8c3df234cd506f46bf609a6eb1d38717c7"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "Happy beeps! Press the button to send.",
+   "seconds": 3.13,
+   "sha256": "134e8e226da2a5480fdfbe94c0349c15b0fb831a8f5c5edfb27958500c972ac9"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "Send it? Press the button!",
+   "seconds": 2.01,
+   "sha256": "4ad6f731a6f1bb1155049486537891bff878a1f57a98aec3837496a068578e4d"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "Okay. I will not send that one.",
+   "seconds": 2.57,
+   "sha256": "754eb2c8446b5bcc6d3d812300fd501f2ab224d22e3b08405db448f0b3768aa8"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "No sound detected. Did you whisper? Try again?",
+   "seconds": 3.45,
+   "sha256": "050da681b26df9ecad552a2ee5366a7befdab3df05c8a3e426fad74100f9d3ab"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "Message delivered! They heard it! Happiness level: over nine thousand!",
+   "seconds": 4.81,
+   "sha256": "d1da9cbe418a85dd10b60c68afeb28720346ed2be67b1a298f7a5774822fd41e"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "Who is it for? Pick a family card!",
+   "seconds": 2.65,
+   "sha256": "e6b98accbd7fa3e23933d750c2ff22ff96dc985a095fed5ed3f11fb6bd9eae19"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "New card detected! Ask a grown-up to add it.",
+   "seconds": 3.13,
+   "sha256": "7aab9a55f28f4ccfae2962f15854d004fa19aeead694cfb3873d8eb63d6284db"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "Still sending. Do not worry. I will keep trying!",
+   "seconds": 3.45,
+   "sha256": "cb940a7f3caa90356fe2efa9ae924826a6fc4140aa43bd8028ba13279401f51b"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "I need a grown-up to set me up. Beep.",
+   "seconds": 2.57,
+   "sha256": "18443a92a00cfe16cf179d80169ecb27fb82b328071105991ac5db3494fe85eb"
+  }
+ ]
+}
