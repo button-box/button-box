@@ -32,6 +32,10 @@ def installed_paths(root):
     for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent"):
         source = f"sounds/guided-reply/{name}.wav"
         paths[source] = "/opt/messagebox/" + source
+    for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
+        for suffix in (".wav", ".lamp.json"):
+            paths[f"sounds/ringtones/{name}{suffix}"] = f"/opt/messagebox/ringtones/{name}{suffix}"
+    paths["sounds/ringtones/manifest.json"] = "/opt/messagebox/ringtones/manifest.json"
     paths.update({
         "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
         "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
@@ -53,7 +57,7 @@ def manifest(root=ROOT):
     return {
         "version": (root / "VERSION").read_text().strip(),
         "commit": revision,
-        "scope": "Installed program files and bundled prompts only; excludes user state, generated audio, OS packages and private configuration.",
+        "scope": "Installed program files and bundled sounds only; excludes user state, generated audio, OS packages and private configuration.",
         "files": [{"source": source, "installed": target,
                    "sha256": hashlib.sha256((root / source).read_bytes()).hexdigest()}
                   for source, target in sorted(installed_paths(root).items())],

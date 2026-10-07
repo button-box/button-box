@@ -6,7 +6,7 @@ set -u
 CONFIG_FILE=/etc/messagebox/env
 RUNTIME_AUDIO_CONFIG_FILE=/run/messagebox-audio/audio.env
 TEST_WORK_DIR=/var/lib/messagebox/state
-RINGTONE=/opt/messagebox/ringtones/ring1.wav
+RINGTONE=/opt/messagebox/ringtones/hello_piano.wav
 
 config_value() {
   if [ ! -r "$1" ]; then

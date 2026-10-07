@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from messagebox.settings import RINGTONES
 from messagebox.guided_reply import valid_account_scope
 from messagebox.device_http import DEVICE_USER_AGENT, NoRedirect
 
@@ -381,6 +382,7 @@ class CloudDeviceClient:
 
 def capabilities(*, nfc=False) -> dict:
     return {
+        "ringtones": list(RINGTONES),
         "recording_modes": ["tap_review", "hold_release"],
         "audio": True,
         "nfc": bool(nfc),

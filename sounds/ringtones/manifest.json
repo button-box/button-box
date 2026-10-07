@@ -1,0 +1,62 @@
+{
+ "default": "hello_piano",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -15 LUFS integrated, peak <= -1 dBFS",
+ "ringtones": [
+  {
+   "id": "hello_piano",
+   "label": "Hello (piano)",
+   "file": "hello_piano.wav",
+   "seconds": 14.1,
+   "sha256": "d5c53d091066567967731d768cc7f5553e57e0ae42a9993fa9e06019c053a830",
+   "lamp_spans": 46
+  },
+  {
+   "id": "sunshine",
+   "label": "Sunshine",
+   "file": "sunshine.wav",
+   "seconds": 15.5,
+   "sha256": "22d08cbd174449872f26c5f58d0910244a4e67307cfcabb64661d9776fac2471",
+   "lamp_spans": 59
+  },
+  {
+   "id": "bouncy",
+   "label": "Bouncy",
+   "file": "bouncy.wav",
+   "seconds": 15.1,
+   "sha256": "02bd3e24d2faff181b75cb63b5e51e3d73b6ad2fe3715c4aea1875f51cbc7b34",
+   "lamp_spans": 49
+  },
+  {
+   "id": "sing_along",
+   "label": "Sing-along",
+   "file": "sing_along.wav",
+   "seconds": 14.2,
+   "sha256": "ae5a0f3ce1dc81c1e076f3d41338bc98bdd981e0b671e4ee372304c8d8f96e5f",
+   "lamp_spans": 57
+  },
+  {
+   "id": "island",
+   "label": "Island",
+   "file": "island.wav",
+   "seconds": 13.4,
+   "sha256": "3f18590e1b8cbc11dc5e89f89e65e88d820ddd1984c711bf4578614c6f03d004",
+   "lamp_spans": 54
+  },
+  {
+   "id": "hello",
+   "label": "Hello (short)",
+   "file": "hello.wav",
+   "seconds": 9.2,
+   "sha256": "96a5f9ddb665401e401236abfeb18d43a5f1e5a2b2afcfe283e346f3bd9f6792",
+   "lamp_spans": 26
+  },
+  {
+   "id": "ukulele",
+   "label": "Ukulele",
+   "file": "ukulele.wav",
+   "seconds": 9.0,
+   "sha256": "4673f77b16bf07740608447002fd8da81abcca20c29233c4b483ba9ca06fd7fb",
+   "lamp_spans": 31
+  }
+ ]
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import fcntl
 import json
+import math
 import os
 import re
 import tempfile
@@ -20,11 +21,18 @@ RECORDING_MODES = frozenset({"tap_review", "hold_release"})
 AFTER_LISTENING = frozenset({"play_only", "invite_reply"})
 MAX_RECORDING_SECONDS = frozenset({30, 60, 120})
 RINGTONES = {
-    "gentle_music_box": "ring1.wav",
-    "playful_chiptune": "ring2.wav",
-    "ding_dong": "ring3.wav",
-    "cuckoo_clock": "ring4.wav",
+    "hello_piano": "hello_piano.wav",
+    "sunshine": "sunshine.wav",
+    "bouncy": "bouncy.wav",
+    "sing_along": "sing_along.wav",
+    "island": "island.wav",
+    "hello": "hello.wav",
+    "ukulele": "ukulele.wav",
 }
+LEGACY_RINGTONES = frozenset({"gentle_music_box", "playful_chiptune", "ding_dong", "cuckoo_clock"})
+DEFAULT_RINGTONE = "hello_piano"
+
+
 ARRIVAL_SIGNALS = frozenset({"ring_and_lamp", "ring_only", "lamp_only", "silent"})
 _TIME = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
 _ROOT_KEYS = {
@@ -66,13 +74,20 @@ def _env_int(environ, name, default):
         return default
 
 
+def normalize_ringtone_id(ringtone_id):
+    if not isinstance(ringtone_id, str):
+        return None
+    return DEFAULT_RINGTONE if ringtone_id in LEGACY_RINGTONES else ringtone_id
+
+
+
 def defaults(environ=None):
     environ = os.environ if environ is None else environ
     maximum = _env_int(environ, "MSGBOX_MAX_SECONDS", 60)
     if maximum not in MAX_RECORDING_SECONDS:
         maximum = 60
-    ring_name = Path(environ.get("MSGBOX_RING_WAV", "ring3.wav")).name
-    ringtone = next((key for key, name in RINGTONES.items() if name == ring_name), "ding_dong")
+    ring_name = Path(environ.get("MSGBOX_RING_WAV", RINGTONES[DEFAULT_RINGTONE])).name
+    ringtone = next((key for key, name in RINGTONES.items() if name == ring_name), DEFAULT_RINGTONE)
     volume = min(100, max(0, _env_int(environ, "MSGBOX_SPEAKER_VOLUME", 50)))
     start_hour = min(23, max(0, _env_int(environ, "MSGBOX_QUIET_START_H", 22)))
     end_hour = min(23, max(0, _env_int(environ, "MSGBOX_QUIET_END_H", 7)))
@@ -126,6 +141,7 @@ def validate(document):
         raise SettingsError("after-listening behavior is invalid")
     if document["max_recording_seconds"] not in MAX_RECORDING_SECONDS:
         raise SettingsError("maximum recording length is invalid")
+    document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"])}
     if document["ringtone_id"] not in RINGTONES:
         raise SettingsError("ringtone is invalid")
     volume = document["master_volume_percent"]
@@ -150,7 +166,28 @@ def validate(document):
 
 
 def ringtone_path(document):
-    return APP_DIR / "ringtones" / RINGTONES[document["ringtone_id"]]
+    return APP_DIR / "ringtones" / RINGTONES[normalize_ringtone_id(document["ringtone_id"])]
+
+
+def load_ring_lamp_schedule(path, ringtone_id):
+    """Reject malformed schedules before the hardware loop uses their spans."""
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("ringtone_id") != ringtone_id:
+        raise ValueError("ringtone lamp schedule is invalid")
+    seconds = document.get("seconds")
+    if type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("ringtone lamp duration is invalid")
+    spans = document.get("lamp_on")
+    if not isinstance(spans, list) or not spans:
+        raise ValueError("ringtone lamp spans are invalid")
+    previous = -1
+    for span in spans:
+        if (not isinstance(span, list) or len(span) != 2
+                or any(type(value) not in {int, float} or not math.isfinite(value) for value in span)
+                or not 0 <= span[0] < span[1] <= seconds or span[0] < previous):
+            raise ValueError("ringtone lamp spans are invalid")
+        previous = span[0]
+    return tuple((start, end) for start, end in spans)
 
 
 def _atomic_json(path, document):
