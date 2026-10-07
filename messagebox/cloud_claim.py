@@ -279,9 +279,11 @@ def setup_session():
 def setup_online_cue(*, consume=False, directory=None, session=None):
     """Persist one cue per setup marker; only the button owner consumes it."""
     directory = Path(directory) if directory is not None else CLAIM_FILE.parent
-    session = setup_session() if session is None else session
-    if session is None:
-        return False
+    if not consume:
+        # Only the setup portal can read the root-owned setup marker.
+        session = setup_session() if session is None else session
+        if session is None:
+            return False
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "setup-online.json"
     with open_private_lock(directory / ".setup-online.lock") as lock:
@@ -291,10 +293,13 @@ def setup_online_cue(*, consume=False, directory=None, session=None):
         except FileNotFoundError:
             document = None
         if consume:
-            if document != {"session": session, "played": False}:
+            # The writer records the session; the button owner only consumes it once.
+            if (not isinstance(document, dict) or document.get("played") is not False
+                    or not isinstance(document.get("session"), str)
+                    or (session is not None and document["session"] != session)):
                 return False
             # Receipt first prevents replay after a service restart or audio failure.
-            atomic_json(path, {"session": session, "played": True})
+            atomic_json(path, {"session": document["session"], "played": True})
             return True
         if not isinstance(document, dict) or document.get("session") != session:
             atomic_json(path, {"session": session, "played": False})
