@@ -10,6 +10,7 @@ review or send-approval prompts.
 | Press, guided acknowledgement, claim press | `button_send.CUES`, `beep`, `acknowledge_guided_press`, `play_claim_cue`: `cue-press.wav`, exactly 0.40 s; unchanged `MIN_HOLD_S`. |
 | Family confirmation / setup card read | `_play_nfc_prompt`, `onboarding.nfc.TonePlayer("read")`: `cue-card.wav`; saved Family confirmation beep setting still gates runtime confirmation. |
 | Setup card saved | `TonePlayer("success")`: `cue-card_saved.wav`. |
+| Changed Cloud settings applied | `maybe_play_cloud_sound`: `cue-card_saved.wav` at the new master volume; three-second debounce, 30-second expiry, silent on boot adoption and in quiet hours. |
 | Runtime awake | `announce_runtime_ready`: `cue-ready.wav`. |
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
 | Online | `play_setup_online`, `maybe_play_connectivity`: connected cue followed by first-ever online voice, durable receipt before the voice. |

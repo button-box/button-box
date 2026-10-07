@@ -739,10 +739,17 @@ class CloudRuntime:
             document = validate_settings(document)
             candidate = {key: value for key, value in document.items()
                          if key not in {"version", "revision"}}
+            intent_path = self._intent_path(item["operation_id"])
             if current["revision"] == desired:
                 if current != {"version": 1, "revision": desired, **candidate}:
                     raise CloudRuntimeError("settings revision conflicts")
             else:
+                # Persist before mutation so a command replay retains its origin
+                # and whether values changed, rather than just its revision.
+                if not intent_path.exists():
+                    atomic_json(intent_path, {"settings_changed": any(current[key] != value
+                        for key, value in candidate.items()), "boot_id": self.boot_id,
+                        "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)
                 if updated["revision"] != desired:
                     raise CloudRuntimeError("settings revision conflicts")
@@ -818,11 +825,29 @@ class CloudRuntime:
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 if marker.get("settings") == document:
+                    self._queue_settings_saved(operation_id, marker)
                     self._ack(operation_id, "applied", applied_revision=desired)
                 else:
                     self._ack(operation_id, "rejected", error_code="settings_superseded")
                 del self.state["pending_settings"][operation_id]
                 self._save()
+
+    def _queue_settings_saved(self, operation_id, marker):
+        try:
+            intent = json.loads(self._intent_path(operation_id).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return  # Already adopted locally, or pending from pre-cue software.
+        if (not isinstance(intent, dict) or not intent.get("settings_changed") or not marker.get("settings_sound")
+                or not self.boot_id or intent.get("boot_id") != self.boot_id
+                or marker.get("boot_id") != self.boot_id
+                or not intent.get("account_scope")
+                or intent.get("account_scope") != (self.state.get("snapshot") or {}).get("account_scope")):
+            return
+        applied = marker.get("applied_mono")
+        if type(applied) not in (int, float) or not 0 <= self.monotonic() - applied < 30:
+            return
+        self.audio_requests.enqueue_settings_saved("settings_saved:" + operation_id,
+            intent["account_scope"], 30 - (self.monotonic() - applied))
 
     def _finish_nfc(self):
         if not self.state["pending_nfc"]:
