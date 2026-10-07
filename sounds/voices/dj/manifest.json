@@ -1,0 +1,114 @@
+{
+ "voice": "Button Box DJ",
+ "voice_key": "dj",
+ "elevenlabs_voice_id": "chrr6mXRdEZaOjekkNNF",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "dry voice over the original 126 bpm techno bed, 0.45 s lead, 0.6 s tail, music ducked under the voice, then loudnorm=I=-16:TP=-1.5:LRA=11",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "fixed fallback only (voice-listened.wav)",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Yo! DJ Button Box in the house! I'll bring you messages from everyone who loves you!",
+   "seconds": 7.37,
+   "sha256": "67081f0794b7db28ffc2d387b4a18915a76f5d283eb6b202e743fd9150027c0f"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "DJ's in the house!",
+   "seconds": 2.97,
+   "sha256": "78cf70edcb6ef6b1bd121ef1e4f73e7b889ca9083c0c3b10c975cedff9f07b73"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Drop it! A message for you!",
+   "seconds": 3.85,
+   "sha256": "689b3af2c99dc7c4a9dc6d6f458e130b3943c44fc6e21d76f13c4caca21d26b1"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "Your turn on the mic! Three... two... one...",
+   "seconds": 5.85,
+   "sha256": "ac625cd46180cb0560a8aa0a38514688621a900c715cdd209c9ad1c3d31ce429"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "Mic check! Three... two... one...",
+   "seconds": 4.65,
+   "sha256": "dbf346a51497649dc67a0beab10801528802c93115fc407903f73925c05ac277"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "Play it back!",
+   "seconds": 2.33,
+   "sha256": "e6d8145762606e76089af56e8b38d3759129618ec13dffd923a05c7a4b928b93"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "That's fire! Press to send!",
+   "seconds": 3.69,
+   "sha256": "cbea7cc0097645cb4a42e5b67fa3d858fc9c9993339d490e4575688dba02d5fc"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Big tune! Now press to send!",
+   "seconds": 3.69,
+   "sha256": "ed9ff8c7fd06931e50b686112e365746bbdb5393a4441e2fdd30359c972e67f7"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "Love that track! Press to send!",
+   "seconds": 3.53,
+   "sha256": "700335316fcd5f70639c8869ee9fb37c9e18f5388a60b0d1f2827119757f036b"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "Wanna drop it? Press the button!",
+   "seconds": 3.69,
+   "sha256": "fb29bb26a81dfc79866b4252bf31b1f2738b63c48b5cc2a081d6937d3c974d37"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "Cool, I won't send that one.",
+   "seconds": 3.05,
+   "sha256": "42a058cbfa381529306c74e9e5b8fec5dd462a8288c932041a90ac73c7f0bbae"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "Hold up, I didn't hear you. Try again?",
+   "seconds": 4.01,
+   "sha256": "47e152872ee43f5cf78fe6deda8b1af16e5ba681604d60ac05d2dbfd207432dd"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "Turn it up! They heard your message!",
+   "seconds": 3.13,
+   "sha256": "8087ebe45bafe84e51194c192501731e540a2fa9c6d3c45404c191bfa748044f"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "Who's it for? Pick a family card!",
+   "seconds": 4.09,
+   "sha256": "53164379cab8d0d43ad02e4e1d825f01b053f427e845b365b111340bdcaadf10"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "New card in the crowd! Ask a grown-up to add it.",
+   "seconds": 4.33,
+   "sha256": "76d222641f3840218c67b55f2da80803889a4e9cac1c054ec6dde59f9160fc9a"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "Still loading the track. I'll keep trying!",
+   "seconds": 4.41,
+   "sha256": "ed6d306e12f1c971b7c89b0ece2cecfd6f21afd833cc200745091d20a3474db4"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "I need a grown-up to set up the decks!",
+   "seconds": 3.29,
+   "sha256": "d543251e3cbaac0b94b1d347101170becac39f2b307263955f3e12d381f5f78a"
+  }
+ ]
+}

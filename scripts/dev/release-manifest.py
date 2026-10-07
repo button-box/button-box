@@ -29,7 +29,8 @@ def installed_paths(root):
             paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
-    for pack in ("cues", "voice"):
+    for pack in ("cues", "voice", "voices", "voices/pirate", "voices/alien",
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie"):
         for source in sorted((root / "sounds" / pack).iterdir()):
             if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
                 relative = source.relative_to(root).as_posix()

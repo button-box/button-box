@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from messagebox.cloud_device import atomic_json
-from messagebox.settings import RINGTONES, normalize_ringtone_id
+from messagebox.settings import RINGTONES, VOICE_PACKS, normalize_ringtone_id
 
 
 def _boot_id():
@@ -38,8 +38,9 @@ class AudioRequests:
         request = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(request, dict) or not isinstance(request.get("key"), str)
                 or self._path(request["key"]).name != path.name
-                or request.get("kind") not in {"success", "preview", "settings_saved"}
+                or request.get("kind") not in {"success", "preview", "voice_preview", "settings_saved"}
                 or (request.get("kind") == "preview" and normalize_ringtone_id(request.get("ringtone_id")) not in RINGTONES)
+                or (request.get("kind") == "voice_preview" and request.get("voice_pack") not in VOICE_PACKS)
                 or not isinstance(request.get("account_scope"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", request["account_scope"])
                 or type(request.get("expires_at")) not in (int, float)
@@ -94,7 +95,7 @@ class AudioRequests:
                                "expires_at": expires_at, "expires_mono": expires_mono,
                                "boot_id": self.boot_id, "state": "pending", **fields})
 
-    def enqueue_settings_saved(self, key, scope, seconds, *, volume_changed=False, ringtone_changed=False):
+    def enqueue_settings_saved(self, key, scope, seconds, *, volume_changed=False, ringtone_changed=False, voice_changed=False):
         """Debounce saves, retaining the first request's bounded lifetime."""
         with self._locked(self.directory / "settings-saved.json"):
             path = self._path(key)
@@ -112,7 +113,8 @@ class AudioRequests:
                             and ready >= (mono if request.get("boot_id") else now)):
                         request.update(ready_at=now + SETTINGS_SOUND_DELAY_S, ready_mono=mono + SETTINGS_SOUND_DELAY_S,
                                        volume_changed=bool(request.get("volume_changed") or volume_changed),
-                                       ringtone_changed=bool(request.get("ringtone_changed") or ringtone_changed))
+                                       ringtone_changed=bool(request.get("ringtone_changed") or ringtone_changed),
+                                       voice_changed=bool(request.get("voice_changed") or voice_changed))
                         # A receipt for every merged operation prevents replay after restart.
                         with self._locked(path):
                             self._save(path, {**request, "key": key, "state": "rejected"})
@@ -120,7 +122,7 @@ class AudioRequests:
                         return
             self.enqueue_for(key, "settings_saved", scope, seconds,
                              ready_at=now + SETTINGS_SOUND_DELAY_S, ready_mono=mono + SETTINGS_SOUND_DELAY_S, volume_changed=bool(volume_changed),
-                             ringtone_changed=bool(ringtone_changed))
+                             ringtone_changed=bool(ringtone_changed), voice_changed=bool(voice_changed))
 
     @contextmanager
     def owner(self):

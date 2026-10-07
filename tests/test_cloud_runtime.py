@@ -127,7 +127,7 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def listened_item(self, *, clip=True, operation_id="listened:" + "b" * 64):
         payload = {"message_id": MID, "listener_identity_id": PERSON["id"],
-                   "listener_first_name": "Avery"}
+                   "listener_first_name": "Avery", "voice_pack": "jessica"}
         if clip:
             path = self.root / "name.wav"
             write_pcm_wav(path, 0.1, sample_rate=48000)
@@ -147,8 +147,11 @@ class CloudRuntimeTests(unittest.TestCase):
         stack.enter_context(mock.patch.object(button_send, "announcement_gate", button_send.AnnouncementGate()))
         stack.enter_context(mock.patch.object(button_send, "transport_mode", return_value="cloud"))
         stack.enter_context(mock.patch.object(button_send, "quiet_hours", return_value=quiet))
-        stack.enter_context(mock.patch.object(button_send, "LISTENED_FALLBACK_WAV", str(self.root / "fallback.wav")))
-        (self.root / "fallback.wav").write_bytes(b"synthetic fallback")
+        stack.enter_context(mock.patch.object(button_send, "LISTENED_FALLBACK_WAV", str(self.root / "voice/voice-listened.wav")))
+        fallback = self.root / "voice/voice-listened.wav"
+        fallback.parent.mkdir(exist_ok=True)
+        fallback.write_bytes(b"synthetic fallback")
+        stack.enter_context(mock.patch.object(button_send.sound_pack, "SOUND_DIR", self.root))
         stack.enter_context(mock.patch.object(button_send.cloud_runtime, "listened_status", side_effect=self.runtime.listened_status))
         stack.enter_context(mock.patch.object(button_send, "log"))
         stack.enter_context(mock.patch.object(button_send, "log_event"))
@@ -193,6 +196,27 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime.poll_once()
             self.assertEqual(self.client.acks[-1]["state"], "applied")
 
+    def test_listened_clip_pack_is_checked_at_playback_after_settings_change(self):
+        self.runtime.heartbeat()
+        for index, (payload_pack, current_pack, matches) in enumerate((
+            ("pirate", "pirate", True), ("pirate", "alien", False),
+            (None, "jessica", False), ("jessica", "dj", False),
+        )):
+            item = self.listened_item(operation_id=f"listened:pack{index}")
+            item["payload"]["voice_pack"] = payload_pack
+            self.runtime._command(item, NOW)
+            store = self.runtime._receipt_store()
+            [path] = list(store.pending.glob("*.json"))
+            notice = store.load(path)
+            self.assertEqual(notice.cloud["voice_pack"], payload_pack)
+            with self.listened_playback(), \
+                 mock.patch.object(button_send.sound_pack, "current_voice_pack", return_value=current_pack), \
+                 mock.patch.object(button_send, "play_moment"), \
+                 mock.patch.object(button_send, "play_audio_ordinary") as play:
+                self.assertEqual(button_send.play_pending_listened(), 1)
+                play.assert_called_once_with(notice.clip if matches else str(self.root / "voice/voice-listened.wav"))
+            self.runtime._maintain_local()
+
     def test_listened_receipt_deduplicates_crash_before_state_save(self):
         self.runtime.heartbeat()
         item = self.listened_item()
@@ -223,7 +247,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
                      mock.patch.object(button_send, "play_audio_ordinary") as play:
                     self.assertEqual(button_send.play_pending_listened(), 1)
-                    play.assert_called_once_with(str(self.root / "fallback.wav"))
+                    play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
                 self.runtime._maintain_local()
                 self.assertEqual(self.client.acks[-1]["state"], "applied")
 
@@ -265,6 +289,22 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.heartbeat()
         self.assertFalse(Path(second).exists())
 
+    def test_listened_cache_keeps_same_text_in_different_packs_separate(self):
+        self.runtime.heartbeat()
+        item = self.listened_item()
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as download:
+            jessica = self.runtime._listened_clip(item["payload"], "a" * 64)
+            item["payload"]["voice_pack"] = "pirate"
+            pirate = self.runtime._listened_clip(item["payload"], "a" * 64)
+            self.assertNotEqual(jessica, pirate)
+            self.assertTrue(Path(jessica).exists())
+            self.assertEqual(self.runtime._listened_clip(item["payload"], "a" * 64), pirate)
+            self.assertEqual(download.call_count, 2)
+            item["payload"]["text_hash"] = "d" * 64
+            self.runtime._listened_clip(item["payload"], "a" * 64)
+            self.assertFalse(Path(pirate).exists())
+            self.assertTrue(Path(jessica).exists())
+
     def test_listened_cache_bounds_and_evicted_notice_fallback(self):
         self.runtime.heartbeat()
         item = self.listened_item()
@@ -281,7 +321,7 @@ class CloudRuntimeTests(unittest.TestCase):
         with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
              mock.patch.object(button_send, "play_audio_ordinary") as play:
             self.assertEqual(button_send.play_pending_listened(), 1)
-            play.assert_called_once_with(str(self.root / "fallback.wav"))
+            play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
 
     def test_listened_capability_is_reported_by_heartbeat(self):
         with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
@@ -656,7 +696,7 @@ class CloudRuntimeTests(unittest.TestCase):
             cloud_audio_requests=self.runtime.audio_requests,
             caregiver_settings=lambda: self.runtime.settings.load()[0],
             _applied_volume_revision=revision, _recording=False, _guided_active=False,
-            button=types.SimpleNamespace(is_pressed=False), create=True)
+            button=types.SimpleNamespace(is_pressed=False), led=mock.Mock(), create=True)
 
     def apply_settings_on_button(self):
         with mock.patch.object(button_send.time, "monotonic", side_effect=lambda: self.mono[0]), \
@@ -688,6 +728,28 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime._finish_settings()
             self.assertFalse(button_send.maybe_play_cloud_sound())
         play.assert_called_once_with(None)  # Ringtone changed too: the whole new ringtone at the new level.
+
+    def test_voice_switch_plays_new_pack_sample_after_apply_and_debounce(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(voice_pack="dj", master_volume_percent=35)
+        with self.settings_audio_owner(), \
+             mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", Path(__file__).resolve().parents[1] / "sounds"), \
+             mock.patch.object(button_send, "led", mock.Mock(), create=True) as lamp, \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play, \
+             mock.patch.object(button_send, "play_ringtone_snippet") as ringtone:
+            self.runtime._command(item, NOW)
+            self.apply_settings_on_button()
+            self.runtime._finish_settings()
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.mono[0] += 3
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(play.call_args.args[0], Path(__file__).resolve().parents[1] / "sounds/voices/dj/voice-msg-start.wav")
+        ringtone.assert_not_called()
+        lamp.off.assert_called_once()
 
     def test_volume_change_previews_the_ringtone_instead_of_the_saved_cue(self):
         self.runtime.heartbeat()
@@ -1248,7 +1310,7 @@ class CloudRuntimeTests(unittest.TestCase):
     def audio_owner(self):
         return mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
             _recording=False, _guided_active=False,
-            button=types.SimpleNamespace(is_pressed=False), create=True)
+            button=types.SimpleNamespace(is_pressed=False), led=mock.Mock(), create=True)
 
     def test_preview_waits_for_idle_button_owner_and_acknowledges_only_playback(self):
         self.runtime.heartbeat()
@@ -1278,6 +1340,30 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime._finish_previews()
         self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
         self.assertEqual(self.runtime.state["pending_previews"], {})
+
+    def test_voice_preview_waits_for_owner_and_plays_requested_pack_with_lamp_off(self):
+        self.runtime.heartbeat()
+        item = {**self.preview(), "kind": "voice_preview", "payload": {"voice_pack": "robot"}}
+        self.client.items = [item]
+        with mock.patch.object(button_send.subprocess, "run") as poller_play:
+            self.runtime.poll_once()
+        poller_play.assert_not_called()
+        with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", Path(__file__).resolve().parents[1] / "sounds"), \
+             mock.patch.object(button_send, "led", mock.Mock(), create=True) as lamp, \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as play:
+            with mock.patch.object(button_send, "_recording", True):
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(play.call_args.args[0], Path(__file__).resolve().parents[1] / "sounds/voices/robot/voice-msg-start.wav")
+        self.assertEqual(play.call_args.kwargs, {})
+        lamp.off.assert_called_once()
+        self.runtime._finish_previews()
+        self.assertEqual(json.loads(next(self.ack_dir.glob("*.json")).read_text())["state"], "applied")
+        with self.assertRaises(CloudRuntimeError):
+            self.runtime._command({**item, "operation_id": "bad-pack", "payload": {"voice_pack": "../bad"}}, NOW)
 
     def test_preview_claim_before_crash_suppresses_replay_and_reports_unknown(self):
         self.runtime.heartbeat()

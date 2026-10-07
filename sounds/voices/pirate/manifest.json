@@ -1,0 +1,114 @@
+{
+ "voice": "Button Box Pirate",
+ "voice_key": "pirate",
+ "elevenlabs_voice_id": "XQd9FUmieioZhAXymABT",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "Cloud may render name lines with this voice id, model, and seed",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Ahoy! I be Button Box! I'll bring ye messages from everyone who loves ye!",
+   "seconds": 6.08,
+   "sha256": "2141b2b5cd42330e1f353f7231177943f2774e3f3e5fed195919f06c3a06ffaa"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "Land ho! I'm here!",
+   "seconds": 2.64,
+   "sha256": "9fc61d572b64065337815062002abc99af713c707fc948f60e8798bbd3b2cf94"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Arr! A message for ye!",
+   "seconds": 2.24,
+   "sha256": "6e3e7845fd80616fc8f589c930c4bd31c24198d2ed4129166be306f0d00d7538"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "Yer turn, matey! Three... two... one...",
+   "seconds": 4.0,
+   "sha256": "95b11e9d0814fcbaf347c2da132710ad21d247619506e2d678b9d8ec54c6e1aa"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "Ready, matey? Three... two... one...",
+   "seconds": 3.28,
+   "sha256": "9ea0d99df8fb6cc200f358cf801ab0118bd7b18fc79562d167b13d276bcd616b"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "Listen up!",
+   "seconds": 0.88,
+   "sha256": "810effd487cd82743eda955eb76e67fbc52d9af7f7ec0a25de32f54b3153c70a"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "Shiver me timbers! Press to send!",
+   "seconds": 3.6,
+   "sha256": "8c6975f271c713e57f711bb09bffead642d730f75b1adf29fbf8e464382dacf5"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Aye, that be grand! Press to send!",
+   "seconds": 3.12,
+   "sha256": "7e3906f183e2ed374df8fd222555b4199ffab70a8988d7ee5221257a93ac73a8"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "Yo ho, fine work! Press to send!",
+   "seconds": 3.36,
+   "sha256": "fe7658ee9f59032470e9da8a00d5bf56cbdcfbeddf34310377b04f5049acb3d5"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "Want to send it sailin'? Press the button!",
+   "seconds": 2.4,
+   "sha256": "02fc4371f2e52bba47d254e1c01ff2d1e2bc4fcc41fdfc519b0db5a1bcea6573"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "Aye, I won't send that one.",
+   "seconds": 2.32,
+   "sha256": "8e74b091a21be4e5a14c2a22024946752f1410eb557ab76e93e611b59dae2e9a"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "Arr, I heard only the waves. Try again?",
+   "seconds": 3.92,
+   "sha256": "936610506022e2bb7ff5855e69502b351eb64e166c09247ffb28b1302bbd2922"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "Land ho! They heard yer message!",
+   "seconds": 2.72,
+   "sha256": "fb938f543f46569db91946e450f4c1de7e4cf4f44f195473e7d73e699975338d"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "Who be it for? Pick a family card!",
+   "seconds": 3.04,
+   "sha256": "957b6f221fe15703cf07f0ebc8fbd2f0da0b4ba700ac7554f26f7bc39733ffeb"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "Arr, a new card! Ask a grown-up to add it.",
+   "seconds": 3.44,
+   "sha256": "db9e1cac3ec1b73e6eca4b24bfb44ff1c17122237d328e22fbbf6b591f2dcf40"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "The seas be slow. I'll keep sailin'!",
+   "seconds": 2.88,
+   "sha256": "cbae113837a206dd38910e646e842d9d4929d120bc7bb8e912e09b5715b417b2"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "I need a grown-up to set me sails!",
+   "seconds": 2.88,
+   "sha256": "b70d5d33b858719c01e9d2a15ae4c5b0775107da1c198856abec6f53f8a05ab3"
+  }
+ ]
+}

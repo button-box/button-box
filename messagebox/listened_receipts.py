@@ -190,7 +190,7 @@ class ReceiptStore:
 
     def enqueue_cloud(self, operation_id: str, message_id: str, listener_id: str,
                       listener_name: str, clip: str, *, account_scope: str,
-                      expires_at: float, received_at: float) -> str:
+                      expires_at: float, received_at: float, voice_pack: str | None = None) -> str:
         """Cloud already correlates the outbound message and verified listener."""
         notice_id = self.cloud_notice_id(operation_id)
         if not self.cloud_exists(notice_id):
@@ -200,7 +200,7 @@ class ReceiptStore:
                 "clip": clip, "received_at": received_at,
                 "cloud": {"operation_id": operation_id, "message_id": message_id,
                           "listener_id": listener_id, "account_scope": account_scope,
-                          "expires_at": expires_at},
+                          "expires_at": expires_at, "voice_pack": voice_pack},
             })
         return notice_id
 

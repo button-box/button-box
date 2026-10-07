@@ -100,6 +100,21 @@ class SettingsStoreTests(unittest.TestCase):
         with self.assertRaises(SettingsError):
             validate({**saved, "ringtone_id": "unknown"})
 
+    def test_voice_pack_migrates_defaults_normalizes_unknown_and_round_trips(self):
+        from messagebox.settings import VOICE_PACKS
+        initial = defaults({"TZ": "UTC"})
+        self.assertEqual(initial["voice_pack"], "jessica")
+        old = {key: value for key, value in initial.items() if key != "voice_pack"}
+        self.assertEqual(validate(old), initial)
+        for unknown in ("unavailable", None, [], 7):
+            self.assertEqual(validate({**initial, "voice_pack": unknown})["voice_pack"], "jessica")
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for pack in VOICE_PACKS:
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, voice_pack=pack), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertEqual(saved["voice_pack"], pack)
+
     def test_swoosh_setting_requires_boolean(self):
         document = defaults({"TZ": "UTC"})
         with self.assertRaises(SettingsError):

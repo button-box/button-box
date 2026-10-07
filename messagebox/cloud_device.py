@@ -382,7 +382,9 @@ class CloudDeviceClient:
 
 
 def capabilities(*, nfc=False) -> dict:
+    from messagebox.sound_pack import installed_voice_packs
     return {
+        "voice_packs": installed_voice_packs(),
         "ringtones": list(RINGTONES),
         "recording_modes": ["tap_review", "hold_release"],
         "audio": True,

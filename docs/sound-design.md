@@ -57,10 +57,11 @@ message play at most once. The ask-send take counter survives restart.
 ## Installation and acceptance
 
 Setup, provision and bounded-update preflight validate format, complete PCM,
-manifest filenames, SHA-256 and exact press duration. Startup requires the packs;
+manifest filenames, SHA-256 and exact press duration. Startup requires Jessica and cues; optional packs can fall back to Jessica;
 claim confirmation remains available after a truthful asset warning. No runtime
 synthesis or replacement system voice is used. The bounded updater includes
-all 32 WAVs, manifests, READMEs and cue catalog. It retires only the five old
+all 134 WAVs, manifests, READMEs and cue catalog, including the six optional
+voice choices in `sounds/voices/` (required in a complete release). It retires only the five old
 bundled prompts and old swoosh, rejecting symlinks/hardlinks, recording their
 program rollback state and restoring them on failure or explicit rollback.
 
@@ -69,3 +70,26 @@ The Cloud assistant and Cloud dashboard/Flow Atlas are maintained separately;
 no old spoken prompt quotes were found in the Pi setup screens. Their setting
 labels remain unchanged. Historical release notes describe their original
 releases and are not current sound instructions.
+
+
+## Voice pack acceptance
+
+Installation and bounded preflight require all seven voice sets to validate.
+Capabilities exclude any incomplete or corrupt optional set; missing choices
+do not prevent a runtime restart. Jessica is the
+per-file runtime fallback, and the originals remain in `sounds/voice/`.
+See [pack licensing](../sounds/voices/README.md) and
+[settings behavior](cloud-settings.md#voice-packs).
+
+Countdown playback is synchronous: both `voice-count-reply.wav` and
+`voice-count-new.wav` finish before the go tick; that tick finishes before the
+microphone opens. Recording and silence timers start after playback, so DJ's
+longer music bed does not consume recording time.
+
+On a real box, listen to Jessica, Pirate, Alien, DJ, Robot, French and Charlie on
+the speaker. For each, preview and switch the setting; confirm the sample, volume
+and dark lamp. Exercise all 17 lines, both guided countdowns and the go tick,
+checking that DJ's tail ends before microphone capture. Verify a matched Cloud
+name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
+lines. Confirm volume-only and ringtone-only previews retain their behavior.
+Offline checks do not establish speaker quality or physical microphone timing.
