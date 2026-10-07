@@ -16,6 +16,8 @@ import time
 import wave
 from pathlib import Path
 
+from messagebox import sound_pack
+from messagebox.settings import SettingsReader
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc import PN532I2CReader
 from messagebox.nfc_state import NfcError, normalize_uid
@@ -108,59 +110,32 @@ def _load_state(path, *, clock=time.time):
 
 
 class TonePlayer:
-    """Generate simple local tones and play them without private audio assets."""
+    """Play validated bundled card cues; report failure without synthesis."""
 
-    def __init__(self, directory="/run/messagebox-onboarding-nfc", *, run=subprocess.run):
-        self.directory = Path(directory)
+    def __init__(self, directory=None, *, run=subprocess.run):
+        self.directory = Path(directory) if directory else sound_pack.SOUND_DIR / "cues"
         self.run = run
-
-    @staticmethod
-    def _write_tone(path, frequencies):
-        import math as _math
-        import struct
-
-        rate = 16000
-        samples = bytearray()
-        for frequency, duration in frequencies:
-            count = int(rate * duration)
-            for index in range(count):
-                envelope = min(1.0, index / 80, (count - index) / 80)
-                value = int(16000 * envelope * _math.sin(2 * _math.pi * frequency * index / rate))
-                samples.extend(struct.pack("<h", value))
-            samples.extend(b"\x00\x00" * int(rate * 0.04))
-        with wave.open(os.fspath(path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(rate)
-            output.writeframes(samples)
+        self.settings = SettingsReader()
 
     def __call__(self, kind):
-        self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / ("read-v3.wav" if kind == "read" else f"{kind}-v2.wav")
-        if not path.exists():
-            if kind == "read":
-                # Match the runtime button acknowledgement exactly, including
-                # gain and encoding. Keep setup's separate runtime directory.
-                self.run(
-                    ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-                     "-i", "sine=frequency=880:duration=0.40",
-                     "-filter:a", "volume=12dB", os.fspath(path)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                )
-            else:
-                self._write_tone(path, [(1320, 0.14), (1760, 0.22)])
-            os.chmod(path, 0o600)
+        name = {"read": "card", "success": "card_saved"}[kind]
+        path = self.directory / f"cue-{name}.wav"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("card cue missing/invalid")
+        try:
+            with wave.open(str(path), "rb") as sound:
+                if sound.getnframes() <= 0 or sound.getnchannels() != 1:
+                    raise ValueError("card cue missing/invalid")
+        except (EOFError, wave.Error) as exc:
+            raise ValueError("card cue missing/invalid") from exc
+        settings = self.settings.snapshot()
+        self.run(["amixer", "-q", "-c", os.environ.get("MSGBOX_SPEAKER_CARD", "Device"),
+                  "sset", os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM"),
+                  f'{settings["master_volume_percent"]}%', "unmute"], check=True,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
-        self.run(
-            ["aplay", "-q", "-D", device, os.fspath(path)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
+        self.run(["aplay", "-q", "-D", device, os.fspath(path)], check=True,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
 
 
 class NfcOnboardingEngine:

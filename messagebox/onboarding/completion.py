@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import grp
+import logging
 import os
 import stat
 import subprocess
@@ -10,6 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from messagebox import sound_pack
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
 from messagebox.onboarding.paths import (
@@ -88,6 +91,14 @@ def _restore_onboarding(enabled_path, *, run):
     run(["systemctl", "start", "comitup.service"], check=False)
 
 
+def request_all_set_sound():
+    # Shared settings group lets the runtime read the root gate's receipt.
+    path = sound_pack.ALL_SET_REQUEST
+    _atomic_json(path, {"complete": True})
+    os.chown(path, 0, grp.getgrnam("messagebox-settings").gr_gid)
+    os.chmod(path, 0o640)
+
+
 def complete(
     *,
     request_path=ONBOARDING_COMPLETION_REQUEST_PATH,
@@ -154,6 +165,10 @@ def complete(
             # hostname before the dashboard takes over, including its IPv4 record.
             run(["systemctl", "restart", "avahi-daemon.service"], check=True)
             run(["systemctl", "start", RUNTIME_TARGET], check=True)
+            try:
+                request_all_set_sound()
+            except (OSError, KeyError):
+                logging.getLogger(__name__).warning("Setup completion sound unavailable")
             Path(request_path).unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError):
             if removed_gate:

@@ -100,7 +100,6 @@ START_ORDER = (
 
 EXPLICIT_TARGETS = {
     "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
-    "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
     "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
     "scripts/install/messagebox-mode-migrate.py": MODE_MIGRATION,
     "scripts/messageboxctl": "/usr/local/bin/messageboxctl",
@@ -115,6 +114,52 @@ for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello
     for suffix in (".wav", ".lamp.json"):
         EXPLICIT_TARGETS[f"sounds/ringtones/{name}{suffix}"] = f"/opt/messagebox/ringtones/{name}{suffix}"
 EXPLICIT_TARGETS["sounds/ringtones/manifest.json"] = "/opt/messagebox/ringtones/manifest.json"
+
+SOUND_SOURCES = (
+    "sounds/cues/README.md",
+    "sounds/cues/cue-all_set.wav",
+    "sounds/cues/cue-card.wav",
+    "sounds/cues/cue-card_saved.wav",
+    "sounds/cues/cue-connected.wav",
+    "sounds/cues/cue-listened.wav",
+    "sounds/cues/cue-msg_end.wav",
+    "sounds/cues/cue-msg_start.wav",
+    "sounds/cues/cue-offline.wav",
+    "sounds/cues/cue-oops.wav",
+    "sounds/cues/cue-press.wav",
+    "sounds/cues/cue-ready.wav",
+    "sounds/cues/cue-rec_go.wav",
+    "sounds/cues/cue-rec_limit.wav",
+    "sounds/cues/cue-sent.wav",
+    "sounds/cues/cue-still_trying.wav",
+    "sounds/cues/cues.json",
+    "sounds/cues/manifest.json",
+    "sounds/voice/README.md",
+    "sounds/voice/manifest.json",
+    "sounds/voice/voice-all-set.wav",
+    "sounds/voice/voice-ask-send-1.wav",
+    "sounds/voice/voice-ask-send-2.wav",
+    "sounds/voice/voice-ask-send-3.wav",
+    "sounds/voice/voice-card-needed.wav",
+    "sounds/voice/voice-card-unknown.wav",
+    "sounds/voice/voice-count-new.wav",
+    "sounds/voice/voice-count-reply.wav",
+    "sounds/voice/voice-empty.wav",
+    "sounds/voice/voice-fail.wav",
+    "sounds/voice/voice-last-chance.wav",
+    "sounds/voice/voice-listened.wav",
+    "sounds/voice/voice-msg-start.wav",
+    "sounds/voice/voice-not-sent.wav",
+    "sounds/voice/voice-online.wav",
+    "sounds/voice/voice-review.wav",
+    "sounds/voice/voice-stuck.wav",
+)
+for source in SOUND_SOURCES:
+    EXPLICIT_TARGETS[source] = "/opt/messagebox/" + source
+RETIRED_SOUNDS = tuple(
+    "/opt/messagebox/sounds/guided-reply/" + name + ".wav"
+    for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent")
+) + ("/opt/messagebox/sounds/feedback/sent-swoosh.wav",)
 
 EXECUTABLE_TARGETS = {
     MODE_GENERATOR,
@@ -159,14 +204,6 @@ def _expected_target(source):
         if path.suffix not in {".css", ".html", ".js", ".py", ".sh"}:
             return None
         return "/opt/messagebox/" + source
-    if source.startswith("sounds/guided-reply/") and path.name in {
-        "delete-warning.wav",
-        "not-sent.wav",
-        "press-to-send.wav",
-        "reply-countdown.wav",
-        "standalone-countdown.wav",
-    }:
-        return "/opt/messagebox/" + source
     if len(path.parts) >= 2 and path.parts[0] == "systemd":
         if path.name == "messagebox.tmpfiles.conf":
             return "/etc/tmpfiles.d/messagebox.conf"
@@ -186,6 +223,7 @@ def _rollback_target_allowed(absolute):
         set(SELECTOR_PATHS)
         | {RELEASE_METADATA, MODE_GENERATOR, "/etc/tmpfiles.d/messagebox.conf"}
         | set(EXPLICIT_TARGETS.values())
+        | set(RETIRED_SOUNDS)
         | {
             "/etc/systemd/system/messagebox.target",
             "/etc/systemd/system/comitup.service.d/messagebox.conf",
@@ -388,6 +426,23 @@ def load_candidate(source_root, manifest_path, root):
         )
         sources.add(source)
         targets.add(target)
+    sound_entries = {entry["source"] for entry in entries if entry["source"] in SOUND_SOURCES}
+    if sound_entries:
+        if sound_entries != set(SOUND_SOURCES):
+            raise UpdateError("release sound pack is incomplete")
+        try:
+            _load_module("messagebox_candidate_sound_pack", source_root / "messagebox/sound_pack.py").validate_sounds(source_root / "sounds")
+        except (OSError, ValueError) as exc:
+            raise UpdateError("release sound assets are invalid") from exc
+    for absolute in RETIRED_SOUNDS:
+        destination = _rooted(root, absolute)
+        _check_parents(destination, root)
+        try:
+            metadata = destination.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise UpdateError("retired sound is not a regular file")
     canonical = _load_module(
         "messagebox_bounded_update_release_manifest", canonical_script
     ).installed_paths(source_root)
@@ -554,6 +609,7 @@ def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=()):
     backup_files.mkdir(mode=0o700)
     records = []
     targets = [item["target"] for item in entries]
+    targets.extend(RETIRED_SOUNDS)
     targets.append(RELEASE_METADATA)
     for absolute in targets:
         records.append(
@@ -901,6 +957,19 @@ def _apply_locked(source_root, manifest_path, backup_dir, *, root, run):
             if entry is generator_entry:
                 continue
             _atomic_install(entry["source_path"], entry["destination"], entry["mode"])
+
+        for absolute in RETIRED_SOUNDS:
+            destination = _rooted(root, absolute)
+            _check_parents(destination, root)
+            try:
+                current = destination.lstat()
+            except FileNotFoundError:
+                current = None
+            if current is not None and (not stat.S_ISREG(current.st_mode) or current.st_nlink != 1):
+                raise UpdateError("retired sound changed after preflight")
+            destination.unlink(missing_ok=True)
+            if destination.parent.exists():
+                _fsync_directory(destination.parent)
 
         migration = _load_module("messagebox_bounded_update_migration", migration_entry["source_path"])
         trusted_uid = 0 if root == Path("/") else root.stat().st_uid

@@ -31,9 +31,9 @@ Provision from the repository root on the development computer:
 ./scripts/provision.sh admin@button-box-001.local
 ```
 
-Provisioning refuses to connect to the Pi if any required prompt is absent.
-This keeps a clean card from reaching recipient onboarding with an unusable
-button service. Pass `--guided-prompts DIR` to test an alternate licensed set.
+Provisioning validates the cue and Jessica voice packs before connecting to the
+Pi. Missing or invalid audio fails truthfully. See `sounds/README.md` for the
+format, checksums and voice terms; see `docs/sound-design.md` for sound behavior.
 
 Use the Pi's `.local` hostname instead of assuming a fixed address. Turn
 Internet Sharing off before testing consumer Wi-Fi onboarding.

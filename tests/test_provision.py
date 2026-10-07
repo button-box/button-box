@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -18,17 +19,6 @@ class ProvisionTests(unittest.TestCase):
         self.bin_dir.mkdir()
         self.ssh_log = self.root / "ssh.log"
         self.rsync_log = self.root / "rsync.log"
-        self.prompt_dir = self.root / "guided-prompts"
-        self.prompt_dir.mkdir()
-        for name in (
-            "reply-countdown.wav",
-            "standalone-countdown.wav",
-            "press-to-send.wav",
-            "delete-warning.wav",
-            "not-sent.wav",
-        ):
-            (self.prompt_dir / name).write_bytes(b"test prompt")
-
         self._write_executable(
             "ssh",
             """#!/bin/sh
@@ -69,12 +59,7 @@ esac
                 "RSYNC_LOG": str(self.rsync_log),
             }
         )
-        arguments = [
-            str(PROVISION),
-            "--guided-prompts",
-            str(prompt_dir or self.prompt_dir),
-            target,
-        ]
+        arguments = [str(prompt_dir or PROVISION), target]
         return subprocess.run(
             arguments,
             cwd=self.root,
@@ -89,7 +74,7 @@ esac
 
         self.assertEqual(result.returncode, 0, result.stderr)
         rsync_calls = [line.split("\t") for line in self.rsync_log.read_text().splitlines()]
-        self.assertEqual(len(rsync_calls), 2)
+        self.assertEqual(len(rsync_calls), 1)
         rsync_args = rsync_calls[0][1:]
         self.assertEqual(rsync_args[0], "-azR")
         self.assertEqual(
@@ -119,52 +104,31 @@ esac
         self.assertNotIn("messagebox/dashboard/static/app.js", staged_paths)
         self.assertIn("messagebox/syncloop.sh", staged_paths)
 
-        prompt_args = rsync_calls[1][1:]
-        self.assertEqual(prompt_args[0], "-az")
-        self.assertEqual(
-            {Path(path).name for path in prompt_args[1:-1]},
-            {
-                "reply-countdown.wav",
-                "standalone-countdown.wav",
-                "press-to-send.wav",
-                "delete-warning.wav",
-                "not-sent.wav",
-            },
-        )
-        self.assertEqual(
-            prompt_args[-1],
-            "admin@message-box.local:/tmp/messagebox-provision.test/sounds/guided-reply/",
-        )
-
         ssh_calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(ssh_calls), 4)
+        self.assertEqual(len(ssh_calls), 3)
         self.assertEqual(
             ssh_calls[0],
             "CALL\tadmin@message-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
         )
         self.assertEqual(
             ssh_calls[1],
-            "CALL\tadmin@message-box.local\t"
-            "mkdir -p '/tmp/messagebox-provision.test/sounds/guided-reply'",
-        )
-        self.assertEqual(
-            ssh_calls[2],
             "CALL\t-t\tadmin@message-box.local\t"
             "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
         self.assertEqual(
-            ssh_calls[3],
+            ssh_calls[2],
             "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
         )
 
-    def test_missing_prompt_pack_fails_before_connecting(self):
-        result = self._run(
-            "admin@message-box.local", prompt_dir=self.root / "missing-prompts"
-        )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("Missing guided-reply prompt", result.stderr)
+    def test_missing_sound_pack_fails_before_connecting(self):
+        repo = self.root / "repo"
+        for area in ("scripts", "messagebox", "sounds"):
+            shutil.copytree(ROOT / area, repo / area)
+        (repo / "sounds/cues/cue-press.wav").unlink()
+        result = self._run("admin@message-box.local", prompt_dir=repo / "scripts/provision.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing or invalid cues sound pack", result.stderr)
         self.assertFalse(self.ssh_log.exists())
         self.assertFalse(self.rsync_log.exists())
 

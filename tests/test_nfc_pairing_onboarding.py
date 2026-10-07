@@ -1,9 +1,5 @@
 import json
 import os
-import wave
-import struct
-import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,40 +32,24 @@ class Reader:
 
 
 class TonePlayerTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
-    def test_read_cue_is_long_audible_and_does_not_reuse_old_asset(self):
+    def test_read_and_success_use_bundled_assets_without_generation(self):
+        root = Path(__file__).resolve().parents[1] / "sounds/cues"
+        calls = []
+        player = TonePlayer(root, run=lambda command, **kwargs: calls.append(command))
+        player("read")
+        player("success")
+        self.assertEqual([Path(command[-1]).name for command in calls if command[0] == "aplay"], ["cue-card.wav", "cue-card_saved.wav"])
+        self.assertEqual([command[0] for command in calls], ["amixer", "aplay", "amixer", "aplay"])
         with tempfile.TemporaryDirectory() as directory:
-            old = Path(directory) / "read-v2.wav"
-            old.write_bytes(b"stale cue")
-            calls = []
-            def run(command, **kwargs):
-                calls.append(command)
-                if command[0] == "ffmpeg":
-                    return subprocess.run(command, **kwargs)
-
-            player = TonePlayer(directory, run=run)
-            player("read")
-            with wave.open(calls[-1][-1], "rb") as source:
-                self.assertAlmostEqual(source.getnframes() / source.getframerate(), 0.40)
-                raw = source.readframes(source.getnframes())
-                self.assertGreaterEqual(max(struct.unpack(f"<{len(raw) // 2}h", raw)), 15000)
-            self.assertEqual(old.read_bytes(), b"stale cue")
+            with self.assertRaisesRegex(ValueError, "missing/invalid"):
+                TonePlayer(directory, run=mock.Mock())("read")
 
     def test_uses_complete_configured_speaker_device(self):
         calls = []
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
-            os.environ,
-            {"MSGBOX_SPK_DEV": "plughw:CARD=speaker,DEV=2"},
-        ):
-            player = TonePlayer(
-                directory, run=lambda *args, **kwargs: calls.append((args, kwargs))
-            )
-            player("success")
-
-        self.assertEqual(
-            calls[0][0][0][0:4],
-            ["aplay", "-q", "-D", "plughw:CARD=speaker,DEV=2"],
-        )
+        root = Path(__file__).resolve().parents[1] / "sounds/cues"
+        with mock.patch.dict(os.environ, {"MSGBOX_SPK_DEV": "plughw:CARD=speaker,DEV=2"}):
+            TonePlayer(root, run=lambda *args, **kwargs: calls.append((args, kwargs)))("success")
+        self.assertEqual(calls[-1][0][0][0:4], ["aplay", "-q", "-D", "plughw:CARD=speaker,DEV=2"])
 
 
 def completed_recipients(root, clock):

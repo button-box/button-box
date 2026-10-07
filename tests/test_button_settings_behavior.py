@@ -1,8 +1,6 @@
 import math
-import os
-import shutil
-import struct
 import tempfile
+import struct
 import unittest
 import wave
 import sys
@@ -227,61 +225,20 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
         finally:
             button_send.led = original_led
 
-    def test_press_acknowledgement_is_generated_audibly(self):
-        self.assertEqual(button_send.BEEPS["nfc"][1:], button_send.BEEPS["press"][1:])
-        self.assertEqual(button_send.BEEPS["ready"][1:], ("1320", "0.24", "8"))
-        with patch.object(button_send.subprocess, "run") as run:
-            button_send.make_beeps()
-
-        press_command = run.call_args_list[0].args[0]
-        self.assertIn("sine=frequency=880:duration=0.40", press_command)
-        self.assertIn("volume=12dB", press_command)
-
-    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
-    def test_press_acknowledgement_waveform_meets_signal_acceptance(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "press.wav")
-            with patch.object(
-                button_send,
-                "BEEPS",
-                {"press": (path, "880", "0.40", "12")},
-            ):
-                button_send.make_beeps()
-
-            with wave.open(path, "rb") as cue:
-                self.assertEqual(cue.getsampwidth(), 2)
-                sample_rate = cue.getframerate()
-                samples = struct.unpack(
-                    f"<{cue.getnframes()}h", cue.readframes(cue.getnframes())
-                )
-
-            duration_s = len(samples) / sample_rate
-            peak = max(abs(sample) for sample in samples)
-            rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
-            self.assertGreaterEqual(duration_s, 0.39)
-            self.assertGreaterEqual(peak, 14000)
-            self.assertGreaterEqual(rms, 9000)
-
-            from messagebox.onboarding.nfc import TonePlayer
-            import subprocess
-
-            def run(command, **kwargs):
-                if command[0] == "ffmpeg":
-                    return subprocess.run(command, **kwargs)
-
-            TonePlayer(directory, run=run)("read")
-            with wave.open(os.path.join(directory, "read-v3.wav"), "rb") as setup_cue:
-                self.assertEqual(setup_cue.getframerate(), sample_rate)
-                self.assertEqual(setup_cue.readframes(setup_cue.getnframes()), struct.pack(f"<{len(samples)}h", *samples))
-
-    def test_press_acknowledgement_replaces_a_stale_generated_file(self):
-        with patch.object(button_send.os.path, "exists", return_value=True), patch.object(
-            button_send.subprocess, "run"
-        ) as run:
-            button_send.make_beeps()
-
-        self.assertEqual(run.call_count, len(button_send.BEEPS))
-        self.assertIn("-y", run.call_args_list[0].args[0])
+    def test_bundled_press_is_exactly_the_hold_window_and_matched_loudness(self):
+        from messagebox.sound_pack import validate_sounds
+        root = Path(__file__).resolve().parents[1] / "sounds"
+        validate_sounds(root)
+        with wave.open(str(root / "cues/cue-press.wav"), "rb") as cue:
+            self.assertEqual(cue.getnframes(), 19200)
+            self.assertEqual(cue.getframerate(), 48000)
+            samples = struct.unpack("<19200h", cue.readframes(19200))
+        peak = max(abs(value) for value in samples) / 32768
+        windows = [samples[i:i + 4800] for i in range(0, len(samples) - 4799, 480)]
+        loudest = max(math.sqrt(sum(v*v for v in window) / len(window)) / 32768 for window in windows)
+        self.assertLessEqual(peak, 10 ** (-1 / 20) + 0.001)
+        self.assertAlmostEqual(20 * math.log10(loudest), -13, delta=0.5)
+        self.assertEqual(button_send.MIN_HOLD_S, 0.4)
 
     def test_runtime_ready_cue_is_logged_once_and_audio_failure_is_non_fatal(self):
         for result, event in (

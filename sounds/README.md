@@ -1,20 +1,17 @@
-# Audio assets
+# Button Box sound design v1
 
-The licensed `guided-reply` prompt set is included in this repository. It
-contains these mono WAV files:
+- [`cues/README.md`](cues/README.md): 15 original motif cues and their checksums.
+- [`voice/README.md`](voice/README.md): 17 ElevenLabs Jessica lines, transcripts,
+  checksums and commercial-use terms.
+- [`ringtones/README.md`](ringtones/README.md): the seven ringtone choices.
 
-- `reply-countdown.wav`
-- `standalone-countdown.wav`
-- `press-to-send.wav`
-- `delete-warning.wav`
-- `not-sent.wav`
+Setup and provisioning validate the bundled packs before system or SSH changes.
+Every cue/voice WAV must be complete 48 kHz, 16-bit mono PCM with its declared
+SHA-256; the press cue must be exactly 0.40 seconds. Missing or invalid assets
+fail truthfully. No runtime sine generation or system voice substitution exists.
 
-`scripts/provision.sh` and `scripts/setup.sh` use this directory by default. The
-installer fails before making system changes when any file is missing,
-unreadable, empty, invalid, or not mono. An alternate licensed set can still be
-passed to `scripts/provision.sh` with `--guided-prompts DIR`.
-
-See [`guided-reply/LICENSE.md`](guided-reply/LICENSE.md) for the prompt
-transcripts, production details, checksums, and separate asset-license notice.
-Tests and installation must fail truthfully when a feature requires a missing
-prompt; they must not silently substitute another system voice.
+The "Swoosh sound" setting controls the 1.3-second `cue-sent.wav`. It still means
+accepted for sending, not delivery. Send work continues independently of speaker
+playback; the cue stops on a press, and stale success notices are discarded.
+See [`docs/sound-design.md`](../docs/sound-design.md) for runtime behavior,
+recording exclusions, quiet hours and real-speaker acceptance checks.

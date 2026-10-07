@@ -447,7 +447,7 @@ class InputSimulatorTests(unittest.TestCase):
             def setup():
                 clock[0] += 1
 
-            for name in ("make_beeps", "validate_prompts", "apply_master_volume"):
+            for name in ("validate_sounds", "validate_prompts", "apply_master_volume"):
                 stack.enter_context(mock.patch.object(button_send, name, side_effect=setup))
             stack.enter_context(mock.patch.object(simulator.threading, "Thread"))
             stack.enter_context(mock.patch.object(simulator, "run_inputs", side_effect=lambda runtime, inputs, manifest: observed.append(inputs.started)))
@@ -492,7 +492,7 @@ class InputSimulatorTests(unittest.TestCase):
             contacts.assign_card(OTHER, CARD)
             with mock.patch.object(button_send, "CONTACTS_FILE", str(contacts_path)), \
                  mock.patch.object(simulator, "preflight"), \
-                 mock.patch.object(button_send, "make_beeps") as setup:
+                 mock.patch.object(button_send, "validate_sounds") as setup:
                 with self.assertRaises(simulator.SimulationError):
                     simulator.execute(plan([
                         {"at": 1, "type": "nfc-present", "uid": CARD},

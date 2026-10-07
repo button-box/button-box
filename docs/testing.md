@@ -329,3 +329,25 @@ For an offline check, use the pinned tools already in the local cache. Run all
 `make check` targets with local wrappers for `uv`, `uvx` and `bunx` that execute
 those cached versions directly; do not fetch missing packages. The Python suite
 needs loopback socket access for its HTTP tests, but uses no external network.
+
+## Sound design v1
+
+Run `make check` using the repository's cached/offline tool approach. Sound pack
+contracts cover checksums, format, exact 0.40 s press duration, go-before-capture
+ordering (including playback failure), the limit-minus-5-s warning at 30/60/120 s,
+PCM exclusion, quiet hours, receipt durability, ask-send rotation, incoming
+bookends and bounded update removal/rollback. These tests use synthetic PCM and
+mock hardware/process boundaries; they are not speaker acceptance.
+
+On box 4 and box 5, install the exact reviewed candidate with the bounded updater,
+then check the full [sound map](sound-design.md). Verify both interaction modes,
+all incoming messages, card read/save/unknown/missing, silence, stalled sends,
+accepted-send interruption, listened cue with default and custom family clips,
+first-online and all-set across service restarts and reboot. In quiet hours,
+verify no offline/listened/still-trying audio and that deliberate press responses
+remain audible. Record and send at each 30/60/120 s limit: the go tick must not
+occur in the sent audio; the warning interval and acoustic tail must be silent.
+Listen for words lost during the explicitly documented warning exclusion.
+Check loudness, comfort and clarity at low/normal/high master volume on the
+actual speakers. Verify applied release hashes separately from phone playback
+and delivery. Confirm current ElevenLabs terms before first customer shipment.

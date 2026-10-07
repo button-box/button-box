@@ -1,0 +1,95 @@
+{
+ "format": "48 kHz, 16-bit, mono PCM WAV; loudest 100 ms at -13 dBFS RMS; peak <= -1 dBFS",
+ "cues": [
+  {
+   "file": "cue-press.wav",
+   "seconds": 0.4,
+   "meaning": "A high five. One bright wooden tap on the motif's home note.",
+   "sha256": "47a6732593e490f162a81ff0282ce42c33cecdec87dbb7bdff446cffd437e847"
+  },
+  {
+   "file": "cue-card.wav",
+   "seconds": 0.45,
+   "meaning": "Picking someone up. A quick upward flick, different from the press.",
+   "sha256": "53cbc9a5d818ce8f6b87c4e6055a8526e497492a8df810dbc72a7f3c620d1fdc"
+  },
+  {
+   "file": "cue-rec_go.wav",
+   "seconds": 0.25,
+   "meaning": "Go! A tiny bright tick right after \u201cone\u201d.",
+   "sha256": "2d56c963a0534b7e973c0e9f7d405d0d851d472925b7b8055faed6cfc3308c5d"
+  },
+  {
+   "file": "cue-rec_limit.wav",
+   "seconds": 0.55,
+   "meaning": "Wrap it up. Two soft taps, five seconds before the end.",
+   "sha256": "0845963bbaee97bd3d67cb18c4b835993a9fcd85669b30911fe082d4df70f196"
+  },
+  {
+   "file": "cue-msg_start.wav",
+   "seconds": 0.6,
+   "meaning": "Unwrapping. A quick sparkle up, then the family voice.",
+   "sha256": "a6f5280a60403e2e99cfc9ee3f35f35a43168803b94449f90df47248906b066a"
+  },
+  {
+   "file": "cue-msg_end.wav",
+   "seconds": 0.75,
+   "meaning": "That's all. The \u201cBox!\u201d note, warm and settled.",
+   "sha256": "63faccfdf9a9bde15f722b30977efafc9778a9b4f38c6a8a34c5d33ff6eb662f"
+  },
+  {
+   "file": "cue-oops.wav",
+   "seconds": 0.6,
+   "meaning": "A playful shrug. A bouncy \u201cuh-oh\u201d, two notes down. As loud as the press.",
+   "sha256": "71361aa1c64584284285c1a8df2d9e03052233dd74460e2991893fa5ceef4f00"
+  },
+  {
+   "file": "cue-still_trying.wav",
+   "seconds": 0.6,
+   "meaning": "Still trying. Two gentle knocks on the same note.",
+   "sha256": "5ce86911e01e4cdfe30398e1f2bc9287407f4db2b1ad56748099b812d314572e"
+  },
+  {
+   "file": "cue-offline.wav",
+   "seconds": 0.75,
+   "meaning": "I lost the internet. One soft fall, played once.",
+   "sha256": "01444016a4bf80ddc7badaa5ea7b7868047debcf4f4670112ffae3b68befe480"
+  },
+  {
+   "file": "cue-ready.wav",
+   "seconds": 0.95,
+   "meaning": "I'm awake. A quick \u201cBut-ton Box!\u201d",
+   "sha256": "20e32a1b4607a8851cfd54a7d51e824f736cc5011a3046c8e99a0d541f6c09fd"
+  },
+  {
+   "file": "cue-connected.wav",
+   "seconds": 1.9,
+   "meaning": "I'm here! The airport hug: the motif, its answer, and a sparkle.",
+   "sha256": "f9f0219acc2ce26f11db3bd62c3daae9d1e786692ae9b27c572d58e40b08b703"
+  },
+  {
+   "file": "cue-all_set.wav",
+   "seconds": 2.6,
+   "meaning": "All set! The biggest moment. The connected sound with a full chord at the end.",
+   "sha256": "064cda3956b3905d04397e42f4ff27ddba8eec731c4c17e0ec2d199484986863"
+  },
+  {
+   "file": "cue-sent.wav",
+   "seconds": 1.3,
+   "meaning": "I'll take it to them. A short whoosh that lifts off into the motif's high notes.",
+   "sha256": "cca0e71fa745f5ca78793f515dd49754618ce8fb8b81aa5df06eb05de8fe5990"
+  },
+  {
+   "file": "cue-listened.wav",
+   "seconds": 1.2,
+   "meaning": "They heard it! The happiest small sound: a sparkle and the \u201cBox!\u201d chord.",
+   "sha256": "ede5dc3b25b2bb1f7366463313c3be4495e3dfc283e4425e04dadf8d7e587f4c"
+  },
+  {
+   "file": "cue-card_saved.wav",
+   "seconds": 0.9,
+   "meaning": "Card saved. The pick-up flick, then a happy \u201cyes\u201d.",
+   "sha256": "3b1a56c86399afb1dc273d9594efffe08dedf4e0436b20dc6836665477a028d8"
+  }
+ ]
+}
