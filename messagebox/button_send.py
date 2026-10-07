@@ -1863,12 +1863,20 @@ def claim_button_press(cues):
         play_claim_cue(cues, NFC_UNKNOWN_BEEP)
 
 
+_setup_online_failed = False
+
+
 def play_setup_online(cues):
+    global _setup_online_failed
     try:
         if cloud_claim.setup_online_cue(consume=True):
             play_claim_cue(cues, "online")
+        _setup_online_failed = False
     except (OSError, ValueError, CloudDeviceError):
-        log("setup online audio unavailable")
+        # This runs on every idle poll; report a failure once until it recovers.
+        if not _setup_online_failed:
+            log("setup online audio unavailable")
+        _setup_online_failed = True
 
 
 def claim_only_loop():

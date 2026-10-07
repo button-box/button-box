@@ -118,6 +118,12 @@ class SetupCheckinTests(unittest.TestCase):
         setup_online_cue(directory=self.root, session="session-2")
         self.assertTrue(setup_online_cue(directory=self.root, session="session-2", consume=True))
 
+    def test_button_owner_consumes_without_reading_the_setup_marker(self):
+        setup_online_cue(directory=self.root, session="session-1")
+        with mock.patch("messagebox.cloud_claim.setup_session", side_effect=PermissionError("marker")):
+            self.assertTrue(setup_online_cue(directory=self.root, consume=True))
+            self.assertFalse(setup_online_cue(directory=self.root, consume=True))
+
     def test_backoff_is_capped_resets_on_success_and_stops_after_setup(self):
         request = mock.Mock(side_effect=[OSError("private")] * 4 + [False, OSError("private")])
         waits = []
