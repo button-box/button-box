@@ -21,6 +21,9 @@ def _boot_id():
     return value if re.fullmatch(r"[0-9a-f-]{36}", value) else None
 
 
+# Short enough that the sound lands with "Applied on the box"; long enough to merge a burst of saves.
+SETTINGS_SOUND_DELAY_S = 1
+
 class AudioRequests:
     def __init__(self, directory, *, clock=time.time, monotonic=time.monotonic, boot_id=None):
         self.directory = Path(directory)
@@ -107,7 +110,7 @@ class AudioRequests:
                     if (request["kind"] == "settings_saved" and request["state"] == "pending"
                             and request["account_scope"] == scope and not self._expired(request)
                             and ready >= (mono if request.get("boot_id") else now)):
-                        request.update(ready_at=now + 3, ready_mono=mono + 3,
+                        request.update(ready_at=now + SETTINGS_SOUND_DELAY_S, ready_mono=mono + SETTINGS_SOUND_DELAY_S,
                                        volume_changed=bool(request.get("volume_changed") or volume_changed))
                         # A receipt for every merged operation prevents replay after restart.
                         with self._locked(path):
@@ -115,7 +118,7 @@ class AudioRequests:
                         self._save(pending_path, request)
                         return
             self.enqueue_for(key, "settings_saved", scope, seconds,
-                             ready_at=now + 3, ready_mono=mono + 3, volume_changed=bool(volume_changed))
+                             ready_at=now + SETTINGS_SOUND_DELAY_S, ready_mono=mono + SETTINGS_SOUND_DELAY_S, volume_changed=bool(volume_changed))
 
     @contextmanager
     def owner(self):
