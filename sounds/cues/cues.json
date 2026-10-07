@@ -1,0 +1,62 @@
+{
+ "press": {
+  "desc": "A high five. One bright wooden tap on the motif's home note.",
+  "seconds": 0.4
+ },
+ "card": {
+  "desc": "Picking someone up. A quick upward flick, different from the press.",
+  "seconds": 0.45
+ },
+ "rec_go": {
+  "desc": "Go! A tiny bright tick right after \u201cone\u201d.",
+  "seconds": 0.25
+ },
+ "rec_limit": {
+  "desc": "Wrap it up. Two soft taps, five seconds before the end.",
+  "seconds": 0.55
+ },
+ "msg_start": {
+  "desc": "Unwrapping. A quick sparkle up, then the family voice.",
+  "seconds": 0.6
+ },
+ "msg_end": {
+  "desc": "That's all. The \u201cBox!\u201d note, warm and settled.",
+  "seconds": 0.75
+ },
+ "oops": {
+  "desc": "A playful shrug. A bouncy \u201cuh-oh\u201d, two notes down. As loud as the press.",
+  "seconds": 0.6
+ },
+ "still_trying": {
+  "desc": "Still trying. Two gentle knocks on the same note.",
+  "seconds": 0.6
+ },
+ "offline": {
+  "desc": "I lost the internet. One soft fall, played once.",
+  "seconds": 0.75
+ },
+ "ready": {
+  "desc": "I'm awake. A quick \u201cBut-ton Box!\u201d",
+  "seconds": 0.95
+ },
+ "connected": {
+  "desc": "I'm here! The airport hug: the motif, its answer, and a sparkle.",
+  "seconds": 1.9
+ },
+ "all_set": {
+  "desc": "All set! The biggest moment. The connected sound with a full chord at the end.",
+  "seconds": 2.6
+ },
+ "sent": {
+  "desc": "I'll take it to them. A short whoosh that lifts off into the motif's high notes.",
+  "seconds": 1.3
+ },
+ "listened": {
+  "desc": "They heard it! The happiest small sound: a sparkle and the \u201cBox!\u201d chord.",
+  "seconds": 1.2
+ },
+ "card_saved": {
+  "desc": "Card saved. The pick-up flick, then a happy \u201cyes\u201d.",
+  "seconds": 0.9
+ }
+}

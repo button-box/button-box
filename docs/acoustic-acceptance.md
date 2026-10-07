@@ -1,38 +1,36 @@
 # Acknowledgement acoustic acceptance
 
-Button presses and NFC detection use the same 880 Hz, 400 ms cue at +12 dB
-in setup and runtime. The pairing-success melody stays distinct.
-Generated assets are refreshed/versioned so an update
-cannot silently keep the old quiet cue. Existing NFC presentation debouncing
-and caregiver sound settings remain intact.
+Sound design v1 uses `sounds/cues/cue-press.wav` (exactly 0.40 s) for button
+acknowledgement, `cue-card.wav` for setup/runtime card reads and
+`cue-card_saved.wav` for setup success. These are distinct motif cues. The
+bundled cue manifest records checksums, durations and loudness targets; there
+is no generated-tone refresh. NFC debouncing and caregiver settings stay intact.
 
 Software playback success is not acoustic acceptance. For each named box,
-record a bounded local **16-bit mono PCM WAV** from the agreed room microphone:
+record a bounded local 16-bit mono PCM WAV from the agreed room microphone:
 three quiet seconds, exactly one physical action, then two quiet seconds.
-Keep recording under 60 seconds. Do not record unrelated conversation or upload
-room audio. Do not run another audio test while the box is recording or playing.
+Keep recording under 60 seconds. Avoid unrelated conversation, keep room audio
+private, and do not run another playback test during a child's recording.
 
-Run the deterministic check on that capture:
+Compare the capture with the exact installed reference WAV. Check one audible
+cue at the physical action, comfortable loudness above room noise, no clipping
+or duplicated cue, and correct cue identity. Check setup detection and normal
+runtime scans separately. Hold a card in place for several seconds: one cue.
+Remove/re-present it: one fresh cue. Scan a different card: one fresh cue and
+the correct recipient. Check start/stop/approval acknowledgements separately
+from accepted-send feedback and at low/normal/high master volume.
 
-```sh
-python3 scripts/dev/check-acoustic-cue.py capture.wav --frequency 880 --minimum .32 --maximum .48
-python3 scripts/dev/check-acoustic-cue.py nfc-capture.wav --frequency 880 --minimum .32 --maximum .48
-```
+`scripts/dev/check-acoustic-cue.py` remains a single-frequency experimental
+tone analyzer. Its frequency/duration test does not certify these motif cues;
+use the installed references and physical listening for v1 acceptance.
 
-The check requires one sustained cue with the expected frequency and duration,
-at least 10 dB above the baseline, and under 1% clipped samples. It rejects
-duplicate cues, silence, wrong pitch, short blips and a contaminated baseline.
-This is a controlled-test threshold, not a calibrated loudness measurement or
-proof that a similar sound from elsewhere was emitted by this box. Correlate
-the physical action and device event timestamp; independently listen for comfort
-and clarity on the actual speaker.
+For recording, verify the go tick is absent from the sent audio and the limit
+warning's entire exclusion window is silent. Check acoustic decay and ALSA
+buffering against the 250 ms guard on both boxes. See
+[sound design](sound-design.md#recording-exclusions) and
+[testing](testing.md#sound-design-v1) for the full acceptance sequence.
 
-Check setup detection and normal runtime scans separately. Hold a card in place
-for several seconds: one cue only. Remove/re-present it: one fresh cue. Scan a
-different card: one fresh cue and the correct recipient. Check a press to start,
-stop and approve recording separately from successful-send feedback.
-
-Retain only sanitized measurements, microphone/placement, revision and action
-time in the run record. Stop the microphone and delete the temporary room WAV
-after measurement. No physical or acoustic pass may be inferred from synthetic
-unit tests; if capture is unavailable, mark that gate untested.
+Retain only sanitized measurements, microphone/placement, candidate revision
+and action time. Delete temporary room audio after measurement. Synthetic PCM
+and unit tests do not prove physical speaker acceptance; if capture is
+unavailable, leave that gate explicitly untested.

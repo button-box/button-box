@@ -29,16 +29,17 @@ def installed_paths(root):
             paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
-    for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent"):
-        source = f"sounds/guided-reply/{name}.wav"
-        paths[source] = "/opt/messagebox/" + source
+    for pack in ("cues", "voice"):
+        for source in sorted((root / "sounds" / pack).iterdir()):
+            if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
+                relative = source.relative_to(root).as_posix()
+                paths[relative] = "/opt/messagebox/" + relative
     for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
         for suffix in (".wav", ".lamp.json"):
             paths[f"sounds/ringtones/{name}{suffix}"] = f"/opt/messagebox/ringtones/{name}{suffix}"
     paths["sounds/ringtones/manifest.json"] = "/opt/messagebox/ringtones/manifest.json"
     paths.update({
         "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
-        "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
         "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
         "scripts/install/messagebox-mode-migrate.py": "/usr/lib/messagebox/messagebox-mode-migrate.py",
         "scripts/messageboxctl": "/usr/local/bin/messageboxctl",

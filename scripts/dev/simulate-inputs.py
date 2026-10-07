@@ -543,7 +543,7 @@ def execute(plan, manifest, send, scratch=None):
     runtime.outbox_store = runtime.OutboxStore(runtime.OUTBOX_DIR, transport=runtime.transport_mode())
     runtime.receipt_store = runtime.ReceiptStore(runtime.LISTENED_DIR)
     Path(runtime.TEMP_DIR).mkdir(parents=True, exist_ok=True)
-    runtime.make_beeps()
+    runtime.validate_sounds()
     runtime.validate_prompts()
     runtime.apply_master_volume()
     trace = InputTrace(runtime, manifest)

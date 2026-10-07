@@ -539,11 +539,19 @@ class GuidedSession:
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
         account_scope: str | None = None,
+        incoming_cue_path: str | None = None,
+        incoming_voice_path: str | None = None,
+        incoming_end_path: str | None = None,
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
         if incoming_path:
+            for path in (incoming_cue_path, incoming_voice_path):
+                if path:
+                    self.io.play_ordinary(path)
             self.io.play_ordinary(incoming_path)
+            if incoming_end_path:
+                self.io.play_ordinary(incoming_end_path)
             self.event("guided_inbound_played", session_id=session_id)
             if not auto_record_after_incoming:
                 self.event("guided_playback_only", session_id=session_id)

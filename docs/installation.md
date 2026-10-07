@@ -14,9 +14,9 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
    13. Enable SSH and create a non-root sudo-capable administrator. Set the
    hostname to the box's zero-padded number, such as `button-box-001`, and use
    the same number on the physical label and in inventory.
-2. Review the included licensed guided-reply prompt set described in
-   [`sounds/README.md`](../sounds/README.md). These recordings are required for
-   the two-way voice proof.
+2. Review the included cue and Jessica voice packs described in
+   [`sounds/README.md`](../sounds/README.md). The manifests record format and checksums; confirm ElevenLabs terms before the
+   first customer shipment. These recordings are required for the two-way voice proof.
 3. From a repository clone on another computer, provision over SSH:
 
    ```sh
@@ -24,9 +24,8 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
    ```
 
    This transfers the installer's explicit source allowlist and runs setup on
-   the Pi. The installer validates every prompt before making system changes.
-   To use an alternate licensed prompt set, pass its directory with
-   `--guided-prompts DIR`. Alternatively, clone the repository onto the Pi and
+   the Pi. The installer validates both complete sound packs and their checksums
+   before making system changes. Alternatively, clone the repository onto the Pi and
    run `./scripts/setup.sh` there as a non-root sudo-capable administrator.
    Neither method transfers device runtime state, pairs WhatsApp, or starts
    Button Box services.
@@ -167,3 +166,16 @@ and Comitup active; verify either its connected home portal or its setup
 hotspot portal before calling recovery usable. Do not recreate either legacy
 `multi-user.target.wants` link. The generator-owned link under `/run` is
 ephemeral and must match the marker after every daemon reload.
+
+## Sound pack v1 updates
+
+`make check` validates the 15 cues and 17 Jessica lines without a network or
+speaker. The bounded release manifest includes every new WAV, manifest, cue
+catalog and README. Existing boxes can receive the pack through the bounded
+updater; full setup is unnecessary. The updater checks retired sound paths,
+includes those exact files in automatic program rollback, removes the old
+bundled prompts and swoosh while services are stopped, and restores them on
+rollback. It leaves custom family clips and device data alone.
+
+The press asset is exactly 0.40 seconds and preserves the tap/hold window.
+See [sound design](sound-design.md) for all new moments and recording exclusions.
