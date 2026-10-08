@@ -294,6 +294,7 @@ class CloudRuntimeTests(unittest.TestCase):
         client.send_voice.return_value = {"message_id": "sent-box", "state": "queued",
                                          "server_time": NOW, "expires_at": NOW + 1800}
         with mock.patch.object(button_send, "outbox_store", store), \
+             mock.patch.object(button_send, "cloud_audio_requests", self.runtime.audio_requests), \
              mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=client), \
              mock.patch.object(button_send.cloud_runtime, "recipient_id", side_effect=self.runtime.recipient_id), \
              mock.patch.object(button_send.cloud_runtime, "outbox_now", side_effect=self.runtime.server_now), \
@@ -1797,10 +1798,13 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def test_delayed_acceptance_queues_durable_success_once_across_restart(self):
         self.runtime.heartbeat()
-        job = self.runtime.outbox_dir / "original_key_123456.job"
-        job.mkdir(parents=True)
-        for state in ("accepted", "delivered", "read"):
+        for state in ("queued", "waiting_for_reply", "accepted", "delivered", "read"):
             with self.subTest(state=state):
+                self.runtime.outbox_dir = self.root / f"delayed-{state}"
+                self.runtime.audio_requests = AudioRequests(self.root / f"delayed-sound-{state}",
+                    clock=lambda: NOW, monotonic=lambda: self.mono[0], boot_id="test-boot")
+                job = self.runtime.outbox_dir / f"original_key_{state}.job"
+                job.mkdir(parents=True)
                 metadata = {"transport": "cloud", "message_id": job.stem,
                     "account_scope": "a" * 64, "state": "cloud_retained", "cloud_state": "queued",
                     "cloud_status_checked_at": NOW - 5}
@@ -1810,17 +1814,56 @@ class CloudRuntimeTests(unittest.TestCase):
                 self.runtime.recover_outbox()
                 key = success_key("a" * 64, job.stem)
                 self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
-        # A separate process uses the same persisted request after restart.
-        restarted = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW,
-            monotonic=lambda: self.mono[0], boot_id="test-boot")
-        with restarted.owner():
-            request = restarted.claim_next("a" * 64)
-            self.assertEqual(request["kind"], "success")
-            restarted.finish(request, "played")
-        self.runtime.recover_outbox()
-        self.assertEqual(restarted.outcome(key), "played")
-        with restarted.owner():
-            self.assertIsNone(restarted.claim_next("a" * 64))
+                # A separate process uses the same persisted request after restart.
+                restarted = AudioRequests(self.runtime.audio_requests.directory, clock=lambda: NOW,
+                    monotonic=lambda: self.mono[0], boot_id="test-boot")
+                with restarted.owner():
+                    request = restarted.claim_next("a" * 64)
+                    self.assertEqual(request["kind"], "success")
+                    restarted.finish(request, "played")
+                self.runtime.recover_outbox()
+                self.assertEqual(restarted.outcome(key), "played")
+                with restarted.owner():
+                    self.assertIsNone(restarted.claim_next("a" * 64))
+
+    def test_upload_acceptance_cues_once_and_unsuccessful_states_stay_silent(self):
+        store, job = self.staged_upload()
+        original = json.loads((job.path / "job.json").read_text())
+        accepted = {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
+        for state in (*sorted(accepted), "failed", "rejected", "delivery_uncertain", "canceled", "expired"):
+            with self.subTest(state=state):
+                notices = AudioRequests(self.root / f"upload-{state}", clock=lambda: NOW,
+                    monotonic=lambda: self.mono[0], boot_id="test-boot")
+                atomic_json(job.path / "job.json", {**original, "state": "pending", "attempts": 0})
+                result = {"message_id": MID, "state": state, "server_time": NOW,
+                          "expires_at": NOW + 3600, "deleted": False}
+                self.client.send_voice = mock.Mock(return_value=result)
+                self.client.voice_status = mock.Mock(return_value=result)
+                with mock.patch.object(button_send.cloud_runtime, "CloudRuntime", return_value=self.runtime), \
+                     mock.patch.object(button_send, "outbox_store", store), \
+                     mock.patch.object(button_send, "cloud_audio_requests", notices), \
+                     mock.patch.object(self.runtime, "audio_requests", notices), \
+                     mock.patch.object(button_send.CloudDeviceClient, "from_environment", return_value=self.client), \
+                     mock.patch.object(button_send, "log_event"):
+                    self.assertTrue(button_send._send_cloud_upload(store.load(job.path)))
+                    key = success_key("a" * 64, job.message_id)
+                    with notices.owner():
+                        request = notices.claim_next("a" * 64)
+                        if state in accepted:
+                            self.assertIsNotNone(request)
+                            self.assertEqual(request["kind"], "success")
+                            notices.finish(request, "played")
+                        else:
+                            self.assertIsNone(request)
+                    self.runtime.recover_outbox()
+                    if state in accepted:
+                        self.client.voice_status.return_value = {**result, "state": "delivered"}
+                    self.runtime.recover_outbox()
+                    self.assertEqual(notices.outcome(key), "played" if state in accepted else None)
+                    with notices.owner():
+                        self.assertIsNone(notices.claim_next("a" * 64))
+                self.client.send_voice.assert_called_once()
+                self.assertEqual(self.client.voice_status.call_count, 2)
 
     def test_clock_step_during_enqueue_cannot_change_relative_sound_window(self):
         for step in (-20, 20):
@@ -1915,12 +1958,20 @@ class CloudRuntimeTests(unittest.TestCase):
                 "cloud_state": "queued", "cloud_status_checked_at": NOW - 5}
         status = {"message_id": MID, "state": "accepted", "expires_at": NOW + 60,
                   "server_time": NOW, "deleted": False}
-        for state in ("queued", "waiting_for_reply", "delivery_uncertain", "failed", "expired"):
+        for state in ("delivery_uncertain", "failed", "rejected", "canceled", "expired", "held_for_review", "uncertain"):
             self.runtime.queue_send_success(base, {**status, "state": state})
-        for fields in ({"cloud_status_checked_at": NOW - 31}, {"account_scope": "b" * 64},
-                       {"cloud_state": "accepted"}, {"cloud_state": "failed"}):
-            self.runtime.queue_send_success({**base, **fields}, status)
-        self.runtime.queue_send_success(base, {**status, "deleted": True})
+        for state in ("queued", "waiting_for_reply", "accepted", "delivered", "read"):
+            with self.subTest(state=state):
+                accepted = {**status, "state": state}
+                for fields in ({"cloud_status_checked_at": NOW - 31},
+                               {"cloud_status_checked_at": NOW + 1}, {"account_scope": "b" * 64},
+                               {"cloud_state": "accepted"}, {"cloud_state": "failed"}):
+                    self.runtime.queue_send_success({**base, **fields}, accepted)
+                self.runtime.queue_send_success(base, {**accepted, "deleted": True})
+                self.runtime.queue_send_success(base, {**accepted, "expires_at": NOW})
+                self.runtime.state["deleted"].append(MID)
+                self.runtime.queue_send_success(base, accepted)
+                self.runtime.state["deleted"].remove(MID)
         self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
 
     def test_uncertain_outbox_recovers_expiry_by_read_only_key_without_resend(self):
