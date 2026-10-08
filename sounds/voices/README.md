@@ -19,3 +19,7 @@ at most -1.5 dBTP. Installation validates the complete filename set, PCM data an
 checksums for every pack. Runtime falls back to Jessica per missing file, logging
 each missing line once. Capabilities list only complete, validated packs, with
 Jessica always included. No audio is synthesized on the box.
+
+## tata (Français · Tata)
+
+Native French woman voice; all 17 lines in French (language fr). ElevenLabs voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16. "carte famille" is the French for family card.

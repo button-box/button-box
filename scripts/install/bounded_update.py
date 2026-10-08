@@ -157,7 +157,7 @@ SOUND_SOURCES = (
 )
 SOUND_SOURCES += ("sounds/voices/README.md",) + tuple(
     f"sounds/voices/{pack}/{name}"
-    for pack in ("pirate", "alien", "dj", "robot", "french", "charlie")
+    for pack in ("pirate", "alien", "dj", "robot", "french", "charlie", "tata")
     for name in ("manifest.json",) + tuple(
         Path(source).name for source in SOUND_SOURCES
         if source.startswith("sounds/voice/") and source.endswith(".wav")

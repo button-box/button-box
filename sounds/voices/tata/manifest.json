@@ -1,0 +1,116 @@
+{
+ "voice": "Button Box Tata (French, native)",
+ "voice_key": "tata",
+ "elevenlabs_voice_id": "yN0lwsGSD3mAgqilMvDS",
+ "model": "eleven_v3",
+ "seed": 7,
+ "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11",
+ "language": "fr",
+ "format": "48 kHz, 16-bit, mono PCM WAV, -16 LUFS, true peak <= -1.5 dBTP",
+ "name_lines": "Cloud may render name lines with this voice id, model, and seed",
+ "lines": [
+  {
+   "file": "voice-all-set.wav",
+   "text": "Coucou ! Je suis Button Box ! Je vais t'apporter les messages de tous ceux qui t'aiment !",
+   "seconds": 4.24,
+   "sha256": "411db3b9407bcf58bda9f87ea64603802d9ad1444cef2def956f0b68035f82c1"
+  },
+  {
+   "file": "voice-online.wav",
+   "text": "Me voilà !",
+   "seconds": 1.36,
+   "sha256": "c1598c3531b5d4c3c446ba424ba0efee4cc52da75da17ddbdc65e6a280660b50"
+  },
+  {
+   "file": "voice-msg-start.wav",
+   "text": "Oh ! Un message pour toi !",
+   "seconds": 2.24,
+   "sha256": "f2226e486c285e77c1364463ab799e08c9dcb5fe3e238e86d76c57c8ad716a66"
+  },
+  {
+   "file": "voice-count-reply.wav",
+   "text": "À toi ! Trois... deux... un...",
+   "seconds": 4.08,
+   "sha256": "3c6e87e5c3b9b2040af583503a6313e0b14395a693c23a5b417dc78590d6eeb5"
+  },
+  {
+   "file": "voice-count-new.wav",
+   "text": "C'est parti ! Trois... deux... un...",
+   "seconds": 3.28,
+   "sha256": "76f01c97de50ceb9cc69bc017c8aecd1a5a964343ab21c22508d391ac5b6683d"
+  },
+  {
+   "file": "voice-review.wav",
+   "text": "Écoute !",
+   "seconds": 0.64,
+   "sha256": "bf4e875b7091090eca8c1a3d18fcfe9adf47f39bf11120f5e6551b5f4a2e821c"
+  },
+  {
+   "file": "voice-ask-send-1.wav",
+   "text": "Super ! Appuie pour envoyer.",
+   "seconds": 2.8,
+   "sha256": "1259bb3294307ef56b3950544ac2bbd4055e8b045ddc82881d7c328ab7b1921e"
+  },
+  {
+   "file": "voice-ask-send-2.wav",
+   "text": "Bravo ! Appuie pour envoyer.",
+   "seconds": 2.24,
+   "sha256": "f71ac61a08294c3fe9ab8253e1dc3fde79c57141a9f2b3789cf9134a78166a87"
+  },
+  {
+   "file": "voice-ask-send-3.wav",
+   "text": "Trop bien ! Appuie pour envoyer.",
+   "seconds": 2.24,
+   "sha256": "2c6996135fdda32e49f5ac2e8af257989d575b19d65d61247dbac820e7d2475d"
+  },
+  {
+   "file": "voice-last-chance.wav",
+   "text": "Tu veux l'envoyer ? Appuie sur le bouton !",
+   "seconds": 2.32,
+   "sha256": "5ee46b00e3fc80679e802e9e141b8aae4406399dead68945c22197e356552595"
+  },
+  {
+   "file": "voice-not-sent.wav",
+   "text": "D'accord, je ne l'envoie pas.",
+   "seconds": 2.16,
+   "sha256": "9342fbc9497cd63a64dcbaf44ed9bc93e0f3cabbc15794a80b79ea2af9866c37"
+  },
+  {
+   "file": "voice-empty.wav",
+   "text": "Hmm, je n'ai rien entendu. On réessaie ?",
+   "seconds": 3.68,
+   "sha256": "33c32295f472c43768c33aaa812ce295dd55f0c2dd46978e9df3a88772c1abb9"
+  },
+  {
+   "file": "voice-listened.wav",
+   "text": "Ils ont écouté ton message !",
+   "seconds": 1.68,
+   "sha256": "28980ba50ebb36dbac4a6e110dc937cdf67ea85659a3185379855b3c3b132164"
+  },
+  {
+   "file": "voice-card-needed.wav",
+   "text": "C'est pour qui ? Choisis une carte famille !",
+   "seconds": 2.32,
+   "sha256": "a5404739e3bf1024af26579e62e5aa81da9960a89aa49c3c42d5f66eac63439c"
+  },
+  {
+   "file": "voice-card-unknown.wav",
+   "text": "Oh, une nouvelle carte ! Demande à un adulte de l'ajouter.",
+   "seconds": 3.84,
+   "sha256": "c1df5eeeb75344fedfe81b3a79c1eeed527b0d0e2fff29c59c5dd095eecfd3ff"
+  },
+  {
+   "file": "voice-stuck.wav",
+   "text": "Ça prend un peu de temps. Je continue d'essayer !",
+   "seconds": 3.28,
+   "sha256": "a194a4c129d2daf777d740e9055121c909fd39facfce281ab5d839b0d6d5c9e7"
+  },
+  {
+   "file": "voice-fail.wav",
+   "text": "J'ai besoin d'un adulte pour me configurer !",
+   "seconds": 2.48,
+   "sha256": "09da89dc32c6ca92906f8a5c9361c3afcece06470fc831eed100ef776d1f9ad1"
+  }
+ ],
+ "source_key": "tata_fr"
+}

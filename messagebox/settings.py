@@ -31,7 +31,7 @@ RINGTONES = {
 }
 LEGACY_RINGTONES = frozenset({"gentle_music_box", "playful_chiptune", "ding_dong", "cuckoo_clock"})
 DEFAULT_RINGTONE = "hello_piano"
-VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie")
+VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie", "tata")
 
 
 def normalize_voice_pack(value):

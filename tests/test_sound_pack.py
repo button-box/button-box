@@ -85,7 +85,7 @@ class SoundPackTests(unittest.TestCase):
             self.assertEqual(capabilities()["voice_packs"], list(VOICE_PACKS))
             (target / "voices/dj/voice-count-new.wav").unlink()
             (target / "voices/alien/voice-online.wav").write_bytes(b"damaged")
-            self.assertEqual(capabilities()["voice_packs"], ["jessica", "pirate", "robot", "french", "charlie"])
+            self.assertEqual(capabilities()["voice_packs"], ["jessica", "pirate", "robot", "french", "charlie", "tata"])
             shutil.rmtree(target / "voices")
             self.assertEqual(capabilities()["voice_packs"], ["jessica"])
 
