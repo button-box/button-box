@@ -35,6 +35,16 @@ Do not put temporary tooling or one-off scripts in production paths or the repos
 - Do not expose credentials, card identifiers, message identifiers, phone numbers, or private command output in logs or public APIs.
 - Respect the fixed Raspberry Pi paths, service users, and runtime/onboarding separation unless the task explicitly changes that architecture.
 
+## Two Runtime Modes: wacli And Cloud
+
+The same code runs in two modes. **wacli** boxes are self-hosted: they send and receive through a linked WhatsApp account and never talk to Button Box Cloud. This is the open-source version. **Cloud** boxes use Button Box Cloud. A Cloud feature must never change wacli behavior.
+
+- Put Cloud-only behavior in the Cloud modules (`messagebox/cloud_runtime.py`, `messagebox/cloud_device.py`, and other `cloud_*` files) or behind the Cloud mode check. Do not add Cloud concepts to wacli code paths.
+- Shared modules run in both modes: `button_send.py`, `contacts.py`, `listened_receipts.py`, `settings.py`, `nfc.py`, the onboarding app, sounds, and setup scripts. A change to a shared module must keep wacli behavior the same, unless the task explicitly changes wacli.
+- For every change to a shared module, add or update a test that runs the wacli path and proves its behavior is unchanged: sending to a person, receiving and playing, quiet hours, family card taps, and listened notices, as relevant.
+- In the PR description, add a **wacli impact** section: the shared files you changed, what changes for wacli (or "none"), and the tests that prove it.
+- Do not merge a release into `main` until it passes the wacli check on a physical wacli box: send a voice note, play it, reply from the box, tap a family card, quiet hours, and listened notices.
+
 ## Testing
 
 - Add focused tests that protect changed behavior and realistic failure boundaries, including restart or idempotency when relevant.
