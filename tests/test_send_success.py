@@ -60,12 +60,16 @@ class SendSuccessTests(unittest.TestCase):
                 store.set_state.return_value = job
                 store.complete.side_effect = completion_error
                 results = [types.SimpleNamespace(returncode=0), types.SimpleNamespace(returncode=code, stdout="", stderr="")]
-                with mock.patch.object(button_send, "outbox_store", store), mock.patch.object(button_send.subprocess, "run", side_effect=results) as run:
+                with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"}), \
+                     mock.patch.object(button_send, "_send_cloud_upload") as cloud_send, \
+                     mock.patch.object(button_send, "outbox_store", store), \
+                     mock.patch.object(button_send.subprocess, "run", side_effect=results) as run:
                     if completion_error:
                         with self.assertRaises(OSError):
                             button_send.send_guided_job(job)
                     else:
                         button_send.send_guided_job(job)
+                cloud_send.assert_not_called()
                 command = run.call_args.args[0]
                 self.assertEqual(command[command.index("--lock-wait") + 1], "0s")
                 self.assertEqual(self.notices.empty(), code != 0 or completion_error is not None)
@@ -156,6 +160,9 @@ class SendSuccessTests(unittest.TestCase):
             for flag in ("_recording", "_guided_active"):
                 with mock.patch.object(button_send, flag, True):
                     self.assertFalse(button_send.maybe_play_cloud_sound())
+            with mock.patch.object(button_send.button, "is_pressed", True):
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+            play.assert_not_called()
             self.assertEqual(store.outcome(key), "pending")
             self.assertTrue(button_send.maybe_play_cloud_sound())
             # A new process and repeated enqueue cannot replay the cue.

@@ -949,7 +949,7 @@ def _send_cloud_upload(job):
             return True
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     observed = metadata.get("cloud_status_checked_at", metadata.get("cloud_send_started_at"))
-    if (result["state"] in {"accepted", "delivered", "read"}
+    if (result["state"] in {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
             and result.get("deleted") is not True
             and result["server_time"] < result["expires_at"]
             and type(observed) in (int, float)

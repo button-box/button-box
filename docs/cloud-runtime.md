@@ -226,12 +226,16 @@ failed, interrupted or crash-uncertain previews are never replayed. Its start wi
 is at most 30 seconds and playback retains the selected speaker and WAV-duration
 plus five-second timeout.
 
-Accepted, delivered or read cloud sends can produce one success cue. Queued,
-waiting, review-held, uncertain and failed statuses do not. The status API has no
-acceptance timestamp, so a recovered acceptance must follow a nonaccepted
-observation no more than 30 seconds old. Acceptance discovered after a longer gap
-stays silent. Each cue expires 30 seconds after its first verified acceptance
-observation; waiting for a busy button owner never extends that deadline.
+Cloud sends in `queued`, `waiting_for_reply`, `accepted`, `delivered` or `read`
+can produce one success cue: the Cloud has accepted the message for sending,
+even if it is waiting for the recipient's chat window to open. Review-held,
+uncertain, `failed`, `rejected`, `delivery_uncertain`, `canceled` and `expired`
+statuses stay silent. The status API has no acceptance timestamp, so recovered
+acceptance requires a send or status observation no more than 30 seconds old.
+Acceptance discovered after a longer gap stays silent. Each cue expires 30
+seconds after its first verified acceptance observation; later polls and waiting
+for a busy button owner never extend that deadline. Deleted or expired messages
+and messages outside the current account scope cannot produce a cue.
 Standalone wacli send confirmation behavior is unchanged.
 
 Pending NFC operations retain their original request IDs across restart. The

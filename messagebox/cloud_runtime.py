@@ -572,7 +572,7 @@ class CloudRuntime:
 
     def queue_send_success(self, metadata, status):
         """Only recent, scoped acceptance may become a child-facing cue."""
-        if (status.get("state") not in {"accepted", "delivered", "read"}
+        if (status.get("state") not in {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
                 or status.get("deleted") is True
                 or status.get("message_id") in self.state["deleted"]
                 or status["server_time"] >= status["expires_at"]
@@ -580,8 +580,8 @@ class CloudRuntime:
                 or metadata.get("cloud_state") not in {None, "queued", "waiting_for_reply", "held_for_review", "uncertain"}):
             return
         observed = metadata.get("cloud_status_checked_at", metadata.get("cloud_send_started_at"))
-        # The API has no acceptance timestamp. A recent nonaccepted observation
-        # bounds the transition; after a long outage we keep old sends silent.
+        # The API has no acceptance timestamp. A recent send or status observation
+        # bounds freshness; after a long outage we keep old sends silent.
         if not _valid_time(observed) or not 0 <= status["server_time"] - observed <= 30:
             return
         try:
