@@ -291,7 +291,7 @@ sudo rm -f "$ONBOARDING_DATA_DIR/session.key"
 
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/config/requirements-nfc.txt" "$APP_DIR/config/requirements-nfc.txt"
-for directory in cues voice voices voices/pirate voices/alien voices/dj voices/robot voices/french voices/charlie; do
+for directory in cues voice voices voices/pirate voices/alien voices/dj voices/robot voices/french voices/charlie voices/tata; do
   sudo install -d -o root -g root -m 0755 "$APP_DIR/sounds/$directory"
   for source in "$REPO_DIR/sounds/$directory"/*; do
     if [ -f "$source" ]; then

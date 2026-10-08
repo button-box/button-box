@@ -30,7 +30,7 @@ def installed_paths(root):
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
     for pack in ("cues", "voice", "voices", "voices/pirate", "voices/alien",
-                 "voices/dj", "voices/robot", "voices/french", "voices/charlie"):
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata"):
         for source in sorted((root / "sounds" / pack).iterdir()):
             if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
                 relative = source.relative_to(root).as_posix()
