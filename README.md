@@ -581,8 +581,33 @@ Community contributions are welcome, especially:
 Before opening a pull request:
 
 ```sh
-make check
+MSGBOX_TEST_TRANSPORT=wacli make check
+MSGBOX_TEST_TRANSPORT=cloud make check
 ```
+
+CI runs the full check in both jobs. `MSGBOX_TEST_TRANSPORT` is a test-only
+selector: the runtime-mode contract starts a fresh interpreter with the matching
+`MSGBOX_TRANSPORT`, checks import-time contact paths, poller dispatch, outbox
+binding, presence, reactions, and inbound authorization. Existing transport-specific
+fixtures retain their own mode; the self-hosted contracts always select wacli in
+both jobs. Do not set the suite's ambient `MSGBOX_TRANSPORT=cloud`: legacy fixtures
+that assume wacli would then exercise the wrong transport. No test needs hardware
+or a live Cloud or WhatsApp account.
+
+On the Pi, services load `MSGBOX_TRANSPORT` from `/etc/messagebox/env`. An absent
+setting defaults to `wacli`; `cloud` selects the Cloud runtime and its separate
+contacts. `messageboxctl enter-cloud-claim` requires an already configured Cloud
+box and reopens claim setup; it does not switch transports. See
+[Cloud runtime](docs/cloud-runtime.md) and [configuration](config/env.example).
+
+PRs changing shared runtime modules, onboarding, sounds, or setup/install helpers
+must include a `## wacli impact` section stating the shared files, behavior changes
+(or "none"), and supporting tests. The metadata-only impact workflow checks the
+current PR body and applies `wacli-impact`, including for fork PRs. It uses the
+default token with workflow-scoped PR/issue write permissions and never checks out PR
+code. Repository or organization restrictions on that token still need verification
+on GitHub. The `pull_request_target` workflow becomes active once present on the
+base branch; editing the PR body reruns it.
 
 State clearly which checks were automated and which Pi, phone, network, audio,
 GPIO, NFC, Wi-Fi, or WhatsApp behaviors were physically tested.
