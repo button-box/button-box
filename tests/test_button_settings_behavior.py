@@ -5,7 +5,8 @@ import unittest
 import wave
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timedelta
+from unittest.mock import Mock
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -15,7 +16,7 @@ gpiozero.Button = object
 gpiozero.LED = object
 with patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
-from messagebox.settings import RINGTONES, defaults  # noqa: E402
+from messagebox.settings import RINGTONES, defaults, in_quiet_hours  # noqa: E402
 
 
 class FakeLed:
@@ -27,6 +28,148 @@ class FakeLed:
 
     def off(self):
         self.state = "off"
+
+
+class MorningRingTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.marker = Path(temporary.name) / "morning-ring.json"
+        self.settings = defaults({"TZ": "America/New_York"})
+        self.now = datetime(2026, 10, 9, 7, 0, tzinfo=ZoneInfo("America/New_York"))
+        self.waiting = ["waiting.wav"]
+        self.button = types.SimpleNamespace(is_pressed=False)
+        self.ring = Mock(return_value=True)
+        self.volume = Mock(return_value=True)
+        self.tick = 100
+        for name, value in (
+            ("MORNING_RING_FILE", self.marker), ("_morning_ring_window", None),
+            ("_recording", False), ("_guided_active", False),
+            ("button", self.button), ("ring_alert", self.ring),
+            ("apply_master_volume", self.volume), ("log_event", Mock()),
+            ("caregiver_settings", lambda: self.settings),
+            ("quiet_hours", lambda settings, now=None: in_quiet_hours(settings, now or self.now)),
+            ("queued", lambda: self.waiting), ("_known", None),
+            ("_seen_ever", set()), ("_ring_last", 0),
+        ):
+            patched = patch.object(button_send, name, value, create=True)
+            patched.start()
+            self.addCleanup(patched.stop)
+        clock = patch.object(button_send, "datetime", wraps=datetime)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.clock.now.side_effect = lambda zone: self.now.astimezone(zone)
+
+    def poll(self, minute=0):
+        self.now = self.now.replace(hour=7, minute=minute)
+        self.tick += 60
+        with patch.object(button_send.time, "monotonic", return_value=self.tick):
+            button_send.maybe_ring()
+
+    def test_both_transports_signal_once_per_local_window_and_across_restart(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": mode}):
+                self.marker.unlink(missing_ok=True)
+                button_send._morning_ring_window = None
+                self.ring.reset_mock()
+                self.poll()
+                self.poll(1)
+                # New process state with the same durable marker.
+                button_send._morning_ring_window = None
+                button_send._known = None
+                self.poll(2)
+                self.ring.assert_called_once_with(source="quiet_hours_end", settings=self.settings)
+                self.now += timedelta(days=1)
+                self.poll()
+                self.assertEqual(self.ring.call_count, 2)
+
+    def test_empty_queue_consumes_window_without_a_late_morning_ring(self):
+        self.waiting = []
+        self.poll()
+        self.assertTrue(self.marker.is_file())
+        self.ring.assert_not_called()
+        self.waiting = ["new.wav"]
+        self.poll(1)
+        self.ring.assert_called_once_with(settings=self.settings)
+
+    def test_arrival_variants_use_normal_alert_and_silent_consumes_window(self):
+        for signal in ("ring_and_lamp", "ring_only", "lamp_only", "silent"):
+            with self.subTest(signal=signal):
+                self.marker.unlink(missing_ok=True)
+                button_send._morning_ring_window = None
+                self.ring.reset_mock()
+                self.volume.reset_mock()
+                self.settings["arrival_signal"] = signal
+                self.poll()
+                self.assertTrue(self.marker.is_file())
+                if signal == "silent":
+                    self.ring.assert_not_called()
+                    self.volume.assert_not_called()
+                else:
+                    self.ring.assert_called_once_with(source="quiet_hours_end", settings=self.settings)
+                    self.volume.assert_called_once_with(self.settings)
+
+    def test_busy_defers_until_idle_and_expires_after_thirty_minutes(self):
+        for busy in ("_recording", "_guided_active", "button"):
+            for idle_minute in (10, 30):
+                with self.subTest(busy=busy, idle_minute=idle_minute):
+                    self.marker.unlink(missing_ok=True)
+                    button_send._morning_ring_window = None
+                    self.ring.reset_mock()
+                    if busy == "button":
+                        self.button.is_pressed = True
+                    else:
+                        setattr(button_send, busy, True)
+                    self.poll()
+                    self.ring.assert_not_called()
+                    self.assertFalse(self.marker.exists())
+                    if busy == "button":
+                        self.button.is_pressed = False
+                    else:
+                        setattr(button_send, busy, False)
+                    self.poll(idle_minute)
+                    self.assertEqual(self.ring.call_count, int(idle_minute < 30))
+
+    def test_timezone_quiet_boundary_and_daytime_window(self):
+        self.now = datetime(2026, 10, 9, 10, 59, tzinfo=ZoneInfo("UTC"))
+        button_send.maybe_morning_ring(self.settings, self.waiting)
+        self.ring.assert_not_called()
+        self.now += timedelta(minutes=1)  # 07:00 New York, not the host timezone.
+        button_send.maybe_morning_ring(self.settings, self.waiting)
+        self.ring.assert_called_once()
+        self.settings["quiet_hours"] = {"enabled": True, "start": "12:00", "end": "14:00"}
+        self.now = datetime(2026, 10, 9, 14, 0, tzinfo=ZoneInfo("America/New_York"))
+        button_send.maybe_morning_ring(self.settings, self.waiting)
+        self.assertEqual(self.ring.call_count, 2)
+
+    def test_disabled_all_day_and_expired_windows_stay_silent(self):
+        for quiet, minute in (({"enabled": False, "start": "22:00", "end": "07:00"}, 0),
+                              ({"enabled": True, "start": "07:00", "end": "07:00"}, 0),
+                              ({"enabled": True, "start": "22:00", "end": "07:00"}, 31)):
+            self.settings["quiet_hours"] = quiet
+            self.poll(minute)
+        self.ring.assert_not_called()
+        self.assertFalse(self.marker.exists())
+
+    def test_marker_is_durable_before_audio_and_storage_failure_suppresses_it(self):
+        import json
+        self.ring.side_effect = lambda **unused: self.assertIn("window", json.loads(self.marker.read_text()))
+        self.poll()
+        self.ring.assert_called_once()
+        self.now += timedelta(days=1)
+        self.ring.reset_mock()
+        with patch.object(button_send, "atomic_json", side_effect=OSError("synthetic storage failure")):
+            self.poll()
+        self.ring.assert_not_called()
+
+    def test_failed_volume_application_defers_without_consuming_window(self):
+        self.volume.return_value = False
+        self.poll()
+        self.ring.assert_not_called()
+        self.assertFalse(self.marker.exists())
+        self.volume.return_value = True
+        self.poll(1)
+        self.ring.assert_called_once()
 
 
 class ButtonSettingsBehaviorTests(unittest.TestCase):

@@ -9,6 +9,24 @@ The poller checks for the button process’s applied marker promptly while a set
 For each released build, run `python3 scripts/dev/settings_contract.py > <build>.json` and hand the result to the Cloud repository's `tests/fixtures/box-builds/`. To describe an older checkout, run the current exporter with `--repo <path>`. The exporter inspects source without importing runtime modules. Unsupported source shapes fail clearly on stderr instead of emitting a guessed contract. Capabilities describe the checkout's bundled sound assets with NFC unavailable; installed hardware and assets can change these runtime-dependent values. Generate release fixtures from clean committed checkouts so the build id identifies the actual source.
 
 
+## Quiet hours
+
+Cloud and wacli boxes suppress arrival sound and lamp during quiet hours;
+deliberate playback still works. At the local end time in the settings timezone,
+waiting messages trigger one normal arrival signal, using `arrival_signal`, the
+chosen ringtone, master volume and lamp rhythm. An empty queue stays silent.
+Recording, guided flows, playback and a held button defer the signal until idle,
+for at most 30 minutes after the end. A press stops the signal as usual.
+Disabled quiet hours and equal start/end times (all-day quiet) have no end signal.
+
+The private `/var/lib/messagebox/state/morning-ring.json` marker is written
+atomically before signaling, keyed by timezone, quiet-hours start and local end
+date/time. Restarting within the grace period cannot repeat a consumed signal.
+An empty queue or silent arrival setting also consumes that window. A crash
+between the durable marker and playback can lose that signal; it is never retried
+after ambiguous playback. Marker failures suppress the morning signal. Settings
+keys and Cloud command payloads are unchanged.
+
 ## Voice packs
 
 `voice_pack` defaults to `jessica`; absent or unknown values normalize to Jessica

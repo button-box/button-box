@@ -745,6 +745,17 @@ def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
         unit: "active" if unit in also_active else states[unit]["active"]
         for unit in UNITS
     }
+    # ComItUp owns this optional web UI and may stop it on Wi-Fi connection,
+    # including leaving a failed state after canceling its startup. A manually
+    # running portal without ComItUp still has to be restored truthfully.
+    optional_web = (states["comitup-web.service"]["active"] != "active"
+                    or states["comitup.service"]["active"] == "active")
+
+    def matches(unit, observed):
+        if unit == "comitup-web.service" and optional_web:
+            return observed in {"active", "inactive", "failed"}
+        return observed == expected[unit]
+
     deadline = time.monotonic() + UNIT_SETTLE_TIMEOUT
     stable_since = None
     differences = []
@@ -755,11 +766,11 @@ def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
         current = _unit_states(run, allow_transitional=True, deadline=deadline)
         differences = [
             f"{unit} expected {expected[unit]}, observed {current[unit]['active']}"
-            for unit in UNITS if current[unit]["active"] != expected[unit]
+            for unit in UNITS if not matches(unit, current[unit]["active"])
         ]
         newly_failed = [
             unit for unit in UNITS
-            if current[unit]["active"] == "failed" and expected[unit] != "failed"
+            if current[unit]["active"] == "failed" and not matches(unit, "failed")
         ]
         if newly_failed:
             raise UpdateError("restored managed unit failed: " + ", ".join(newly_failed))

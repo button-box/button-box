@@ -772,10 +772,10 @@ class BoundedUpdateTests(unittest.TestCase):
                 self.assertTrue(portals.isdisjoint(fixture.systemctl.started))
                 self.assertIn(portal, fixture.systemctl.ever_activated)
 
-    def test_comitup_owned_portals_still_require_exact_healthy_states(self):
+    def test_required_setup_services_still_require_exact_healthy_states(self):
         cases = [("messagebox-onboarding-home.service", "inactive"),
-                 ("comitup-web.service", "active"),
-                 ("comitup-web.service", "failed")]
+                 ("messagebox-onboarding-home.service", "failed"),
+                 ("comitup.service", "failed")]
         for unit, observed in cases:
             with self.subTest(unit=unit, observed=observed), tempfile.TemporaryDirectory() as directory:
                 fixture = Fixture(directory, "setup")
@@ -785,6 +785,41 @@ class BoundedUpdateTests(unittest.TestCase):
                     bounded_update._verify_active(fixture.original_units, fixture.systemctl)
                 self.assertIn(unit, str(caught.exception))
                 fixture.assert_private_unchanged(self)
+
+    def test_setup_wifi_apply_and_rollback_accept_state_dependent_web_ui(self):
+        for before in ("inactive", "active"):
+            for after in ("inactive", "failed"):
+                with self.subTest(before=before, after=after), tempfile.TemporaryDirectory() as directory:
+                    fixture = Fixture(directory, "setup")
+                    web = "comitup-web.service"
+                    fixture.systemctl.states[web]["active"] = before
+                    fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+
+                    def connected_comitup(command, **options):
+                        result = fixture.systemctl(command, **options)
+                        if command == ["systemctl", "--job-mode=ignore-dependencies", "start", "comitup.service"]:
+                            # Connected ComItUp cancels/stops the hotspot UI.
+                            fixture.systemctl.states[web]["active"] = after
+                        return result
+
+                    bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                         root=fixture.root, run=connected_comitup)
+                    recorded = json.loads((fixture.backup / "state.json").read_text())
+                    self.assertEqual(recorded["units"][web]["active"], before)
+                    self.assertEqual(json.loads(fixture.metadata.read_text())["commit"], "a" * 40)
+                    bounded_update.rollback(fixture.backup, root=fixture.root, run=connected_comitup)
+                    self.assertEqual(fixture.systemctl.states["comitup.service"]["active"], "active")
+                    self.assertEqual(fixture.systemctl.states[web]["active"], after)
+                    self.assertNotIn(web, fixture.systemctl.started)
+                    fixture.assert_private_unchanged(self)
+
+    def test_manually_active_web_ui_without_comitup_must_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.original_units["comitup-web.service"]["active"] = "active"
+            fixture.systemctl.states["comitup-web.service"]["active"] = "failed"
+            with self.assertRaisesRegex(bounded_update.UpdateError, "restored managed unit failed: comitup-web.service"):
+                bounded_update._verify_active(fixture.original_units, fixture.systemctl)
 
     def test_portal_without_active_comitup_retains_recorded_manual_restore(self):
         with tempfile.TemporaryDirectory() as directory:
