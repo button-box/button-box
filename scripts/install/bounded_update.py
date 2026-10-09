@@ -122,6 +122,7 @@ SOUND_SOURCES = (
     "sounds/cues/cue-card.wav",
     "sounds/cues/cue-card_saved.wav",
     "sounds/cues/cue-connected.wav",
+    "sounds/cues/cue-deleted.wav",
     "sounds/cues/cue-listened.wav",
     "sounds/cues/cue-msg_end.wav",
     "sounds/cues/cue-msg_start.wav",

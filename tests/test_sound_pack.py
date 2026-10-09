@@ -116,45 +116,33 @@ class SoundPackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "voice"):
                 runtime.validate_sounds()
 
-    def test_dj_countdown_and_go_tick_finish_before_microphone_and_timers_start(self):
-        for flow in ("reply", "standalone"):
-            now = [0.0]
-            order = []
-            recorder = mock.Mock()
-            recorder.communicate.return_value = (b"", b"")
-            vad = mock.Mock(meaningful=False)
-            vad.silence_expired.return_value = True
-            vad.trim_bounds.return_value = None
-            def play(command, **kwargs):
-                self.assertEqual(command[0], "aplay")
-                path = Path(command[-1])
-                with wave.open(str(path), "rb") as source:
-                    now[0] += source.getnframes() / source.getframerate()
-                order.append(path.name)
-                return types.SimpleNamespace(returncode=0)
-            def open_mic(command, **kwargs):
-                self.assertEqual(command[0], "arecord")
-                order.append("mic")
-                return recorder
-            with mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
-                 mock.patch.object(sound_pack._settings, "snapshot", return_value={"voice_pack": "dj"}), \
-                 mock.patch.object(runtime, "PROMPT_DIR", ROOT / "sounds/voice"), \
-                 mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
-                 mock.patch.object(runtime.subprocess, "run", side_effect=play), \
-                 mock.patch.object(runtime.subprocess, "Popen", side_effect=open_mic), \
-                 mock.patch.object(runtime.time, "monotonic", side_effect=lambda: now[0]), \
-                 mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
-                 mock.patch.object(runtime.select, "select", return_value=([], [], [])):
-                io = runtime.PiGuidedIO("synthetic", "session", 60)
-                session = GuidedSession(io, OutboxStore(self.root / flow), lambda *a, **kw: None)
-                result = session.run(recipient="synthetic", flow_kind=flow,
-                    countdown_path=str(runtime.PROMPTS[flow]), send_prompt_path=str(runtime.PROMPTS["send"]),
-                    delete_warning_path=str(runtime.PROMPTS["delete_warning"]), not_sent_path=str(runtime.PROMPTS["not_sent"]))
-            self.assertEqual(result, "empty")
-            self.assertEqual(order, ["voice-count-reply.wav" if flow == "reply" else "voice-count-new.wav", "cue-rec_go.wav", "mic"])
-            with wave.open(str(ROOT / "sounds/voice" / order[0]), "rb") as jessica:
-                self.assertGreater(now[0], jessica.getnframes() / jessica.getframerate() + 0.7)
-            vad.start.assert_called_once_with(now[0])
+    def test_recording_flow_has_only_go_cue_before_microphone(self):
+        order = []
+        recorder = mock.Mock()
+        recorder.communicate.return_value = (b"", b"")
+        vad = mock.Mock()
+        vad.trim_bounds.return_value = None
+        def play(command, **kwargs):
+            order.append(Path(command[-1]).name)
+            return types.SimpleNamespace(returncode=0)
+        def capture(command, **kwargs):
+            self.assertEqual(order, ["cue-rec_go.wav"])
+            order.append("mic")
+            return recorder
+        with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
+             mock.patch.object(runtime.subprocess, "run", side_effect=play), \
+             mock.patch.object(runtime.subprocess, "Popen", side_effect=capture), \
+             mock.patch.object(runtime.time, "monotonic", side_effect=[0, 60, 60]), \
+             mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
+             mock.patch.object(runtime, "RecordingLimitCue"), \
+             mock.patch.object(runtime.select, "select", return_value=([], [], [])):
+            session = GuidedSession(runtime.PiGuidedIO("synthetic", "session", 60),
+                                    OutboxStore(self.root / "outbox"), lambda *a, **kw: None)
+            result = session.run(recipient="synthetic", flow_kind="standalone",
+                                 deleted_cue_path=str(sound_pack.cue_path("deleted")))
+        self.assertEqual(result, "deleted")
+        self.assertEqual(order, ["cue-rec_go.wav", "mic", "cue-deleted.wav"])
+        vad.start.assert_called_once_with(0)
 
     def test_online_voice_follows_connected_once_across_restart(self):
         with mock.patch.object(runtime.cloud_claim, "setup_online_cue", return_value=True), \
@@ -175,23 +163,14 @@ class SoundPackTests(unittest.TestCase):
             runtime.announce_all_set()
             play.assert_called_once_with("all_set", "all-set")
 
-    def test_prompt_takes_rotate_durably_and_review_precedes_child_audio(self):
-        names = [sound_pack.next_send_prompt(self.state).name for _ in range(5)]
-        self.assertEqual(names, [f"voice-ask-send-{n}.wav" for n in (1, 2, 3, 1, 2)])
-        order = []
-        with mock.patch.object(runtime, "play_moment", side_effect=lambda *a, **kw: order.append(kw["voice"])), \
-             mock.patch.object(runtime, "play_audio_for_approval", side_effect=lambda path, *a, **kw: order.append(path)):
-            runtime.PiGuidedIO("recipient", "session", 60).play_review_for_approval("child.wav")
-        self.assertEqual(order, ["review", "child.wav"])
-
-    def test_incoming_message_bookends_precede_countdown(self):
+    def test_incoming_message_bookends_precede_recording_without_countdown(self):
         io = FakeIO(recordings=[RecordingResult(None, 0, False)])
         with tempfile.TemporaryDirectory() as directory:
             session = GuidedSession(io, OutboxStore(directory), lambda *a, **kw: None)
-            session.run(recipient="synthetic", flow_kind="reply", countdown_path="countdown", send_prompt_path="send",
-                        delete_warning_path="warning", not_sent_path="not-sent", incoming_path="message",
-                        incoming_cue_path="start", incoming_voice_path="voice", incoming_end_path="end")
-        self.assertEqual(io.calls[:5], [("ordinary", p) for p in ("start", "voice", "message", "end", "countdown")])
+            session.run(recipient="synthetic", flow_kind="reply", deleted_cue_path="deleted",
+                        incoming_path="message", incoming_cue_path="start", incoming_end_path="end")
+        self.assertEqual(io.calls[:4], [("ordinary", "start"), ("ordinary", "message"),
+                                       ("ordinary", "end"), ("record",)])
 
     def test_quiet_hours_block_listened_still_trying_offline_but_press_answers_play(self):
         snapshot = {"boot_id": "boot", "verified_mono": 0}
@@ -287,6 +266,8 @@ class SoundPackTests(unittest.TestCase):
         vad.silence_expired.return_value = True
         vad.trim_bounds.return_value = None
         with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
+             mock.patch.object(runtime.time, "monotonic", side_effect=[0, 60, 60]), \
+             mock.patch.object(runtime, "RecordingLimitCue"), \
              mock.patch.object(runtime.subprocess, "run", side_effect=run), \
              mock.patch.object(runtime.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
@@ -356,7 +337,7 @@ class SoundPackTests(unittest.TestCase):
         vad.silence_expired.return_value = False
         vad.trim_bounds.return_value = (0, 60 * 16000)
         with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
-             mock.patch.object(runtime, "play_moment"), \
+             mock.patch.object(runtime.subprocess, "run"), \
              mock.patch.object(runtime.subprocess, "Popen", side_effect=[recorder, warning]), \
              mock.patch.object(runtime.time, "monotonic", side_effect=[0, 55, 55.55, 60, 60, 60]), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
@@ -368,33 +349,23 @@ class SoundPackTests(unittest.TestCase):
         self.assertEqual(actual, pcm)
         self.assertEqual(vad.start.call_count, 1)
 
-    def test_hold_release_saved_outbox_wav_keeps_warning_and_words(self):
-        pcm = struct.pack("<h", 5000) * (30 * 48000)
+    def test_hold_recording_saved_wav_keeps_warning_and_words(self):
+        pcm = struct.pack("<h", 5000) * (30 * 16000)
         recorder = mock.Mock()
-        recorder.poll.return_value = 0
+        recorder.poll.return_value = None
+        recorder.communicate.return_value = (pcm, None)
         warning = mock.Mock()
         warning.poll.side_effect = [None, 0]
-        def popen(command, **kwargs):
-            if command[0] == "arecord":
-                with wave.open(command[-1], "wb") as output:
-                    output.setparams((1, 2, 48000, 0, "NONE", ""))
-                    output.writeframes(pcm)
-                return recorder
-            return warning
-        context = {"contact": {"jid": "synthetic"}, "via_card": False}
+        vad = mock.Mock()
+        vad.trim_bounds.return_value = (0, 30 * 16000)
         with mock.patch.object(runtime, "button", types.SimpleNamespace(is_pressed=True)), \
-             mock.patch.object(runtime, "OUTBOX_DIR", str(self.root)), \
-             mock.patch.object(runtime, "claim_fresh_card_intent", return_value=("none", None)), \
-             mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", return_value="record"), \
-             mock.patch.object(runtime, "recording_recipient_context", return_value=context), \
-             mock.patch.object(runtime, "transport_mode", return_value="wacli"), \
-             mock.patch.object(runtime, "bind_legacy_job_recipient"), \
-             mock.patch.object(runtime.time, "monotonic", side_effect=[0, 25, 25.55, 30, 30, 30, 30]), \
-             mock.patch.object(runtime.time, "sleep"), \
-             mock.patch.object(runtime.subprocess, "Popen", side_effect=popen):
-            runtime.record_and_send_legacy({"max_recording_seconds": 30})
-        saved = next(self.root.glob("*.wav"))
-        with wave.open(str(saved), "rb") as source:
-            actual = source.readframes(source.getnframes())
-        # The recording is saved unchanged; speech during the warning is kept.
-        self.assertEqual(actual, pcm)
+             mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
+             mock.patch.object(runtime.subprocess, "run"), \
+             mock.patch.object(runtime.subprocess, "Popen", side_effect=[recorder, warning]), \
+             mock.patch.object(runtime.time, "monotonic", side_effect=[0, 25, 25.55, 30, 30, 30]), \
+             mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
+             mock.patch.object(runtime, "EnergyVAD", return_value=vad):
+            result = runtime.capture_guided_recording("synthetic", max_seconds=30, talk_mode="hold")
+        self.assertFalse(result.timed_out)
+        with wave.open(result.path, "rb") as source:
+            self.assertEqual(source.readframes(source.getnframes()), pcm)

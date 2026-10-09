@@ -1,9 +1,9 @@
 # Button Box sound design v1
 
-The sound pack has 15 motif cues and 19 Jessica lines. All output uses the saved
+The sound pack has 16 motif cues and 19 Jessica lines. All output uses the saved
 master volume. "Swoosh sound", "Family confirmation beep" and every setting ID
-retain their existing names and meanings. Hold and release has no countdown,
-review or send-approval prompts.
+retain their existing names and meanings. Both talk modes use a start cue and optional playback review, without
+countdown, review, approval or deletion voices.
 
 | Brief moment | Implementation |
 | --- | --- |
@@ -15,16 +15,16 @@ review or send-approval prompts.
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
 | Online | `play_setup_online`, `maybe_play_connectivity`: connected cue followed by first-ever online voice, durable receipt before the voice. |
 | Accepted send | `play_send_success_cue`: `cue-sent.wav`; independent sender, interruptible on press, unchanged setting and no delivery claim. |
-| Guided countdown / approval / last chance / cancellation | `PROMPTS`, `PiGuidedIO.play_ordinary`, `sound_pack.next_send_prompt`: count-reply/new, ask-send-1/2/3 in durable rotation, last-chance, not-sent. Existing 10 s approval window and button handling stay. |
+| Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
 | Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then card-unknown voice (or explicit operator override), acknowledged once per presentation. |
 | Listened / listener announcement test | `play_pending_listened`: listened cue then saved family clip or `voice-listened.wav`; dashboard receipt ingestion uses the new default. All receipt playback shares this path. |
 | Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. `voice-msg-start.wav` remains bundled for voice previews only. |
-| Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply countdown. |
-| Microphone opens after countdown | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
+| Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply. |
+| Microphone opens after start cue | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
 | Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; it stays in the recording (Dan, 7 Oct: no words are cut). |
-| Review starts | `PiGuidedIO.play_review_for_approval`: review voice then child recording. |
-| Silent guided capture | `run_guided_once.session_event("guided_recording_empty")`: oops then empty voice. No outgoing job is created. |
+| Review starts | `GuidedSession` plays the child recording, discarding presses during playback, then waits for a fresh tap. |
+| Short or silent capture in either mode | `guided_recording_empty`: delete and play the deletion cue. No outgoing job is created. |
 | Three send failures | `sender_loop` counts by current message in both modes, queues a notice; idle `maybe_play_still_trying` checks job still pending, then still_trying + stuck voice once durably per job. |
 | Recipient unavailable | `block_unavailable_recipient`: oops + fail voice when no default/family is available; card-selection asks for a card, and unknown-card routing stays fail-closed. |
 | Setup finishes | Root `onboarding.completion` queues a sound request after successful handoff; idle `announce_all_set` plays all_set + all-set voice once per box. |
@@ -38,12 +38,14 @@ and stays in the recording as two soft taps: removing it would also remove the
 child's words that overlap it (Dan, 7 October 2026). The hardware acceptance
 check confirms the go tick is absent from sent audio.
 
-A press during the card invitation stops and reaps its player before opening
-the microphone. It records immediately, skipping the usual hold classification,
-guided countdown and go tick. Hold and release still ends on release;
-tap and review ignores this starting press until release and ends on a later
-press or the existing silence/length limit. The same card mapping is revalidated
-before capture; a changed or expired selection never falls back to another person.
+A press during the card invitation stops and reaps its player before the start
+cue. It skips hold classification, while still waiting for rec_go to end before
+opening the microphone. Hold to talk ends on release; tap to talk ignores the
+starting press until release and ends on a later tap. Without that tap before
+the recording limit, tap to talk deletes the recording. Both modes reject
+recordings shorter than 1.5 seconds (measured before silence trimming) and
+recordings without detected voice. The same card mapping is revalidated before
+capture; a changed or expired selection never falls back to another person.
 
 Incoming audio in both modes uses
 `highpass=f=100,equalizer=f=2500:t=q:w=1:g=2,loudnorm=I=-16:TP=-2:LRA=11:linear=true,alimiter=limit=0.79:level=disabled`.
@@ -63,7 +65,7 @@ custom family clip still reports unavailable and stays pending.
 written. First-use receipts are written before playback to prevent replay after
 a crash, including a crash during audio playback; audio failure is reported and
 is not proof that a child heard the line. Online voice, all-set and each stuck
-message play at most once. The ask-send take counter survives restart.
+message play at most once. Legacy voice assets and receipts remain installed for release compatibility.
 
 ## Installation and acceptance
 
@@ -71,15 +73,15 @@ Setup, provision and bounded-update preflight validate format, complete PCM,
 manifest filenames, SHA-256 and exact press duration. Startup requires Jessica and cues; optional packs can fall back to Jessica;
 claim confirmation remains available after a truthful asset warning. No runtime
 synthesis or replacement system voice is used. The bounded updater includes
-all 134 WAVs, manifests, READMEs and cue catalog, including the six optional
+all bundled WAVs, manifests, READMEs and cue catalog, including the six optional
 voice choices in `sounds/voices/` (required in a complete release). It retires only the five old
 bundled prompts and old swoosh, rejecting symlinks/hardlinks, recording their
 program rollback state and restoring them on failure or explicit rollback.
 
 See [testing](testing.md#sound-design-v1) for offline and physical acceptance.
 The Cloud assistant and Cloud dashboard/Flow Atlas are maintained separately;
-no old spoken prompt quotes were found in the Pi setup screens. Their setting
-labels remain unchanged. Historical release notes describe their original
+no old spoken prompt quotes were found in the Pi setup screens. The local setup page offers Tap to talk, Hold to talk and the independent
+"Let them hear it before sending" switch. Historical release notes describe their original
 releases and are not current sound instructions.
 
 
@@ -92,15 +94,14 @@ per-file runtime fallback, and the originals remain in `sounds/voice/`.
 See [pack licensing](../sounds/voices/README.md) and
 [settings behavior](cloud-settings.md#voice-packs).
 
-Countdown playback is synchronous: both `voice-count-reply.wav` and
-`voice-count-new.wav` finish before the go tick; that tick finishes before the
-microphone opens. Recording and silence timers start after playback, so DJ's
-longer music bed does not consume recording time.
+Start-cue playback is synchronous in both modes. Recording time starts after
+the cue ends. Legacy countdown and approval voice assets remain bundled but
+are no longer used by the recording flow.
 
 On a real box, listen to Jessica, Pirate, Alien, DJ, Robot, French and Charlie on
 the speaker. For each, preview and switch the setting; confirm the sample, volume
-and dark lamp. Exercise all 19 lines, both guided countdowns and the go tick,
-checking that DJ's tail ends before microphone capture. Verify a matched Cloud
+and dark lamp. Exercise all four talk/review combinations and the go tick,
+checking that no start cue is captured and the deletion cue is clear. Verify a matched Cloud
 name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
 lines. Confirm volume-only and ringtone-only previews retain their behavior.
 Offline checks do not establish speaker quality or physical microphone timing.

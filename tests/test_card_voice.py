@@ -115,6 +115,7 @@ class CardVoiceTests(unittest.TestCase):
 
     def test_prompt_press_skips_guided_countdown_and_legacy_hold_classification(self):
         context = {"via_card": True, "uid": CARD, "contact": {"jid": JID, "card_uids": [CARD]}}
+        real_capture = runtime.capture_guided_recording
         for mode in ("wacli", "cloud"):
             with self.subTest(mode=mode), \
                  mock.patch.object(runtime, "transport_mode", return_value=mode), \
@@ -126,7 +127,7 @@ class CardVoiceTests(unittest.TestCase):
                  mock.patch.object(runtime, "queued", return_value=[]), \
                  mock.patch.object(runtime, "quiet_hours", return_value=False), \
                  mock.patch.object(runtime, "mark_queue_known"), \
-                 mock.patch.object(runtime, "play_audio_ordinary", side_effect=AssertionError("no countdown")), \
+                 mock.patch.object(runtime, "play_audio_ordinary", side_effect=lambda path: self.assertEqual(Path(path).name, "cue-deleted.wav")), \
                  mock.patch.object(runtime, "capture_guided_recording", return_value=RecordingResult(None, 0, False)) as capture, \
                  mock.patch.object(runtime, "play_moment"):
                 runtime.run_guided_once(self.settings, card_prompt_uid=CARD)
@@ -134,7 +135,10 @@ class CardVoiceTests(unittest.TestCase):
                 # Stop at the microphone boundary: neither hold classification
                 # nor a press cue may delay the same immediate legacy path.
                 self.button.is_pressed = True
-                with mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")), \
+                with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
+                     mock.patch.object(runtime.subprocess, "run"), \
+                     mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")), \
+                     mock.patch.object(runtime, "capture_guided_recording", side_effect=real_capture), \
                      mock.patch.object(runtime.subprocess, "Popen", side_effect=RuntimeError("microphone boundary")) as open_mic:
                     with self.assertRaisesRegex(RuntimeError, "microphone boundary"):
                         runtime.record_and_send_legacy(self.settings, card_prompt_uid=CARD)
@@ -172,11 +176,11 @@ class CardVoiceTests(unittest.TestCase):
              mock.patch.object(runtime, "presence"), \
              mock.patch.object(runtime, "acknowledge_guided_press"), \
              mock.patch.object(runtime, "wait_for_stable_open"), \
-             mock.patch.object(runtime, "play_moment") as audio:
+             mock.patch.object(runtime.subprocess, "run") as audio:
             result = runtime.capture_guided_recording(JID, "session", card_prompt=True)
         self.assertFalse(result.meaningful)
         self.assertEqual(ticks[0], 4)
-        audio.assert_not_called()
+        self.assertEqual(Path(audio.call_args.args[0][-1]).name, "cue-rec_go.wav")
 
     def test_guided_incoming_only_plays_start_cue_and_message_in_both_modes(self):
         from test_guided_reply import FakeIO

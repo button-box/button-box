@@ -77,6 +77,8 @@ def settings_namespace(tree):
                                                for target in node.targets):
             namespace["_TIME"] = re.compile(ast.literal_eval(node.value.args[0]))
     names = {"defaults", "validate", "_env_flag", "_env_int"}
+    # Include persisted-setting migrations, including legacy recording modes,
+    # while describing older checkouts that do not yet have those helpers.
     names.update(node.name for node in tree.body if isinstance(node, ast.FunctionDef)
                  and node.name.startswith("normalize_"))
     isolated_functions(tree, names, namespace)

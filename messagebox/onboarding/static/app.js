@@ -987,7 +987,8 @@ function renderHome(state) {
 function populateSettings(payload) {
   currentSettings = payload.settings;
   const value = currentSettings;
-  document.querySelector(`[name="recording_mode"][value="${value.recording_mode}"]`).checked = true;
+  document.querySelector(`[name="talk_mode"][value="${value.talk_mode}"]`).checked = true;
+  document.getElementById("review-before-send").checked = value.review_before_send;
   document.querySelector(`[name="after_listening"][value="${value.after_listening}"]`).checked = true;
   document.getElementById("max-recording").value = String(value.max_recording_seconds);
   document.getElementById("ringtone").value = value.ringtone_id;
@@ -1022,7 +1023,8 @@ async function loadSettings() {
 function settingsCandidate() {
   return {
     timezone: document.getElementById("timezone").value.trim(),
-    recording_mode: document.querySelector('[name="recording_mode"]:checked').value,
+    talk_mode: document.querySelector('[name="talk_mode"]:checked').value,
+    review_before_send: document.getElementById("review-before-send").checked,
     after_listening: document.querySelector('[name="after_listening"]:checked').value,
     max_recording_seconds: Number(document.getElementById("max-recording").value),
     ringtone_id: document.getElementById("ringtone").value,
@@ -1043,10 +1045,6 @@ async function saveSettings(event) {
   event.preventDefault();
   const status = document.getElementById("settings-status");
   const candidate = settingsCandidate();
-  if (candidate.recording_mode === "hold_release" && currentSettings?.recording_mode !== "hold_release") {
-    const accepted = window.confirm("Press and hold sends immediately when the button is released. There is no playback review. Save this mode?");
-    if (!accepted) return;
-  }
   status.textContent = "Saving…";
   try {
     const payload = await request("/api/settings", {

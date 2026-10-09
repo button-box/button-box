@@ -90,6 +90,12 @@
    "seconds": 0.9,
    "meaning": "Card saved. The pick-up flick, then a happy \u201cyes\u201d.",
    "sha256": "3b1a56c86399afb1dc273d9594efffe08dedf4e0436b20dc6836665477a028d8"
+  },
+  {
+   "file": "cue-deleted.wav",
+   "seconds": 0.4,
+   "meaning": "Deleted. Two soft descending wooden notes, without a voice.",
+   "sha256": "e95cf8bfd2f53507adeccdf21c6f0096aafb2a5710bb0c27732469f7773c1894"
   }
  ]
 }

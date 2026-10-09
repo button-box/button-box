@@ -391,6 +391,8 @@ def capabilities(*, nfc=False) -> dict:
         "voice_packs": installed_voice_packs(),
         "ringtones": list(RINGTONES),
         "recording_modes": ["tap_review", "hold_release"],
+        "talk_modes": ["tap", "hold"],
+        "review_before_send": True,
         "audio": True,
         "nfc": bool(nfc),
         "settings_version": 1,

@@ -41,7 +41,7 @@ class SettingsStoreTests(unittest.TestCase):
         )
         document, warning = store.load()
         self.assertFalse(warning)
-        self.assertEqual(document["recording_mode"], "hold_release")
+        self.assertEqual(document["recording_mode"], "tap_review")
         self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 120)
         self.assertEqual(document["ringtone_id"], "hello_piano")
@@ -55,7 +55,7 @@ class SettingsStoreTests(unittest.TestCase):
         fresh, warning = store.load()
         self.assertFalse(warning)
         self.assertEqual((fresh["recording_mode"], fresh["after_listening"]),
-                         ("hold_release", "play_only"))
+                         ("tap_review", "play_only"))
         saved = {**fresh, "revision": 7, "recording_mode": "tap_review",
                  "after_listening": "invite_reply"}
         self.path.write_text(json.dumps(saved), encoding="utf-8")
@@ -73,6 +73,58 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertFalse(warning)
         self.assertTrue(document["swoosh_sound_enabled"])
         self.assertEqual(document["revision"], initial["revision"])
+
+    def test_legacy_saved_modes_and_legacy_updates_keep_their_behavior(self):
+        for legacy, talk, review in (("tap_review", "tap", True), ("hold_release", "hold", False)):
+            with self.subTest(legacy=legacy):
+                saved = {key: value for key, value in defaults({}).items()
+                         if key not in {"talk_mode", "review_before_send"}}
+                saved.update(recording_mode=legacy, revision=7)
+                self.path.write_text(json.dumps(saved))
+                before = self.path.read_bytes()
+                store = SettingsStore(self.path, environ={})
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual((loaded["talk_mode"], loaded["review_before_send"]), (talk, review))
+                self.assertEqual(loaded["revision"], 7)
+                self.assertEqual(self.path.read_bytes(), before)
+                updated = store.update(self.candidate(saved), 7, desired_revision=9)
+                self.assertEqual((updated["talk_mode"], updated["review_before_send"]), (talk, review))
+                self.assertEqual(store.load(), (updated, False))
+
+    def test_all_new_combinations_round_trip_and_override_legacy_hint(self):
+        store = SettingsStore(self.path, environ={})
+        for talk in ("tap", "hold"):
+            for review in (False, True):
+                with self.subTest(talk=talk, review=review):
+                    initial, _ = store.load()
+                    candidate = self.candidate(initial, talk_mode=talk, review_before_send=review)
+                    candidate.pop("recording_mode")
+                    saved = store.update(candidate, initial["revision"])
+                    self.assertEqual((saved["talk_mode"], saved["review_before_send"]), (talk, review))
+                    self.assertEqual(saved["recording_mode"], "tap_review" if talk == "tap" else "hold_release")
+                    self.assertEqual(store.load(), (saved, False))
+                    opposite = "hold_release" if talk == "tap" else "tap_review"
+                    self.assertEqual(validate({**saved, "recording_mode": opposite}), saved)
+
+    def test_unrecoverable_saved_settings_keep_legacy_fallback_with_attention(self):
+        self.path.write_text("not json")
+        document, warning = SettingsStore(self.path, environ={}).load()
+        self.assertTrue(warning)
+        self.assertEqual((document["talk_mode"], document["review_before_send"]), ("hold", False))
+        self.assertEqual(self.path.read_text(), "not json")
+
+    def test_new_settings_reject_invalid_and_partial_known_values(self):
+        baseline = defaults({})
+        for changes in ({"talk_mode": "other"}, {"talk_mode": []},
+                        {"review_before_send": 1}, {"review_before_send": "false"},
+                        {"recording_mode": None}):
+            with self.subTest(changes=changes), self.assertRaises(SettingsError):
+                validate({**baseline, **changes})
+        for missing in ("talk_mode", "review_before_send"):
+            candidate = {key: value for key, value in baseline.items() if key != missing}
+            with self.subTest(missing=missing), self.assertRaises(SettingsError):
+                validate(candidate)
 
     def test_each_legacy_ringtone_loads_and_cloud_update_maps_without_revision_loss(self):
         for old_id in LEGACY_RINGTONES:
@@ -213,7 +265,7 @@ class SettingsStoreTests(unittest.TestCase):
 
     def test_safe_defaults_match_caregiver_contract(self):
         document = defaults({"TZ": "UTC"})
-        self.assertEqual(document["recording_mode"], "hold_release")
+        self.assertEqual(document["recording_mode"], "tap_review")
         self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 60)
         self.assertEqual(document["ringtone_id"], "hello_piano")

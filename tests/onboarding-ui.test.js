@@ -424,11 +424,15 @@ test("Cloud local Settings navigation still loads and renders normal device sett
   const h = harness();
   setCloudState(h);
   const settings = {
-    recording_mode: "hold_release", after_listening: "play_only", max_recording_seconds: 60,
+    recording_mode: "hold_release", talk_mode: "hold", review_before_send: false, after_listening: "play_only", max_recording_seconds: 60,
     ringtone_id: "default", master_volume_percent: 30, arrival_signal: "ring",
     quiet_hours: {enabled:false, start:"22:00", end:"07:00"}, timezone: "UTC", nfc_confirmation_beep: true, swoosh_sound_enabled: true,
   };
-  h.context.document.querySelector = selector => selector.startsWith("[name=") ? h.node(selector) : null;
+  h.context.document.querySelector = selector => {
+    if (selector === '[name="talk_mode"]:checked') return {value: settings.talk_mode};
+    if (selector === '[name="after_listening"]:checked') return {value: settings.after_listening};
+    return selector.startsWith("[name=") ? h.node(selector) : null;
+  };
   h.context.fetch = async (url) => {
     h.calls.push({url});
     return {ok:true, headers:{get:()=>"application/json"}, json:async()=>({settings, attention:false})};
@@ -443,6 +447,11 @@ test("Cloud local Settings navigation still loads and renders normal device sett
   expect(h.node("master-volume").value).toBe("30");
   expect(h.node("swoosh-sound").checked).toBe(true);
   expect(h.node("card-name-prompt").checked).toBe(true);
+  expect(h.node("review-before-send").checked).toBe(false);
+  const candidate = vm.runInContext("settingsCandidate()", h.context);
+  expect(candidate.talk_mode).toBe("hold");
+  expect(candidate.review_before_send).toBe(false);
+  expect(candidate.recording_mode).toBeUndefined();
   h.node("card-name-prompt").checked = false;
   expect(vm.runInContext("settingsCandidate()", h.context).card_name_prompt).toBe(false);
   expect(h.node("settings-status").textContent).toBe("");

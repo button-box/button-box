@@ -12,7 +12,7 @@ from messagebox.runtime_paths import APP_DIR, STATE_DIR
 from messagebox.settings import SettingsReader, VOICE_PACKS, normalize_voice_pack
 
 CUE_NAMES = (
-    "press", "card", "rec_go", "rec_limit", "msg_start", "msg_end", "oops",
+    "press", "card", "rec_go", "rec_limit", "msg_start", "msg_end", "oops", "deleted",
     "still_trying", "offline", "ready", "connected", "all_set", "sent", "listened", "card_saved",
 )
 VOICE_NAMES = (

@@ -58,5 +58,9 @@
  "card_saved": {
   "desc": "Card saved. The pick-up flick, then a happy “yes”.",
   "seconds": 0.9
+ },
+ "deleted": {
+  "desc": "Deleted. Two soft descending wooden notes, without a voice.",
+  "seconds": 0.4
  }
 }
