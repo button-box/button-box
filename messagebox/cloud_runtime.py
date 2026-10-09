@@ -29,7 +29,7 @@ from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE, STATE_DIR)
 from messagebox.settings import (
-    in_quiet_hours, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
+    in_quiet_hours, ignored_settings, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
 
@@ -953,6 +953,7 @@ class CloudRuntime:
                     or document.get("revision") != desired):
                 raise CloudRuntimeError("settings revision is invalid")
             # Normalize pre-update commands before replay comparison and ACKs.
+            ignored = ignored_settings(document)
             document = validate_settings(document)
             candidate = {key: value for key, value in document.items()
                          if key not in {"version", "revision"}}
@@ -972,14 +973,20 @@ class CloudRuntime:
                         "ringtone_changed": ("ringtone_id" in candidate
                                              and current.get("ringtone_id") != candidate["ringtone_id"]),
                         "voice_changed": current.get("voice_pack") != candidate["voice_pack"],
+                        "ignored_settings": ignored,
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
                 updated = self.settings.update(candidate, expected, desired_revision=desired)
                 if updated["revision"] != desired:
                     raise CloudRuntimeError("settings revision conflicts")
+            if ignored:
+                # Also cover replay after the settings write but before pending-state persistence.
+                intent = json.loads(intent_path.read_text(encoding="utf-8")) if intent_path.exists() else {}
+                if intent.get("ignored_settings") != ignored:
+                    atomic_json(intent_path, {**intent, "ignored_settings": ignored})
             self.state["pending_settings"][item["operation_id"]] = document
             self._save()
-            self._ack(item["operation_id"], "received")
+            self._ack(item["operation_id"], "received", **({"ignored_settings": ignored} if ignored else {}))
         elif kind in {"nfc_enroll", "nfc_cancel", "nfc_unpair"}:
             self._nfc(item)
         elif kind == "queue_hold":
@@ -1060,11 +1067,17 @@ class CloudRuntime:
                             "voice_pack": normalize_voice_pack(document.get("voice_pack"))}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
+                try:
+                    intent = json.loads(self._intent_path(operation_id).read_text(encoding="utf-8"))
+                except FileNotFoundError:
+                    intent = {}
+                ignored = intent.get("ignored_settings", [])
+                fields = {"ignored_settings": ignored} if ignored else {}
                 if marker.get("settings") == document:
                     self._queue_settings_saved(operation_id, marker)
-                    self._ack(operation_id, "applied", applied_revision=desired)
+                    self._ack(operation_id, "applied", applied_revision=desired, **fields)
                 else:
-                    self._ack(operation_id, "rejected", error_code="settings_superseded")
+                    self._ack(operation_id, "rejected", error_code="settings_superseded", **fields)
                 del self.state["pending_settings"][operation_id]
                 self._save()
 

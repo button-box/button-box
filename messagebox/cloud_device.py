@@ -390,6 +390,7 @@ def capabilities(*, nfc=False) -> dict:
         "audio": True,
         "nfc": bool(nfc),
         "settings_version": 1,
+        "settings_unknown_keys": "ignore",
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
         "box_link": True,

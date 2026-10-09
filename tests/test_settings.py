@@ -120,6 +120,22 @@ class SettingsStoreTests(unittest.TestCase):
         with self.assertRaises(SettingsError):
             validate({**document, "swoosh_sound_enabled": 1})
 
+    def test_unknown_keys_are_skipped_without_weakening_known_validation(self):
+        document = defaults({"TZ": "UTC"})
+        self.assertEqual(validate({**document, "future_setting": {"anything": True}}), document)
+        for changes in ({"master_volume_percent": 101}, {"timezone": "Invalid/Zone"},
+                        {"quiet_hours": {**document["quiet_hours"], "future_nested": True}},
+                        {"recording_mode": "unknown"}, {"swoosh_sound_enabled": 1}):
+            with self.subTest(changes=changes), self.assertRaises(SettingsError):
+                validate({**document, "future_setting": True, **changes})
+
+    def test_ignored_names_obey_acknowledgement_limits(self):
+        from messagebox.settings import ignored_settings
+        document = {**defaults({}), **{f"future_{index:02d}": True for index in range(40)},
+                    "invalid-name": True, "a" * 65: True}
+        self.assertEqual(ignored_settings(document), [f"future_{index:02d}" for index in range(32)])
+        self.assertEqual(validate(document), defaults({}))
+
     def test_revision_conflict_never_overwrites_newer_settings(self):
         store = SettingsStore(self.path, environ={"TZ": "UTC"})
         initial, _warning = store.load()

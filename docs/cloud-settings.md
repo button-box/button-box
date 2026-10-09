@@ -2,7 +2,11 @@
 
 Cloud settings compare the expected revision to the local settings under the existing file lock. A new desired revision may skip failed or expired generations, but must advance. The full document is validated before atomic replacement. Replays of the same document do not increment the revision, and stale local writes still fail.
 
-The poller checks for the button process’s applied marker promptly while a settings change is pending. It acknowledges success only when that marker matches the entire requested document. The Cloud dashboard waits for this receipt before showing success, with a short deadline and an explicit unconfirmed outcome when confirmation is unavailable.
+Unknown top-level settings keys are skipped in both local and Cloud settings; every known key retains its existing validation. Nested objects such as quiet hours still require their supported schema. The heartbeat capability `settings_unknown_keys: "ignore"` advertises this behavior.
+
+The poller checks for the button process’s applied marker promptly while a settings change is pending. It acknowledges success only when that marker matches the normalized document of known settings. Received and terminal settings acknowledgements include `ignored_settings` when keys were skipped, including across restart and replay. This field contains at most 32 sorted names matching `^[a-z][a-z0-9_]{0,63}$`; other unknown keys are still skipped, but their names cannot be included in the wire field. Values are never reported. The Cloud dashboard waits for this receipt before showing success, with a short deadline and an explicit unconfirmed outcome when confirmation is unavailable.
+
+For each released build, run `python3 scripts/dev/settings_contract.py > <build>.json` and hand the result to the Cloud repository's `tests/fixtures/box-builds/`. To describe an older checkout, run the current exporter with `--repo <path>`. The exporter inspects source without importing runtime modules. Unsupported source shapes fail clearly on stderr instead of emitting a guessed contract. Capabilities describe the checkout's bundled sound assets with NFC unavailable; installed hardware and assets can change these runtime-dependent values. Generate release fixtures from clean committed checkouts so the build id identifies the actual source.
 
 
 ## Voice packs

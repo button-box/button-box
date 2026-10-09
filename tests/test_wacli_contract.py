@@ -89,6 +89,21 @@ class WacliContractTests(unittest.TestCase):
         candidate["quiet_hours"] = {"enabled": enabled, "start": "22:00", "end": "07:00"}
         self.settings.update(candidate, current["revision"])
 
+    def test_local_unknown_settings_preserve_wacli_routing_and_quiet_hours(self):
+        current, _ = self.settings.load()
+        candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
+        candidate.update(future_setting={"enabled": True}, master_volume_percent=37)
+        saved = self.settings.update(candidate, current["revision"])
+        # Also exercise a newer document read directly from local storage.
+        self.settings.path.write_text(json.dumps({**saved, "future_setting": True}))
+        self.assertEqual(button_send.transport_mode(), "wacli")
+        self.assertEqual(button_send.caregiver_settings(), saved)
+        self.assertEqual(saved["master_volume_percent"], 37)
+        self.assertFalse(button_send.quiet_hours())
+        self.send_to(PERSON)
+        self.set_quiet(True)
+        self.assertTrue(button_send.quiet_hours())
+
     def send_to(self, recipient):
         wav = self.root / "outbox" / "1000-2.0.wav"
         write_pcm_wav(wav, 2)
