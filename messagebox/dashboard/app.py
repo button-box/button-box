@@ -44,6 +44,7 @@ from messagebox import cloud_runtime
 from messagebox.cloud_device import CloudDeviceError
 from messagebox.cloud_runtime import CloudRuntimeError
 from messagebox.identity import read_box_color, read_box_id
+from messagebox.software import software_footer
 from messagebox.nfc import router as nfc_router
 from messagebox.nfc_state import NfcError, active_selection
 from messagebox.runtime_paths import APP_DIR, CONTACTS_FILE, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
@@ -120,7 +121,9 @@ QUEUE_ACTION_LOCK = threading.Lock()
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parents[1] / "onboarding" / "static"
 DASHBOARD_STATIC = {
     "/": (
-        DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes(),
+        DASHBOARD_STATIC_DIR.joinpath("index.html").read_bytes().replace(
+            b"__SOFTWARE_FOOTER__", software_footer()
+        ),
         "text/html; charset=utf-8",
     ),
     "/static/app.js": (
@@ -140,7 +143,9 @@ DASHBOARD_STATIC = {
         "text/javascript; charset=utf-8",
     ),
 }
-CLOUD_LOCAL_HTML = DASHBOARD_STATIC_DIR.joinpath("cloud-local.html").read_bytes()
+CLOUD_LOCAL_HTML = DASHBOARD_STATIC_DIR.joinpath("cloud-local.html").read_bytes().replace(
+    b"__SOFTWARE_FOOTER__", software_footer()
+)
 RINGTONE_PREVIEW_LOCK = threading.Lock()
 PUBLIC_MESSAGE_LOCK = threading.Lock()
 PUBLIC_MESSAGES = {}

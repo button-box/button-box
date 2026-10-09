@@ -61,6 +61,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/__init__.py" \
   "$REPO_DIR/./messagebox/button_send.py" \
   "$REPO_DIR/./messagebox/device_http.py" \
+  "$REPO_DIR/./messagebox/software.py" \
   "$REPO_DIR/./messagebox/cloud_device.py" \
   "$REPO_DIR/./messagebox/cloud_claim.py" \
   "$REPO_DIR/./messagebox/qrcodegen.py" \

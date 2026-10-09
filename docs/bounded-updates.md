@@ -105,6 +105,14 @@ manifest when auditing the installed revision. A matching record and file
 hashes are software evidence; they do not replace physical button, NFC, audio,
 messaging, network, or cold-reboot acceptance.
 
+Cloud registration and heartbeats report optional `software_version` and
+`software_commit` fields from this record. Services cache the validated identity
+at startup; the updater records the new identity before restarting them. The
+local setup and status pages show the same version with the first seven commit
+characters. Missing, unreadable, or invalid records omit the fields and footer;
+Cloud can display "Unknown" for older installs. `/opt/messagebox/VERSION` is not
+an installed release source. This reporting does not change wacli messaging.
+
 ## Roll back
 
 Keep the backup directory unchanged. To restore it deliberately:
