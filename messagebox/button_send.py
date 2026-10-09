@@ -13,8 +13,10 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
@@ -87,6 +89,8 @@ CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
+MORNING_RING_FILE = DEFAULT_STATE_DIR / "morning-ring.json"
+MORNING_RING_GRACE_S = 30 * 60
 NFC_SELECTION_TTL_S = float(os.environ.get("MSGBOX_NFC_SELECTION_TTL_S", "30"))
 NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
@@ -104,7 +108,7 @@ PROMPTS = {
 }
 
 # Quiet hours: lamp dark, no ringtone (messages still queue; a deliberate press
-# still plays). Overnight arrivals do not ring when quiet hours end.
+# still plays). Waiting messages signal once when quiet hours end, when idle.
 RING_PHRASE = [
     (True, 1.2),
     (True, 1.6),
@@ -1115,6 +1119,51 @@ def ring_lamp_on(elapsed, ringtone_id):
 _known = None
 _seen_ever = set()
 _ring_last = 0.0
+_morning_ring_window = None
+
+
+def maybe_morning_ring(settings, snapshot, now=None):
+    """Consume a local quiet-hours end once, before crossing the audio boundary."""
+    global _morning_ring_window
+    quiet = settings["quiet_hours"]
+    if not quiet["enabled"] or quiet["start"] == quiet["end"]:
+        return False
+    zone = ZoneInfo(settings["timezone"])
+    current = now.astimezone(zone) if now is not None else datetime.now(zone)
+    if quiet_hours(settings, current):
+        return False
+    hour, minute = map(int, quiet["end"].split(":"))
+    end = current.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+    if end > current:
+        end -= timedelta(days=1)
+    if not 0 <= (current - end).total_seconds() < MORNING_RING_GRACE_S:
+        return False
+    window = f'{settings["timezone"]}:{quiet["start"]}:{end.isoformat()}'
+    if _morning_ring_window == window:
+        return False
+    try:
+        try:
+            saved = json.loads(MORNING_RING_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            saved = {}
+        if saved.get("window") == window:
+            _morning_ring_window = window
+            return False
+        if snapshot and (_recording or _guided_active or button.is_pressed):
+            return False
+        signal = bool(snapshot) and settings["arrival_signal"] != "silent"
+        if signal and not apply_master_volume(settings):
+            return False
+        # Persist first: a crash during playback must never repeat the alert.
+        # This favors at-most-once delivery over retrying ambiguous audio.
+        atomic_json(MORNING_RING_FILE, {"window": window})
+    except (OSError, ValueError, AttributeError):
+        log_event("morning_ring_unavailable")
+        return False
+    _morning_ring_window = window
+    if signal:
+        ring_alert(source="quiet_hours_end", settings=settings)
+    return True
 
 
 def mark_queue_known():
@@ -1132,6 +1181,10 @@ def maybe_ring():
         return
     _ring_last = now
     snapshot = set(queued())
+    settings = caregiver_settings()
+    # The button service polls here only from its idle loop. Playback and child
+    # flows own this same thread, so they cannot be interrupted by this alert.
+    morning_consumed = maybe_morning_ring(settings, snapshot)
     if _known is None:
         _known = snapshot
         _seen_ever.update(snapshot)
@@ -1139,8 +1192,7 @@ def maybe_ring():
     fresh = (snapshot - _known) - _seen_ever
     _known = snapshot
     _seen_ever.update(snapshot)
-    settings = caregiver_settings()
-    if fresh and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
+    if fresh and not morning_consumed and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
         ring_alert(settings=settings)
 
 
