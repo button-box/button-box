@@ -38,8 +38,8 @@ class TonePlayerTests(unittest.TestCase):
         player = TonePlayer(root, run=lambda command, **kwargs: calls.append(command))
         player("read")
         player("success")
-        self.assertEqual([Path(command[-1]).name for command in calls if command[0] == "aplay"], ["cue-card.wav", "cue-card_saved.wav"])
-        self.assertEqual([command[0] for command in calls], ["amixer", "aplay", "amixer", "aplay"])
+        self.assertEqual([Path(command[-1]).name for command in calls if command[0] == "aplay"], ["cue-card.wav", "cue-card_saved.wav", "voice-card-saved.wav"])
+        self.assertEqual([command[0] for command in calls], ["amixer", "aplay", "amixer", "aplay", "aplay"])
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "missing/invalid"):
                 TonePlayer(directory, run=mock.Mock())("read")

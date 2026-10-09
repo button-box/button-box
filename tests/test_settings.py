@@ -120,6 +120,21 @@ class SettingsStoreTests(unittest.TestCase):
         with self.assertRaises(SettingsError):
             validate({**document, "swoosh_sound_enabled": 1})
 
+    def test_card_name_prompt_defaults_migrates_and_round_trips_with_future_keys(self):
+        initial = defaults({"TZ": "UTC"})
+        self.assertIs(initial["card_name_prompt"], True)
+        old = {key: value for key, value in initial.items() if key != "card_name_prompt"}
+        self.assertEqual(validate(old), initial)
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for enabled in (False, True):
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, card_name_prompt=enabled, future_key=True), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertIs(saved["card_name_prompt"], enabled)
+        for invalid in (1, "true", None, []):
+            with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
+                validate({**initial, "card_name_prompt": invalid})
+
     def test_unknown_keys_are_skipped_without_weakening_known_validation(self):
         document = defaults({"TZ": "UTC"})
         self.assertEqual(validate({**document, "future_setting": {"anything": True}}), document)

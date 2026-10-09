@@ -109,6 +109,22 @@
    "text": "I need a grown-up to set me up!",
    "seconds": 2.4,
    "sha256": "9387d825688e715a93fd8196365d925038eeef90bc698a8ce97cf913f5183977"
+  },
+  {
+   "file": "voice-card-prompt.wav",
+   "cue": "BX-CARD-PROMPT",
+   "purpose": "Generic family-card recording invitation",
+   "seconds": 3.36,
+   "sha256": "7c8c32a164eb46d990bb7a93e0644bef68a274d3a98a60feb624ccfe908b5160",
+   "text": "Voil\u00e0! Ready! Press and talk now!"
+  },
+  {
+   "file": "voice-card-saved.wav",
+   "cue": "BX-CARD-SAVED",
+   "purpose": "Successful family-card pairing confirmation",
+   "seconds": 2.64,
+   "sha256": "26d9f6d2a86e818dfbdc062fac89e6f0594f0174bb73304b96fe9b292cdae182",
+   "text": "Voil\u00e0! New family card saved!"
   }
  ]
 }

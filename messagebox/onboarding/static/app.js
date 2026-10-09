@@ -999,6 +999,7 @@ function populateSettings(payload) {
   document.getElementById("quiet-end").value = value.quiet_hours.end;
   document.getElementById("timezone").value = value.timezone;
   document.getElementById("nfc-beep").checked = value.nfc_confirmation_beep;
+  document.getElementById("card-name-prompt").checked = value.card_name_prompt !== false;
   document.getElementById("swoosh-sound").checked = value.swoosh_sound_enabled;
   document.getElementById("settings-attention").hidden = !payload.attention;
   const suggested = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1033,6 +1034,7 @@ function settingsCandidate() {
       end: document.getElementById("quiet-end").value,
     },
     nfc_confirmation_beep: document.getElementById("nfc-beep").checked,
+    card_name_prompt: document.getElementById("card-name-prompt").checked,
     swoosh_sound_enabled: document.getElementById("swoosh-sound").checked,
   };
 }

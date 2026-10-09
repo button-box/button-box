@@ -397,5 +397,6 @@ def capabilities(*, nfc=False) -> dict:
         "settings_unknown_keys": "ignore",
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
+        "card_name_prompt": True,
         "box_link": True,
     }

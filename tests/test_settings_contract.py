@@ -39,7 +39,7 @@ class SettingsContractTests(unittest.TestCase):
         with mock.patch("messagebox.sound_pack.SOUND_DIR", REPO / "sounds"):
             self.assertEqual(contract["capabilities"], capabilities(nfc=False))
         self.assertEqual(contract["command_kinds"], sorted([
-            "audio", "listened", "settings", "preview_ringtone", "voice_preview",
+            "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview",
             "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message",
         ]))
 

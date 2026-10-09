@@ -110,6 +110,22 @@
    "text": "J'ai besoin d'un adulte pour me configurer !",
    "seconds": 2.48,
    "sha256": "09da89dc32c6ca92906f8a5c9361c3afcece06470fc831eed100ef776d1f9ad1"
+  },
+  {
+   "file": "voice-card-prompt.wav",
+   "cue": "BX-CARD-PROMPT",
+   "purpose": "Generic family-card recording invitation",
+   "seconds": 2.32,
+   "sha256": "6f762f7867ec3197584b9c57c2236e5ceed63b6a7de0f023134eab5288657f22",
+   "text": "C'est parti ! Appuie et parle !"
+  },
+  {
+   "file": "voice-card-saved.wav",
+   "cue": "BX-CARD-SAVED",
+   "purpose": "Successful family-card pairing confirmation",
+   "seconds": 2.88,
+   "sha256": "d1705d1573b210c863f34b4aae984d210147d67d46da9aa39ab848cb311126a3",
+   "text": "Super ! Nouvelle carte de famille enregistrée !"
   }
  ],
  "source_key": "tata_fr"

@@ -442,6 +442,9 @@ test("Cloud local Settings navigation still loads and renders normal device sett
   expect(h.node("setup-view").hidden).toBe(true);
   expect(h.node("master-volume").value).toBe("30");
   expect(h.node("swoosh-sound").checked).toBe(true);
+  expect(h.node("card-name-prompt").checked).toBe(true);
+  h.node("card-name-prompt").checked = false;
+  expect(vm.runInContext("settingsCandidate()", h.context).card_name_prompt).toBe(false);
   expect(h.node("settings-status").textContent).toBe("");
   expect(h.calls.map(call=>call.url)).toEqual(["/api/settings"]);
 });

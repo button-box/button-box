@@ -136,6 +136,10 @@ class TonePlayer:
         device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
         self.run(["aplay", "-q", "-D", device, os.fspath(path)], check=True,
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        if kind == "success":
+            voice = sound_pack.voice_path("card-saved", settings.get("voice_pack"))
+            self.run(["aplay", "-q", "-D", device, os.fspath(voice)], check=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
 
 class NfcOnboardingEngine:

@@ -260,7 +260,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send.time, "time", return_value=NOW):
             button_send.play_next_legacy()
         self.assertEqual(playback.call_args.args[0][-1], str(path))
-        self.assertEqual(cues.call_args_list, [mock.call("msg_start", "msg-start"), mock.call("msg_end")])
+        self.assertEqual(cues.call_args_list, [mock.call("msg_start"), mock.call("msg_end")])
         played_ack.assert_called_once_with(metadata)
         self.assertEqual(recent_reply_recipient(self.runtime.queue_dir,
             self.runtime.contacts.allowed_jids(), now=NOW), ("route", BOX_JID))
@@ -677,6 +677,130 @@ class CloudRuntimeTests(unittest.TestCase):
         with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
             self.runtime.heartbeat()
         self.assertIs(send.call_args.args[0]["capabilities"]["listened_announcements"], True)
+        self.assertIs(send.call_args.args[0]["capabilities"]["card_name_prompt"], True)
+
+    def card_prompt_item(self, *, pack="jessica", operation_id="cardprompt:example", box=False):
+        item = self.box_listened_item() if box else self.listened_item()
+        item.update(kind="card_prompt", operation_id=operation_id)
+        item["payload"].pop("message_id")
+        item["payload"]["voice_pack"] = pack
+        item["payload"]["listener_name" if box else "listener_first_name"] = (
+            BOX["box_name"] if box else self.client.people[0]["display_name"].split()[0][:24])
+        return item
+
+    def test_card_prompt_preload_replay_restart_and_local_person_and_box_lookup(self):
+        self.connect_box()
+        for box, jid in ((False, PERSON["wa_id"] + "@s.whatsapp.net"), (True, BOX_JID)):
+            item = self.card_prompt_item(box=box, operation_id=f"cardprompt:{box}")
+            self.client.items = [item]
+            with mock.patch.object(self.client, "media", wraps=self.client.media) as download:
+                self.runtime.poll_once()
+                path = self.runtime.card_prompt_clip(jid, "jessica")
+                self.assertTrue(Path(path).is_file())
+                self.assertEqual(Path(path).read_bytes(), self.client.audio)
+                self.assertEqual(Path(path).stat().st_mode & 0o777, 0o600)
+                self.assertEqual(Path(path).parent.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(self.client.acks[-1]["state"], "applied")
+                self.runtime.state = self.runtime._load()
+                self.runtime.poll_once()
+                self.assertEqual(self.runtime.card_prompt_clip(jid, "jessica"), path)
+                download.assert_called_once()
+                self.assertEqual(self.runtime._receipt_store().pending_count(), 0)
+                self.assertEqual(self.runtime.card_prompt_clip(jid, "pirate"), "")
+                self.assertEqual(self.runtime.card_prompt_clip(jid, "robot"), "")
+                self.assertEqual(self.runtime.card_prompt_clip(jid, "dj"), "")
+
+    def test_card_prompt_cache_separates_listened_and_pack_and_invalidates_names(self):
+        self.runtime.heartbeat()
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        listened = self.runtime._listened_clip(self.listened_item()["payload"], "a" * 64)
+        self.runtime._command(self.card_prompt_item(), NOW)
+        first = self.runtime.card_prompt_clip(jid, "jessica")
+        self.assertNotEqual(first, listened)
+        self.runtime._command(self.card_prompt_item(pack="pirate", operation_id="cardprompt:pirate"), NOW)
+        self.assertTrue(self.runtime.card_prompt_clip(jid, "pirate"))
+        changed = self.card_prompt_item(operation_id="cardprompt:newtext")
+        changed["payload"]["text_hash"] = "d" * 64
+        self.runtime._command(changed, NOW)
+        self.assertFalse(Path(first).exists())
+        path = self.runtime.card_prompt_clip(jid, "jessica")
+        self.client.people[0]["display_name"] = "New name"
+        self.runtime.heartbeat()
+        self.assertEqual(self.runtime.card_prompt_clip(jid, "jessica"), "")
+        self.client.people = []
+        self.runtime.heartbeat()
+        self.assertFalse(Path(path).exists())
+        self.assertEqual(list((self.root / "card-prompts").glob("*.json")), [])
+
+    def test_card_prompt_invalid_revoked_expired_and_unavailable_clips_fail_closed(self):
+        self.runtime.heartbeat()
+        for index, failure in enumerate(("hash", "format", "download", "identity", "expired", "robot", "unknown")):
+            item = self.card_prompt_item(operation_id=f"cardprompt:failure{index}")
+            if failure == "hash":
+                item["payload"]["sha256"] = "0" * 64
+            elif failure == "format":
+                self.client.audio = b"not a wave"
+                item["payload"]["sha256"] = hashlib.sha256(self.client.audio).hexdigest()
+            elif failure == "identity":
+                item["payload"]["listener_identity_id"] = "unauthorized"
+            elif failure == "expired":
+                item["expires_at"] = NOW
+            elif failure in {"robot", "unknown"}:
+                item["payload"]["voice_pack"] = failure
+            self.client.items = [item]
+            with mock.patch.object(self.client, "media", side_effect=CloudDeviceError("offline")) if failure == "download" else contextlib.nullcontext():
+                self.runtime.poll_once()
+            self.assertEqual(self.client.acks[-1]["state"], "expired" if failure == "expired" else "rejected")
+            self.assertEqual(self.runtime.card_prompt_clip(PERSON["wa_id"] + "@s.whatsapp.net", "jessica"), "")
+
+    def test_card_prompt_name_change_waits_for_snapshot_and_then_replaces_clip(self):
+        self.runtime.heartbeat()
+        self.runtime._command(self.card_prompt_item(), NOW)
+        self.client.people[0]["display_name"] = "Avery Example"
+        changed = self.card_prompt_item(operation_id="cardprompt:newname")
+        changed["payload"]["text_hash"] = "d" * 64
+        changed["payload"]["future_key"] = {"safe_to_ignore": True}
+        self.client.items = [changed]
+        with mock.patch.object(self.client, "media", wraps=self.client.media) as download:
+            self.runtime.poll_once()
+            download.assert_not_called()
+            self.assertNotIn(changed["operation_id"], [ack["operation_id"] for ack in self.client.acks])
+            self.runtime.heartbeat()
+            self.runtime.poll_once()
+            download.assert_called_once()
+        self.assertTrue(self.runtime.card_prompt_clip(PERSON["wa_id"] + "@s.whatsapp.net", "jessica"))
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
+        self.assertEqual(self.runtime._card_prompt_name({"display_name": " A\x01very Example "}, box=False), "Avery")
+        self.assertEqual(self.runtime._card_prompt_name({"display_name": "😀" * 30}, box=False), "😀" * 24)
+
+    def test_card_prompt_corrupt_cache_and_stale_authorization_use_generic_fallback(self):
+        self.runtime.heartbeat()
+        self.runtime._command(self.card_prompt_item(), NOW)
+        jid = PERSON["wa_id"] + "@s.whatsapp.net"
+        path = Path(self.runtime.card_prompt_clip(jid, "jessica"))
+        metadata = path.with_suffix(".json")
+        original = metadata.read_bytes()
+        for damage in ("json", "schema", "audio", "missing", "symlink", "stale"):
+            with self.subTest(damage=damage):
+                metadata.write_bytes(original)
+                path.unlink(missing_ok=True)
+                path.write_bytes(self.client.audio)
+                self.mono[0] = 100
+                if damage == "json":
+                    metadata.write_text("invalid json")
+                elif damage == "schema":
+                    metadata.write_text("[]")
+                elif damage == "audio":
+                    path.write_bytes(b"damaged")
+                elif damage == "missing":
+                    path.unlink()
+                elif damage == "symlink":
+                    path.unlink()
+                    path.symlink_to(self.root / "name.wav")
+                elif damage == "stale":
+                    self.mono[0] += 91
+                with mock.patch.object(self.client, "media", side_effect=AssertionError("tap must never fetch")):
+                    self.assertEqual(self.runtime.card_prompt_clip(jid, "jessica"), "")
 
     def test_listened_stale_authorization_waits_then_revoked_listener_is_rejected(self):
         self.runtime.heartbeat()

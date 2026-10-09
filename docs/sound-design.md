@@ -1,6 +1,6 @@
 # Button Box sound design v1
 
-The sound pack has 15 motif cues and 17 Jessica lines. All output uses the saved
+The sound pack has 15 motif cues and 19 Jessica lines. All output uses the saved
 master volume. "Swoosh sound", "Family confirmation beep" and every setting ID
 retain their existing names and meanings. Hold and release has no countdown,
 review or send-approval prompts.
@@ -8,8 +8,8 @@ review or send-approval prompts.
 | Brief moment | Implementation |
 | --- | --- |
 | Press, guided acknowledgement, claim press | `button_send.CUES`, `beep`, `acknowledge_guided_press`, `play_claim_cue`: `cue-press.wav`, exactly 0.40 s; unchanged `MIN_HOLD_S`. |
-| Family confirmation / setup card read | `_play_nfc_prompt`, `onboarding.nfc.TonePlayer("read")`: `cue-card.wav`; saved Family confirmation beep setting still gates runtime confirmation. |
-| Setup card saved | `TonePlayer("success")`: `cue-card_saved.wav`. |
+| Family confirmation / setup card read | `_play_nfc_prompt`, `onboarding.nfc.TonePlayer("read")`: `cue-card.wav`; Family confirmation beep gates the runtime cue. Runtime taps then play the cached name invitation or current pack's generic `voice-card-prompt.wav` when `card_name_prompt` is enabled. |
+| Family card saved | Runtime `enrolled` handoff and `TonePlayer("success")`: `cue-card_saved.wav` then current pack's `voice-card-saved.wav`, independently of tap feedback settings. |
 | Changed Cloud settings applied | `maybe_play_cloud_sound`: `cue-card_saved.wav` at the new master volume; three-second debounce, 30-second expiry, silent on boot adoption and in quiet hours. |
 | Runtime awake | `announce_runtime_ready`: `cue-ready.wav`. |
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
@@ -19,7 +19,7 @@ review or send-approval prompts.
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
 | Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then card-unknown voice (or explicit operator override), acknowledged once per presentation. |
 | Listened / listener announcement test | `play_pending_listened`: listened cue then saved family clip or `voice-listened.wav`; dashboard receipt ingestion uses the new default. All receipt playback shares this path. |
-| Every incoming message starts | `GuidedSession.run` incoming intro paths; `play_next_legacy`; unroutable-but-authorized inbound path: msg_start then msg-start voice then family audio. |
+| Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. `voice-msg-start.wav` remains bundled for voice previews only. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply countdown. |
 | Microphone opens after countdown | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
 | Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; it stays in the recording (Dan, 7 Oct: no words are cut). |
@@ -37,6 +37,17 @@ never recorded. The 5 s limit warning (rec_limit) plays while capture continues
 and stays in the recording as two soft taps: removing it would also remove the
 child's words that overlap it (Dan, 7 October 2026). The hardware acceptance
 check confirms the go tick is absent from sent audio.
+
+A press during the card invitation stops and reaps its player before opening
+the microphone. It records immediately, skipping the usual hold classification,
+guided countdown and go tick. Hold and release still ends on release;
+tap and review ignores this starting press until release and ends on a later
+press or the existing silence/length limit. The same card mapping is revalidated
+before capture; a changed or expired selection never falls back to another person.
+
+Incoming audio in both modes uses
+`highpass=f=100,equalizer=f=2500:t=q:w=1:g=2,loudnorm=I=-16:TP=-2:LRA=11:linear=true,alimiter=limit=0.79:level=disabled`.
+`MSGBOX_EQ_FILTER` still overrides the chain, including an empty disable value.
 
 ## Quiet hours and first-use receipts
 
@@ -88,7 +99,7 @@ longer music bed does not consume recording time.
 
 On a real box, listen to Jessica, Pirate, Alien, DJ, Robot, French and Charlie on
 the speaker. For each, preview and switch the setting; confirm the sample, volume
-and dark lamp. Exercise all 17 lines, both guided countdowns and the go tick,
+and dark lamp. Exercise all 19 lines, both guided countdowns and the go tick,
 checking that DJ's tail ends before microphone capture. Verify a matched Cloud
 name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
 lines. Confirm volume-only and ringtone-only previews retain their behavior.

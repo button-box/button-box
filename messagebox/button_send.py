@@ -494,40 +494,44 @@ def block_unavailable_recipient():
         play_moment("oops", "fail")
 
 
-def _play_nfc_prompt(uid, action, card_clip):
+def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
     if action == "unknown":
         play_moment("oops")
         play_audio_ordinary(card_clip or sound_pack.voice_path("card-unknown"))
         nfc_announcement_store.acknowledge(uid)
         log_event("nfc_announced", action=action, played=True, mode="spoken")
         return True
-    beeped = False
-    if caregiver_settings()["nfc_confirmation_beep"]:
-        beep("nfc")
-        beeped = True
-    card_clip = os.path.expanduser(card_clip)
-    if card_clip and os.path.isfile(card_clip):
-        played = subprocess.run(
-            ["aplay", "-q", "-D", SPK_DEV, card_clip], check=False
-        ).returncode == 0
-        mode = "spoken"
-    elif beeped and action in ("recognized", "selected", "enrolled"):
-        played = True
-        mode = "beep"
+    settings = caregiver_settings()
+    paths = []
+    if action == "enrolled":
+        paths = [sound_pack.cue_path("card_saved"), sound_pack.voice_path("card-saved")]
+    elif action in {"recognized", "selected"}:
+        if settings["nfc_confirmation_beep"]:
+            paths.append(sound_pack.cue_path("card"))
+        if settings.get("card_name_prompt", True):
+            clip = ""
+            if transport_mode() == "cloud":
+                contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+                if contact:
+                    clip = cloud_runtime.card_prompt_clip(contact["jid"], settings.get("voice_pack"))
+            paths.append(clip or sound_pack.voice_path("card-prompt", settings.get("voice_pack")))
     else:
-        played = False
-        mode = "missing"
-        log(f"NFC announcement clip missing: {card_clip or '(not configured)'}")
-    log_event("nfc_announced", action=action, played=played, mode=mode)
-    if played:
-        nfc_announcement_store.acknowledge(uid)
-    else:
-        nfc_announcement_store.clear_acknowledgement()
-        beep(NFC_UNKNOWN_BEEP)
-    return played
+        return False
+    interrupted = False
+    for path in paths:
+        if not play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path)):
+            interrupted = button.is_pressed
+            break
+    # An intentional interruption (and disabled feedback) still confirms the
+    # exact card. The player has reaped aplay before a recorder can be opened.
+    nfc_announcement_store.acknowledge(uid)
+    log_event("nfc_announced", action=action, played=not interrupted, mode="card")
+    if interrupted and allow_recording and action != "enrolled" and settings.get("card_name_prompt", True):
+        handle_confirmed_press(time.monotonic(), card_prompt_uid=uid)
+    return True
 
 
-def play_pending_nfc_announcement(*, force=False, expected_uid=None):
+def play_pending_nfc_announcement(*, force=False, expected_uid=None, allow_recording=True):
     """Play at most one reader request while this process exclusively owns audio."""
     global _last_nfc_announcement_poll
     now = time.monotonic()
@@ -540,7 +544,7 @@ def play_pending_nfc_announcement(*, force=False, expected_uid=None):
     if expected_uid is not None and request["uid"] != expected_uid:
         return None
     return request["action"] if _play_nfc_prompt(
-        request["uid"], request["action"], request["prompt"]
+        request["uid"], request["action"], request["prompt"], allow_recording=allow_recording
     ) else None
 
 
@@ -549,10 +553,10 @@ def ensure_nfc_confirmation(context):
     uid = context.get("uid")
     if uid is None or nfc_announcement_store.is_acknowledged(uid):
         return True
-    if play_pending_nfc_announcement(force=True, expected_uid=uid):
+    if play_pending_nfc_announcement(force=True, expected_uid=uid, allow_recording=False):
         return True
     contact = context["contact"]
-    return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""))
+    return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""), allow_recording=False)
 
 
 def legacy_job_metadata(path):
@@ -1720,10 +1724,11 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False):
     global _recording
     # Synchronous playback must complete before the microphone is opened.
-    play_moment("rec_go")
+    if not card_prompt:
+        play_moment("rec_go")
     capture_id = uuid.uuid4().hex
     raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
     wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
@@ -1755,6 +1760,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
     presence_last = started
     closed_since = None
     stopped_by_press = False
+    stop_armed = not card_prompt
     try:
         with open(raw_path, "wb") as raw:
             while True:
@@ -1766,13 +1772,15 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
                     if chunk:
                         raw.write(chunk)
                         vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
-                if button.is_pressed:
+                if button.is_pressed and stop_armed:
                     closed_since = closed_since or now
                     if now - closed_since >= CONFIRM_PRESS_S:
                         stopped_by_press = True
                         break
                 else:
                     closed_since = None
+                    if not button.is_pressed:
+                        stop_armed = True
                 if vad.silence_expired(now):
                     break
                 if now - started >= max_seconds:
@@ -1822,10 +1830,11 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60):
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id, max_seconds):
+    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False):
         self.recipient = recipient
         self.session_id = session_id
         self.max_seconds = max_seconds
+        self.card_prompt = card_prompt
 
     def voice_prompt(self, path):
         if PROMPT_DIR == sound_pack.SOUND_DIR / "voice" and str(path) in {str(p) for p in PROMPTS.values()}:
@@ -1847,7 +1856,8 @@ class PiGuidedIO:
 
     def record(self):
         return capture_guided_recording(
-            self.recipient, self.session_id, self.max_seconds
+            self.recipient, self.session_id, self.max_seconds,
+            **({"card_prompt": True} if self.card_prompt else {}),
         )
 
     def wait_for_approval(self, timeout):
@@ -1880,7 +1890,7 @@ def play_next_legacy():
     path, meta = selected
     log(f"playing {path.name} ({len(names)} waiting)")
     try:
-        play_moment("msg_start", "msg-start")
+        play_moment("msg_start")
         subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(path)], check=True, timeout=600)
         if len(names) == 1:
             play_moment("msg_end")
@@ -1906,13 +1916,13 @@ def play_next_legacy():
     refresh_led(force=True)
 
 
-def record_and_send_legacy(settings=None, pressed_at=None):
+def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=None):
     global _recording
     settings = settings or caregiver_settings()
     max_seconds = settings["max_recording_seconds"]
     scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
-    intent = acknowledge_and_classify_legacy_press(pressed_at)
+    intent = "record" if card_prompt_uid else acknowledge_and_classify_legacy_press(pressed_at)
     if intent == "play":
         wait_for_stable_open()
         if card_state in {"claimed", "expired"}:
@@ -1927,7 +1937,10 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         block_unavailable_recipient()
         return
     if card_state == "none":
-        context = recording_recipient_context()
+        context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
+    if card_prompt_uid and (context is None or card_prompt_uid not in context["contact"]["card_uids"]):
+        block_unavailable_recipient()
+        return
     if context is None:
         block_unavailable_recipient()
         return
@@ -2000,7 +2013,7 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         _recording = False
 
 
-def run_guided_once(settings=None):
+def run_guided_once(settings=None, *, card_prompt_uid=None):
     global _guided_active
     settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
@@ -2009,14 +2022,17 @@ def run_guided_once(settings=None):
     if card_state == "expired":
         block_unavailable_recipient()
         return
-    claim = None if card_state == "claimed" else claim_oldest()
+    claim = None if card_state == "claimed" or card_prompt_uid else claim_oldest()
     if card_state == "stale" and not claim:
         block_unavailable_recipient()
         return
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
-        context = recording_recipient_context()
+        context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
+    if card_prompt_uid and (context is None or card_prompt_uid not in context["contact"]["card_uids"]):
+        block_unavailable_recipient()
+        return
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )
@@ -2039,7 +2055,7 @@ def run_guided_once(settings=None):
             if not inbound_audio_authorized(metadata):
                 release_claim(claim)
                 return
-            play_moment("msg_start", "msg-start")
+            play_moment("msg_start")
             play_audio_ordinary(claim["path"])
             if not queued():
                 play_moment("msg_end")
@@ -2052,7 +2068,8 @@ def run_guided_once(settings=None):
         return
 
     led.off()
-    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"])
+    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
+                    **({"card_prompt": True} if card_prompt_uid else {}))
 
     def session_event(kind, **data):
         if kind == "guided_recording_empty":
@@ -2074,7 +2091,7 @@ def run_guided_once(settings=None):
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
-            countdown_path=str(PROMPTS["reply" if claim else "standalone"]),
+            countdown_path=None if card_prompt_uid else str(PROMPTS["reply" if claim else "standalone"]),
             send_prompt_path=str(PROMPTS["send"]),
             delete_warning_path=str(PROMPTS["delete_warning"]),
             not_sent_path=str(PROMPTS["not_sent"]),
@@ -2083,7 +2100,6 @@ def run_guided_once(settings=None):
             auto_record_after_incoming=settings["after_listening"] == "invite_reply",
             account_scope=scope,
             incoming_cue_path=str(sound_pack.cue_path("msg_start")),
-            incoming_voice_path=str(sound_pack.voice_path("msg-start")),
             incoming_end_path=str(sound_pack.cue_path("msg_end")) if not queued() else None,
         )
         if claim:
@@ -2184,7 +2200,7 @@ def claim_only_loop():
             time.sleep(POLL_S)
 
 
-def handle_confirmed_press(closed_at):
+def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
     """Dispatch a debounced press through the normal routing and audio flow."""
     if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
         log_event("cloud_claim_button_pressed")
@@ -2195,11 +2211,15 @@ def handle_confirmed_press(closed_at):
         if interaction_settings["recording_mode"] == "tap_review":
             # The session starts from this press only after its release; it can
             # never be carried into incoming audio, countdown, or recording.
-            acknowledge_guided_press("start_session")
-            wait_for_stable_open()
-            run_guided_once(interaction_settings)
+            if card_prompt_uid:
+                run_guided_once(interaction_settings, card_prompt_uid=card_prompt_uid)
+            else:
+                acknowledge_guided_press("start_session")
+                wait_for_stable_open()
+                run_guided_once(interaction_settings)
         else:
-            record_and_send_legacy(interaction_settings, pressed_at=closed_at)
+            record_and_send_legacy(interaction_settings, pressed_at=closed_at,
+                                   **({"card_prompt_uid": card_prompt_uid} if card_prompt_uid else {}))
     except Exception as exc:
         log(f"button flow error: {exc}")
         log_event(

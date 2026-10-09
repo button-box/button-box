@@ -371,3 +371,29 @@ private acceptance records. Do not publish a final release from automated
 checks alone. Recheck the merged main revision before creating the release tag.
 
 The regular heartbeat reports saved NFC card counts per authorized recipient, scoped to the last verified account and contact-store revision. It never sends card UIDs or local contact labels. Existing cards and subsequent unpairing appear in the authenticated Cloud dashboard after the next heartbeat.
+
+## Card prompt clip delivery
+
+A capable Pi reports `card_name_prompt: true` and accepts `card_prompt` commands
+through the existing inbox and authenticated listened-media download path. The
+payload uses `listener_identity_id` for a person or `listener_link_id` for a
+connected box, plus `voice_pack`, `text_hash`, `media_url`, `sha256` and
+`content_type: "audio/wav"`. Cloud also supplies `listener_first_name` or
+`listener_name`, as for listened clips. There is no message ID or listened
+receipt: a validated preload is ACKed `applied` without playing it.
+
+The existing clip downloader enforces its byte limit, SHA-256 and full 48 kHz,
+16-bit mono PCM validation. Card clips live in the private `card-prompts/`
+directory next to the runtime state, separate from `listened-clips/`, keyed by
+account scope, identity/link, pack and text hash. A private atomic sidecar binds
+the clip to the current name and audio hash. Changed text replaces that pack's
+clip; changed names, stale authorization, corrupt/missing files, revoked people
+or links, and account changes cannot select an old name clip. Cache pruning uses
+the existing bounded clip policy, independently for each clip kind.
+
+A card tap only reads local storage. Missing clips and offline boxes use the
+current pack's `voice-card-prompt.wav`; Robot and DJ always use that generic
+asset. wacli uses only bundled generic invitations and never accesses Cloud.
+The boolean `card_name_prompt` defaults to true, including older saved settings;
+false restores cue-only tap feedback. Unknown top-level settings remain ignored
+and reported, while unsupported command kinds remain rejected.

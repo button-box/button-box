@@ -18,7 +18,7 @@ CUE_NAMES = (
 VOICE_NAMES = (
     "all-set", "online", "msg-start", "count-reply", "count-new", "review",
     "ask-send-1", "ask-send-2", "ask-send-3", "last-chance", "not-sent", "empty",
-    "listened", "card-needed", "card-unknown", "stuck", "fail",
+    "listened", "card-needed", "card-unknown", "card-prompt", "card-saved", "stuck", "fail",
 )
 SOUND_DIR = APP_DIR / "sounds"
 SOUND_STATE = STATE_DIR / "sound-state.json"
