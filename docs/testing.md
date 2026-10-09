@@ -335,7 +335,7 @@ needs loopback socket access for its HTTP tests, but uses no external network.
 Run `make check` using the repository's cached/offline tool approach. Sound pack
 contracts cover checksums, format, exact 0.40 s press duration, go-before-capture
 ordering (including playback failure), the limit-minus-5-s warning at 30/60/120 s,
-PCM exclusion, quiet hours, receipt durability, ask-send rotation, incoming
+start-cue exclusion, quiet hours, receipt durability, deletion tone, incoming
 bookends and bounded update removal/rollback. These tests use synthetic PCM and
 mock hardware/process boundaries; they are not speaker acceptance.
 
@@ -351,3 +351,19 @@ Listen for words lost during the explicitly documented warning exclusion.
 Check loudness, comfort and clarity at low/normal/high master volume on the
 actual speakers. Verify applied release hashes separately from phone playback
 and delivery. Confirm current ElevenLabs terms before first customer shipment.
+
+## Talk modes and review
+
+Run `MSGBOX_TEST_TRANSPORT=wacli make check` and
+`MSGBOX_TEST_TRANSPORT=cloud make check`. Recording contracts exercise all four
+mode/review combinations with synthetic PCM, fresh-press dispatch, held-start
+press rejection in tap mode, release in hold mode, 30/60/120-second limits,
+review timeout, short/silent deletion, exact recipient/transport binding and
+legacy settings migration. The deletion cue is included in sound validation,
+release manifests and bounded apply/rollback checks.
+
+On a physical box, exercise each combination and both cancellation timeouts.
+Check the deletion tone, the 5-second reminder, cue exclusion from recordings,
+short/silent rejection, family-card priority and quiet hours. Before merging a
+release, complete the required physical wacli send/play/reply/card/quiet-hours/
+listened-notice check. Automated checks do not establish those physical outcomes.

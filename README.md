@@ -635,3 +635,21 @@ Button Box uses [wacli](https://github.com/openclaw/wacli) and
 [Comitup](https://github.com/davesteele/comitup). It is not affiliated with or
 endorsed by WhatsApp or Meta.
 --- sha: f40a0195ab57e6bc33c950bdb755f7ea276145e4 ---
+
+### Recording a reply
+
+Choose **Tap to talk** or **Hold to talk**, with the independent
+**Let them hear it before sending** switch. Fresh settings use tap with review
+on; saved legacy settings retain their mode and review choice. Tap starts
+hands-free recording; the next tap stops it. Hold records while pressed and
+stops on release. With review off, stopping sends; with review on, the box plays
+it back and a fresh tap within 10 seconds sends it. Doing nothing after review,
+or missing the second tap before the tap recording limit, deletes it.
+Recordings shorter than 1.5 seconds or without detected voice are also deleted.
+Every deletion plays the same short descending tone, in all voice packs.
+
+The start cue finishes before the microphone opens. The soft limit tick stays
+five seconds before the selected 30, 60 or 120 second limit. Hold mode retains
+short-press playback and both modes retain card routing and quiet hours. See
+[settings compatibility](docs/cloud-settings.md#recording-modes) and
+[deletion cue/checksum](sounds/cues/README.md#deletion-cue).

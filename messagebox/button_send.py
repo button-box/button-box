@@ -54,6 +54,7 @@ from messagebox.runtime_paths import (
     STATE_DIR as DEFAULT_STATE_DIR,
 )
 from messagebox.settings import (
+    normalize_recording_settings,
     in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
 )
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
@@ -1724,11 +1725,13 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap"):
     global _recording
     # Synchronous playback must complete before the microphone is opened.
-    if not card_prompt:
-        play_moment("rec_go")
+    subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("rec_go"))],
+                   check=True, timeout=5)
+    if talk_mode == "hold" and not button.is_pressed:
+        return RecordingResult(None, 0, False)
     capture_id = uuid.uuid4().hex
     raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
     wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
@@ -1760,7 +1763,9 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
     presence_last = started
     closed_since = None
     stopped_by_press = False
-    stop_armed = not card_prompt
+    timed_out = False
+    open_since = None
+    stop_armed = not button.is_pressed
     try:
         with open(raw_path, "wb") as raw:
             while True:
@@ -1772,7 +1777,17 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                     if chunk:
                         raw.write(chunk)
                         vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
-                if button.is_pressed and stop_armed:
+                if now - started >= max_seconds:
+                    timed_out = talk_mode == "tap"
+                    break
+                if talk_mode == "hold":
+                    if not button.is_pressed:
+                        open_since = open_since or now
+                        if now - open_since >= CONFIRM_RELEASE_S:
+                            break
+                    else:
+                        open_since = None
+                elif button.is_pressed and stop_armed:
                     closed_since = closed_since or now
                     if now - closed_since >= CONFIRM_PRESS_S:
                         stopped_by_press = True
@@ -1781,10 +1796,6 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                     closed_since = None
                     if not button.is_pressed:
                         stop_armed = True
-                if vad.silence_expired(now):
-                    break
-                if now - started >= max_seconds:
-                    break
                 if now - presence_last >= 8:
                     presence("recording", recipient)
                     presence_last = now
@@ -1820,51 +1831,35 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
             acknowledge_guided_press("stop_recording", session_id)
             wait_for_stable_open()
 
+    recorded_seconds = raw_path.stat().st_size / (16000 * 2)
     bounds = vad.trim_bounds()
     if bounds is None:
         raw_path.unlink(missing_ok=True)
-        return RecordingResult(None, time.monotonic() - started, False)
+        return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
     duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
     raw_path.unlink(missing_ok=True)
-    return RecordingResult(str(wav_path), duration, True)
+    return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds)
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False):
+    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False, talk_mode="tap"):
         self.recipient = recipient
         self.session_id = session_id
         self.max_seconds = max_seconds
         self.card_prompt = card_prompt
-
-    def voice_prompt(self, path):
-        if PROMPT_DIR == sound_pack.SOUND_DIR / "voice" and str(path) in {str(p) for p in PROMPTS.values()}:
-            return sound_pack.voice_path(Path(path).stem.removeprefix("voice-"))
-        return path
+        self.talk_mode = talk_mode
 
     def play_ordinary(self, path):
-        if str(path) == str(PROMPTS["send"]):
-            selected = sound_pack.next_send_prompt()
-            path = (selected if PROMPT_DIR == sound_pack.SOUND_DIR / "voice"
-                    else PROMPT_DIR / selected.name)
-        else:
-            path = self.voice_prompt(path)
         play_audio_ordinary(path)
-
-    def play_review_for_approval(self, path):
-        play_moment(voice="review")
-        return play_audio_for_approval(path, self.session_id, action="approve_review")
 
     def record(self):
         return capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
-            **({"card_prompt": True} if self.card_prompt else {}),
+            card_prompt=self.card_prompt, talk_mode=self.talk_mode,
         )
 
     def wait_for_approval(self, timeout):
         return wait_for_approval(timeout, self.session_id)
-
-    def play_warning_for_approval(self, path):
-        return play_warning_for_approval(self.voice_prompt(path), self.session_id)
 
     def delete(self, path):
         try:
@@ -1917,9 +1912,7 @@ def play_next_legacy():
 
 
 def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=None):
-    global _recording
     settings = settings or caregiver_settings()
-    max_seconds = settings["max_recording_seconds"]
     scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
     intent = "record" if card_prompt_uid else acknowledge_and_classify_legacy_press(pressed_at)
@@ -1950,67 +1943,27 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
         return
     if context["via_card"] and not button.is_pressed:
         return
-    part = os.path.join(OUTBOX_DIR, f"{int(time.time() * 1000)}.part")
-    recorder = subprocess.Popen(
-        [
-            "arecord",
-            "-q",
-            "-D",
-            MIC_DEV,
-            "-t",
-            "wav",
-            "-f",
-            "S16_LE",
-            "-r",
-            "48000",
-            "-c",
-            "1",
-            "-d",
-            str(max_seconds + 2),
-            part,
-        ]
-    )
-    _recording = True
-    led.on()
-    started = time.monotonic()
-    warning = RecordingLimitCue(started, max_seconds)
-    open_since = None
-    presence_last = None
+    session_id = uuid.uuid4().hex
+    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
+                    card_prompt=bool(card_prompt_uid), talk_mode="hold")
+    global _guided_active
+    _guided_active = True
+    outcome = None
     try:
-        while True:
-            time.sleep(POLL_S)
-            now = time.monotonic()
-            warning.update(now)
-            if now - started >= MIN_HOLD_S and (
-                presence_last is None or now - presence_last >= 8
-            ):
-                presence("recording", recipient)
-                presence_last = now
-            if not button.is_pressed:
-                open_since = open_since or now
-                if now - open_since >= CONFIRM_RELEASE_S:
-                    break
-            else:
-                open_since = None
-            if now - started >= max_seconds:
-                break
-        held = min(time.monotonic() - started, max_seconds)
-        led.off()
-        recorder.send_signal(signal.SIGINT)
-        recorder.wait()
-        warning.finish(time.monotonic())
-        if presence_last:
-            presence("paused", recipient)
-        final_path = part[:-5] + f"-{held:.1f}.wav"
-        bind_legacy_job_recipient(final_path, recipient, account_scope=scope)
-        os.replace(part, final_path)
+        outcome = GuidedSession(io, outbox_store, log_event).run(
+            recipient=recipient, flow_kind="standalone", session_id=session_id,
+            deleted_cue_path=str(sound_pack.cue_path("deleted")),
+            review_before_send=settings.get("review_before_send", False), account_scope=scope,
+        )
+    except Exception:
+        cleanup_temp_recordings()
+        raise
     finally:
-        warning.finish(time.monotonic())
-        if recorder.poll() is None:
-            recorder.send_signal(signal.SIGINT)
-            recorder.wait(timeout=3)
-        led.off()
-        _recording = False
+        _guided_active = False
+        mark_queue_known()
+        refresh_led(force=True)
+        if should_ring_after_unsent_session(outcome, bool(queued()), quiet_hours(settings)):
+            ring_alert(source="queued_after_unsent")
 
 
 def run_guided_once(settings=None, *, card_prompt_uid=None):
@@ -2072,8 +2025,6 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
                     **({"card_prompt": True} if card_prompt_uid else {}))
 
     def session_event(kind, **data):
-        if kind == "guided_recording_empty":
-            play_moment("oops", "empty")
         if kind == "guided_session_started" and claim:
             data["source_file"] = claim["path"].name
         log_event(kind, **data)
@@ -2091,10 +2042,8 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
-            countdown_path=None if card_prompt_uid else str(PROMPTS["reply" if claim else "standalone"]),
-            send_prompt_path=str(PROMPTS["send"]),
-            delete_warning_path=str(PROMPTS["delete_warning"]),
-            not_sent_path=str(PROMPTS["not_sent"]),
+            deleted_cue_path=str(sound_pack.cue_path("deleted")),
+            review_before_send=settings.get("review_before_send", True),
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
             auto_record_after_incoming=settings["after_listening"] == "invite_reply",
@@ -2206,11 +2155,11 @@ def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         log_event("cloud_claim_button_pressed")
         wait_for_stable_open()
         return True
-    interaction_settings = caregiver_settings()
+    interaction_settings = normalize_recording_settings(caregiver_settings())
     try:
-        if interaction_settings["recording_mode"] == "tap_review":
+        if interaction_settings["talk_mode"] == "tap":
             # The session starts from this press only after its release; it can
-            # never be carried into incoming audio, countdown, or recording.
+            # never be carried into incoming audio or recording.
             if card_prompt_uid:
                 run_guided_once(interaction_settings, card_prompt_uid=card_prompt_uid)
             else:

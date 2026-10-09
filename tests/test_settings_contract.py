@@ -32,6 +32,10 @@ class SettingsContractTests(unittest.TestCase):
         self.assertEqual(contract["keys"]["master_volume_percent"], {"type": "int", "min": 0, "max": 100})
         self.assertEqual(contract["keys"]["revision"], {"type": "int", "min": 0})
         self.assertEqual(contract["keys"]["timezone"], {"type": "string", "max": 64})
+        self.assertEqual(contract["keys"]["talk_mode"], {"type": "enum", "values": ["hold", "tap"]})
+        self.assertEqual(contract["keys"]["review_before_send"], {"type": "bool"})
+        self.assertEqual(contract["capabilities"]["talk_modes"], ["tap", "hold"])
+        self.assertIs(contract["capabilities"]["review_before_send"], True)
         for key, descriptor in contract["keys"].items():
             for value in descriptor.get("values", []):
                 with self.subTest(key=key, value=value):
@@ -62,7 +66,7 @@ class SettingsContractTests(unittest.TestCase):
             path = repo / "messagebox" / "settings.py"
             source = path.read_text()
             # Represent the older validation policy without the new filter.
-            source = source.replace('    document = {key: value for key, value in document.items() if key in _ROOT_KEYS}\n', '')
+            source = source.replace('    document = normalize_recording_settings(\n        {key: value for key, value in document.items() if key in _ROOT_KEYS})\n', '    document = normalize_recording_settings(document)\n')
             path.write_text(source)
             result = self.export(repo)
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -18,6 +18,7 @@ from messagebox.runtime_paths import APP_DIR, SETTINGS_FILE
 
 
 SCHEMA_VERSION = 1
+TALK_MODES = frozenset({"tap", "hold"})
 RECORDING_MODES = frozenset({"tap_review", "hold_release"})
 AFTER_LISTENING = frozenset({"play_only", "invite_reply"})
 MAX_RECORDING_SECONDS = frozenset({30, 60, 120})
@@ -46,6 +47,8 @@ _ROOT_KEYS = {
     "revision",
     "timezone",
     "recording_mode",
+    "talk_mode",
+    "review_before_send",
     "after_listening",
     "max_recording_seconds",
     "ringtone_id",
@@ -57,7 +60,8 @@ _ROOT_KEYS = {
     "card_name_prompt",
     "swoosh_sound_enabled",
 }
-_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack", "card_name_prompt"}
+_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack", "card_name_prompt",
+                                   "recording_mode", "talk_mode", "review_before_send"}
 
 
 class SettingsError(ValueError):
@@ -123,7 +127,9 @@ def defaults(environ=None):
         "version": SCHEMA_VERSION,
         "revision": 0,
         "timezone": timezone,
-        "recording_mode": "hold_release",
+        "recording_mode": "tap_review",
+        "talk_mode": "tap",
+        "review_before_send": True,
         "after_listening": "play_only",
         "max_recording_seconds": maximum,
         "ringtone_id": ringtone,
@@ -141,6 +147,25 @@ def defaults(environ=None):
     }
 
 
+def normalize_recording_settings(document):
+    """New fields are authoritative; legacy-only saved documents retain their choice."""
+    document = dict(document)
+    legacy = document.get("recording_mode")
+    if "recording_mode" in document and (not isinstance(legacy, str) or legacy not in RECORDING_MODES):
+        raise SettingsError("recording mode is invalid")
+    if "talk_mode" not in document and "review_before_send" not in document:
+        if legacy is None:
+            raise SettingsError("recording settings are missing")
+        document["talk_mode"] = "tap" if legacy == "tap_review" else "hold"
+        document["review_before_send"] = legacy == "tap_review"
+    if "talk_mode" not in document or "review_before_send" not in document:
+        raise SettingsError("recording settings are incomplete")
+    # The old interface can represent only these two combinations. Keep its
+    # nearest mode for consumers that still display the legacy field.
+    document["recording_mode"] = "tap_review" if document["talk_mode"] == "tap" else "hold_release"
+    return document
+
+
 def ignored_settings(document):
     """Return skipped names that fit the bounded Cloud acknowledgement field."""
     if not isinstance(document, dict):
@@ -152,7 +177,8 @@ def ignored_settings(document):
 def validate(document):
     if not isinstance(document, dict):
         raise SettingsError("settings have an invalid schema")
-    document = {key: value for key, value in document.items() if key in _ROOT_KEYS}
+    document = normalize_recording_settings(
+        {key: value for key, value in document.items() if key in _ROOT_KEYS})
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
         # Persisted settings from earlier releases retain their cue and default voice.
         document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True, **document}
@@ -170,6 +196,10 @@ def validate(document):
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise SettingsError("time zone is invalid") from exc
+    if not isinstance(document["talk_mode"], str) or document["talk_mode"] not in TALK_MODES:
+        raise SettingsError("talk mode is invalid")
+    if type(document["review_before_send"]) is not bool:
+        raise SettingsError("review before send value is invalid")
     if document["recording_mode"] not in RECORDING_MODES:
         raise SettingsError("recording mode is invalid")
     if document["after_listening"] not in AFTER_LISTENING:
@@ -295,7 +325,11 @@ class SettingsStore:
             try:
                 return self._read(self.last_good_path), True
             except (FileNotFoundError, OSError, ValueError, SettingsError):
-                return defaults(self.environ), True
+                # A broken saved configuration is not a fresh box. Retain the
+                # earlier fallback rather than silently opting into tap mode.
+                document = defaults(self.environ)
+                document.update(recording_mode="hold_release", talk_mode="hold", review_before_send=False)
+                return document, True
 
     def _write_pair(self, document):
         _atomic_json(self.path, document)
@@ -306,7 +340,8 @@ class SettingsStore:
             raise SettingsError("settings request must be an object")
         candidate = {"voice_pack": "jessica", "card_name_prompt": True, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
-        candidate = {key: value for key, value in candidate.items() if key in _ROOT_KEYS}
+        candidate = normalize_recording_settings(
+            {key: value for key, value in candidate.items() if key in _ROOT_KEYS})
         if set(candidate) != value_keys:
             raise SettingsError("settings request has an invalid schema")
         self.path.parent.mkdir(parents=True, exist_ok=True)

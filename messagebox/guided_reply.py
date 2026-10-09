@@ -150,6 +150,8 @@ class RecordingResult:
     path: str | None
     duration: float
     meaningful: bool
+    timed_out: bool = False
+    recorded_seconds: float | None = None
 
 
 class EnergyVAD:
@@ -518,7 +520,7 @@ class GuidedSession:
 
     ``io`` owns real audio and button operations.  Ordinary playback never
     returns a button result, making carried presses impossible by contract.
-    Only ``wait_for_approval`` and ``play_warning_for_approval`` can approve.
+    Only ``wait_for_approval`` can approve a reviewed recording.
     """
 
     def __init__(self, io, outbox: OutboxStore, event):
@@ -531,10 +533,8 @@ class GuidedSession:
         *,
         recipient: str,
         flow_kind: str,
-        countdown_path: str | None,
-        send_prompt_path: str,
-        delete_warning_path: str,
-        not_sent_path: str,
+        deleted_cue_path: str,
+        review_before_send: bool = True,
         incoming_path: str | None = None,
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
@@ -556,21 +556,25 @@ class GuidedSession:
             if not auto_record_after_incoming:
                 self.event("guided_playback_only", session_id=session_id)
                 return "played"
-        if countdown_path:
-            self.io.play_ordinary(countdown_path)
         recording: RecordingResult = self.io.record()
-        if not recording.meaningful or not recording.path:
+        if recording.timed_out:
             if recording.path:
                 self.io.delete(recording.path)
+            self.io.play_ordinary(deleted_cue_path)
+            self.event("guided_deleted", session_id=session_id, flow=flow_kind, reason="recording_timeout")
+            return "deleted"
+        recorded_seconds = recording.duration if recording.recorded_seconds is None else recording.recorded_seconds
+        if not recording.meaningful or not recording.path or recorded_seconds < 1.5:
+            if recording.path:
+                self.io.delete(recording.path)
+            self.io.play_ordinary(deleted_cue_path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
-        approved = self.io.play_review_for_approval(recording.path)
-        self.event("guided_review_approved" if approved else "guided_review_played", session_id=session_id, duration=recording.duration)
-        if not approved:
-            self.io.play_ordinary(send_prompt_path)
+        approved = not review_before_send
+        if review_before_send:
+            self.io.play_ordinary(recording.path)
+            self.event("guided_review_played", session_id=session_id, duration=recording.duration)
             approved = self.io.wait_for_approval(10.0)
-        if not approved:
-            approved = self.io.play_warning_for_approval(delete_warning_path)
         if approved:
             job = self.outbox.approve(
                 recording.path,
@@ -588,7 +592,7 @@ class GuidedSession:
             )
             self.io.delete(recording.path)
             return "approved"
-        self.io.play_ordinary(not_sent_path)
         self.io.delete(recording.path)
+        self.io.play_ordinary(deleted_cue_path)
         self.event("guided_deleted", session_id=session_id, flow=flow_kind)
         return "deleted"

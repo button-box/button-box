@@ -51,3 +51,19 @@ button owner uses a cached name clip only when that value exactly matches the
 current pack at playback; absent or mismatched values use the current pack's
 `voice-listened.wav`. This also handles a voice change while a notice is queued.
 Cloud generation and dashboard picker implementation belong to the Cloud repo.
+
+## Recording modes
+
+`talk_mode` is `tap` or `hold`; `review_before_send` is boolean. Fresh settings
+use tap with review on. Legacy-only saved settings map `tap_review` to tap with
+review, and `hold_release` to hold without review; loading preserves revision
+and does not rewrite the saved file. The new pair is authoritative when both
+interfaces are present. Partial new pairs and invalid known values are rejected.
+The legacy `recording_mode` returned to old consumers is `tap_review` for tap
+and `hold_release` for hold, the closest available old mode.
+
+Capabilities advertise `talk_modes: ["tap", "hold"]` and
+`review_before_send: true`. Cloud must use legacy `recording_mode` documents for
+boxes without these capabilities and show that the other combinations require
+an update. The fleet fixture must be regenerated after the coordinator commits
+the completed release; an uncommitted export still carries the base build id.

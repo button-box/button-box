@@ -1,6 +1,6 @@
 # Button Box sound design v1
 
-- [`cues/README.md`](cues/README.md): 15 original motif cues and their checksums.
+- [`cues/README.md`](cues/README.md): 16 original motif cues and their checksums.
 - [`voice/README.md`](voice/README.md): 17 ElevenLabs Jessica lines, transcripts,
   checksums and commercial-use terms.
 - [`ringtones/README.md`](ringtones/README.md): the seven ringtone choices.
