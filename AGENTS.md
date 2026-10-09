@@ -45,6 +45,11 @@ The same code runs in two modes. **wacli** boxes are self-hosted: they send and 
 - In the PR description, add a **wacli impact** section: the shared files you changed, what changes for wacli (or "none"), and the tests that prove it.
 - Do not merge a release into `main` until it passes the wacli check on a physical wacli box: send a voice note, play it, reply from the box, tap a family card, quiet hours, and listened notices.
 
+## Cloud compatibility
+
+- Settings documents and command payloads must tolerate unknown keys while preserving validation of known keys and fail-closed routing. Skip unknown top-level settings keys and report them in `ignored_settings`; do not silently accept unsupported command kinds.
+- When a release changes accepted settings, setting keys, or command kinds, regenerate its fleet fixture with `python3 scripts/dev/settings_contract.py` and hand it to the Cloud repository at `tests/fixtures/box-builds/`. Use `--repo <path>` to describe an older checkout.
+
 ## Testing
 
 - Add focused tests that protect changed behavior and realistic failure boundaries, including restart or idempotency when relevant.

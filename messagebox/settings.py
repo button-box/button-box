@@ -139,9 +139,18 @@ def defaults(environ=None):
     }
 
 
+def ignored_settings(document):
+    """Return skipped names that fit the bounded Cloud acknowledgement field."""
+    if not isinstance(document, dict):
+        return []
+    return sorted(key for key in document if key not in _ROOT_KEYS
+                  and isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key))[:32]
+
+
 def validate(document):
     if not isinstance(document, dict):
         raise SettingsError("settings have an invalid schema")
+    document = {key: value for key, value in document.items() if key in _ROOT_KEYS}
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
         # Persisted settings from earlier releases retain their cue and default voice.
         document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", **document}
@@ -293,6 +302,7 @@ class SettingsStore:
             raise SettingsError("settings request must be an object")
         candidate = {"voice_pack": "jessica", **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
+        candidate = {key: value for key, value in candidate.items() if key in _ROOT_KEYS}
         if set(candidate) != value_keys:
             raise SettingsError("settings request has an invalid schema")
         self.path.parent.mkdir(parents=True, exist_ok=True)

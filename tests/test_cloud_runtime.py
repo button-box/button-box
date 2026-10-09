@@ -1041,6 +1041,40 @@ class CloudRuntimeTests(unittest.TestCase):
                 "payload": {"settings": desired, "expected_revision": current["revision"],
                             "desired_revision": desired["revision"]}}
 
+    def test_settings_unknown_keys_report_through_restart_and_completed_replay(self):
+        self.runtime.heartbeat()
+        item = self.settings_command(master_volume_percent=37, future_setting={"value": 1})
+        item.update(sequence=1, created_at=NOW, expires_at=NOW + 100)
+        self.client.items = [item]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["ignored_settings"], ["future_setting"])
+        saved, warning = self.runtime.settings.load()
+        self.assertFalse(warning)
+        self.assertEqual(saved["master_volume_percent"], 37)
+        self.assertNotIn("future_setting", saved)
+        self.runtime = self.restart()
+        (self.root / "applied-settings.json").write_text(json.dumps({"revision": 1, "settings": saved}))
+        self.client.items = []
+        self.runtime.poll_once()
+        applied = self.client.acks[-1]
+        self.assertEqual(applied["state"], "applied")
+        self.assertEqual(applied["ignored_settings"], ["future_setting"])
+        self.client.items = [item]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1], applied)
+        self.assertEqual(self.runtime.settings.load()[0]["revision"], 1)
+
+    def test_unknown_settings_do_not_hide_invalid_known_values(self):
+        self.runtime.heartbeat()
+        original, _ = self.runtime.settings.load()
+        item = self.settings_command(master_volume_percent=101, future_setting=True)
+        item.update(sequence=1, created_at=NOW, expires_at=NOW + 100)
+        self.client.items = [item]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertEqual(self.client.acks[-1]["error_code"], "device_command_rejected")
+        self.assertEqual(self.runtime.settings.load()[0], original)
+
     def settings_audio_owner(self, revision=0):
         return mock.patch.multiple(button_send,
             cloud_audio_requests=self.runtime.audio_requests,

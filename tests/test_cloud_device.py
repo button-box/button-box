@@ -18,6 +18,9 @@ from messagebox.cloud_device import (
 
 
 class CloudCapabilityTests(unittest.TestCase):
+    def test_unknown_settings_tolerance_is_advertised(self):
+        self.assertEqual(capabilities()["settings_unknown_keys"], "ignore")
+
     def test_swoosh_capability_is_advertised(self):
         self.assertIs(capabilities()["swoosh_sound_enabled"], True)
 
