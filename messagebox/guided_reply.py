@@ -531,7 +531,7 @@ class GuidedSession:
         *,
         recipient: str,
         flow_kind: str,
-        countdown_path: str,
+        countdown_path: str | None,
         send_prompt_path: str,
         delete_warning_path: str,
         not_sent_path: str,
@@ -556,7 +556,8 @@ class GuidedSession:
             if not auto_record_after_incoming:
                 self.event("guided_playback_only", session_id=session_id)
                 return "played"
-        self.io.play_ordinary(countdown_path)
+        if countdown_path:
+            self.io.play_ordinary(countdown_path)
         recording: RecordingResult = self.io.record()
         if not recording.meaningful or not recording.path:
             if recording.path:

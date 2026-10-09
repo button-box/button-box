@@ -31,7 +31,7 @@ keys and Cloud command payloads are unchanged.
 
 `voice_pack` defaults to `jessica`; absent or unknown values normalize to Jessica
 without losing the settings revision. Supported ids are `jessica`, `pirate`,
-`alien`, `dj`, `robot`, `french` and `charlie`. Jessica lives in `sounds/voice/`;
+`alien`, `dj`, `robot`, `french`, `charlie` and `tata`. Jessica lives in `sounds/voice/`;
 other packs live in `sounds/voices/<id>/`. Every spoken prompt resolves the current
 pack at use, with a per-file Jessica fallback and one warning per missing line.
 

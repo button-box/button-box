@@ -96,10 +96,10 @@ def log_event(**ev):
         append_event(EVENTS_FILE, ev)
     except Exception:
         print("event log error", flush=True)
-# EQ for the small boxy speaker: cut low-mid mud, lift presence/highs, then
-# normalize loudness. Set to "" to disable, or override with any ffmpeg -af chain.
+# Gentle presence and bounded peaks for the small speaker. Set to "" to disable,
+# or override with any ffmpeg -af chain.
 EQ_FILTER = os.environ.get("MSGBOX_EQ_FILTER",
-    "highpass=f=150,treble=g=6:f=3000,loudnorm=I=-16:TP=-1.5")
+    "highpass=f=100,equalizer=f=2500:t=q:w=1:g=2,loudnorm=I=-16:TP=-2:LRA=11:linear=true,alimiter=limit=0.79:level=disabled")
 STATE_FILE = str(STATE_DIR / "seen.json")
 _last_queue_ms = 0
 

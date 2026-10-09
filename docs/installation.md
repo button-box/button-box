@@ -169,7 +169,7 @@ ephemeral and must match the marker after every daemon reload.
 
 ## Sound pack v1 updates
 
-`make check` validates the 15 cues and 17 Jessica lines without a network or
+`make check` validates the 15 cues and 19 Jessica lines without a network or
 speaker. The bounded release manifest includes every new WAV, manifest, cue
 catalog and README. Existing boxes can receive the pack through the bounded
 updater; full setup is unnecessary. The updater checks retired sound paths,

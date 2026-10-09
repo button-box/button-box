@@ -54,9 +54,10 @@ _ROOT_KEYS = {
     "arrival_signal",
     "quiet_hours",
     "nfc_confirmation_beep",
+    "card_name_prompt",
     "swoosh_sound_enabled",
 }
-_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack"}
+_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack", "card_name_prompt"}
 
 
 class SettingsError(ValueError):
@@ -135,6 +136,7 @@ def defaults(environ=None):
         },
         "nfc_confirmation_beep": _env_flag(environ, "MSGBOX_NFC_DETECTION_BEEP", True),
         "swoosh_sound_enabled": True,
+        "card_name_prompt": True,
         "voice_pack": "jessica",
     }
 
@@ -153,7 +155,7 @@ def validate(document):
     document = {key: value for key, value in document.items() if key in _ROOT_KEYS}
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
         # Persisted settings from earlier releases retain their cue and default voice.
-        document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", **document}
+        document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True, **document}
         document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
         raise SettingsError("settings have an invalid schema")
@@ -193,6 +195,8 @@ def validate(document):
         raise SettingsError("quiet hours end time is invalid")
     if type(document["nfc_confirmation_beep"]) is not bool:
         raise SettingsError("NFC confirmation beep value is invalid")
+    if type(document["card_name_prompt"]) is not bool:
+        raise SettingsError("card name prompt value is invalid")
     if type(document["swoosh_sound_enabled"]) is not bool:
         raise SettingsError("swoosh sound value is invalid")
     return copy.deepcopy(document)
@@ -300,7 +304,7 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
-        candidate = {"voice_pack": "jessica", **candidate}
+        candidate = {"voice_pack": "jessica", "card_name_prompt": True, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
         candidate = {key: value for key, value in candidate.items() if key in _ROOT_KEYS}
         if set(candidate) != value_keys:

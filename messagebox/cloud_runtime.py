@@ -775,7 +775,10 @@ class CloudRuntime:
         return hashlib.sha256((scope + ":" + listener_id).encode()).hexdigest()
 
     def _prune_listened_clips(self):
-        directory = self.state_path.parent / "listened-clips"
+        for name in ("listened-clips", "card-prompts"):
+            self._prune_clip_directory(self.state_path.parent / name)
+
+    def _prune_clip_directory(self, directory):
         # Only the poller writes this directory; discard interrupted downloads.
         for temporary in directory.glob(".*.part"):
             temporary.unlink(missing_ok=True)
@@ -792,9 +795,14 @@ class CloudRuntime:
                 path.unlink(missing_ok=True)
             else:
                 retained += 1
+        for metadata in directory.glob("*.json"):
+            if not metadata.with_suffix(".wav").exists():
+                metadata.unlink(missing_ok=True)
 
-    def _listened_clip(self, payload, scope):
+    def _listened_clip(self, payload, scope, *, kind="listened"):
         """A failed optional clip always leaves the bundled voice available."""
+        if kind not in {"listened", "card_prompt"}:
+            raise CloudRuntimeError("clip kind is unsupported")
         fields = ("text_hash", "media_url", "sha256", "content_type")
         if not any(field in payload for field in fields):
             return ""
@@ -805,7 +813,7 @@ class CloudRuntime:
                 or not isinstance(payload.get("media_url"), str)
                 or payload.get("content_type") != "audio/wav"):
             return ""
-        directory = self.state_path.parent / "listened-clips"
+        directory = self.state_path.parent / ("card-prompts" if kind == "card_prompt" else "listened-clips")
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
         prefix = self._listened_prefix(scope, payload.get("listener_link_id", payload.get("listener_identity_id")))
@@ -817,9 +825,10 @@ class CloudRuntime:
         for prior in directory.glob(prefix + "-*.wav"):
             if prior != path:
                 prior.unlink(missing_ok=True)
+                prior.with_suffix(".json").unlink(missing_ok=True)
         temporary = directory / f".{uuid.uuid4().hex}.part"
         try:
-            if path.exists() and path.stat().st_size <= MAX_LISTENED_CLIP_BYTES:
+            if path.is_file() and not path.is_symlink() and path.stat().st_size <= MAX_LISTENED_CLIP_BYTES:
                 audio = path.read_bytes()
             else:
                 audio = self.client.media(payload["media_url"], limit=MAX_LISTENED_CLIP_BYTES)
@@ -851,6 +860,64 @@ class CloudRuntime:
             return ""
         finally:
             temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _card_prompt_name(person, *, box):
+        name = person["box_name" if box else "display_name"].strip()
+        if box:
+            return name
+        return re.sub(r"[\x00-\x1f\x7f]", "", name.split()[0] if name else "")[:24]
+
+    def _card_prompt(self, item):
+        payload = item["payload"]
+        box = "listener_link_id" in payload
+        recipient = payload.get("listener_link_id" if box else "listener_identity_id")
+        if (not _valid_id(recipient) or box and "listener_identity_id" in payload
+                or payload.get("voice_pack") not in VOICE_PACKS
+                or payload["voice_pack"] in {"robot", "dj"}):
+            raise CloudRuntimeError("card prompt is invalid")
+        snapshot = self._snapshot()
+        people = self._boxes() if box else self._people()
+        person = people.get(recipient)
+        if person is None:
+            raise CloudRuntimeError("card recipient is no longer authorized")
+        name = payload.get("listener_name" if box else "listener_first_name")
+        if not isinstance(name, str) or not 0 < len(name) <= 24:
+            raise CloudRuntimeError("card prompt name is invalid")
+        if name != self._card_prompt_name(person, box=box):
+            # A name-change command can precede the next heartbeat snapshot.
+            raise CloudCommandDeferred("card prompt name snapshot is stale")
+        path = self._listened_clip(payload, snapshot["account_scope"], kind="card_prompt")
+        if not path:
+            raise CloudRuntimeError("card prompt clip is unavailable")
+        atomic_json(Path(path).with_suffix(".json"), {
+            "name": name, "sha256": payload["sha256"],
+        })
+        self._ack(item["operation_id"], "applied")
+
+    def card_prompt_clip(self, jid, pack):
+        """Read a preloaded clip only; taps never download or synthesize audio."""
+        if pack not in VOICE_PACKS or pack in {"robot", "dj"}:
+            return ""
+        try:
+            snapshot = self._snapshot()
+            recipient = self.recipient_id(jid)
+            person = (self._boxes() if jid.startswith("box:") else self._people())[recipient]
+            name = self._card_prompt_name(person, box=jid.startswith("box:"))
+            prefix = self._listened_prefix(snapshot["account_scope"], recipient)
+            voice_key = hashlib.sha256(json.dumps(pack, separators=(",", ":")).encode()).hexdigest()[:16]
+            directory = self.state_path.parent / "card-prompts"
+            for path in directory.glob(f"{prefix}-{voice_key}-*.wav"):
+                metadata = path.with_suffix(".json")
+                if path.is_symlink() or metadata.is_symlink() or path.stat().st_size > MAX_LISTENED_CLIP_BYTES:
+                    continue
+                document = json.loads(metadata.read_text())
+                if (isinstance(document, dict) and document.get("name") == name
+                        and hashlib.sha256(path.read_bytes()).hexdigest() == document.get("sha256")):
+                    return str(path)
+        except (OSError, ValueError, KeyError, CloudRuntimeError):
+            pass
+        return ""
 
     def listened_status(self, metadata):
         snapshot = self._snapshot()
@@ -941,6 +1008,8 @@ class CloudRuntime:
             return self._audio(item, server_time)
         if kind == "listened":
             return self._listened(item, server_time)
+        if kind == "card_prompt":
+            return self._card_prompt(item)
         if kind == "delete_message":
             self._delete(payload.get("message_id"))
             self._ack(item["operation_id"], "applied")
@@ -1143,7 +1212,7 @@ class CloudRuntime:
         for item in sorted(items, key=lambda entry: (entry.get("kind") != "delete_message", entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"audio", "listened", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
+                    or item.get("kind") not in {"audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (
@@ -1306,6 +1375,13 @@ def record_played(metadata):
 def listened_status(metadata):
     """Check local authorization only; the button owner never downloads media."""
     return CloudRuntime(client=object()).listened_status(metadata)
+
+
+def card_prompt_clip(jid, pack):
+    try:
+        return CloudRuntime(client=object()).card_prompt_clip(jid, pack)
+    except (OSError, ValueError, CloudRuntimeError):
+        return ""
 
 
 def account_scope(*, fresh=False):

@@ -142,6 +142,8 @@ SOUND_SOURCES = (
     "sounds/voice/voice-ask-send-2.wav",
     "sounds/voice/voice-ask-send-3.wav",
     "sounds/voice/voice-card-needed.wav",
+    "sounds/voice/voice-card-prompt.wav",
+    "sounds/voice/voice-card-saved.wav",
     "sounds/voice/voice-card-unknown.wav",
     "sounds/voice/voice-count-new.wav",
     "sounds/voice/voice-count-reply.wav",

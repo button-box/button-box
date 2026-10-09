@@ -178,6 +178,7 @@ class ButtonRoutingTests(unittest.TestCase):
 
         with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
              mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "play_moment") as cues, \
              mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
              mock.patch.object(button_send, "archive_played_file") as archive, \
              mock.patch.object(button_send, "react_played"), \
@@ -189,6 +190,7 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(archive.call_args.args[1], standalone_wav)
         self.assertTrue(cloud_wav.exists())
         self.assertTrue(cloud_sidecar.exists())
+        self.assertEqual(cues.call_args_list, [mock.call("msg_start")])
 
     def test_guided_recheck_releases_cloud_claim_after_mode_switch(self):
         self.add_family()

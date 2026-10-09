@@ -109,6 +109,22 @@
    "text": "I need a grown-up to set me sails!",
    "seconds": 2.88,
    "sha256": "b70d5d33b858719c01e9d2a15ae4c5b0775107da1c198856abec6f53f8a05ab3"
+  },
+  {
+   "file": "voice-card-prompt.wav",
+   "cue": "BX-CARD-PROMPT",
+   "purpose": "Generic family-card recording invitation",
+   "seconds": 3.2,
+   "sha256": "5d650bff348ff6a6978ec9a1945a86b9e7d3b7c0e9ad620ce966be22b103723d",
+   "text": "Arr! Ready! Press and talk now!"
+  },
+  {
+   "file": "voice-card-saved.wav",
+   "cue": "BX-CARD-SAVED",
+   "purpose": "Successful family-card pairing confirmation",
+   "seconds": 3.2,
+   "sha256": "c77989effccdf55ccf526c20958233dc736ecb46d48f6ca4f8b24d591400ea72",
+   "text": "Arr! A new family card for the crew!"
   }
  ]
 }

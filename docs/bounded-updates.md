@@ -168,7 +168,7 @@ press after `messageboxctl reset-wifi` without manually starting a service.
 ## Sound design v1
 
 The canonical manifest and exact updater allowlist include all 15 cue WAVs and
-17 voice WAVs plus their manifests, READMEs and cue catalog. Candidate preflight
+19 voice WAVs plus their manifests, READMEs and cue catalog. Candidate preflight
 checks complete sound packs, SHA-256, mono PCM format and exact press duration
 before any service or installed-file mutation. Full setup is unnecessary.
 

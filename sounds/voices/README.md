@@ -1,6 +1,6 @@
 # Button Box voice packs
 
-Pirate, Alien, DJ, Robot, French and Charlie each contain 17 ElevenLabs lines,
+Pirate, Alien, DJ, Robot, French and Charlie each contain 19 ElevenLabs lines,
 generated on a paid plan with `eleven_v3`, seed 7. Jessica remains in `../voice/`.
 Each manifest retains the generation metadata, transcript and SHA-256 of every
 shipped recording, including DJ's music bed and Robot's post effects.
@@ -20,6 +20,11 @@ checksums for every pack. Runtime falls back to Jessica per missing file, loggin
 each missing line once. Capabilities list only complete, validated packs, with
 Jessica always included. No audio is synthesized on the box.
 
+Every pack includes the B48 generic `voice-card-prompt.wav` and pairing
+`voice-card-saved.wav`; transcripts match the source manifests by SHA-256.
+Cloud name invitations use the same pack and are cached separately from listened
+clips. Robot and DJ always use their bundled generic invitation with its effects.
+
 ## tata (Français · Tata)
 
-Native French woman voice; all 17 lines in French (language fr). ElevenLabs voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16. "carte famille" is the French for family card.
+Native French woman voice; all 19 lines in French (language fr). ElevenLabs voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16. "carte famille" is the French for family card.

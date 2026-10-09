@@ -42,6 +42,7 @@ CONTROL_CASES = {
     "quiet-end": ["BB-SET-02", "BB-VOICE-02"],
     "timezone": ["BB-SET-02", "BB-VOICE-02"],
     "nfc-beep": ["BB-SET-02", "BB-NFC-03"],
+    "card-name-prompt": ["BB-SET-02", "BB-NFC-03"],
     "swoosh-sound": ["BB-SET-02"],
     "save-settings": ["BB-SET-01", "BB-SET-02"],
     "advanced-connections-setup": ["BB-SETUP-01"],
