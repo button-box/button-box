@@ -1,4 +1,5 @@
 import http.client
+import importlib
 import json
 import tempfile
 import threading
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import messagebox.dashboard.app as dashboard
+from messagebox import software
 
 
 class HomeParser(HTMLParser):
@@ -90,6 +92,36 @@ class DashboardHomeTests(unittest.TestCase):
                 body, links = self.home(transport)
                 self.assertNotIn("home-cloud-dashboard", links)
                 self.assertNotIn('href="/cloud-connect"', body)
+
+    def test_status_footer_in_both_modes_refreshes_on_service_restart(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            software, "RELEASE_FILE", Path(directory) / "release.json"
+        ):
+            try:
+                for payload, expected in (
+                    (None, None),
+                    ('{"version":"bad version","commit":"abc1234"}', None),
+                    ('{"version":"0.3.0","commit":"abc1234abcdef"}', "Software 0.3.0 (abc1234)"),
+                    ('{"version":"0.3.1","commit":"def5678"}', "Software 0.3.1 (def5678)"),
+                ):
+                    if payload is not None:
+                        software.RELEASE_FILE.write_text(payload)
+                    software.installed_release.cache_clear()
+                    importlib.reload(dashboard)
+                    for transport in ("wacli", "cloud"):
+                        with self.subTest(payload=payload, transport=transport):
+                            body, _ = self.home(transport)
+                            self.assertNotIn("__SOFTWARE_FOOTER__", body)
+                            if expected:
+                                self.assertIn(expected, body)
+                            else:
+                                self.assertNotIn('class="software-version"', body)
+                            if transport == "wacli":
+                                self.assertIn('id="settings-form"', body)
+                                self.assertIn('id="whatsapp-form"', body)
+            finally:
+                software.installed_release.cache_clear()
+        importlib.reload(dashboard)
 
     def cloud_state(self, change=None, *, unclaimed=False):
         now = time.time()

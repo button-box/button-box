@@ -5,6 +5,7 @@ import unittest
 import urllib.error
 from pathlib import Path
 from unittest import mock
+from messagebox import software
 
 from messagebox.cloud_device import (
     capabilities,
@@ -43,6 +44,42 @@ class _Response:
 
 
 class CloudIdentityTests(unittest.TestCase):
+    def test_registration_and_heartbeat_use_only_installed_release_identity(self):
+        identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            software, "RELEASE_FILE", Path(directory) / "release.json"
+        ):
+            self.addCleanup(software.installed_release.cache_clear)
+            for document, expected in (
+                ({"version": "0.3.0", "commit": "abc1234" * 5},
+                 {"software_version": "0.3.0", "software_commit": "abc1234" * 5}),
+                (None, {}),
+                ({"version": "bad version", "commit": "not hex"}, {}),
+            ):
+                with self.subTest(document=document):
+                    software.RELEASE_FILE.unlink(missing_ok=True)
+                    if document is not None:
+                        software.RELEASE_FILE.write_text(json.dumps(document))
+                    software.installed_release.cache_clear()
+                    requests = []
+
+                    def opener(request, *, timeout):
+                        requests.append(request)
+                        return _Response({"ok": True})
+
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1",
+                                               identity, opener=opener)
+                    client.register({"audio": True})
+                    state = {"online": True, "software_version": "stale", "software_commit": "junk"}
+                    client.heartbeat(state)
+                    for request in requests:
+                        body = json.loads(request.data)
+                        actual = {key: value for key, value in body.items() if key.startswith("software_")}
+                        self.assertEqual(actual, expected)
+                    self.assertEqual(json.loads(requests[0].data)["capabilities"], {"audio": True})
+                    self.assertIs(json.loads(requests[1].data)["online"], True)
+                    self.assertEqual(state["software_version"], "stale")
+
     def test_identity_survives_repeat_load_and_rejects_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "device.json"

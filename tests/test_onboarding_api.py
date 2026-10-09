@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from unittest import mock
 
 from unittest.mock import patch
+from messagebox import software
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
@@ -338,6 +339,40 @@ class OnboardingAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_wacli_setup_footer_uses_cached_release_without_cloud_calls(self):
+        release = Path(self.directory.name) / "release.json"
+        with patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"}), patch.object(
+            software, "RELEASE_FILE", release
+        ), patch("messagebox.onboarding.app.CloudClaim") as cloud:
+            try:
+                for payload, expected in (
+                    (None, None),
+                    ('{"version":"bad version","commit":"abc1234"}', None),
+                    ('{"version":"0.3.0","commit":"abc1234abcdef"}', b"Software 0.3.0 (abc1234)"),
+                ):
+                    if payload is not None:
+                        release.write_text(payload)
+                    software.installed_release.cache_clear()
+                    app = create_app(
+                        mode="HOTSPOT", config={"device_id": "A7K2"}, state_store=self.store,
+                        adapter=self.adapter, connectivity_checker=self.checker,
+                        caregiver_settings=self.settings,
+                    )
+                    release.write_text('{"version":"0.3.1","commit":"def5678"}')
+                    response = WSGIHarness(app).request("GET", "/")
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertNotIn(b"__SOFTWARE_FOOTER__", response["body"])
+                    self.assertNotIn(b"Software 0.3.1", response["body"])
+                    if expected:
+                        self.assertIn(expected, response["body"])
+                    else:
+                        self.assertNotIn(b'class="software-version"', response["body"])
+                    self.assertIn(b'id="whatsapp-form"', response["body"])
+                cloud.assert_not_called()
+                self.assertEqual(self.checker.calls, 0)
+            finally:
+                software.installed_release.cache_clear()
 
     def test_each_new_ringtone_preview_uses_the_bundled_asset(self):
         from messagebox.settings import RINGTONES

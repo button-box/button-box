@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from messagebox.identity import read_box_color, read_box_id
+from messagebox.software import software_footer
 from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError, setup_online_cue
 from messagebox.cloud_device import CloudDeviceError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
@@ -495,7 +496,10 @@ def create_app(
         ("clipboard.js", "text/javascript; charset=utf-8"),
         ("styles.css", "text/css; charset=utf-8"),
     ):
-        static_files[name] = (STATIC_DIR.joinpath(name).read_bytes(), content_type)
+        body = STATIC_DIR.joinpath(name).read_bytes()
+        if name.endswith(".html"):
+            body = body.replace(b"__SOFTWARE_FOOTER__", software_footer())
+        static_files[name] = (body, content_type)
 
     def safe_whatsapp_state(state):
         if selected_mode != "HOME" or state["phase"] not in {

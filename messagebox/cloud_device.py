@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from messagebox.settings import RINGTONES
 from messagebox.guided_reply import valid_account_scope
 from messagebox.device_http import DEVICE_USER_AGENT, NoRedirect
+from messagebox.software import software_fields
 
 
 CLOUD_DIR = Path("/var/lib/messagebox-cloud")
@@ -163,6 +164,7 @@ class CloudDeviceClient:
         self.api_url = api_url.rstrip("/")
         self.identity = identity
         self.open_request = opener or _OPENER
+        self.software = software_fields()
 
     @classmethod
     def from_environment(cls, environ=None, *, identity_store=None):
@@ -226,7 +228,7 @@ class CloudDeviceClient:
     def register(self, capabilities: dict) -> dict:
         return self.json(
             "/device/register", method="POST",
-            body={**self.identity, "capabilities": capabilities},
+            body={**self.identity, "capabilities": capabilities, **self.software},
         )
 
     def claim(self) -> dict:
@@ -247,7 +249,9 @@ class CloudDeviceClient:
         return self.json("/device/claim/cancel", method="POST", body={"claim_id": claim_id})
 
     def heartbeat(self, state: dict) -> dict:
-        return self.json("/device/heartbeat", method="POST", body=state)
+        body = {key: value for key, value in state.items()
+                if key not in {"software_version", "software_commit"}}
+        return self.json("/device/heartbeat", method="POST", body={**body, **self.software})
 
     def inbox(self, cursor: int) -> dict:
         if type(cursor) is not int or cursor < 0:

@@ -285,6 +285,7 @@ button.secondary, .button.secondary { background: var(--surface); color: var(--t
 h1:focus-visible, main:focus-visible { outline: none; }
 
 .status { margin: 1rem 0; color: var(--muted); line-height: 1.5; }
+.software-version { color: var(--muted); font-size: 0.75rem; text-align: center; overflow-wrap: anywhere; }
 .field-help { margin: -0.25rem 0 0.5rem; color: var(--muted); font-size: 0.85rem; line-height: 1.45; }
 .pairing-code {
   margin: 1.75rem 0;
