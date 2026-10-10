@@ -20,6 +20,11 @@ checksums for every pack. Runtime falls back to Jessica per missing file, loggin
 each missing line once. Capabilities list only complete, validated packs, with
 Jessica always included. No audio is synthesized on the box.
 
+Every pack includes `voice-online-ready.wav` for claimed Cloud reconnects.
+`voice-setup-online.wav` is only in the default Jessica directory, because setup
+always uses the default voice. Both are registered with PCM durations and
+SHA-256 checksums in their manifests.
+
 Every pack includes the B48 generic `voice-card-prompt.wav` and pairing
 `voice-card-saved.wav`; transcripts match the source manifests by SHA-256.
 Cloud name invitations use the same pack and are cached separately from listened
@@ -27,4 +32,7 @@ clips. Robot and DJ always use their bundled generic invitation with its effects
 
 ## tata (Français · Tata)
 
-Native French woman voice; all 19 lines in French (language fr). ElevenLabs voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16. "carte famille" is the French for family card.
+Native French woman voice; the original 19 lines are in French (language fr).
+The online-ready handoff added here uses the supplied English copy. ElevenLabs
+voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16.
+"carte famille" is the French for family card.

@@ -95,10 +95,26 @@ The first successful setup check-in queues `cue-connected.wav`. The shared,
 group-restricted `/var/lib/messagebox-cloud/setup-online.json` keeps one receipt
 per setup marker. The idle setup button listener marks it played before bounded
 playback, so polling and restarts cannot replay it in the same session. After
-the connected cue finishes, `voice-online.wav` ("I'm here!") plays only once in
-the box's lifetime, with a durable receipt in the private runtime sound state.
-The runtime also plays connected after a fresh heartbeat on boot or recovery.
-Quiet hours defer these unsolicited welcomes.
+the connected cue finishes, Jessica's `voice-setup-online.wav` gives the setup
+card handoff once in the box's lifetime, using its own durable receipt (older
+`voice-online.wav` receipts do not suppress this new line). Setup always uses
+Jessica. Claimed runtime plays connected plus the current voice pack's
+`voice-online-ready.wav` on a fresh heartbeat after boot or recovery. A locked,
+atomic receipt suppresses repeats across service restarts and limits both cue
+and voice to once per ten minutes, including Wi-Fi flapping and reboots. Quiet
+hours and zero master volume consume runtime transitions silently; they do not
+queue a delayed welcome. Reachability comes from existing heartbeats only.
+
+The Cloud hotspot form delivers a complete, inline, box-colored handoff before
+dispatching the radio switch. Its QR instructions remain visible when requests
+fail. If durable home-Wi-Fi proof can still reach the browser, the handoff shows
+"✓ Connected! You can close this page. Now scan the QR code on the card to
+finish in WhatsApp." Association alone, a timed-out request, or disconnection
+never means success. With the current single-radio Comitup flow, the hotspot
+is lost before home-Wi-Fi proof is available; verified success before hotspot
+shutdown is not guaranteed. The setup voice provides the verified next step.
+The wacli handoff keeps its existing home-network/local-page instructions.
+No new reported settings, capabilities, or command kinds are introduced.
 
 The existing snapshot's boot ID and monotonic verification time provide the
 reachability signal. After three minutes without verification, the idle button

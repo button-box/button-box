@@ -125,6 +125,13 @@
    "seconds": 3.28,
    "sha256": "48c506b869a7e47e69951e5e731a3cd88385542203cf1d62115b8cd3788b23bf",
    "text": "New family card detected! Saved to the mothership!"
+  },
+  {
+   "file": "voice-online-ready.wav",
+   "cue": "BX-ONLINE-READY",
+   "text": "I'm online and ready to send and get messages!",
+   "seconds": 4.64,
+   "sha256": "18b9a06403928257f965b870c423cd3ec5945163086e3b0501760c2b267143dc"
   }
  ]
 }

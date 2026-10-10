@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import time
 import wave
 from pathlib import Path
 
@@ -16,10 +17,11 @@ CUE_NAMES = (
     "still_trying", "offline", "ready", "connected", "all_set", "sent", "listened", "card_saved",
 )
 VOICE_NAMES = (
-    "all-set", "online", "msg-start", "count-reply", "count-new", "review",
+    "all-set", "online", "online-ready", "msg-start", "count-reply", "count-new", "review",
     "ask-send-1", "ask-send-2", "ask-send-3", "last-chance", "not-sent", "empty",
     "listened", "card-needed", "card-unknown", "card-prompt", "card-saved", "stuck", "fail",
 )
+SETUP_VOICE_NAMES = ("setup-online",)
 SOUND_DIR = APP_DIR / "sounds"
 SOUND_STATE = STATE_DIR / "sound-state.json"
 ALL_SET_REQUEST = Path("/var/lib/messagebox-cloud/setup-complete-sound.json")
@@ -38,8 +40,10 @@ def current_voice_pack():
 
 
 def voice_path(name, pack=None):
-    if name not in VOICE_NAMES:
+    if name not in VOICE_NAMES + SETUP_VOICE_NAMES:
         raise ValueError("unknown voice line")
+    if name in SETUP_VOICE_NAMES:
+        return SOUND_DIR / "voice" / f"voice-{name}.wav"
     pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
     fallback = SOUND_DIR / "voice" / f"voice-{name}.wav"
     if pack == "jessica":
@@ -100,7 +104,7 @@ def installed_voice_packs(root=None):
 def validate_sounds(root=None, *, require_voice_packs=True):
     root = SOUND_DIR if root is None else Path(root)
     _validate_pack(root / "cues", CUE_NAMES, "cues", "cue")
-    _validate_pack(root / "voice", VOICE_NAMES, "lines", "voice")
+    _validate_pack(root / "voice", VOICE_NAMES + SETUP_VOICE_NAMES, "lines", "voice")
     if require_voice_packs:
         for pack in VOICE_PACKS[1:]:
             _validate_pack(root / "voices" / pack, VOICE_NAMES, "lines", "voice")
@@ -142,6 +146,39 @@ def next_send_prompt(path=SOUND_STATE):
         document["send_take"] = (index + 1) % 3
         atomic_json(path, document)
     return voice_path(f"ask-send-{index + 1}")
+
+
+def online_transition(boot_id, online, *, audible=True, mono=None, wall=None, path=SOUND_STATE):
+    """Consume Cloud online edges durably, including silent or rate-limited edges."""
+    mono = time.monotonic() if mono is None else mono
+    wall = time.time() if wall is None else wall
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open_private_lock(path.with_suffix(".lock")) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            document = {}
+        if not isinstance(document, dict):
+            raise ValueError("sound receipts are invalid")
+        previous = document.get("online_ready", {})
+        if not isinstance(previous, dict):
+            raise ValueError("online receipt is invalid")
+        if previous.get("boot_id") == boot_id and previous.get("online") is online:
+            return False
+        elapsed = 600
+        if "played_wall" in previous:
+            # Same-boot rate limits tolerate wall-clock corrections; reboot uses UTC.
+            elapsed = (mono - previous["played_mono"] if previous.get("played_boot") == boot_id
+                       else wall - previous["played_wall"])
+        play = online and audible and elapsed >= 600
+        receipt = {**previous, "boot_id": boot_id, "online": online}
+        if play:
+            receipt.update(played_boot=boot_id, played_mono=mono, played_wall=wall)
+        document["online_ready"] = receipt
+        atomic_json(path, document)
+        return play
 
 
 
