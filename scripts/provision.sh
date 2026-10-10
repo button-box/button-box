@@ -66,6 +66,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/cloud_claim.py" \
   "$REPO_DIR/./messagebox/qrcodegen.py" \
   "$REPO_DIR/./messagebox/cloud_runtime.py" \
+  "$REPO_DIR/./messagebox/cloud_quiet.py" \
   "$REPO_DIR/./messagebox/sound_pack.py" \
   "$REPO_DIR/./messagebox/audio_requests.py" \
   "$REPO_DIR/./messagebox/cloud_events.py" \

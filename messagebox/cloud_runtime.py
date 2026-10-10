@@ -32,6 +32,7 @@ from messagebox.settings import (
     in_quiet_hours, ignored_settings, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
+from messagebox import cloud_quiet
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
 ACK_DIR = CLOUD_DIR / "acks"
@@ -140,6 +141,7 @@ class CloudRuntime:
         self.queue_dir = Path(queue_dir)
         self.outbox_dir = Path(outbox_dir)
         self.settings = SettingsStore(settings_path)
+        self.silence = cloud_quiet.SilenceStore(self.state_path.parent / "silence.json")
         self.clock = clock
         self.converter = converter
         self.monotonic = monotonic
@@ -147,6 +149,11 @@ class CloudRuntime:
         self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
+
+    def quiet_state(self):
+        state = self.silence.load()
+        return {"muted": state["muted"],
+                "quiet_until": state["quiet_until"] if cloud_quiet.quiet_now(state, self.clock()) else None}
 
     def _receipt_store(self):
         return ReceiptStore(str(LISTENED_DIR))
@@ -317,6 +324,7 @@ class CloudRuntime:
         response = self.client.heartbeat({
             "version": "cloud-mvp-1", "capabilities": capabilities(nfc=NFC_HEALTH_FILE.exists()),
             "settings": settings, "applied_revision": settings["revision"],
+            "quiet_state": self.quiet_state(),
             "queue": {"held": bool((self.state.get("snapshot") or {}).get("queue_hold", False)),
                       "count": len(list(self.queue_dir.glob("*.wav"))), "playing_message_id": None},
             "last_error": None,
@@ -935,7 +943,9 @@ class CloudRuntime:
         if metadata.get("listener_kind") == "box":
             settings, warning = self.settings.load()
             now = datetime.fromtimestamp(self.server_now(), ZoneInfo(settings["timezone"]))
-            if warning or in_quiet_hours(settings, now) or settings["arrival_signal"] == "silent":
+            if (warning or in_quiet_hours(settings, now, cloud=True)
+                    or self.silence.load()["muted"] or cloud_quiet.quiet_now(self.silence.load(), self.server_now())
+                    or settings["arrival_signal"] == "silent"):
                 return "expired"
         if (snapshot["queue_hold"] or not snapshot["entitlement"]["deliver"]
                 or not snapshot["entitlement"]["send"]
@@ -1010,7 +1020,16 @@ class CloudRuntime:
             return self._listened(item, server_time)
         if kind == "card_prompt":
             return self._card_prompt(item)
-        if kind == "delete_message":
+        if kind in {"quiet_now", "mute"}:
+            key = "quiet_until" if kind == "quiet_now" else "muted"
+            if key not in payload:
+                raise CloudRuntimeError("silence command is incomplete")
+            try:
+                self.silence.apply(kind, payload[key], item["sequence"], now=server_time)
+            except ValueError as exc:
+                raise CloudRuntimeError("silence command is invalid") from exc
+            self._ack(item["operation_id"], "applied")
+        elif kind == "delete_message":
             self._delete(payload.get("message_id"))
             self._ack(item["operation_id"], "applied")
         elif kind == "settings":
@@ -1209,10 +1228,14 @@ class CloudRuntime:
             self._finish_nfc()
             self._finish_settings()
             self.flush_acks()
-        for item in sorted(items, key=lambda entry: (entry.get("kind") != "delete_message", entry.get("sequence", 0))):
+        # Silence must not wait behind media downloads. Deletion still precedes
+        # all other work; cursors remain hints until each operation is ACKed.
+        for item in sorted(items, key=lambda entry: (
+                {"mute": 0, "quiet_now": 0, "delete_message": 1}.get(entry.get("kind"), 2),
+                entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message"}
+                    or item.get("kind") not in {"audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (

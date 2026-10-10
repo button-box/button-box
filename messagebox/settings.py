@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -42,6 +42,8 @@ def normalize_voice_pack(value):
 
 ARRIVAL_SIGNALS = frozenset({"ring_and_lamp", "ring_only", "lamp_only", "silent"})
 _TIME = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+QUIET_DEFAULTS = {"quiet_schedules": None, "weekend_days": None,
+                  "holiday_until": None, "morning_ring": True}
 _ROOT_KEYS = {
     "version",
     "revision",
@@ -56,11 +58,15 @@ _ROOT_KEYS = {
     "master_volume_percent",
     "arrival_signal",
     "quiet_hours",
+    "quiet_schedules",
+    "weekend_days",
+    "holiday_until",
+    "morning_ring",
     "nfc_confirmation_beep",
     "card_name_prompt",
     "swoosh_sound_enabled",
 }
-_REQUIRED_ROOT_KEYS = _ROOT_KEYS - {"swoosh_sound_enabled", "voice_pack", "card_name_prompt",
+_REQUIRED_ROOT_KEYS = _ROOT_KEYS - set(QUIET_DEFAULTS) - {"swoosh_sound_enabled", "voice_pack", "card_name_prompt",
                                    "recording_mode", "talk_mode", "review_before_send"}
 
 
@@ -72,7 +78,11 @@ class RevisionConflict(SettingsError):
     """The settings changed after a caregiver loaded the form."""
 
 
-def in_quiet_hours(settings, now=None):
+def in_quiet_hours(settings, now=None, *, cloud=False):
+    if cloud:
+        current = now or datetime.now(ZoneInfo(settings["timezone"]))
+        current = current.astimezone(ZoneInfo(settings["timezone"]))
+        return any(start <= current < end for start, end in quiet_intervals(settings, current.date()))
     quiet = settings["quiet_hours"]
     if not quiet["enabled"]:
         return False
@@ -85,6 +95,80 @@ def in_quiet_hours(settings, now=None):
     if start < end:
         return start <= minute < end
     return minute >= start or minute < end
+
+
+def quiet_schedule(settings, day):
+    """A crossing-midnight period belongs to its ending day's schedule."""
+    schedules = settings.get("quiet_schedules")
+    if schedules is None:
+        quiet = settings["quiet_hours"]
+        return [{"start": quiet["start"], "end": quiet["end"]}] if quiet["enabled"] else []
+    days = settings.get("weekend_days")
+    if days is None:
+        days = [4, 5] if settings["timezone"] == "Asia/Jerusalem" else [5, 6]
+    holiday = settings.get("holiday_until")
+    weekend = day.weekday() in days or (holiday is not None and day <= date.fromisoformat(holiday))
+    return schedules["weekend" if weekend else "school_days"]
+
+
+def quiet_intervals(settings, day):
+    zone = ZoneInfo(settings["timezone"])
+    intervals = []
+    # Include tomorrow's night: Friday evening uses Saturday's schedule.
+    for end_day in (day, day + timedelta(days=1)):
+        for period in quiet_schedule(settings, end_day):
+            start = datetime.combine(end_day, datetime.strptime(period["start"], "%H:%M").time(), zone)
+            end = datetime.combine(end_day, datetime.strptime(period["end"], "%H:%M").time(), zone)
+            if start == end:
+                start = start.replace(hour=0, minute=0)
+                end = start + timedelta(days=1)
+            elif start > end:
+                start -= timedelta(days=1)
+            intervals.append((start, end))
+    return intervals
+
+
+def morning_quiet_end(settings, current):
+    """Return only the latest morning end, even when periods overlap."""
+    periods = [p for p in quiet_schedule(settings, current.date())
+               if p["start"] != p["end"] and "04:00" <= p["end"] <= "11:00"]
+    if not periods:
+        return None
+    period = max(periods, key=lambda p: p["end"])
+    hour, minute = map(int, period["end"].split(":"))
+    return current.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+
+
+def normalize_quiet_settings(document):
+    document = {**QUIET_DEFAULTS, **document}
+    schedules = document["quiet_schedules"]
+    if schedules is not None:
+        if not isinstance(schedules, dict) or set(schedules) != {"school_days", "weekend"}:
+            raise SettingsError("quiet schedules are invalid")
+        for periods in schedules.values():
+            if not isinstance(periods, list) or len(periods) > 3:
+                raise SettingsError("quiet periods are invalid")
+            for period in periods:
+                if (not isinstance(period, dict) or set(period) != {"start", "end"}
+                        or any(not isinstance(period[key], str) or not _TIME.fullmatch(period[key])
+                               for key in ("start", "end"))):
+                    raise SettingsError("quiet period times are invalid")
+    days = document["weekend_days"]
+    if days is not None and (not isinstance(days, list) or len(days) > 7
+                            or any(type(day) is not int or not 0 <= day <= 6 for day in days)
+                            or len(set(days)) != len(days)):
+        raise SettingsError("weekend days are invalid")
+    holiday = document["holiday_until"]
+    if holiday is not None:
+        if not isinstance(holiday, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", holiday):
+            raise SettingsError("holiday end date is invalid")
+        try:
+            date.fromisoformat(holiday)
+        except ValueError as exc:
+            raise SettingsError("holiday end date is invalid") from exc
+    if type(document["morning_ring"]) is not bool:
+        raise SettingsError("morning ring value is invalid")
+    return document
 
 
 def _env_flag(environ, name, default):
@@ -124,6 +208,7 @@ def defaults(environ=None):
     except (ZoneInfoNotFoundError, ValueError):
         timezone = "UTC"
     return {
+        **QUIET_DEFAULTS,
         "version": SCHEMA_VERSION,
         "revision": 0,
         "timezone": timezone,
@@ -181,7 +266,7 @@ def validate(document):
         {key: value for key, value in document.items() if key in _ROOT_KEYS})
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
         # Persisted settings from earlier releases retain their cue and default voice.
-        document = {"swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True, **document}
+        document = normalize_quiet_settings({"swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True, **document})
         document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
         raise SettingsError("settings have an invalid schema")
@@ -338,7 +423,7 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
-        candidate = {"voice_pack": "jessica", "card_name_prompt": True, **candidate}
+        candidate = {**QUIET_DEFAULTS, "voice_pack": "jessica", "card_name_prompt": True, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
         candidate = normalize_recording_settings(
             {key: value for key, value in candidate.items() if key in _ROOT_KEYS})

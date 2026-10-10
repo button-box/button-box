@@ -401,4 +401,11 @@ def capabilities(*, nfc=False) -> dict:
         "listened_announcements": True,
         "card_name_prompt": True,
         "box_link": True,
+        "quiet_periods": 3,
+        "quiet_schedules": True,
+        "weekend_days": True,
+        "holiday_mode": True,
+        "morning_ring": True,
+        "quiet_now": True,
+        "mute": True,
     }

@@ -9,23 +9,91 @@ The poller checks for the button process’s applied marker promptly while a set
 For each released build, run `python3 scripts/dev/settings_contract.py > <build>.json` and hand the result to the Cloud repository's `tests/fixtures/box-builds/`. To describe an older checkout, run the current exporter with `--repo <path>`. The exporter inspects source without importing runtime modules. Unsupported source shapes fail clearly on stderr instead of emitting a guessed contract. Capabilities describe the checkout's bundled sound assets with NFC unavailable; installed hardware and assets can change these runtime-dependent values. Generate release fixtures from clean committed checkouts so the build id identifies the actual source.
 
 
-## Quiet hours
+## Quiet schedules and silence controls
 
-Cloud and wacli boxes suppress arrival sound and lamp during quiet hours;
-deliberate playback still works. At the local end time in the settings timezone,
-waiting messages trigger one normal arrival signal, using `arrival_signal`, the
-chosen ringtone, master volume and lamp rhythm. An empty queue stays silent.
-Recording, guided flows, playback and a held button defer the signal until idle,
-for at most 30 minutes after the end. A press stops the signal as usual.
-Disabled quiet hours and equal start/end times (all-day quiet) have no end signal.
+Cloud settings accept `quiet_schedules` (null for legacy behavior, or an object
+with `school_days` and `weekend` arrays). Each array has up to three `{start, end}`
+periods in local `HH:MM`, without names. Empty arrays disable that schedule;
+overlapping periods remain quiet throughout their union. Equal start/end is
+all-day quiet and never generates a morning signal. `quiet_hours` remains
+accepted and required for existing Cloud documents and local settings clients.
+When `quiet_schedules` is null or absent, its enabled period is the first and
+only period of both schedules. Explicit schedules take precedence in Cloud mode.
+The dashboard initializes Weekend by copying School days and sends both arrays.
 
-The private `/var/lib/messagebox/state/morning-ring.json` marker is written
-atomically before signaling, keyed by timezone, quiet-hours start and local end
-date/time. Restarting within the grace period cannot repeat a consumed signal.
-An empty queue or silent arrival setting also consumes that window. A crash
-between the durable marker and playback can lose that signal; it is never retried
-after ambiguous playback. Marker failures suppress the morning signal. Settings
-keys and Cloud command payloads are unchanged.
+`weekend_days` is null for the timezone default or a list of unique weekday
+integers, Monday=0 through Sunday=6 (an empty list means no weekend days).
+Asia/Jerusalem defaults to Friday/Saturday; all other zones to Saturday/Sunday.
+Daytime periods use that calendar day's schedule. Periods crossing midnight use
+their ending day's schedule: Portugal's weekend nights are Friday/Saturday;
+Israel's are Thursday/Friday. All decisions use the box's timezone, including DST.
+
+`holiday_until` is null for off, or an inclusive local date `YYYY-MM-DD`.
+Through that date, weekend replaces the school schedule; later mornings and
+daytime automatically return to their configured schedules. Nights still use
+the schedule of the morning on which they end.
+
+`morning_ring` is boolean, default true. Only the latest-ending period whose end
+is between 04:00 and 11:00 inclusive can signal in Cloud mode. Naps and the end of
+Quiet now cannot signal. The normal arrival signal uses the configured ringtone,
+volume and lamp rhythm when messages are waiting. Idle deferral is bounded to
+30 minutes. A disabled morning ring, mute, Quiet now, another overlapping quiet
+period, an empty queue or silent arrival setting consumes the morning window
+without signaling. No deferred signal follows their end. The existing durable
+`/var/lib/messagebox/state/morning-ring.json` marker prevents replay after restart;
+marker failures suppress signaling.
+
+The `quiet_now` command has `quiet_until`: a Unix timestamp in seconds, `"manual"`,
+or null to end it. The `mute` command has `muted`: true or false. Missing or invalid
+known values are rejected; extra optional payload fields are ignored. The Cloud
+resolves durations and "until morning" into an absolute timestamp. Silence controls
+persist atomically in `/var/lib/messagebox-cloud/silence.json`, independently of
+settings revisions. Each control tracks its command sequence, so replay and
+older retries cannot undo a newer command. Timed Quiet now expires by comparing
+the deadline with the current time; no expiry process or late alert is needed.
+Heartbeat `quiet_state` reports `{muted, quiet_until}`, using null after expiry.
+
+Both commands stop active button-service audio. Mute blocks all later audio,
+including cues, voice lines and previews, and arrival lamp blinking. A deliberate
+button press while muted flashes the lamp once without playing or claiming a
+message. Saved speaker volume remains intact. Quiet now suppresses unsolicited
+sounds and arrival lamp blinking but permits deliberate playback after the
+command's immediate stop. Interrupted incoming audio remains queued and receives
+no played receipt. Audio is monitored at 20 ms intervals; actual acoustic latency
+requires verification on the Pi. The guard targets its own child processes only.
+
+### Receiver-first release
+
+Before any device registration or heartbeat from this build, deploy and verify
+Cloud acceptance of all new settings keys, capabilities and optional `quiet_state`.
+Unknown optional fields must never reject registration or heartbeat. Capabilities
+are `quiet_periods: 3`, `quiet_schedules`, `weekend_days`, `holiday_mode`,
+`morning_ring`, `quiet_now` and `mute` (the latter six are true). Existing
+capabilities and command kinds remain present. Older boxes receive only the
+first school period through `quiet_hours`; multiple schedules and controls need
+this build. No Pi installation precedes the receiver rollout and contract test.
+
+Regenerate the fleet fixture from the final committed checkout with
+`python3 scripts/dev/settings_contract.py`, then place it in Cloud's
+`tests/fixtures/box-builds/`. A working-tree fixture is for integration development
+only: its `build` still names the base commit and must be replaced after commit.
+
+### wacli impact
+
+Shared changes are in `settings.py`, `button_send.py`, `scripts/setup.sh` and
+`scripts/provision.sh`. Settings retain new optional values for schema tolerance;
+wacli keeps its legacy `quiet_hours`, B45 end signal and existing audio subprocess
+behavior. It does not consult Cloud silence state or apply Cloud schedules,
+holiday mode, morning-ring switch or mute/Quiet now commands. The new Cloud module
+is included in both installers without starting an additional service.
+
+`test_cloud_quiet.py` proves wacli ignores the new schedules and silence controls;
+`test_button_settings_behavior.py` covers both transports' durable B45 signal,
+legacy quiet boundaries, arrivals and button behavior. Existing routing, guided
+reply, NFC and listened-notice tests run in both transport checks. Before a merge
+to main, the physical wacli send/play/reply/card/quiet/listened matrix remains
+required, along with Cloud box audio interruption, queue preservation and muted
+lamp/press checks.
 
 ## Voice packs
 
