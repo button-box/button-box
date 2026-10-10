@@ -1931,7 +1931,7 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
         return
     if card_state == "none":
         context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
-    if card_prompt_uid and (context is None or card_prompt_uid not in context["contact"]["card_uids"]):
+    if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
         block_unavailable_recipient()
         return
     if context is None:
@@ -1966,6 +1966,19 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
             ring_alert(source="queued_after_unsent")
 
 
+
+def _context_matches_card(context, uid):
+    """A press during the card prompt must use the card that was announced.
+
+    Claimed card selections carry the card uid but not the contact's full
+    card list, so compare the uid first and fall back to the list.
+    """
+    if context is None:
+        return False
+    if context.get("uid") == uid:
+        return True
+    return uid in context.get("contact", {}).get("card_uids", ())
+
 def run_guided_once(settings=None, *, card_prompt_uid=None):
     global _guided_active
     settings = settings or caregiver_settings()
@@ -1983,7 +1996,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
         context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
-    if card_prompt_uid and (context is None or card_prompt_uid not in context["contact"]["card_uids"]):
+    if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
         block_unavailable_recipient()
         return
     recipient = metadata.get("chat") if metadata else (

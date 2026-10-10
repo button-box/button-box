@@ -210,3 +210,19 @@ class CardVoiceTests(unittest.TestCase):
                     runtime.run_guided_once(self.settings)
                 self.assertEqual(cue.call_args_list, [mock.call("msg_start"), mock.call("msg_end")])
                 voice.assert_called_once_with(claim["path"])
+
+
+class CardPromptPressContextTests(unittest.TestCase):
+    """A press during the card prompt uses a claimed selection without card_uids."""
+
+    def test_claimed_selection_without_card_list_matches_by_uid(self):
+        from messagebox import button_send
+        context = {"contact": {"jid": "15550001111@s.whatsapp.net", "name": "Abba"}, "uid": "04AABBCC", "via_card": True}
+        self.assertTrue(button_send._context_matches_card(context, "04AABBCC"))
+        self.assertFalse(button_send._context_matches_card(context, "04FFFFFF"))
+        self.assertFalse(button_send._context_matches_card(None, "04AABBCC"))
+
+    def test_full_contact_with_card_list_still_matches(self):
+        from messagebox import button_send
+        context = {"contact": {"jid": "15550001111@s.whatsapp.net", "card_uids": ["04AABBCC"]}, "via_card": False}
+        self.assertTrue(button_send._context_matches_card(context, "04AABBCC"))
