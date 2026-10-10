@@ -125,6 +125,13 @@
    "seconds": 2.812,
    "sha256": "852d4ad53b657d02f833f8eb29560dcec937358056745e46c1e8dee045ef0f5f",
    "text": "New family card. Saved. Beep."
+  },
+  {
+   "file": "voice-online-ready.wav",
+   "cue": "BX-ONLINE-READY",
+   "text": "I'm online and ready to send and get messages!",
+   "seconds": 3.532,
+   "sha256": "560d7ce2db82be97a529f9af8749f7ee198a7df824dc03b5dbd4b118ced467e7"
   }
  ]
 }

@@ -824,6 +824,8 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertIn(b"data-box-color=", response["body"])
         self.assertIn(b"Join the Wi-Fi you chose for your Button Box", response["body"])
         self.assertNotIn(b"setup card", response["body"])
+        self.assertNotIn(b"scan the QR", response["body"])
+        self.assertNotIn(b"checkWifiHandoff", response["body"])
         self.assertNotIn(b"__STYLES__", response["body"])
         self.assertIn(f'href="http://{HOST}/"'.encode(), response["body"])
         self.assertEqual(self.adapter.calls, [])

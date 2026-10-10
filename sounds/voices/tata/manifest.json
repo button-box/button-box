@@ -126,6 +126,13 @@
    "seconds": 2.88,
    "sha256": "d1705d1573b210c863f34b4aae984d210147d67d46da9aa39ab848cb311126a3",
    "text": "Super ! Nouvelle carte de famille enregistrée !"
+  },
+  {
+   "file": "voice-online-ready.wav",
+   "cue": "BX-ONLINE-READY",
+   "text": "I'm online and ready to send and get messages!",
+   "seconds": 4.16,
+   "sha256": "92a407fe51467d4e03ef285cd74515cad99df5f23f9edabe12d262cc98fa620b"
   }
  ],
  "source_key": "tata_fr"

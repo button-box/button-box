@@ -1066,12 +1066,11 @@ def maybe_play_still_trying():
 
 
 _offline_announced = False
-_online_announced = False
 
 
 def maybe_play_connectivity():
     """Reuse persisted heartbeat age; never probe the network for a sound."""
-    global _offline_announced, _online_announced
+    global _offline_announced
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
         return False
     runtime = cloud_runtime.CloudRuntime(client=object(), state_path=cloud_runtime.STATE_FILE)
@@ -1084,13 +1083,13 @@ def maybe_play_connectivity():
     age = time.monotonic() - verified
     if 0 <= age <= 90:
         _offline_announced = False
-        if not quiet_hours() and not _online_announced:
-            play_moment("connected")
-            announce_first_online()
-            _online_announced = True
+        settings = caregiver_settings()
+        audible = not quiet_hours(settings) and settings["master_volume_percent"] > 0
+        if sound_pack.online_transition(runtime.boot_id, True, audible=audible):
+            play_moment("connected", "online-ready")
             return True
     if age > 90:
-        _online_announced = False
+        sound_pack.online_transition(runtime.boot_id, False)
     if age >= 180 and not _offline_announced and not quiet_hours():
         token = f"{runtime.boot_id}:{verified}"
         if sound_pack.consume_moment("offline", token=token):
@@ -2163,8 +2162,8 @@ def play_setup_online(cues):
         if cloud_claim.setup_online_cue(consume=True):
             if play_claim_cue(cues, "online"):
                 # Claim mode has no Button instance used by ordinary playback.
-                if sound_pack.consume_moment("online"):
-                    play_sound(sound_pack.voice_path("online"), timeout=5)
+                if sound_pack.consume_moment("setup_online"):
+                    play_sound(sound_pack.voice_path("setup-online", "jessica"), timeout=15)
         _setup_online_failed = False
     except (OSError, ValueError, CloudDeviceError, subprocess.SubprocessError):
         # This runs on every idle poll; report a failure once until it recovers.

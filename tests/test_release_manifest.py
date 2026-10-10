@@ -21,7 +21,7 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 286)
+        self.assertEqual(len(paths), 296)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
@@ -52,8 +52,9 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertEqual(paths["sounds/cues/cue-deleted.wav"], "/opt/messagebox/sounds/cues/cue-deleted.wav")
         self.assertEqual(paths["sounds/cues/cue-card_saved.wav"], "/opt/messagebox/sounds/cues/cue-card_saved.wav")
         self.assertIn("sounds/voice/voice-online.wav", paths)
+        self.assertIn("sounds/voice/voice-setup-online.wav", paths)
         for pack in ("voice", *(f"voices/{pack}" for pack in ("pirate", "alien", "dj", "robot", "french", "charlie", "tata"))):
-            for line in ("card-prompt", "card-saved"):
+            for line in ("card-prompt", "card-saved", "online-ready"):
                 source = f"sounds/{pack}/voice-{line}.wav"
                 self.assertEqual(paths[source], "/opt/messagebox/" + source)
         self.assertNotIn("messagebox/midi_ringtone.py", paths)
@@ -98,7 +99,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 286)
+            self.assertEqual(len(entries), 296)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(

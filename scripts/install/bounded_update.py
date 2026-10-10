@@ -155,6 +155,8 @@ SOUND_SOURCES = (
     "sounds/voice/voice-msg-start.wav",
     "sounds/voice/voice-not-sent.wav",
     "sounds/voice/voice-online.wav",
+    "sounds/voice/voice-online-ready.wav",
+    "sounds/voice/voice-setup-online.wav",
     "sounds/voice/voice-review.wav",
     "sounds/voice/voice-stuck.wav",
 )
@@ -164,6 +166,7 @@ SOUND_SOURCES += ("sounds/voices/README.md",) + tuple(
     for name in ("manifest.json",) + tuple(
         Path(source).name for source in SOUND_SOURCES
         if source.startswith("sounds/voice/") and source.endswith(".wav")
+        and Path(source).name != "voice-setup-online.wav"
     )
 )
 for source in SOUND_SOURCES:

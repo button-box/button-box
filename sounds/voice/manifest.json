@@ -138,6 +138,20 @@
    "seconds": 2.48,
    "sha256": "991ade77e2dfb82795946655199fabec28247da76e5225b2bd2637dc10f45c5c",
    "text": "Yay! New family card saved!"
+  },
+  {
+   "file": "voice-online-ready.wav",
+   "cue": "BX-ONLINE-READY",
+   "text": "I'm online and ready to send and get messages!",
+   "seconds": 3.2,
+   "sha256": "aaee04709a1941786ed60534bc306a5d3ed2493cc5b81beb725376c2e1f3bc30"
+  },
+  {
+   "file": "voice-setup-online.wav",
+   "cue": "BX-SETUP-ONLINE",
+   "text": "Hi, I'm Button Box! Thanks for setting me up. Now scan the code on the card to finish in WhatsApp!",
+   "seconds": 6.56,
+   "sha256": "30a9d553851be07cc17142a8990fca6a8bf3646c63158f28caac7a2f0c3b662b"
   }
  ]
 }

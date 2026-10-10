@@ -1,6 +1,7 @@
 # Button Box sound design v1
 
-The sound pack has 16 motif cues and 19 Jessica lines. All output uses the saved
+The sound pack has 16 motif cues, 21 Jessica lines and 20 lines in each other
+pack. The setup handoff line is Jessica-only. All output uses the saved
 master volume. "Swoosh sound", "Family confirmation beep" and every setting ID
 retain their existing names and meanings. Both talk modes use a start cue and optional playback review, without
 countdown, review, approval or deletion voices.
@@ -13,7 +14,7 @@ countdown, review, approval or deletion voices.
 | Changed Cloud settings applied | `maybe_play_cloud_sound`: `cue-card_saved.wav` at the new master volume; three-second debounce, 30-second expiry, silent on boot adoption and in quiet hours. |
 | Runtime awake | `announce_runtime_ready`: `cue-ready.wav`. |
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
-| Online | `play_setup_online`, `maybe_play_connectivity`: connected cue followed by first-ever online voice, durable receipt before the voice. |
+| Online | Cloud `play_setup_online`: connected cue then Jessica setup handoff once. Claimed `maybe_play_connectivity`: connected cue then current pack's online-ready line, once per transition and at most once per ten minutes. Durable receipts precede playback. Legacy online voice stays bundled for wacli. |
 | Accepted send | `play_send_success_cue`: `cue-sent.wav`; independent sender, interruptible on press, unchanged setting and no delivery claim. |
 | Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
@@ -53,8 +54,10 @@ Incoming audio in both modes uses
 
 ## Quiet hours and first-use receipts
 
-Unsolicited listened, still-trying, offline, connected and setup-complete audio
-waits until quiet hours end. Runtime awake is suppressed in quiet hours. Prompt,
+Unsolicited listened, still-trying, offline and setup-complete audio
+waits until quiet hours end. Cloud runtime connected transitions during quiet
+hours or mute are consumed silently. Setup handoff waits until quiet hours end.
+Runtime awake is suppressed in quiet hours. Prompt,
 card and press responses still sound. Recording, guided sessions and an active
 press defer idle notifications. The sender only queues notifications; it never
 owns the speaker. Listened receipts remain pending during quiet hours. Persisted receipts naming
@@ -64,8 +67,11 @@ custom family clip still reports unavailable and stays pending.
 `/var/lib/messagebox/state/sound-state.json` is private, locked and atomically
 written. First-use receipts are written before playback to prevent replay after
 a crash, including a crash during audio playback; audio failure is reported and
-is not proof that a child heard the line. Online voice, all-set and each stuck
-message play at most once. Legacy voice assets and receipts remain installed for release compatibility.
+is not proof that a child heard the line. Setup voice, all-set and each stuck
+message play at most once. Runtime online edges retain their boot ID and last
+playback time; same-boot rate limits use monotonic time, and reboots use wall time
+(a backwards wall clock suppresses the announcement). Legacy voice assets and
+receipts remain installed for release compatibility.
 
 ## Installation and acceptance
 

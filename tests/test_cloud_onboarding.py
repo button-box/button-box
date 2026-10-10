@@ -328,12 +328,20 @@ class CloudOnboardingTests(unittest.TestCase):
             response = self.request("POST", "/wifi/connect", f"http://{HOST}",
                                     b"ssid=Home&security=protected&password=synthetic-password")
         self.assertEqual(response["status"], "202 Accepted")
-        self.assertIn(b"Your box is joining your Wi-Fi. When it beeps, scan the QR code on your setup card to finish in WhatsApp.", response["body"])
+        self.assertIn("Connecting…".encode(), response["body"])
+        self.assertIn(b"When the box says it is connected, you can close this page.", response["body"])
+        self.assertIn("✓ Connected!".encode(), response["body"])
+        self.assertIn(b"Now scan the QR code on the card to finish in WhatsApp.", response["body"])
+        self.assertIn(b'background: var(--box-color)', response["body"])
+        self.assertIn(b'fetch("/api/state"', response["body"])
+        self.assertIn(b'<script nonce="messagebox-handoff">', response["body"])
+        self.assertNotIn(b'src=', response["body"])  # No asset fetch after the radio switch.
         self.assertIn(b"No card? Join the same Wi-Fi and open", response["body"])
         self.assertIn(b'class="field-help"', response["body"])
         self.assertIn(f'href="http://{HOST}/cloud-connect"'.encode(), response["body"])
         self.assertIn(b'data-box-color="blue"', response["body"])
         self.assertNotIn(b"__HANDOFF_CONTENT__", response["body"])
+        self.assertNotIn(b"__HANDOFF_SCRIPT__", response["body"])
 
     def test_completion_requires_live_claim_and_preserves_legacy_setup_gate(self):
         body = b"intent=done"
