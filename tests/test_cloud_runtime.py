@@ -254,12 +254,12 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send.cloud_runtime, "playable", side_effect=self.runtime.playable), \
              mock.patch.object(button_send.cloud_runtime, "record_played") as played_ack, \
              mock.patch.object(button_send, "play_moment") as cues, \
-             mock.patch.object(button_send.subprocess, "run", return_value=mock.Mock(returncode=0)) as playback, \
+             mock.patch.object(button_send, "play_sound", return_value=mock.Mock(returncode=0)) as playback, \
              mock.patch.object(button_send, "wait_for_stable_open"), \
              mock.patch.object(button_send, "refresh_led"), \
              mock.patch.object(button_send.time, "time", return_value=NOW):
             button_send.play_next_legacy()
-        self.assertEqual(playback.call_args.args[0][-1], str(path))
+            self.assertEqual(playback.call_args.args[0], path)
         self.assertEqual(cues.call_args_list, [mock.call("msg_start"), mock.call("msg_end")])
         played_ack.assert_called_once_with(metadata)
         self.assertEqual(recent_reply_recipient(self.runtime.queue_dir,

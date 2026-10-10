@@ -54,11 +54,11 @@ from messagebox.runtime_paths import (
     STATE_DIR as DEFAULT_STATE_DIR,
 )
 from messagebox.settings import (
-    normalize_recording_settings,
+    normalize_recording_settings, morning_quiet_end,
     in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
 )
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
-from messagebox import cloud_runtime, cloud_claim, sound_pack
+from messagebox import cloud_runtime, cloud_claim, cloud_quiet, sound_pack
 from messagebox.cloud_runtime import CloudRuntimeError
 
 
@@ -152,7 +152,29 @@ def log_event(event_type, **fields):
 
 
 def quiet_hours(settings=None, now=None):
-    return in_quiet_hours(settings or caregiver_settings(), now)
+    settings = settings or caregiver_settings()
+    if transport_mode() != "cloud":
+        return in_quiet_hours(settings, now)
+    state = cloud_quiet.silence_store.load()
+    return (state["muted"] or cloud_quiet.quiet_now(state, now.timestamp() if now else None)
+            or in_quiet_hours(settings, now, cloud=True))
+
+
+def box_muted():
+    return transport_mode() == "cloud" and cloud_quiet.muted()
+
+
+def start_player(args, **kwargs):
+    if transport_mode() == "cloud":
+        return cloud_quiet.start_player(args, **kwargs)
+    return subprocess.Popen(args, **kwargs)
+
+
+def play_sound(path, *, timeout):
+    args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
+    if transport_mode() == "cloud":
+        return cloud_quiet.play(args, timeout=timeout)
+    return subprocess.run(args, check=True, timeout=timeout)
 
 
 _applied_volume_revision = None
@@ -198,7 +220,9 @@ def validate_sounds():
 
 
 def beep(name):
-    return subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(CUES[name])], check=True, timeout=5)
+    if box_muted() or (name == "fail" and transport_mode() == "cloud" and cloud_quiet.quiet_now()):
+        return subprocess.CompletedProcess([], 0)
+    return play_sound(CUES[name], timeout=5)
 
 
 def play_moment(cue=None, voice=None):
@@ -1131,16 +1155,22 @@ def maybe_morning_ring(settings, snapshot, now=None):
     """Consume a local quiet-hours end once, before crossing the audio boundary."""
     global _morning_ring_window
     quiet = settings["quiet_hours"]
-    if not quiet["enabled"] or quiet["start"] == quiet["end"]:
+    cloud = transport_mode() == "cloud"
+    if (not cloud or settings.get("quiet_schedules") is None) and (not quiet["enabled"] or quiet["start"] == quiet["end"]):
         return False
     zone = ZoneInfo(settings["timezone"])
     current = now.astimezone(zone) if now is not None else datetime.now(zone)
-    if quiet_hours(settings, current):
+    if not cloud and in_quiet_hours(settings, current):
         return False
-    hour, minute = map(int, quiet["end"].split(":"))
-    end = current.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
-    if end > current:
-        end -= timedelta(days=1)
+    if cloud:
+        end = morning_quiet_end(settings, current)
+        if end is None:
+            return False
+    else:
+        hour, minute = map(int, quiet["end"].split(":"))
+        end = current.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+        if end > current:
+            end -= timedelta(days=1)
     if not 0 <= (current - end).total_seconds() < MORNING_RING_GRACE_S:
         return False
     window = f'{settings["timezone"]}:{quiet["start"]}:{end.isoformat()}'
@@ -1154,9 +1184,10 @@ def maybe_morning_ring(settings, snapshot, now=None):
         if saved.get("window") == window:
             _morning_ring_window = window
             return False
-        if snapshot and (_recording or _guided_active or button.is_pressed):
+        signal = (bool(snapshot) and settings["arrival_signal"] != "silent"
+                  and (not cloud or settings.get("morning_ring", True) and not quiet_hours(settings, current)))
+        if (signal if cloud else snapshot) and (_recording or _guided_active or button.is_pressed):
             return False
-        signal = bool(snapshot) and settings["arrival_signal"] != "silent"
         if signal and not apply_master_volume(settings):
             return False
         # Persist first: a crash during playback must never repeat the alert.
@@ -1218,6 +1249,8 @@ def maybe_manual_ring():
 
 def ring_alert(source="new_message", settings=None):
     settings = settings or caregiver_settings()
+    if transport_mode() == "cloud" and quiet_hours(settings):
+        return True
     path = os.fspath(ringtone_path(settings))
     manual = source == "dashboard"
     signal = "ring_and_lamp" if manual else settings["arrival_signal"]
@@ -1228,7 +1261,7 @@ def ring_alert(source="new_message", settings=None):
         return False
     log(f"ringing: {source}")
     log_event("ring", source=source)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
     started = time.monotonic()
     try:
         while (process is not None and process.poll() is None) or (
@@ -1236,7 +1269,7 @@ def ring_alert(source="new_message", settings=None):
         ):
             elapsed = time.monotonic() - started
             (led.on if flash_lamp and ring_lamp_on(elapsed, settings["ringtone_id"]) else led.off)()
-            if button.is_pressed:
+            if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
                 if process is not None:
                     process.terminate()
                 log("ring cut by press")
@@ -1372,11 +1405,7 @@ def wait_for_confirmed_press(timeout=None):
 
 def play_audio_ordinary(path):
     """Play all audio and discard every press made during it."""
-    subprocess.run(
-        ["aplay", "-q", "-D", SPK_DEV, str(path)],
-        check=True,
-        timeout=600,
-    )
+    play_sound(path, timeout=600)
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
 
 
@@ -1474,12 +1503,14 @@ def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS, ringtone_id=None):
     if ringtone_id not in cloud_runtime.RINGTONES or not path.is_file() or button.is_pressed:
         return False
     limit = ["-d", str(seconds)] if seconds else []
-    process = subprocess.Popen(["aplay", "-q", *limit, "-D", SPK_DEV, str(path)])
+    if transport_mode() == "cloud" and quiet_hours():
+        return False
+    process = start_player(["aplay", "-q", *limit, "-D", SPK_DEV, str(path)])
     started = time.monotonic()
     deadline = started + (seconds or cloud_runtime._ringtone_preview_timeout(path)) + 2
     try:
         while process.poll() is None:
-            if button.is_pressed or time.monotonic() >= deadline:
+            if button.is_pressed or time.monotonic() >= deadline or (transport_mode() == "cloud" and quiet_hours()):
                 return False
             # Previews flash the lamp to the ringtone's rhythm, like a real ring.
             if led is not None:
@@ -1500,13 +1531,13 @@ def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS, ringtone_id=None):
 
 def play_idle_sound(path, timeout, lamp_ringtone=None):
     """Yield to a press and release the speaker before recording can start."""
-    if button.is_pressed:
+    if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
         return False
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
     deadline = time.monotonic() + timeout
     try:
         while (code := process.poll()) is None:
-            if button.is_pressed:
+            if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
                 return False
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired("aplay", timeout)
@@ -1639,7 +1670,7 @@ def wait_for_approval(timeout, session_id=None):
 def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
     """Consume only a fresh deliberate press in review or deletion warning."""
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
     approved = False
     try:
         closed_since = None
@@ -1657,6 +1688,8 @@ def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
     finally:
         if process.poll() is None:
             process.wait()
+    if transport_mode() == "cloud" and not approved and process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, "aplay")
     if approved:
         acknowledge_guided_press(action, session_id)
     wait_for_stable_open()
@@ -1696,9 +1729,12 @@ class RecordingLimitCue:
         if not self.intervals and now - self.started >= self.maximum - 5:
             self.intervals.append([now - self.started, None])
             try:
-                self.process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV,
-                                                 str(sound_pack.cue_path("rec_limit"))])
-            except OSError:
+                if not box_muted():
+                    self.process = start_player(["aplay", "-q", "-D", SPK_DEV,
+                                                     str(sound_pack.cue_path("rec_limit"))])
+                else:
+                    self.intervals[-1][1] = now - self.started
+            except (OSError, cloud_quiet.AudioSilenced):
                 self.intervals[-1][1] = now - self.started
                 log_event("recording_limit_cue_unavailable")
         if self.process is not None:
@@ -1728,8 +1764,7 @@ class RecordingLimitCue:
 def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap"):
     global _recording
     # Synchronous playback must complete before the microphone is opened.
-    subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("rec_go"))],
-                   check=True, timeout=5)
+    play_sound(sound_pack.cue_path("rec_go"), timeout=5)
     if talk_mode == "hold" and not button.is_pressed:
         return RecordingResult(None, 0, False)
     capture_id = uuid.uuid4().hex
@@ -1886,7 +1921,7 @@ def play_next_legacy():
     log(f"playing {path.name} ({len(names)} waiting)")
     try:
         play_moment("msg_start")
-        subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(path)], check=True, timeout=600)
+        play_sound(path, timeout=600)
         if len(names) == 1:
             play_moment("msg_end")
         played_at = time.time()
@@ -2103,7 +2138,7 @@ def claim_beeps():
 
 def play_claim_cue(cues, name):
     try:
-        subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(cues[name])], check=True, timeout=5)
+        play_sound(cues[name], timeout=5)
         return True
     except (OSError, subprocess.SubprocessError):
         log("claim audio playback unavailable")
@@ -2129,8 +2164,7 @@ def play_setup_online(cues):
             if play_claim_cue(cues, "online"):
                 # Claim mode has no Button instance used by ordinary playback.
                 if sound_pack.consume_moment("online"):
-                    subprocess.run(["aplay", "-q", "-D", SPK_DEV,
-                                    str(sound_pack.voice_path("online"))], check=True, timeout=5)
+                    play_sound(sound_pack.voice_path("online"), timeout=5)
         _setup_online_failed = False
     except (OSError, ValueError, CloudDeviceError, subprocess.SubprocessError):
         # This runs on every idle poll; report a failure once until it recovers.
@@ -2169,6 +2203,12 @@ def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         wait_for_stable_open()
         return True
     interaction_settings = normalize_recording_settings(caregiver_settings())
+    if box_muted():
+        led.on()
+        time.sleep(0.15)
+        led.off()
+        wait_for_stable_open()
+        return True
     try:
         if interaction_settings["talk_mode"] == "tap":
             # The session starts from this press only after its release; it can

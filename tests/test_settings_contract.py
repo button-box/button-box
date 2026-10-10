@@ -45,6 +45,7 @@ class SettingsContractTests(unittest.TestCase):
         self.assertEqual(contract["command_kinds"], sorted([
             "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview",
             "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message",
+            "quiet_now", "mute",
         ]))
 
     def alternate_checkout(self, directory):

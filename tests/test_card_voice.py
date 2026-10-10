@@ -136,7 +136,7 @@ class CardVoiceTests(unittest.TestCase):
                 # nor a press cue may delay the same immediate legacy path.
                 self.button.is_pressed = True
                 with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
-                     mock.patch.object(runtime.subprocess, "run"), \
+                     mock.patch.object(runtime, "play_sound"), \
                      mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")), \
                      mock.patch.object(runtime, "capture_guided_recording", side_effect=real_capture), \
                      mock.patch.object(runtime.subprocess, "Popen", side_effect=RuntimeError("microphone boundary")) as open_mic:

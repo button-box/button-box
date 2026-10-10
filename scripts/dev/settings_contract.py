@@ -12,6 +12,7 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+from datetime import date
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -38,9 +39,9 @@ def literal(node, constants):
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
         return literal(node.left, constants) - literal(node.right, constants)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        if node.func.id in {"frozenset", "list", "bool"}:
-            constructor = {"frozenset": frozenset, "list": list, "bool": bool}[node.func.id]
-            return constructor(literal(node.args[0], constants))
+        if node.func.id in {"frozenset", "list", "bool", "set"}:
+            constructor = {"frozenset": frozenset, "list": list, "bool": bool, "set": set}[node.func.id]
+            return constructor(literal(node.args[0], constants)) if node.args else constructor()
         if node.func.id == "installed_voice_packs" and not node.args:
             return constants["installed_voice_packs"]()
     raise ContractError(f"unsupported expression: {ast.unparse(node)}")
@@ -71,7 +72,7 @@ def settings_namespace(tree):
     constants = source_constants(tree)
     namespace = {**constants, "copy": copy, "os": os, "Path": Path, "re": re,
                  "ZoneInfo": ZoneInfo, "ZoneInfoNotFoundError": ZoneInfoNotFoundError,
-                 "SettingsError": ValueError}
+                 "SettingsError": ValueError, "date": date}
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "_TIME"
                                                for target in node.targets):
@@ -107,6 +108,18 @@ def describe_keys(tree, namespace, baseline):
     descriptions = {}
     kinds = {bool: "bool", int: "int", str: "string", dict: "object"}
     for key in sorted(namespace["_ROOT_KEYS"]):
+        if key in namespace.get("QUIET_DEFAULTS", {}) and key != "morning_ring":
+            # These optional values use null to preserve legacy schedules and
+            # timezone defaults. Describe their nested constraints explicitly.
+            descriptions[key] = {
+                "quiet_schedules": {"type": "object", "nullable": True,
+                    "keys": ["school_days", "weekend"], "periods_max": 3,
+                    "period_keys": ["start", "end"], "time_format": "HH:MM"},
+                "weekend_days": {"type": "array", "nullable": True, "items": "int",
+                    "min": 0, "max": 6, "max_items": 7, "unique": True},
+                "holiday_until": {"type": "string", "nullable": True, "format": "YYYY-MM-DD"},
+            }[key]
+            continue
         if key not in baseline or type(baseline[key]) not in kinds:
             raise ContractError(f"cannot describe setting {key!r}: no supported default type")
         descriptions[key] = {"type": kinds[type(baseline[key])]}
