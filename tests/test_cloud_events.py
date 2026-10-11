@@ -188,7 +188,8 @@ class RuntimeSchedulingTests(unittest.TestCase):
 
     def test_lost_hint_backup_poll_and_heartbeat_every_thirty_seconds(self):
         runtime, stop, events, polls, beats = self.runtime()
-        runtime.run(stop=stop, events=events)
+        with mock.patch("messagebox.cloud_runtime.random.random", return_value=0):
+            runtime.run(stop=stop, events=events)
         self.assertEqual(polls, [0, 30, 60])
         self.assertEqual(beats, [0, 30, 60])
         events.start.assert_called_once()

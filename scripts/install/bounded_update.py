@@ -169,6 +169,11 @@ SOUND_SOURCES += ("sounds/voices/README.md",) + tuple(
         and Path(source).name != "voice-setup-online.wav"
     )
 )
+CLOUD_SOUND_SOURCES = ("sounds/cloud/manifest.json", "sounds/cloud/reaction.wav",
+                  "sounds/cloud/text-message.wav", "sounds/cloud/nothing.wav") + tuple(
+    f"sounds/cloud/more-{count}.wav" for count in range(1, 98)
+)
+SOUND_SOURCES += CLOUD_SOUND_SOURCES
 for source in SOUND_SOURCES:
     EXPLICIT_TARGETS[source] = "/opt/messagebox/" + source
 RETIRED_SOUNDS = tuple(
@@ -461,7 +466,10 @@ def load_candidate(source_root, manifest_path, root):
         targets.add(target)
     sound_entries = {entry["source"] for entry in entries if entry["source"] in SOUND_SOURCES}
     if sound_entries:
-        if sound_entries != set(SOUND_SOURCES):
+        required_sounds = set(SOUND_SOURCES)
+        if not sound_entries.intersection(CLOUD_SOUND_SOURCES):
+            required_sounds.difference_update(CLOUD_SOUND_SOURCES)
+        if sound_entries != required_sounds:
             raise UpdateError("release sound pack is incomplete")
         try:
             _candidate_sound_pack(source_root).validate_sounds(source_root / "sounds")
