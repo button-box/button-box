@@ -23,6 +23,7 @@ from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
+from messagebox.cloud_voice import VoiceCache, ReactionQueue, fallback
 from messagebox.listened_receipts import ReceiptStore
 from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
@@ -264,6 +265,8 @@ class CloudRuntime:
     def _sync_contacts(self, snapshot):
         people = snapshot["people"]
         wanted = {p["wa_id"] + "@s.whatsapp.net": p for p in people}
+        if snapshot.get("reactions"):
+            wanted["box:reaction_heart"] = {"id": "reaction_heart", "display_name": "Heart reaction"}
         wanted.update({"box:" + box["id"]: {"id": box["id"], "display_name": box["box_name"]}
                        for box in snapshot.get("connected_boxes", [])})
         default = next((jid for jid, person in wanted.items()
@@ -303,6 +306,7 @@ class CloudRuntime:
             contact = document["contacts"].get("box:" + box["id"])
             if contact:
                 cards.extend((box["id"], uid) for uid in contact["card_uids"])
+        cards.extend(("reaction_heart", uid) for uid in document["contacts"].get("box:reaction_heart", {}).get("card_uids", []))
         cards = CardReferenceStore(NFC_CARD_REFERENCES_FILE).sync(snapshot["account_scope"], cards)
         return {"account_scope": snapshot["account_scope"],
                 "revision": document["revision"], "cards": cards}
@@ -367,7 +371,8 @@ class CloudRuntime:
         until = entitlement.get("until")
         if until is not None and not _valid_time(until):
             raise CloudRuntimeError("cloud entitlement is invalid")
-        snapshot = {"box_id": response["box_id"], "server_time": response["server_time"],
+        snapshot = {"reactions": response.get("voice_features", {}).get("reactions") == 1 if isinstance(response.get("voice_features", {}), dict) else False,
+                    "box_id": response["box_id"], "server_time": response["server_time"],
                     "account_scope": response["account_scope"],
                     "verified_at": self.clock(), "verified_mono": self.monotonic(),
                     "boot_id": self.boot_id,
@@ -379,6 +384,7 @@ class CloudRuntime:
         self.state["snapshot"] = snapshot
         self._save()
         self._prune_listened_clips()
+        self._preload_voice_lines()
         return response
 
     def _ack_paths(self, operation_id):
@@ -608,12 +614,13 @@ class CloudRuntime:
         sender_id = payload.get("sender_id")
         expires_at = payload.get("expires_at")
         message_created_at = payload.get("message_created_at")
+        text_fallback = payload.get("text_read_aloud") is True and payload.get("use_fallback") is True
         if (not _valid_id(message_id) or not _valid_time(expires_at) or not _valid_id(sender_id)
                 or expires_at > item["expires_at"]
                 or payload.get("sender_kind") not in {None, "person", "box"}
                 or sender_id not in (self._boxes() if payload.get("sender_kind") == "box" else self._people())
                 or (message_created_at is not None and not _valid_time(message_created_at))
-                or not isinstance(payload.get("sha256"), str) or not _SHA.fullmatch(payload["sha256"])
+                or not text_fallback and (not isinstance(payload.get("sha256"), str) or not _SHA.fullmatch(payload["sha256"]))
                 or payload.get("content_type") not in {"audio/ogg", "audio/opus", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr", "audio/wav", "audio/x-wav"}
                 or not isinstance(payload.get("media_url"), str)):
             raise CloudRuntimeError("cloud audio metadata is invalid")
@@ -637,6 +644,8 @@ class CloudRuntime:
                     "sender_jid": jid, "media_type": "audio", "cloud": True,
                     "cloud_message_id": message_id, "cloud_operation_id": item["operation_id"],
                     "sender_id": sender_id, "expires_at": expires_at}
+        if payload.get("text_read_aloud"):
+            metadata["text_read_aloud"] = True
         if payload.get("sender_kind") == "box":
             metadata["sender_kind"] = "box"
         if message_created_at is not None:
@@ -661,8 +670,9 @@ class CloudRuntime:
                 self._save()
                 self._ack(item["operation_id"], "received")
                 return
-        audio = self.client.media(payload.get("media_url"), limit=MAX_MEDIA_BYTES)
-        if not audio or hashlib.sha256(audio).hexdigest() != payload["sha256"]:
+        audio = (fallback("text-message").read_bytes() if text_fallback else
+                 self.client.media(payload.get("media_url"), limit=MAX_MEDIA_BYTES))
+        if not audio or not text_fallback and hashlib.sha256(audio).hexdigest() != payload["sha256"]:
             raise CloudRuntimeError("cloud audio hash is invalid")
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         temporary = self.queue_dir / f".cloud-{uuid.uuid4().hex}.part"
@@ -707,7 +717,8 @@ class CloudRuntime:
         router = NfcRouter(self.contacts, SelectionStore(NFC_SELECTION_FILE),
                            EnrollmentStore(NFC_ENROLLMENT_FILE))
         if kind == "nfc_enroll":
-            jid, label = self._recipient(payload.get("recipient_id"))
+            jid, label = (("box:reaction_heart", "Heart reaction") if payload.get("recipient_id") == "reaction_heart"
+                          else self._recipient(payload.get("recipient_id")))
             active = router.enrollment.active()
             if active is None:
                 active = router.begin_enrollment(label=label,
@@ -751,7 +762,8 @@ class CloudRuntime:
             else:
                 if targeted:
                     recipient_id = payload.get("recipient_id")
-                    jid, _label = self._recipient(recipient_id)
+                    jid, _label = (("box:reaction_heart", "Heart reaction") if recipient_id == "reaction_heart"
+                                   else self._recipient(recipient_id))
                     snapshot = self.state.get("snapshot") or {}
                     uid = CardReferenceStore(NFC_CARD_REFERENCES_FILE).resolve(
                         snapshot.get("account_scope"), payload.get("card_ref"))
@@ -778,6 +790,77 @@ class CloudRuntime:
                 if current_jid is not None:
                     raise CloudRuntimeError("selected saved card changed")
             self._ack(item["operation_id"], "applied")
+
+    def _voice_reference_key(self, template, recipient, name, pack):
+        snapshot = self._snapshot()
+        return hashlib.sha256(json.dumps([snapshot["account_scope"], template, recipient, name, pack]).encode()).hexdigest()
+
+    def _preload_voice_lines(self):
+        if not hasattr(self.client, "voice_line"):
+            return
+        settings, warning = self.settings.load()
+        if warning:
+            return
+        pack = settings.get("voice_pack")
+        mapping = self.state.setdefault("voice_line_cache", {})
+        wanted = {}
+        calls = 0
+        for box, people in ((False, self._people()), (True, self._boxes())):
+            for recipient, person in people.items():
+                name = self._card_prompt_name(person, box=box)
+                for template in ("card_prompt", "card_saved"):
+                    key = self._voice_reference_key(template, recipient, name, pack)
+                    cached = mapping.get(key, {})
+                    if cached.get("retry_at", 0) <= self.server_now() and calls < 3:
+                        clip = self.fetch_voice_line(template, **{"link_id" if box else "identity_id": recipient})
+                        cached = {"clip": clip, "sha256": hashlib.sha256(Path(clip).read_bytes()).hexdigest() if clip else "",
+                                  "retry_at": self.server_now() + (3600 if clip else 60)}
+                        calls += 1
+                    wanted[key] = cached
+        self.state["voice_line_cache"] = wanted
+        self._save()
+
+    def named_card_clip(self, jid, pack, template="card_prompt"):
+        try:
+            recipient = self.recipient_id(jid)
+            box = jid.startswith("box:")
+            person = (self._boxes() if box else self._people())[recipient]
+            key = self._voice_reference_key(template, recipient, self._card_prompt_name(person, box=box), pack)
+            cached = self.state.get("voice_line_cache", {}).get(key, {})
+            path = cached.get("clip", "")
+            valid = (path and Path(path).parent == self.state_path.parent / "voice-lines"
+                     and Path(path).is_file() and not Path(path).is_symlink()
+                     and hashlib.sha256(Path(path).read_bytes()).hexdigest() == cached.get("sha256"))
+            return path if valid else ""
+        except (KeyError, CloudRuntimeError, OSError):
+            return ""
+
+    def fetch_voice_line(self, template, **reference):
+        try:
+            payload = self.client.voice_line(template, **reference)
+            settings, warning = self.settings.load()
+            if warning or payload.get("voice_pack") not in {None, settings.get("voice_pack")} :
+                return ""
+            return VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload)
+        except (CloudDeviceError, OSError, ValueError, AttributeError):
+            return ""
+
+    def _reaction(self, item):
+        payload = item["payload"]
+        snapshot = self._snapshot()
+        sender = payload.get("sender_id")
+        if (not _valid_id(payload.get("event_id")) or not _valid_id(sender)
+                or payload.get("sender_kind") not in {"person", "box"}
+                or sender not in (self._boxes() if payload.get("sender_kind") == "box" else self._people())):
+            raise CloudRuntimeError("reaction sender is unavailable")
+        settings, warning = self.settings.load()
+        if warning or not settings.get("say_reactions", True):
+            self._ack(item["operation_id"], "rejected")
+            return
+        clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload)
+        ReactionQueue(self.state_path.parent / "cloud-reactions.json").enqueue(
+            item["operation_id"], snapshot["account_scope"], item["expires_at"], payload, clip)
+        self._ack(item["operation_id"], "applied")
 
     def _listened_prefix(self, scope, listener_id):
         return hashlib.sha256((scope + ":" + listener_id).encode()).hexdigest()
@@ -905,6 +988,9 @@ class CloudRuntime:
 
     def card_prompt_clip(self, jid, pack):
         """Read a preloaded clip only; taps never download or synthesize audio."""
+        modern = self.named_card_clip(jid, pack)
+        if modern:
+            return modern
         if pack not in VOICE_PACKS or pack in {"robot", "dj"}:
             return ""
         try:
@@ -982,7 +1068,9 @@ class CloudRuntime:
         store = self._receipt_store()
         notice_id = store.cloud_notice_id(item["operation_id"])
         if not store.cloud_exists(notice_id):
-            clip = (self._listened_clip(payload, snapshot["account_scope"])
+            modern_clip = self.fetch_voice_line("box_listened" if box_listener else "listened",
+                **{"link_id" if box_listener else "identity_id": listener_id}) if status != "lamp_only" else ""
+            clip = modern_clip or (self._listened_clip(payload, snapshot["account_scope"])
                     if len(listener_name) <= 24 and status != "lamp_only" else "")
             store.enqueue_cloud(item["operation_id"], payload["message_id"],
                 listener_id, listener_name, clip,
@@ -1016,6 +1104,8 @@ class CloudRuntime:
         kind, payload = item["kind"], item["payload"]
         if kind == "audio":
             return self._audio(item, server_time)
+        if kind == "reaction":
+            return self._reaction(item)
         if kind == "listened":
             return self._listened(item, server_time)
         if kind == "card_prompt":
@@ -1235,7 +1325,7 @@ class CloudRuntime:
                 entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute"}
+                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (
@@ -1393,6 +1483,8 @@ def record_played(metadata):
     if metadata and metadata.get("cloud") is True and _valid_id(metadata.get("cloud_operation_id")):
         runtime = CloudRuntime()
         runtime._ack(metadata["cloud_operation_id"], "played")
+        atomic_json(runtime.state_path.parent / "last-played.json", {"message_id": metadata["cloud_message_id"],
+                    "played_at": runtime.server_now(), "scope": (runtime.state.get("snapshot") or {}).get("account_scope")})
 
 
 def listened_status(metadata):
@@ -1427,3 +1519,61 @@ def outbox_retry_until():
 def outbox_now():
     runtime = CloudRuntime(client=object())
     return runtime.server_now()
+
+
+def _play_reactions(play, *, deliberate=False):
+    """Called only by the button owner; quiet reactions wait for a deliberate press."""
+    runtime = CloudRuntime(client=object())
+    snapshot = runtime._snapshot()
+    settings, warning = runtime.settings.load()
+    silence = runtime.silence.load()
+    if warning or not snapshot["entitlement"]["deliver"] or snapshot["queue_hold"]:
+        return False
+    if not settings.get("say_reactions", True):
+        ReactionQueue(runtime.state_path.parent / "cloud-reactions.json").take(snapshot["account_scope"], set())
+        return False
+    if not deliberate and (silence["muted"] or cloud_quiet.quiet_now(silence, runtime.server_now())
+            or in_quiet_hours(settings, datetime.fromtimestamp(runtime.server_now(), ZoneInfo(settings["timezone"])), cloud=True)):
+        return False
+    allowed = {("person", person) for person in runtime._people()}
+    allowed.update(("box", link) for link in runtime._boxes())
+    rows, more = ReactionQueue(runtime.state_path.parent / "cloud-reactions.json").take(
+        snapshot["account_scope"], allowed, now=runtime.server_now())
+    if rows:
+        from messagebox import sound_pack
+        play(sound_pack.cue_path("listened"))
+        for row in rows:
+            clip = Path(row["clip"]) if row["clip"] else fallback("reaction")
+            cache = runtime.state_path.parent / "voice-lines"
+            if row["clip"] and (clip.parent != cache or clip.is_symlink()):
+                clip = fallback("reaction")
+            play(clip if clip.is_file() else fallback("reaction"))
+        if more:
+            play(fallback("more", more))
+    return bool(rows)
+
+
+def react_with_heart():
+    runtime = CloudRuntime()
+    try:
+        last = json.loads((runtime.state_path.parent / "last-played.json").read_text())
+        snapshot = runtime._snapshot()
+        if last.get("scope") != snapshot["account_scope"] or not 0 <= runtime.server_now() - last["played_at"] <= 600:
+            return "nothing_to_react_to"
+        # Stable operation per message survives card taps and unknown send outcomes.
+        operation = hashlib.sha256((snapshot["account_scope"] + last["message_id"]).encode()).hexdigest()
+        runtime.flush_acks()  # Publish playback before the server checks the ten-minute window.
+        return runtime.client.send_reaction(last["message_id"], operation)["state"]
+    except (CloudDeviceError, OSError, ValueError, KeyError, CloudRuntimeError):
+        return "nothing_to_react_to"
+
+
+def card_saved_clip(jid, pack):
+    return CloudRuntime(client=object()).named_card_clip(jid, pack, "card_saved")
+
+
+def play_reactions(play, *, deliberate=False):
+    try:
+        return _play_reactions(play, deliberate=deliberate)
+    except (CloudRuntimeError, OSError, ValueError, KeyError):
+        return False

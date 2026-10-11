@@ -83,17 +83,17 @@ def muted():
     return silence_store.load()["muted"]
 
 
-def start_player(args, **kwargs):
+def start_player(args, *, allow_muted=False, **kwargs):
     """Watch only this process; never kill other services' audio players."""
     before = silence_store.load()
-    if before["muted"]:
+    if before["muted"] and not allow_muted:
         raise AudioSilenced("box is muted")
     process = subprocess.Popen(args, **kwargs)
 
     def watch():
         while process.poll() is None:
             state = silence_store.load()
-            if state["muted"] or state["stop_sequence"] > before["stop_sequence"]:
+            if state["muted"] and not allow_muted or state["stop_sequence"] > before["stop_sequence"]:
                 process.terminate()
                 try:
                     process.wait(timeout=0.2)
@@ -107,8 +107,8 @@ def start_player(args, **kwargs):
     return process
 
 
-def play(args, *, timeout):
-    process = start_player(args)
+def play(args, *, timeout, allow_muted=False):
+    process = start_player(args, allow_muted=allow_muted)
     try:
         code = process.wait(timeout=timeout)
         if code:

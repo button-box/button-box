@@ -268,6 +268,26 @@ class CloudDeviceClient:
             raise CloudDeviceError("cloud response is invalid")
         return result
 
+    def voice_line(self, template, **reference):
+        try:
+            result = json.loads(self.request("/device/voice-lines", method="POST",
+                                             body={"template": template, **reference}))
+        except (ValueError, TypeError) as exc:
+            raise CloudDeviceError("voice line response is invalid") from exc
+        if not isinstance(result, dict):
+            raise CloudDeviceError("voice line response is invalid")
+        return result
+
+    def send_reaction(self, message_id, operation_id):
+        try:
+            result = json.loads(self.request("/device/reactions", method="POST",
+                body={"message_id": message_id, "operation_id": operation_id}))
+        except (ValueError, TypeError) as exc:
+            raise CloudDeviceError("reaction response is invalid") from exc
+        if not isinstance(result, dict) or result.get("state") not in {"sent", "uncertain", "nothing_to_react_to"}:
+            raise CloudDeviceError("reaction response is invalid")
+        return result
+
     def voice_status(self, idempotency_key: str) -> dict:
         if not isinstance(idempotency_key, str) or not _ID.fullmatch(idempotency_key):
             raise CloudDeviceError("voice idempotency key is invalid")
@@ -294,7 +314,8 @@ class CloudDeviceClient:
             parsed.scheme != "https"
             or parsed.netloc != urlsplit(self.api_url).netloc
             or not parsed.path.startswith(("/cloud-api/v1/device/media/",
-                                           "/cloud-api/v1/device/listened-media/"))
+                                           "/cloud-api/v1/device/listened-media/",
+                                           "/cloud-api/v1/device/voice-lines/"))
             or parsed.username is not None
             or parsed.password is not None
             or parsed.query
@@ -399,6 +420,9 @@ def capabilities(*, nfc=False) -> dict:
         "settings_unknown_keys": "ignore",
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
+        "voice_lines": 1,
+        "reactions": 1,
+        "text_to_voice": 1,
         "card_name_prompt": True,
         "box_link": True,
         "quiet_periods": 3,

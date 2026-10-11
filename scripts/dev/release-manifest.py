@@ -29,8 +29,11 @@ def installed_paths(root):
             paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
-    for pack in ("cues", "voice", "voices", "voices/pirate", "voices/alien",
+    for pack in ("cloud", "cues", "voice", "voices", "voices/pirate", "voices/alien",
                  "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata"):
+        # The Cloud-only fallbacks were introduced after the legacy release layout.
+        if pack == "cloud" and not (root / "sounds" / pack).exists():
+            continue
         for source in sorted((root / "sounds" / pack).iterdir()):
             if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
                 relative = source.relative_to(root).as_posix()

@@ -61,6 +61,7 @@ class SoundPackTests(unittest.TestCase):
                     asset.write_bytes(asset.read_bytes()[:-2] + b"xx")
                 with self.assertRaisesRegex(ValueError, "cues"):
                     sound_pack.validate_sounds(target)
+                shutil.rmtree(target)
 
     def test_current_pack_paths_unknown_default_and_missing_file_logs_once(self):
         with mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \

@@ -1,5 +1,39 @@
 # Cloud runtime boundary
 
+## Voice features (B64)
+
+Cloud mode reports `voice_lines: 1`, `reactions: 1` and `text_to_voice: 1`.
+Name lines use the authenticated template/reference API, are cached by clip ID,
+and use the existing bundled line when offline. Card prompt and saved references
+include the account scope, recipient name and applied voice. The cache accepts
+only bounded, hash-checked mono PCM WAV files. An old Cloud response keeps the
+legacy name paths working and does not enable reaction-card recipients.
+
+Reactions use a durable, account-scoped queue. Quiet times and Mute hold them
+until the next deliberate press, before the message interaction. A burst plays
+the soft listened chime, up to three lines, then an English count summary.
+Disabling “Say when family reacts” discards pending announcements. Removed
+senders, expired events and duplicate operations do not play. Only the button
+process owns playback; the poller downloads and ACKs durable queueing.
+
+The dashboard pairs the reserved heart-card recipient `reaction_heart` through
+the normal NFC enrolment flow. It cannot become a recording destination. A tap
+within ten minutes of the last played message submits a stable operation after
+flushing the playback ACK. A confirmed send plays the card cue. A missing,
+expired or unavailable target plays the short error tone. Unknown provider
+outcomes are never automatically resent.
+
+Text read aloud enters the existing audio queue with `text_read_aloud` metadata,
+so playback, retention, quiet times, Mute and morning rings use the same rules.
+Generation failure uses the bundled English “You have a message” line. New
+fallback and count WAV files live in `sounds/cloud`; setup, provisioning and the
+bounded updater include them explicitly. This directory is optional when
+describing older releases, and must be complete when included in an update.
+
+Deploy the compatible Cloud receiver and migration before this Pi sender.
+No live canary or provider acceptance is implied by source checks. The
+self-hosted wacli mode does not use these endpoints, queues or card recipients.
+
 `MSGBOX_TRANSPORT=cloud` selects the authenticated Cloud API v1 device path. The
 default `wacli` path remains available. These are the only two connection modes.
 The earlier `business` adapter was removed: `MSGBOX_TRANSPORT=business` now stops

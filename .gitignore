@@ -46,6 +46,7 @@ config/env
 !sounds/guided-reply/*.wav
 !sounds/ringtones/*.wav
 !sounds/cues/*.wav
+!sounds/cloud/*.wav
 !sounds/voice/*.wav
 !sounds/voices/*/*.wav
 *.mp3

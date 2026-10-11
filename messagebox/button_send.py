@@ -527,9 +527,21 @@ def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
         log_event("nfc_announced", action=action, played=True, mode="spoken")
         return True
     settings = caregiver_settings()
+    if transport_mode() == "cloud" and action in {"recognized", "selected"}:
+        contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+        if contact and contact["jid"] == "box:reaction_heart":
+            result = cloud_runtime.react_with_heart()
+            play_idle_sound(sound_pack.cue_path("card") if result == "sent" else sound_pack.cue_path("oops"), 5)
+            nfc_announcement_store.acknowledge(uid)
+            return True
     paths = []
     if action == "enrolled":
-        paths = [sound_pack.cue_path("card_saved"), sound_pack.voice_path("card-saved")]
+        clip = ""
+        if transport_mode() == "cloud":
+            contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+            if contact and contact["jid"] != "box:reaction_heart":
+                clip = cloud_runtime.card_saved_clip(contact["jid"], settings.get("voice_pack"))
+        paths = [sound_pack.cue_path("card_saved"), clip or sound_pack.voice_path("card-saved")]
     elif action in {"recognized", "selected"}:
         if settings["nfc_confirmation_beep"]:
             paths.append(sound_pack.cue_path("card"))
@@ -2201,6 +2213,9 @@ def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         log_event("cloud_claim_button_pressed")
         wait_for_stable_open()
         return True
+    if transport_mode() == "cloud":
+        cloud_runtime.play_reactions(lambda path: cloud_quiet.play(
+            ["aplay", "-q", "-D", SPK_DEV, str(path)], timeout=60, allow_muted=True), deliberate=True)
     interaction_settings = normalize_recording_settings(caregiver_settings())
     if box_muted():
         led.on()
@@ -2321,6 +2336,8 @@ def main():
             if button.is_pressed:
                 break
             play_pending_nfc_announcement()
+            if transport_mode() == "cloud" and not _recording and not _guided_active and not button.is_pressed:
+                cloud_runtime.play_reactions(lambda path: play_idle_sound(path, 60))
             maybe_play_pending_listened()
             refresh_led()
             maybe_manual_ring()
