@@ -11,7 +11,13 @@ the applicable operating process before running it.
 
 ## Prepare the release source
 
-From the exact reviewed commit, run the repository checks and write its
+For signed public tagged artifacts, follow [the release procedure](releases.md).
+Verify the minisign signature over SHA256SUMS, then both asset hashes, before
+extraction. This legacy operator workflow does not implement unattended signature
+verification or boot recovery.
+
+For a legacy attended update from the exact reviewed commit, run the repository
+checks and write its
 installed-file manifest into the package:
 
 ```sh

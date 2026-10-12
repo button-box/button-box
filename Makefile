@@ -6,8 +6,8 @@ test:
 
 syntax:
 	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m py_compile scripts/dev/settings_contract.py scripts/dev/make_deleted_cue.py
-	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/dev/validate_acceptance_run.py scripts/install/audio_config.py scripts/install/ringtones.py scripts/install/bounded_update.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py scripts/dev/simulate-inputs.py scripts/dev/simulate-selected-message.py scripts/dev/simulate-received-message.py scripts/dev/simulate-activity-dashboard.py
-	for file in scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh; do sh -n "$$file"; done
+	PYTHONPYCACHEPREFIX=/tmp/messagebox-pycache python3 -m compileall -q messagebox tests scripts/release scripts/dev/validate_acceptance_run.py scripts/install/audio_config.py scripts/install/ringtones.py scripts/install/bounded_update.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py scripts/dev/simulate-inputs.py scripts/dev/simulate-selected-message.py scripts/dev/simulate-received-message.py scripts/dev/simulate-activity-dashboard.py
+	for file in scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh scripts/release/*.sh; do sh -n "$$file"; done
 	sh -n scripts/messageboxctl
 	bash -n messagebox/syncloop.sh
 
@@ -15,10 +15,10 @@ lint: lint-python lint-shell lint-frontend
 
 lint-python:
 	uvx --from ruff==0.16.3 ruff check --target-version=py313 --select=E4,E7,E9,F scripts/dev/settings_contract.py scripts/dev/make_deleted_cue.py
-	uvx --from ruff==0.16.3 ruff check --target-version=py313 --select=E4,E7,E9,F messagebox tests scripts/install/audio_config.py scripts/install/ringtones.py scripts/install/bounded_update.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py scripts/dev/simulate-inputs.py scripts/dev/simulate-selected-message.py scripts/dev/simulate-received-message.py scripts/dev/simulate-activity-dashboard.py
+	uvx --from ruff==0.16.3 ruff check --target-version=py313 --select=E4,E7,E9,F messagebox tests scripts/release scripts/install/audio_config.py scripts/install/ringtones.py scripts/install/bounded_update.py scripts/install/tailscale_dashboard.py scripts/dev/release-manifest.py scripts/dev/simulate-inputs.py scripts/dev/simulate-selected-message.py scripts/dev/simulate-received-message.py scripts/dev/simulate-activity-dashboard.py
 
 lint-shell:
-	uvx --from shellcheck-py==0.11.0.1 shellcheck --exclude=SC1007,SC1091,SC2029 scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh scripts/messageboxctl messagebox/syncloop.sh
+	uvx --from shellcheck-py==0.11.0.1 shellcheck --exclude=SC1007,SC1091,SC2029 scripts/*.sh scripts/commands/* scripts/dev/onboard.sh scripts/dev/hardware-test.sh scripts/dev/reprovision.sh scripts/install/*.sh scripts/release/*.sh scripts/messageboxctl messagebox/syncloop.sh
 
 lint-frontend:
 	bunx @biomejs/biome@2.5.9 lint --diagnostic-level=error messagebox/onboarding/static
