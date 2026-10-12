@@ -1,3 +1,5 @@
+from mic_helpers import physical_capture
+from functools import partial
 import contextlib
 import subprocess
 import sys
@@ -115,7 +117,7 @@ class CardVoiceTests(unittest.TestCase):
 
     def test_prompt_press_skips_guided_countdown_and_legacy_hold_classification(self):
         context = {"via_card": True, "uid": CARD, "contact": {"jid": JID, "card_uids": [CARD]}}
-        real_capture = runtime.capture_guided_recording
+        real_capture = partial(physical_capture, runtime, capture_function=runtime.capture_guided_recording)
         for mode in ("wacli", "cloud"):
             with self.subTest(mode=mode), \
                  mock.patch.object(runtime, "transport_mode", return_value=mode), \
@@ -177,7 +179,7 @@ class CardVoiceTests(unittest.TestCase):
              mock.patch.object(runtime, "acknowledge_guided_press"), \
              mock.patch.object(runtime, "wait_for_stable_open"), \
              mock.patch.object(runtime.subprocess, "run") as audio:
-            result = runtime.capture_guided_recording(JID, "session", card_prompt=True)
+            result = physical_capture(runtime, JID, "session", card_prompt=True)
         self.assertFalse(result.meaningful)
         self.assertEqual(ticks[0], 4)
         self.assertEqual(Path(audio.call_args.args[0][-1]).name, "cue-rec_go.wav")

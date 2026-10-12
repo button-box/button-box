@@ -411,7 +411,8 @@ class SelectedMessageSimulatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             claim_file = Path(directory) / "claim.json"
             original = mock.Mock(return_value=True)
-            with mock.patch.object(button_send.cloud_claim, "CLAIM_FILE", claim_file), \
+            with mock.patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+                    mock.patch.object(button_send.cloud_claim, "CLAIM_FILE", claim_file), \
                     mock.patch.object(button_send.cloud_claim, "consume_claim_press", original), \
                     mock.patch.object(button_send, "transport_mode", return_value="cloud"), \
                     mock.patch.object(button_send, "run_guided_once") as guided, \

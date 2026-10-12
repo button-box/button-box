@@ -134,7 +134,8 @@ class InputSimulatorTests(unittest.TestCase):
 
     def test_shared_dispatch_preserves_cloud_claim_and_guided_release_order(self):
         order = []
-        with mock.patch.object(button_send, "transport_mode", return_value="cloud"), \
+        with mock.patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             mock.patch.object(button_send, "transport_mode", return_value="cloud"), \
              mock.patch.object(button_send.cloud_claim, "consume_claim_press", return_value=True), \
              mock.patch.object(button_send, "log_event"), \
              mock.patch.object(button_send, "wait_for_stable_open") as released, \
@@ -142,7 +143,8 @@ class InputSimulatorTests(unittest.TestCase):
             self.assertTrue(button_send.handle_confirmed_press(1))
             released.assert_called_once()
             settings.assert_not_called()
-        with mock.patch.object(button_send, "transport_mode", return_value="wacli"), \
+        with mock.patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             mock.patch.object(button_send, "transport_mode", return_value="wacli"), \
              mock.patch.object(button_send, "caregiver_settings", return_value={"recording_mode": "tap_review"}), \
              mock.patch.object(button_send, "acknowledge_guided_press", side_effect=lambda *args: order.append("ack")), \
              mock.patch.object(button_send, "wait_for_stable_open", side_effect=lambda: order.append("released")), \
@@ -152,7 +154,8 @@ class InputSimulatorTests(unittest.TestCase):
             self.assertEqual(order, ["ack", "released", "session", "lamp"])
 
     def test_shared_dispatch_reports_failure_and_still_refreshes_lamp(self):
-        with mock.patch.object(button_send, "transport_mode", return_value="wacli"), \
+        with mock.patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             mock.patch.object(button_send, "transport_mode", return_value="wacli"), \
              mock.patch.object(button_send, "caregiver_settings", return_value={"recording_mode": "hold_release"}), \
              mock.patch.object(button_send, "record_and_send_legacy", side_effect=OSError), \
              mock.patch.object(button_send, "log"), mock.patch.object(button_send, "log_event"), \
