@@ -1,5 +1,6 @@
 """Offline release verification; shared by downloader and privileged installer."""
 
+import base64
 import hashlib
 import json
 import re
@@ -20,6 +21,24 @@ class ReleaseError(ValueError):
     """Bounded reason code, safe to report without command output."""
 
 
+def public_key_id(line):
+    try:
+        data = base64.b64decode(line, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ReleaseError('invalid_public_key') from exc
+    if len(data) != 42 or data[:2] != b'Ed' or base64.b64encode(data).decode() != line:
+        raise ReleaseError('invalid_public_key')
+    return data[2:10][::-1].hex().upper()
+
+
+def public_key_line(path):
+    lines = Path(path).read_text(encoding='ascii').splitlines()
+    if len(lines) != 2 or not lines[0].startswith('untrusted comment: '):
+        raise ReleaseError('invalid_public_key')
+    public_key_id(lines[1])
+    return lines[1]
+
+
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open('rb') as source:
@@ -30,6 +49,11 @@ def digest(path):
 
 def verify_bundle(directory, keys, *, version, channel, floor, platform, run=subprocess.run, verify_archive=True):
     directory, keys = Path(directory), Path(keys)
+    # Resolve the root-owned generation once: a concurrent pointer switch may
+    # reject a download, but must never mix keys from two sets.
+    emergency = {public_key_id(public_key_line(key))
+                 for key in (keys.parent / 'emergency-keys').glob('*.pub')}
+    keys = keys.resolve()
     if not isinstance(version, str) or not TAG.fullmatch(version):
         raise ReleaseError('invalid_version')
     sums = directory / 'SHA256SUMS'
@@ -38,6 +62,8 @@ def verify_bundle(directory, keys, *, version, channel, floor, platform, run=sub
         raise ReleaseError('incomplete_download')
     verified = False
     for key in sorted(keys.glob('*.pub')):
+        if public_key_id(public_key_line(key)) in emergency:
+            continue
         try:
             result = run(['minisign', '-Vm', str(sums), '-x', str(signature), '-p', str(key)],
                          capture_output=True, check=False, timeout=15)

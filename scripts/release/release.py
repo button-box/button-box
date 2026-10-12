@@ -123,7 +123,7 @@ def verify(directory, key):
     return archive, manifest, members
 
 
-def sign(directory, secret, key):
+def signing_secret(directory, secret):
     if os.environ.get("CI"):
         raise ReleaseError("sign only on the operator's offline computer, never in CI")
     secret = regular_file(secret).resolve()
@@ -136,6 +136,11 @@ def sign(directory, secret, key):
         raise ReleaseError("invalid encrypted minisign secret key") from exc
     if len(data) != 158 or data[:6] != b"EdScB2":
         raise ReleaseError("require a password-encrypted minisign secret key")
+    return secret
+
+
+def sign(directory, secret, key):
+    secret = signing_secret(directory, secret)
     key = public_key(key)
     directory = Path(directory).resolve()
     archive = checksums(directory)

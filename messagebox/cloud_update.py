@@ -66,7 +66,7 @@ def heartbeat_fields():
     if not value.get('installed'):
         return {}
     return {'software_update': {key: value.get(key) for key in
-            ('effective_mode', 'channel', 'available_version', 'last_result')}}
+            ('effective_mode', 'channel', 'available_version', 'last_result', 'trust_sequence')}}
 
 
 def heartbeat_succeeded():

@@ -1,5 +1,6 @@
 # Exact tracked files permitted in the release archive. No globs or directories.
 LICENSE
+config/emergency-keys/README.md
 config/journald.conf.d/messagebox.conf
 config/release-keys/README.md
 config/requirements-nfc.txt
@@ -73,10 +74,12 @@ scripts/install/audio_config.py
 scripts/install/bounded_update.py
 scripts/install/messagebox-mode-migrate.py
 scripts/install/release_verify.py
+scripts/install/trust_update.py
 scripts/install/update-bootstrap.sh
 scripts/install/update_controller.py
 scripts/install/update_discovery.py
 scripts/messageboxctl
+scripts/release/trust-update.py
 sounds/cloud/manifest.json
 sounds/cloud/more-1.wav
 sounds/cloud/more-10.wav

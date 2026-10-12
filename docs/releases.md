@@ -66,7 +66,7 @@ updater and manifest generator needed by the legacy operator path, license and Q
 provenance. No setup/provisioning scripts, Git metadata, device configuration,
 user state, logs, test reports, or arbitrary migrations are packaged. New installed
 files must be added deliberately to this list. New public keys must also be added
-explicitly when a bridge/bootstrap release needs to carry them.
+explicitly when a bootstrap release needs to carry them.
 
 The tar archive has sorted file entries, uid/gid zero, empty owner/group names,
 0644/0755 modes determined from tracked Git modes, and the commit timestamp for
@@ -178,6 +178,81 @@ publishes separately in GitHub. Enable immutable releases where available.
 Physical wacli send/play/reply, family-card, quiet-hours and listened-notice checks
 remain a gate before merging a release into main. Software checks do not prove
 physical Pi, GPIO, audio, NFC, Wi-Fi or WhatsApp acceptance.
+
+## Emergency trust updates
+
+Use two separately held offline password-encrypted minisign secret keys. The
+**release** key signs normal `SHA256SUMS`; the **emergency** key never signs an
+application release. It signs only `trust-update.json`. The coordinator adds the
+reviewed emergency public pin to `config/emergency-keys/` and the explicit payload
+allowlist. Bootstrap installs the pins in separate root-owned directories and
+refuses matching key IDs. If there is no emergency pin, trust replacement is off.
+Adding one to an already bootstrapped box needs attended fixed-updater maintenance;
+an ordinary application release cannot install a new root of trust.
+
+For a stolen or lost release key, generate a new release key offline. Reserve a
+new positive `trust_sequence` greater than **every** previously signed trust
+sequence (separate from `release_sequence`). Build a document with only the keys
+that should remain trusted, including the new one, and the stolen key's uppercase
+16-digit minisign ID in `revoked_key_ids`. Include **all historical revoked IDs**
+in every document: offline boxes can skip earlier releases. Keep the complete
+sequence/revocation record with the offline signing procedure. Never reuse a
+sequence, even for a withdrawn or unpublished signed document.
+
+```sh
+python3 scripts/release/trust-update.py build \
+  --output /tmp/button-box-trust-v2 --trust-sequence 2 \
+  --release-key config/release-keys/new-release.pub \
+  --revoked-key-id 0000000000000001
+```
+
+The example sequence and revoked ID are placeholders; use the reviewed history.
+Repeat `--release-key` for 1–3 keys and `--revoked-key-id` for each revoked ID.
+The JSON contains exactly `schema`, `product`, `trust_sequence`, `release_keys`,
+`revoked_key_ids` and `created`, with a maximum of 8 KiB. Public keys are canonical
+base64 lines without their untrusted comments. `created` defaults to UTC seconds;
+use `--created <ISO timestamp>` to build fixed bytes. Unknown/duplicate fields,
+duplicate key IDs, revoked keys in the new set and malformed dates are rejected.
+Review the JSON and public-key fingerprints on the offline computer.
+
+```sh
+python3 scripts/release/trust-update.py sign /tmp/button-box-trust-v2 \
+  --secret-key /media/offline-emergency/button-box-emergency.key \
+  --public-key config/emergency-keys/emergency.pub
+
+python3 scripts/release/trust-update.py verify /tmp/button-box-trust-v2 \
+  --public-key config/emergency-keys/emergency.pub
+```
+
+Signing is manual with `minisign -S`; the secret path is mandatory and minisign
+prompts for its password. The wrapper shares the normal signer's refusal of CI,
+secrets inside the repository/artifact directory, unencrypted secret keys and
+existing signatures. Verification uses `minisign -V -H` with a reviewed emergency
+pin and needs no make, credentials or network. It verifies before parsing JSON.
+These commands create no tags, commits, uploads or releases.
+
+Return only `trust-update.json` and `trust-update.json.minisig` to the connected
+release computer. Apply the same mandatory public-output policy, actual-audience
+check, pattern scan, semantic review, sanitization/recheck and private receipt to
+both assets, signature comments, notes, tag/commit and GitHub automatic source
+archives before any upload. Publish manually as assets of a normal release or a
+dedicated immutable `trust-v<N>` **prerelease**. A dedicated trust release must be
+a prerelease so it does not displace `/latest` for boxes without emergency pins.
+The normal four-asset publish wrapper does not upload trust assets. Read back and
+independently verify the downloaded assets before publishing the draft.
+
+Boxes replace release trust without a physical button press and report
+`software_update.trust_sequence`. Sequence and cumulative revocation history
+persist outside application rollback. Removed keys cannot authenticate a queued
+candidate after replacement; revoked IDs can never return. Publish a **normal
+release signed with the new release key** after publishing the trust update.
+Emergency pins themselves cannot be rotated by this document.
+
+If both secret keys are lost, boxes keep working on their existing Cloud features
+but box software freezes. Recovery requires an SD-card swap with newly reviewed
+pins. A box without an emergency pin also needs that recovery if its release key
+is lost. Power-loss durability, ownership and concurrency need physical Pi
+acceptance before rollout; local minisign/crash tests do not establish it.
 
 ## A bad release
 

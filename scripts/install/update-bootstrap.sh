@@ -13,7 +13,12 @@ python3 - "$REPO_DIR" <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts/install'))
-from release_verify import SUPPORTED_MODELS, local_platform
+from release_verify import SUPPORTED_MODELS, local_platform, public_key_line, public_key_id
+source = Path(sys.argv[1]) / 'config'
+release = {public_key_id(public_key_line(key)) for key in (source / 'release-keys').glob('*.pub')}
+emergency = {public_key_id(public_key_line(key)) for key in (source / 'emergency-keys').glob('*.pub')}
+if release & emergency:
+    raise SystemExit('Emergency and release keys must be distinct.')
 platform = local_platform()
 if platform['os'] != 'raspios-trixie' or platform['architecture'] != 'aarch64' or platform['model'] not in SUPPORTED_MODELS:
     raise SystemExit('Updater bootstrap requires a supported Pi 4 or Pi 3 A+ box on Trixie / aarch64.')
@@ -26,20 +31,23 @@ BOX_TIMEZONE=$(timedatectl show --property=Timezone --value)
 command -v minisign >/dev/null
 command -v espeak-ng >/dev/null
 getent passwd messagebox-update >/dev/null || useradd --system --user-group --home-dir /var/cache/button-box-update --shell /usr/sbin/nologin messagebox-update
-install -d -o root -g root -m 0755 /usr/lib/messagebox-update /etc/button-box-update /etc/button-box-update/release-keys /var/lib/button-box-update /run/messagebox-update
+install -d -o root -g root -m 0755 /usr/lib/messagebox-update /etc/button-box-update /var/lib/button-box-update /run/messagebox-update
 install -d -o root -g root -m 0700 /var/lib/button-box-update/snapshots /var/lib/button-box-update/staging /var/lib/button-box-update/downloads
 install -d -o messagebox-update -g messagebox-update -m 0750 /var/cache/button-box-update
-for module in bounded_update release_verify update_controller update_discovery; do
+for module in bounded_update release_verify trust_update update_controller update_discovery; do
   if [ -e "/usr/lib/messagebox-update/$module.py" ] && ! cmp -s "$REPO_DIR/scripts/install/$module.py" "/usr/lib/messagebox-update/$module.py"; then
     echo "Existing fixed controller differs; attended recovery-tested maintenance required." >&2
     exit 1
   fi
   install -o root -g root -m 0644 "$REPO_DIR/scripts/install/$module.py" "/usr/lib/messagebox-update/$module.py"
 done
-for key in "$REPO_DIR"/config/release-keys/*.pub; do
-  [ -f "$key" ] || continue
-  install -o root -g root -m 0644 "$key" /etc/button-box-update/release-keys/
-done
+python3 - "$REPO_DIR" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, '/usr/lib/messagebox-update')
+from trust_update import bootstrap_keys
+bootstrap_keys(Path(sys.argv[1]) / 'config', Path('/etc/button-box-update'))
+PY
 # The files/units installed during this attended step are frozen for B72.
 for unit in "$REPO_DIR"/systemd/messagebox-update-*; do
   install -o root -g root -m 0644 "$unit" /etc/systemd/system/

@@ -46,10 +46,60 @@ cannot be rerun to override Ask policy or replace its executing controller.
 
 The controller and recovery launcher remain fixed for B72. Releases stage and
 syntax-check controller copies in `updater/`; they do not overwrite the running
-recovery implementation. Promoting changed fixed code, trust keys, recovery
+recovery implementation. Promoting changed fixed code, emergency pins, recovery
 units or dependencies requires a separate attended maintenance release with
 recovery testing. B72 routine updates reject changed fixed units or NFC
 requirements. `setup.sh` and legacy `apply` refuse converted installations.
+
+## Emergency release-key replacement
+
+Release keys authenticate application releases only. A distinct emergency key
+authenticates only a bounded `trust-update.json` and its
+`trust-update.json.minisig`. Bootstrap installs reviewed `config/emergency-keys/*.pub`
+as root-owned 0644 files at `/etc/button-box-update/emergency-keys/` and refuses
+overlapping release/emergency key IDs. No emergency public pin means this feature
+is off; ordinary release verification and discovery retain their existing path.
+The coordinator supplies the real emergency public pin; this checkout contains
+no throwaway trusted key.
+
+The schema is exactly `schema: 1`, `product: "button-box"`, positive integer
+`trust_sequence`, `release_keys` (1–3 canonical minisign base64 public-key lines,
+without comments), `revoked_key_ids` (unique uppercase 16-digit minisign key IDs),
+and `created` (ISO timestamp with seconds and timezone). Unknown or duplicate
+fields, invalid types/keys/dates and JSON over 8 KiB are rejected. The created
+timestamp is descriptive; only the signed sequence establishes order.
+
+Publish the two assets on a normal GitHub release or a dedicated `trust-v<N>`
+prerelease. With an emergency pin, the same unprivileged downloader scans bounded
+paginated releases on both channels, verifies the highest emergency-signed trust
+sequence and hands bytes to root before considering application releases, even
+for an explicit owner install request. Root copies through no-follow descriptors,
+verifies again using emergency pins only, and requires a sequence above
+`/var/lib/button-box-update/trust-sequence.json`. Only the downloader UID may
+submit that local command; Cloud has only the existing discovery hint. No
+physical confirmation, audio cue or microphone operation is involved. A bounded
+log records the sequence, and heartbeat reports `software_update.trust_sequence`.
+
+`release-keys` is a root-owned symlink to a complete 0755 generation under
+`/etc/button-box-update/release-keysets/` with root-owned 0644 `.pub` files. The
+controller fsyncs a root-owned pending intent, writes and fsyncs the new key
+directory, atomically renames the symlink, and fsyncs the sequence/revocation
+record. On restart it rolls a pending intent forward before accepting work.
+There is always a complete old or new key set; application rollback cannot
+restore either the trust record or old pins. Trust replacement and the worker's
+signature check through installation share a nonblocking exclusive lock. If an
+install is already running, discovery defers replacement through its existing
+backoff. After replacement, even an already downloaded candidate must pass the
+worker's check with current release keys. Emergency keys are excluded from
+normal release verification, including an accidental duplicate release pin.
+
+Revocation history is cumulative on the device: a later update cannot re-add a
+revoked ID. Every published trust document must also carry **all** previously
+revoked IDs so boxes that skipped earlier trust updates retain that protection.
+For a stolen release key, drop/revoke it and add a new release key in an
+emergency-signed trust update, then publish a normal release signed with the new
+key. If both secret keys are lost, existing Cloud features keep working but box
+software freezes; recovery is an SD-card swap. See [release procedures](releases.md#emergency-trust-updates).
 
 ## Signed asset contract
 
@@ -167,13 +217,14 @@ Registration/heartbeat retain existing `version` semantics (`cloud-mvp-1`).
 Installed identity uses `software_version` and `software_commit`. The local
 page's existing footer reads the same installed record. Heartbeats include
 `software_update` with `effective_mode`, `channel`, `available_version` and
-`last_result`. Update ACKs persist/replay through existing Cloud ledgers:
+`last_result` and `trust_sequence`. Update ACKs persist/replay through existing Cloud ledgers:
 `downloading`, `waiting_for_button`, `waiting_for_window`, `installing`,
 `installed`, `failed`, `expired`, `rolled_back`, `rollback_failed`, with exact
 target/installed identity and bounded reason codes. Acceptance is not installation.
 
-The unprivileged downloader uses the GitHub stable latest endpoint or bounded
-paginated release lists for canary. It authenticates candidate metadata and
+Without an emergency pin, the unprivileged downloader uses the GitHub stable
+latest endpoint or bounded paginated release lists for canary. With a pin, both
+channels scan bounded pages for independent trust updates. It authenticates candidate metadata and
 chooses the highest eligible signed sequence before downloading that archive.
 API ETags, rate-limit reset, Retry-After, failure backoff and a ten-minute hint
 cooldown persist across restarts. A twice-daily schedule has jitter; the short

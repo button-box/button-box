@@ -36,7 +36,7 @@ class TransactionTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((fixture.source / entry['source']).read_bytes())
         import shutil
-        for name in ("bounded_update", "release_verify", "update_controller", "update_discovery"):
+        for name in ("bounded_update", "release_verify", "trust_update", "update_controller", "update_discovery"):
             shutil.copyfile(Path(__file__).resolve().parents[1] / "scripts/install" / (name + ".py"),
                             fixture.source / "scripts/install" / (name + ".py"))
         old = update.bootstrap_layout(root=fixture.root, run=fixture.systemctl)

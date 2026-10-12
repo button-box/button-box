@@ -21,6 +21,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import bounded_update as update
+import trust_update as trust
 from release_verify import MAX_ARCHIVE, TAG, ReleaseError, digest, extract_bundle, local_platform, verify_bundle
 
 STATE = Path(update.UPDATE_STATE)
@@ -121,6 +122,8 @@ def public_status():
     value = {'installed': installed(), 'effective_mode': configuration['mode'],
              'channel': configuration['channel'], 'available_version': available.get('version'),
              'last_result': result, 'sequence_floor': read('sequence.json', 0),
+             'trust_sequence': trust.trust_state(STATE)['trust_sequence'],
+             'trust_updates_enabled': any((KEYS.parent / 'emergency-keys').glob('*.pub')),
              **installed_identity()}
     save('status.json', value, 0o644)
     return value
@@ -157,16 +160,18 @@ def bind_approval(operation, available=None):
     record(operation, 'waiting_for_button')
 
 
-def receive_bundle(version):
+def receive_bundle(version, *, trust_only=False):
     """Copy untrusted downloads with no-follow FDs before root verification."""
-    if not isinstance(version, str) or not TAG.fullmatch(version):
+    pattern = trust.TRUST_TAG if trust_only else TAG
+    if not isinstance(version, str) or not pattern.fullmatch(version):
         raise ReleaseError('invalid_version')
     source = CACHE / version
     if source.is_symlink() or not source.is_dir():
         raise ReleaseError('incomplete_download')
     destination = STATE / 'downloads' / uuid.uuid4().hex
     destination.mkdir(parents=True, mode=0o700)
-    names = ('SHA256SUMS', 'SHA256SUMS.minisig', 'release-manifest.json', f'button-box-{version}.tar.gz')
+    names = (('trust-update.json', 'trust-update.json.minisig') if trust_only else
+             ('SHA256SUMS', 'SHA256SUMS.minisig', 'release-manifest.json', f'button-box-{version}.tar.gz'))
     try:
         parent = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -174,7 +179,8 @@ def receive_bundle(version):
                 descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
                 with os.fdopen(descriptor, 'rb') as incoming:
                     info = os.fstat(incoming.fileno())
-                    limit = MAX_ARCHIVE if name.endswith('.tar.gz') else 2 * 1024 * 1024
+                    limit = (trust.MAX_TRUST if name == 'trust-update.json' else 4096) if trust_only else (
+                        MAX_ARCHIVE if name.endswith('.tar.gz') else 2 * 1024 * 1024)
                     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
                         raise ReleaseError('unsafe_download')
                     with (destination / name).open('xb') as output:
@@ -188,6 +194,11 @@ def receive_bundle(version):
                         os.fsync(output.fileno())
         finally:
             os.close(parent)
+        if trust_only:
+            try:
+                return trust.apply_trust(destination, KEYS.parent, STATE)
+            finally:
+                shutil.rmtree(destination)
         manifest = verify_bundle(destination, KEYS, version=version, channel=policy()['channel'],
                                  floor=read('sequence.json', 0), platform=local_platform())
         pointer = update.RELEASES + '/' + version + '-' + manifest['commit']
@@ -197,7 +208,7 @@ def receive_bundle(version):
                      'manifest_sha256': digest(destination / 'release-manifest.json'), 'bundle': str(destination)}
         return available
     except BaseException:
-        shutil.rmtree(destination)
+        shutil.rmtree(destination, ignore_errors=True)
         raise
 
 
@@ -237,7 +248,7 @@ class Controller:
             raise ValueError('not_button_owner')
         if command == 'heartbeat' and (uid != runtime_uid or pid != unit_pid('messagebox-poller.service')):
             raise ValueError('not_heartbeat_owner')
-        if command in {'downloaded', 'download_failed'} and uid != discovery_uid:
+        if command in {'downloaded', 'download_failed', 'trust_downloaded'} and uid != discovery_uid:
             raise ValueError('not_downloader')
         with self.lock:
             if command == 'status':
@@ -266,6 +277,12 @@ class Controller:
                 save('hint.json', {'at': time.time()})
                 wake_discovery()
                 return {'accepted': True}
+            if command == 'trust_downloaded':
+                if set(data) != {'command', 'version'}:
+                    raise ValueError('invalid_trust_request')
+                sequence = receive_bundle(data.get('version'), trust_only=True)
+                public_status()
+                return {'accepted': True, 'trust_sequence': sequence}
             if command == 'download_failed':
                 operation = active_operation()
                 reason = data.get('reason')
@@ -462,6 +479,14 @@ class Controller:
 
 
 def worker():
+    # Serialize the signature check through transaction completion with trust
+    # replacement. A queued candidate is always checked against current pins.
+    with trust.trust_lock(STATE, blocking=True):
+        trust.recover_trust(KEYS.parent, STATE)
+        _worker()
+
+
+def _worker():
     ticket = read('ticket.json')
     operation = read(operation_name(ticket['operation_id']))
     bundle = Path(ticket['bundle'])
@@ -542,6 +567,9 @@ def attended_install(directory, version):
 
 
 def serve():
+    if (STATE / 'trust-pending.json').exists():
+        with trust.trust_lock(STATE):
+            trust.recover_trust(KEYS.parent, STATE)
     RUN.mkdir(mode=0o755, parents=True, exist_ok=True)
     SOCKET.unlink(missing_ok=True)
     controller = Controller()

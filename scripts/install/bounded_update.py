@@ -1587,7 +1587,7 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                 target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
                 _atomic_install(entry['source_path'], target, entry['mode'])
                 hashes.append({'relative': relative, 'sha256': entry['sha256']})
-            for name in ('bounded_update', 'release_verify', 'update_controller', 'update_discovery'):
+            for name in ('bounded_update', 'release_verify', 'trust_update', 'update_controller', 'update_discovery'):
                 source = Path(source_root) / 'scripts/install' / (name + '.py')
                 _validate_staged_file(source, Path(source_root), 0 if root == Path('/') else os.geteuid())
                 try:

@@ -16,7 +16,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/button-box-update /run/messagebox-update
+ReadWritePaths=/var/lib/button-box-update /run/messagebox-update /etc/button-box-update
 RestrictAddressFamilies=AF_UNIX
 CapabilityBoundingSet=CAP_CHOWN
 

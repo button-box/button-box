@@ -11,10 +11,22 @@ application updates cannot change the fixed controller, recovery units, or
 trusted keys. Tests generate throwaway keys in temporary directories; test keys
 are never trusted by a box.
 
-For rotation, distribute an old-key-signed **bridge** through an attended
-maintenance operation that adds the new public key to device trust. Later
-releases use the new key. Keep the old key trusted until every box has the
-bridge. Remove the old key only through a later reviewed maintenance step. Never
-replace the pin and sign only with the new key: existing devices could not
-authenticate it. A lost or compromised key needs physical recovery unless a
-separate emergency key was pinned during bootstrap.
+These are **release** keys: they authenticate application releases only.
+The separately reviewed public key in `config/emergency-keys/` authenticates
+only `trust-update.json`; it must never sign an application release or share a
+key ID with a release key. Bootstrap pins it separately in
+`/etc/button-box-update/emergency-keys/`, root-owned with 0644 public files.
+No emergency pin means trust replacement is disabled; normal releases continue.
+
+For a lost or stolen release key, use the offline emergency key to sign a trust
+update that drops the old key, permanently revokes its ID and adds a new release
+public key. Publish those two assets, then publish a normal release signed with
+the new release key. The updater atomically replaces the release set, without a
+physical button press. Preserve the cumulative revoked-ID list and increase the
+independent trust sequence. Application rollback never restores old trust.
+See [the signing and recovery procedure](../../docs/releases.md#emergency-trust-updates).
+
+If both signing keys are lost, boxes keep working with existing Cloud features,
+but their box software freezes. Recovery requires an SD-card swap with newly
+reviewed pins. Losing a release key on a box without an emergency pin also
+requires that recovery. Never add a new pin through an untrusted release.

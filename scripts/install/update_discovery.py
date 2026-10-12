@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from release_verify import MAX_ARCHIVE, TAG, ReleaseError, local_platform, verify_bundle
+from trust_update import MAX_TRUST, TRUST_TAG, verify_trust
 
 API = 'https://api.github.com/repos/button-box/button-box/releases'
 CACHE = Path('/var/cache/button-box-update')
@@ -179,7 +180,36 @@ class Discovery:
         self.download(self.archive_urls[version], directory / f"button-box-{version}.tar.gz", MAX_ARCHIVE)
         verify_bundle(directory, KEYS, version=version, channel=channel, floor=floor, platform=platform)
 
-    def poll(self, channel, floor, platform, *, requested=None, notify=lambda version: None, failed=lambda version, reason: None, hint=False):
+    def trust_candidate(self, release):
+        if not isinstance(release, dict) or release.get('draft') is not False:
+            raise DownloadError('invalid_release')
+        names = {'trust-update.json': MAX_TRUST, 'trust-update.json.minisig': 4096}
+        assets = release.get('assets')
+        if not isinstance(assets, list):
+            raise DownloadError('incomplete_release')
+        selected = [item for item in assets if isinstance(item, dict) and item.get('name') in names]
+        if len(selected) != 2 or {item['name'] for item in selected} != set(names):
+            raise DownloadError('incomplete_release')
+        directory = self.directory / 'trust-download'
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(mode=0o750)
+        try:
+            for asset in selected:
+                limit = names[asset['name']]
+                if type(asset.get('size')) is not int or not 0 < asset['size'] <= limit:
+                    raise DownloadError('download_limit')
+                self.download(asset.get('browser_download_url', ''), directory / asset['name'], limit)
+            value = verify_trust(directory, KEYS.parent / 'emergency-keys')
+            target = self.directory / ('trust-v' + str(value['trust_sequence']))
+            shutil.rmtree(target, ignore_errors=True)
+            os.replace(directory, target)
+            return value
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def poll(self, channel, floor, platform, *, requested=None, notify=lambda version: None,
+             failed=lambda version, reason: None, hint=False, trust_enabled=False, trust_floor=0,
+             notify_trust=lambda version: None):
         now = self.clock()
         # Boot, timer and hints share this persisted cooldown. Cloud requests
         # cannot flood GitHub or bypass a rate-limit response.
@@ -194,9 +224,12 @@ class Discovery:
                 if not isinstance(requested, str) or not TAG.fullmatch(requested):
                     raise DownloadError('invalid_version')
                 releases = [self.json(API + '/tags/' + requested)]
-            elif channel == 'stable':
+            elif channel == 'stable' and not trust_enabled:
                 releases = [self.json(API + '/latest')]
             else:
+                releases = []
+            if trust_enabled or not requested and channel == 'canary':
+                requested_releases = releases if requested else []
                 releases = []
                 for page in range(1, MAX_PAGES + 1):
                     batch = self.json(API + f'?per_page=100&page={page}')
@@ -207,11 +240,30 @@ class Discovery:
                         break
                 else:
                     raise DownloadError('pagination_limit')
+                releases.extend(requested_releases)
+            if trust_enabled:
+                best_trust = None
+                for release in releases:
+                    tag = str(release.get('tag_name', '')) if isinstance(release, dict) else ''
+                    if not (TAG.fullmatch(tag) or TRUST_TAG.fullmatch(tag)):
+                        continue
+                    try:
+                        value = self.trust_candidate(release)
+                    except (ReleaseError, DownloadError):
+                        continue
+                    if value['trust_sequence'] > max(trust_floor, (best_trust or {}).get('trust_sequence', 0)):
+                        best_trust = value
+                if best_trust:
+                    # Root swaps pins before normal metadata or queued candidates
+                    # are considered. Cloud supplies no trust payload or URL.
+                    notify_trust('trust-v' + str(best_trust['trust_sequence']))
             best = None
             # Authenticate metadata for every bounded API page, then fetch only
             # the archive with the highest eligible signed sequence.
             for release in releases:
                 if not isinstance(release, dict) or not TAG.fullmatch(str(release.get('tag_name', ''))):
+                    continue
+                if requested and release['tag_name'] != requested:
                     continue
                 try:
                     manifest = self.candidate(release, channel, floor, platform)
@@ -244,7 +296,8 @@ class Discovery:
 
     def prune(self, keep=None):
         for child in self.directory.iterdir():
-            if child.is_dir() and child.name != keep and TAG.fullmatch(child.name):
+            if child.is_dir() and child.name != keep and (TAG.fullmatch(child.name) or TRUST_TAG.fullmatch(child.name)
+                                                        or child.name == 'trust-download'):
                 shutil.rmtree(child)
             elif child.name.endswith('.part') and self.clock() - child.stat().st_mtime > 86400:
                 child.unlink()
@@ -274,6 +327,9 @@ def main():
         Discovery().poll(status['channel'], status['sequence_floor'], local_platform(),
                          requested=status.get('requested_version'),
                          hint=bool(status.get('discovery_hint')),
+                         trust_enabled=status.get('trust_updates_enabled') is True,
+                         trust_floor=status.get('trust_sequence', 0),
+                         notify_trust=lambda version: request('trust_downloaded', version=version),
                          notify=lambda version: request('downloaded', version=version),
                          failed=lambda version, reason: request('download_failed', version=version, reason=reason))
     except Exception:
