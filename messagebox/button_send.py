@@ -529,8 +529,9 @@ def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
     settings = caregiver_settings()
     if transport_mode() == "cloud" and action in {"recognized", "selected"}:
         contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
-        if contact and contact["jid"] == "box:reaction_heart":
-            result = cloud_runtime.react_with_heart()
+        if contact and contact["jid"].startswith("box:reaction_"):
+            result = (cloud_runtime.react_with_heart() if contact["jid"] == "box:reaction_heart"
+                      else cloud_runtime.react_with_card(contact["jid"][4:]))
             play_idle_sound(sound_pack.cue_path("card") if result == "sent" else sound_pack.cue_path("oops"), 5)
             nfc_announcement_store.acknowledge(uid)
             return True
@@ -539,7 +540,7 @@ def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
         clip = ""
         if transport_mode() == "cloud":
             contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
-            if contact and contact["jid"] != "box:reaction_heart":
+            if contact and not contact["jid"].startswith("box:reaction_"):
                 clip = cloud_runtime.card_saved_clip(contact["jid"], settings.get("voice_pack"))
         paths = [sound_pack.cue_path("card_saved"), clip or sound_pack.voice_path("card-saved")]
     elif action in {"recognized", "selected"}:

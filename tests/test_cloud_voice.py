@@ -132,14 +132,64 @@ class ReactionTests(unittest.TestCase):
         with self.assertRaises(cloud_runtime.CloudRuntimeError):
             self.runtime.recipient_id('box:reaction_heart')
 
+    def test_reaction_cards_sync_enroll_remove_and_retain_valid_section(self):
+        heartbeat = self.client.heartbeat
+        cards = [{"id": "reaction_heart", "emoji": "❤️"}, {"id": "reaction_laugh", "emoji": "😂"}]
+        self.client.heartbeat = lambda state: {**heartbeat(state), "voice_features": {"reactions": 1}, "reaction_cards": cards}
+        self.runtime.heartbeat()
+        self.assertIn("box:reaction_laugh", self.runtime.contacts.load()["contacts"])
+        self.runtime._nfc({"operation_id": OP, "kind": "nfc_enroll", "created_at": NOW, "expires_at": NOW+120,
+                           "payload": {"recipient_id": "reaction_laugh"}})
+        self.assertEqual(cloud_runtime.EnrollmentStore(cloud_runtime.NFC_ENROLLMENT_FILE).active()["jid"], "box:reaction_laugh")
+        with self.assertRaises(cloud_runtime.CloudRuntimeError):
+            self.runtime.recipient_id("box:reaction_laugh")
+        cards = [{"id": "reaction_bad"}]
+        self.runtime.heartbeat()
+        self.assertIn("box:reaction_laugh", self.runtime.contacts.load()["contacts"])
+        cards = []
+        self.runtime.heartbeat()
+        self.assertNotIn("box:reaction_laugh", self.runtime.contacts.load()["contacts"])
+
+    def test_react_with_card_uses_id_and_old_cloud_uses_legacy_request(self):
+        snapshot = {"account_scope": "synthetic-scope", "reactions": True,
+                    "reaction_cards": [{"id": "reaction_laugh", "emoji": "😂"}]}
+        self.runtime._snapshot = lambda: snapshot
+        self.runtime.server_now = lambda: NOW
+        self.runtime.flush_acks = mock.Mock()
+        self.runtime.client.send_reaction = mock.Mock(return_value={"state": "sent"})
+        (self.runtime.state_path.parent / "last-played.json").write_text(json.dumps(
+            {"scope": "synthetic-scope", "message_id": MID, "played_at": NOW}))
+        with mock.patch.object(cloud_runtime, "CloudRuntime", return_value=self.runtime):
+            self.assertEqual(cloud_runtime.react_with_card("reaction_laugh"), "sent")
+            self.assertEqual(self.runtime.client.send_reaction.call_args.args[2], "reaction_laugh")
+            self.assertEqual(cloud_runtime.react_with_card("reaction_removed"), "nothing_to_react_to")
+            snapshot.pop("reaction_cards")
+            self.assertEqual(cloud_runtime.react_with_heart(), "sent")
+            self.assertEqual(len(self.runtime.client.send_reaction.call_args.args), 2)
+
 
 class WacliVoiceBoundaryTests(unittest.TestCase):
     setUp = wacli_tests.WacliContractTests.setUp
     set_quiet = wacli_tests.WacliContractTests.set_quiet
     send_to = wacli_tests.WacliContractTests.send_to
 
+
+    def test_cloud_reaction_card_tap_sends_its_id_and_does_not_select_voice_recipient(self):
+        from messagebox import button_send
+        from messagebox.nfc import SelectionStore
+        self.contacts.add_contact("box:reaction_laugh", "Laugh card", receive_after=100)
+        self.contacts.assign_card("box:reaction_laugh", wacli_tests.CARD)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(cloud_runtime, "react_with_card", return_value="sent") as react, \
+             mock.patch.object(button_send, "play_idle_sound") as sound:
+            self.assertTrue(button_send._play_nfc_prompt(wacli_tests.CARD, "selected", ""))
+            react.assert_called_once_with("reaction_laugh")
+            sound.assert_called_once()
+            self.assertIsNone(SelectionStore(button_send.NFC_SELECTION_FILE).load())
+
     def test_self_hosted_card_and_press_never_call_cloud_voice_service(self):
         with mock.patch.object(cloud_runtime,'play_reactions',side_effect=AssertionError('Cloud in wacli')), \
              mock.patch.object(cloud_runtime,'card_prompt_clip',side_effect=AssertionError('Cloud in wacli')), \
-             mock.patch.object(cloud_runtime,'react_with_heart',side_effect=AssertionError('Cloud in wacli')):
+             mock.patch.object(cloud_runtime,'react_with_heart',side_effect=AssertionError('Cloud in wacli')), \
+             mock.patch.object(cloud_runtime,'react_with_card',side_effect=AssertionError('Cloud in wacli')):
             wacli_tests.WacliContractTests.test_family_card_selects_person_and_sends_exact_jid(self)

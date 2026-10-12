@@ -222,6 +222,18 @@ class CloudRuntime:
     def _boxes(self):
         return {box["id"]: box for box in self._snapshot().get("connected_boxes", [])}
 
+    def _reaction_cards(self, snapshot=None):
+        snapshot = snapshot if snapshot is not None else self._snapshot()
+        if "reaction_cards" in snapshot:
+            return snapshot["reaction_cards"]
+        return [{"id": "reaction_heart", "emoji": "❤️", "name": "Heart card"}] if snapshot.get("reactions") else []
+
+    def _card_recipient(self, recipient_id):
+        for card in self._reaction_cards():
+            if card["id"] == recipient_id:
+                return "box:" + card["id"], card["emoji"] + " reaction"
+        return self._recipient(recipient_id)
+
     def _recipient(self, recipient_id):
         if not _valid_id(recipient_id):
             raise CloudRuntimeError("recipient is no longer authorized")
@@ -265,8 +277,8 @@ class CloudRuntime:
     def _sync_contacts(self, snapshot):
         people = snapshot["people"]
         wanted = {p["wa_id"] + "@s.whatsapp.net": p for p in people}
-        if snapshot.get("reactions"):
-            wanted["box:reaction_heart"] = {"id": "reaction_heart", "display_name": "Heart reaction"}
+        for card in self._reaction_cards(snapshot):
+            wanted["box:" + card["id"]] = {"id": card["id"], "display_name": card["emoji"] + " reaction"}
         wanted.update({"box:" + box["id"]: {"id": box["id"], "display_name": box["box_name"]}
                        for box in snapshot.get("connected_boxes", [])})
         default = next((jid for jid, person in wanted.items()
@@ -306,7 +318,8 @@ class CloudRuntime:
             contact = document["contacts"].get("box:" + box["id"])
             if contact:
                 cards.extend((box["id"], uid) for uid in contact["card_uids"])
-        cards.extend(("reaction_heart", uid) for uid in document["contacts"].get("box:reaction_heart", {}).get("card_uids", []))
+        for card in self._reaction_cards(snapshot):
+            cards.extend((card["id"], uid) for uid in document["contacts"].get("box:" + card["id"], {}).get("card_uids", []))
         cards = CardReferenceStore(NFC_CARD_REFERENCES_FILE).sync(snapshot["account_scope"], cards)
         return {"account_scope": snapshot["account_scope"],
                 "revision": document["revision"], "cards": cards}
@@ -371,7 +384,23 @@ class CloudRuntime:
         until = entitlement.get("until")
         if until is not None and not _valid_time(until):
             raise CloudRuntimeError("cloud entitlement is invalid")
-        snapshot = {"reactions": response.get("voice_features", {}).get("reactions") == 1 if isinstance(response.get("voice_features", {}), dict) else False,
+        # This optional section cannot invalidate heartbeat liveness. Retain
+        # its last valid value on a malformed report; routing stays bounded.
+        reaction_cards = response.get("reaction_cards")
+        valid_cards = (isinstance(reaction_cards, list) and len(reaction_cards) <= 6
+                       and all(isinstance(card, dict) and _valid_id(card.get("id"))
+                               and card["id"].startswith("reaction_")
+                               and isinstance(card.get("emoji"), str) and 0 < len(card["emoji"]) <= 32
+                               for card in reaction_cards)
+                       and len({card["id"] for card in reaction_cards}) == len(reaction_cards))
+        previous = self.state.get("snapshot") or {}
+        saved_cards = {}
+        if valid_cards:
+            saved_cards["reaction_cards"] = [{"id": card["id"], "emoji": card["emoji"]} for card in reaction_cards]
+        elif "reaction_cards" in response:
+            saved_cards["reaction_cards"] = (previous.get("reaction_cards", [])
+                                             if previous.get("account_scope") == response["account_scope"] else [])
+        snapshot = {**saved_cards, "reactions": response.get("voice_features", {}).get("reactions") == 1 if isinstance(response.get("voice_features", {}), dict) else False,
                     "box_id": response["box_id"], "server_time": response["server_time"],
                     "account_scope": response["account_scope"],
                     "verified_at": self.clock(), "verified_mono": self.monotonic(),
@@ -717,8 +746,7 @@ class CloudRuntime:
         router = NfcRouter(self.contacts, SelectionStore(NFC_SELECTION_FILE),
                            EnrollmentStore(NFC_ENROLLMENT_FILE))
         if kind == "nfc_enroll":
-            jid, label = (("box:reaction_heart", "Heart reaction") if payload.get("recipient_id") == "reaction_heart"
-                          else self._recipient(payload.get("recipient_id")))
+            jid, label = self._card_recipient(payload.get("recipient_id"))
             active = router.enrollment.active()
             if active is None:
                 active = router.begin_enrollment(label=label,
@@ -762,8 +790,7 @@ class CloudRuntime:
             else:
                 if targeted:
                     recipient_id = payload.get("recipient_id")
-                    jid, _label = (("box:reaction_heart", "Heart reaction") if recipient_id == "reaction_heart"
-                                   else self._recipient(recipient_id))
+                    jid, _label = self._card_recipient(recipient_id)
                     snapshot = self.state.get("snapshot") or {}
                     uid = CardReferenceStore(NFC_CARD_REFERENCES_FILE).resolve(
                         snapshot.get("account_scope"), payload.get("card_ref"))
@@ -1554,15 +1581,24 @@ def _play_reactions(play, *, deliberate=False):
 
 
 def react_with_heart():
+    return react_with_card("reaction_heart")
+
+
+def react_with_card(card_id):
     runtime = CloudRuntime()
     try:
         last = json.loads((runtime.state_path.parent / "last-played.json").read_text())
         snapshot = runtime._snapshot()
         if last.get("scope") != snapshot["account_scope"] or not 0 <= runtime.server_now() - last["played_at"] <= 600:
             return "nothing_to_react_to"
-        # Stable operation per message survives card taps and unknown send outcomes.
-        operation = hashlib.sha256((snapshot["account_scope"] + last["message_id"]).encode()).hexdigest()
+        if card_id not in {card["id"] for card in runtime._reaction_cards(snapshot)}:
+            return "nothing_to_react_to"
+        # One stable operation per message and card survives repeated taps.
+        operation = hashlib.sha256((snapshot["account_scope"] + last["message_id"]
+                                    + ("" if card_id == "reaction_heart" else card_id)).encode()).hexdigest()
         runtime.flush_acks()  # Publish playback before the server checks the ten-minute window.
+        if "reaction_cards" in snapshot:
+            return runtime.client.send_reaction(last["message_id"], operation, card_id)["state"]
         return runtime.client.send_reaction(last["message_id"], operation)["state"]
     except (CloudDeviceError, OSError, ValueError, KeyError, CloudRuntimeError):
         return "nothing_to_react_to"

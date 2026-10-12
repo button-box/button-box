@@ -278,10 +278,11 @@ class CloudDeviceClient:
             raise CloudDeviceError("voice line response is invalid")
         return result
 
-    def send_reaction(self, message_id, operation_id):
+    def send_reaction(self, message_id, operation_id, card_id=None):
         try:
             result = json.loads(self.request("/device/reactions", method="POST",
-                body={"message_id": message_id, "operation_id": operation_id}))
+                body={"message_id": message_id, "operation_id": operation_id,
+                      **({"card_id": card_id} if card_id is not None else {})}))
         except (ValueError, TypeError) as exc:
             raise CloudDeviceError("reaction response is invalid") from exc
         if not isinstance(result, dict) or result.get("state") not in {"sent", "uncertain", "nothing_to_react_to"}:
@@ -422,6 +423,7 @@ def capabilities(*, nfc=False) -> dict:
         "listened_announcements": True,
         "voice_lines": 1,
         "reactions": 1,
+        "reaction_cards": 1,
         "text_to_voice": 1,
         "card_name_prompt": True,
         "box_link": True,

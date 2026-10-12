@@ -225,3 +225,18 @@ replaces the old profile. A failed candidate restores and rechecks the old
 profile; if that also fails, the worker reopens the protected setup hotspot.
 The password is supplied to `nmcli --ask` over stdin and is never placed in a
 process argument, response, status document, or log.
+
+
+## Cloud reaction cards
+
+Cloud boxes report `reaction_cards: 1`. Heartbeat can carry up to six reaction
+card IDs and emojis. Cloud contacts use `box:reaction_*`; they are NFC actions,
+not voice-message recipients. A tap sends the card ID for the last message
+played within ten minutes. Repeated taps use a stable operation ID. A removed
+card is rejected by Cloud and its contact is removed on the next heartbeat.
+The setup screens require no change. Add and remove cards in dashboard People.
+
+When Cloud omits the new section, the Pi keeps the old heart-only contact and
+request body. Malformed optional card reports do not invalidate heartbeat.
+The self-hosted wacli path stays unchanged and never calls the Cloud reaction API.
+Real NFC, speaker, and WhatsApp checks are required before physical acceptance.
