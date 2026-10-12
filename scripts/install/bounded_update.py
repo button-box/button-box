@@ -1500,7 +1500,6 @@ def _boot():
 
 def health_checks(root, journal, run=subprocess.run):
     """Named booleans only: no evidence values, command output or audio capture."""
-    now = time.monotonic()
     checks, pids = [], {}
 
     def check(name, passed):
@@ -1545,10 +1544,13 @@ def health_checks(root, journal, run=subprocess.run):
             if key in journal:
                 check('evidence:' + name + ':' + field, evidence.get(field) == journal[key])
         observed = evidence.get('monotonic')
-        valid_time = type(observed) in {int, float} and journal['started_mono'] <= observed <= now
+        # Read the clock after the evidence file: the button refreshes it every
+        # second, so a clock read earlier in this sample makes it look future-dated.
+        checked_at = time.monotonic()
+        valid_time = type(observed) in {int, float} and journal['started_mono'] <= observed <= checked_at
         check('evidence:' + name + ':monotonic', valid_time)
         if name == 'heartbeat':
-            check('evidence:heartbeat:fresh', valid_time and now - observed <= 90)
+            check('evidence:heartbeat:fresh', valid_time and checked_at - observed <= 90)
         else:
             check('evidence:button:pid', str(evidence.get('pid')) == pids.get('messagebox-button.service', (None,))[0])
         check('evidence:' + name + ':ready', evidence.get('ready') is True)

@@ -429,3 +429,29 @@ class TransactionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class EvidenceClockTests(unittest.TestCase):
+    def test_evidence_written_during_a_slow_sample_is_not_future_dated(self):
+        import importlib
+        import json as _json
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+        from unittest import mock as _mock
+        bounded = importlib.import_module('bounded_update')
+        with _tempfile.TemporaryDirectory() as tmp:
+            root = _Path(tmp)
+            run_dir = root / 'run/messagebox-update'
+            run_dir.mkdir(parents=True)
+            journal = {'started_mono': 100.0, 'units': {}, 'hashes': [], 'transaction': 't', 'boot': 'b',
+                       'version': 'v1', 'commit': 'c' * 40, 'new': '/x'}
+            # The button writes evidence at 205 while the slow systemctl calls run; the check reads 206.
+            for name in ('button', 'heartbeat'):
+                (run_dir / (name + '.json')).write_text(_json.dumps({'transaction': 't', 'boot': 'b', 'software_version': 'v1',
+                    'software_commit': 'c' * 40, 'monotonic': 205.0, 'pid': 1, 'ready': True}))
+            with _mock.patch.object(bounded.time, 'monotonic', lambda: 206.0), \
+                 _mock.patch.object(bounded, 'controlled_release', return_value='/x'):
+                checks = bounded.health_checks(root, journal, run=lambda *a, **k: _mock.Mock(stdout='', returncode=1))[0]
+        names = dict(checks)
+        self.assertTrue(names['evidence:button:monotonic'])
+        self.assertTrue(names['evidence:heartbeat:monotonic'])
