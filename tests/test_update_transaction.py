@@ -36,7 +36,7 @@ class TransactionTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((fixture.source / entry['source']).read_bytes())
         import shutil
-        for name in ("bounded_update", "release_verify", "trust_update", "update_controller", "update_discovery"):
+        for name in ("bounded_update", "release_verify", "trust_update", "update_controller", "update_discovery", "health-probe"):
             shutil.copyfile(Path(__file__).resolve().parents[1] / "scripts/install" / (name + ".py"),
                             fixture.source / "scripts/install" / (name + ".py"))
         old = update.bootstrap_layout(root=fixture.root, run=fixture.systemctl)
@@ -274,7 +274,7 @@ class TransactionTests(unittest.TestCase):
 
     def test_independent_supervisor_recovers_dead_worker_and_restart_counter_jump(self):
         import subprocess
-        for failure in ('updater_died', 'crash_loop'):
+        for failure in ('updater_died', 'crash_loop', 'health_timeout'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 fixture, old = self.prepare(directory)
                 with self.assertRaises(PowerLoss):
@@ -289,6 +289,10 @@ class TransactionTests(unittest.TestCase):
                 if failure == 'updater_died':
                     with mock.patch.object(update, '_process_token', return_value=None):
                         update.supervise_transaction(root=fixture.root, run=run)
+                elif failure == 'health_timeout':
+                    self.clock.now = journal['deadline_mono']
+                    with mock.patch.object(update, '_process_token', return_value='synthetic-token'):
+                        update.supervise_transaction(root=fixture.root, run=run)
                 else:
                     with mock.patch.object(update, '_process_token', return_value='synthetic-token'), \
                          mock.patch.object(update, 'health_sample', side_effect=[(True, {'button': ('1', '0')}), (True, {'button': ('5', '3')})]):
@@ -296,6 +300,117 @@ class TransactionTests(unittest.TestCase):
                         update.supervise_transaction(root=fixture.root, run=run)
                 self.assertEqual(update.controlled_release(fixture.root), old)
                 self.assertEqual(update.read_state(fixture.root, 'result.json')['reason'], failure)
+                self.assertEqual(update.read_state(fixture.root, 'result.json')['detail'], failure)
+
+    def test_supervisor_tolerates_transient_and_resets_persisted_unready_clock(self):
+        import subprocess
+        for sustained in (False, True):
+            with self.subTest(sustained=sustained), tempfile.TemporaryDirectory() as directory:
+                fixture, old = self.prepare(directory)
+                with self.assertRaises(PowerLoss):
+                    self.install(fixture, health=lambda *args: (_ for _ in ()).throw(PowerLoss()))
+                journal = update.read_state(fixture.root, 'journal.json')
+                journal['process_token'] = 'synthetic-token'
+                update.save_state(fixture.root, 'journal.json', journal)
+                def run(command, **options):
+                    if command == ['systemctl', 'stop', 'messagebox-update-install.service']:
+                        return subprocess.CompletedProcess(command, 0)
+                    return fixture.systemctl(command, **options)
+                ready = True
+                def sample(*args, failures):
+                    if not ready:
+                        failures.append('evidence:heartbeat:fresh')
+                    return ready, {}
+                with mock.patch.object(update, '_process_token', return_value='synthetic-token'), \
+                     mock.patch.object(update, 'health_sample', side_effect=sample):
+                    self.clock.now = 10
+                    update.supervise_transaction(root=fixture.root, run=run)
+                    ready = False
+                    for now in (20, 39):
+                        self.clock.now = now
+                        update.supervise_transaction(root=fixture.root, run=run)
+                        self.assertEqual(update.controlled_release(fixture.root), journal['new'])
+                        self.assertEqual(update.read_state(fixture.root, 'supervisor.json')['first_unready_mono'], 20)
+                    ready = True
+                    self.clock.now = 40
+                    update.supervise_transaction(root=fixture.root, run=run)
+                    monitor = update.read_state(fixture.root, 'supervisor.json')
+                    self.assertNotIn('first_unready_mono', monitor)
+                    self.assertEqual(monitor['last_failures'], ['evidence:heartbeat:fresh'])
+                    ready = False
+                    self.clock.now = 41
+                    update.supervise_transaction(root=fixture.root, run=run)
+                    self.clock.now = 61 if sustained else 60
+                    update.supervise_transaction(root=fixture.root, run=run)
+                if sustained:
+                    self.assertEqual(update.controlled_release(fixture.root), old)
+                    result = update.read_state(fixture.root, 'result.json')
+                    self.assertEqual(result['state'], 'rolled_back')
+                    self.assertEqual(result['reason'], 'readiness_lost')
+                    self.assertEqual(result['detail'], 'evidence:heartbeat:fresh')
+                else:
+                    self.assertEqual(update.controlled_release(fixture.root), journal['new'])
+
+    def test_terminal_rollback_receipt_survives_next_supervisor_tick(self):
+        import hashlib
+        for state in ('rolled_back', 'rollback_failed'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                fixture, _old = self.prepare(directory)
+                operation_id = 'synthetic-operation'
+                name = 'operations/' + hashlib.sha256(operation_id.encode()).hexdigest() + '.json'
+                update.save_state(fixture.root, name, {'operation_id': operation_id, 'state': 'installing'})
+                update.save_state(fixture.root, 'ticket.json', {'operation_id': operation_id,
+                                  'boot': 'synthetic-boot', 'queued_mono': 0})
+                result = {'operation_id': operation_id, 'state': state, 'reason': 'readiness_lost',
+                          'detail': 'evidence:heartbeat:fresh'}
+                update.save_state(fixture.root, 'result.json', result, 0o644)
+                journal = update.read_state(fixture.root, 'journal.json')
+                journal['phase'] = state
+                update.save_state(fixture.root, 'journal.json', journal)
+                self.clock.now = 100
+                with mock.patch.object(update, '_run', side_effect=AssertionError('no service mutation')):
+                    update.supervise_transaction(root=fixture.root, run=fixture.systemctl)
+                    update.supervise_transaction(root=fixture.root, run=fixture.systemctl)
+                self.assertEqual(update.read_state(fixture.root, 'result.json'), result)
+                operation = update.read_state(fixture.root, name)
+                self.assertEqual(operation['state'], state)
+                self.assertEqual(operation['reason'], 'readiness_lost')
+                self.assertEqual(operation['detail'], 'evidence:heartbeat:fresh')
+
+    def test_bootstrap_only_removes_unheld_top_level_lgpio_fifos(self):
+        for kind in ('unused', 'held', 'other', 'nested', 'symlink', 'unreadable'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                fixture.metadata.write_text(json.dumps({'version': 'v0.2.0', 'commit': 'b' * 40}))
+                pointer = fixture.root / 'opt/messagebox'
+                fifo = pointer / ('.lgd-nfy-test' if kind != 'other' else 'other-fifo')
+                if kind == 'nested':
+                    fifo = pointer / 'nested' / fifo.name
+                    fifo.parent.mkdir()
+                if kind == 'symlink':
+                    fifo.symlink_to('release.json')
+                else:
+                    os.mkfifo(fifo)
+                proc = fixture.root / 'proc'
+                proc.mkdir()
+                if kind == 'held':
+                    descriptors = proc / '123/fd'
+                    descriptors.mkdir(parents=True)
+                    (descriptors / '7').symlink_to(fifo)
+                scanner = update._fifo_held
+                def held(path):
+                    if kind == 'unreadable':
+                        raise PermissionError()
+                    return scanner(path, proc=proc)
+                with mock.patch.object(update, '_fifo_held', side_effect=held):
+                    if kind == 'unused':
+                        old = update.bootstrap_layout(root=fixture.root, run=fixture.systemctl)
+                        self.assertFalse((update._rooted(fixture.root, old) / fifo.name).exists())
+                    else:
+                        with self.assertRaisesRegex(update.UpdateError, 'unsafe_legacy_tree'):
+                            update.bootstrap_layout(root=fixture.root, run=fixture.systemctl)
+                        self.assertTrue(fifo.exists())
+                        self.assertFalse(pointer.is_symlink())
 
     def test_bootstrap_power_loss_and_nfc_dependency_move_recovers_in_place(self):
         with tempfile.TemporaryDirectory() as directory:

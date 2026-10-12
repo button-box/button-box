@@ -250,3 +250,204 @@ supervisor handles application crashes; a hardware watchdog covers system hangs.
 Then verify voice send, receive/play, reply, family-card taps, quiet hours and
 listened notices on the Cloud canary and on a physical wacli box. No deployment
 or physical acceptance is established by local CI.
+
+## Health diagnostics and attended fixed-controller maintenance
+
+The supervisor permits a readiness dip after the candidate was ready. It records
+`first_unready_mono` and rolls back only after 20 continuous seconds of failure;
+a ready sample resets that clock. Initial startup still has the five-minute
+deadline. The 60-second stable-success requirement and crash-loop threshold are
+unchanged. `supervisor.json` retains at most 32 failing check names (160
+characters each); rollback `detail` contains the first code. These codes contain
+check names, never evidence values, device identifiers or command output. The
+terminal operation/result retains `rolled_back` or `rollback_failed` and its
+cause after the worker exits. Recovery persists the cause before restoration.
+
+From an attended SSH session, run either:
+
+```sh
+sudo python3 /usr/lib/messagebox-update/health-probe.py \
+  --journal /var/lib/button-box-update/journal.json
+sudo python3 /usr/lib/messagebox-update/health-probe.py --current
+```
+
+The first command checks the transaction's pointer, hashes, intended unit states
+(including suspended activators), and transaction-bound evidence. Use it during
+probation. `--current` checks the running pointer, manifest application hashes,
+intended units and current identity/boot evidence without transaction binding.
+Every evaluated check prints `PASS` or `FAIL`; exit status is 0 only when all
+pass. The probe writes no files, including Python import caches, and runs no
+service mutations or audio capture. A converted legacy release without an
+application manifest or readiness evidence will report missing proof; this is
+not a physical audio test. After rollback the transaction probe appropriately
+fails against the candidate; use `--current` for the restored release.
+
+Bootstrap removes only unused top-level `.lgd-nfy*` FIFOs after inspecting all
+`/proc/*/fd` links (including inode aliases). An open FIFO, an unreadable process
+FD directory, or any other unsafe legacy entry still fails closed. Identical
+canonical emergency pins are accepted on key-bootstrap retry; changed pins are
+rejected before either key role is modified. This does not make the complete
+bootstrap safe to rerun on an installed box.
+
+For an **already bootstrapped** Cloud Pi, changing application `updater/` copies
+will not activate these fixes. The coordinator must promote the reviewed fixed
+controller separately. Do not remove `/etc/button-box-update/installed`, rerun
+`update-bootstrap.sh`, call `bootstrap_keys`, run setup, or reconvert the layout.
+Keep policy, pins, trust/sequence floors, quarantine, journals and snapshots.
+
+Perform this maintenance in an attended idle session, with no install or
+onboarding in progress. Verify the SSH host is the intended box, Pi model,
+Trixie/aarch64, Cloud mode, root-owned installed marker, controlled application
+pointer and installed identity. Confirm the journal is absent or terminal
+`committed`/`rolled_back`; resolve `rollback_failed` with the existing recovery
+procedure first. Review the exact maintenance source revision and its hashes,
+run both transport checks, and complete the release privacy review before
+transferring any artifacts. Transfer only the reviewed installer modules and
+fixed unit files into a root-owned, non-writable-by-others maintenance source,
+for example `/root/button-box-maintenance`. Keep its installer files under
+`scripts/install/` and unit files under `systemd/`. No secret signing keys belong
+on the box. The following commands run **on the verified box**, as root:
+
+```sh
+sudo -i
+set -eu
+SOURCE=/root/button-box-maintenance
+FIXED=/usr/lib/messagebox-update
+NEXT=/usr/lib/messagebox-update.next
+# Record original enablement/active states privately for restoration on error.
+systemctl is-active messagebox-update-install.service || true
+# Continue only if the worker is inactive/failed, never activating or running.
+# Quiesce triggers first, then their services and the broker. Leave boot recovery
+# enabled; it must always have a complete fixed implementation.
+systemctl stop messagebox-update-discovery.timer messagebox-update-supervisor.timer
+systemctl stop messagebox-update-discovery.service messagebox-update-supervisor.service
+# Hold trust first (as the worker does), then update/mode/interaction.
+# All acquisitions fail if busy. Do not stop a broker required by a live worker.
+exec 6>/var/lib/button-box-update/trust.lock
+flock -n 6
+exec 9>/run/lock/messagebox-bounded-update.lock
+flock -n 9
+exec 8>/run/lock/messagebox-mode-transition.lock
+flock -n 8
+exec 7<>/run/messagebox-update/maintenance.lock
+flock -n 7
+# Recheck under the locks before stopping the broker. A queued worker is busy
+# even if it has not yet switched the application. Abort and restore triggers.
+case "$(systemctl is-active messagebox-update-install.service || true)" in
+  inactive|failed) ;; *) echo 'Install in progress; stop maintenance.' >&2; exit 1 ;;
+esac
+systemctl stop messagebox-update-controller.service
+# Check terminal journal and controlled pointer again under the locks.
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import json
+import stat
+import sys
+from pathlib import Path
+sys.path.insert(0, '/usr/lib/messagebox-update')
+import bounded_update as update
+from release_verify import local_platform
+platform = local_platform()
+if (platform['os'] != 'raspios-trixie' or platform['architecture'] != 'aarch64'
+        or platform['model'] != 'Raspberry Pi 4 Model B'):
+    raise SystemExit('This canary maintenance requires Pi 4 / Trixie / aarch64.')
+marker = Path('/etc/button-box-update/installed').lstat()
+if not stat.S_ISREG(marker.st_mode) or marker.st_uid != 0 or marker.st_mode & 0o022:
+    raise SystemExit('Installed marker is unsafe.')
+lines = Path('/etc/messagebox/env').read_text().splitlines()
+if not any(line.strip() in {'MSGBOX_TRANSPORT=cloud', 'MSGBOX_TRANSPORT="cloud"'} for line in lines):
+    raise SystemExit('Cloud mode required.')
+journal = update.read_state(Path('/'), 'journal.json')
+if journal:
+    update._validate_journal(Path('/'), journal)
+    if journal['phase'] not in {'committed', 'rolled_back'}:
+        raise SystemExit('Recovery required; stop maintenance.')
+pointer = update.controlled_release(Path('/'))
+identity = json.loads((Path(pointer) / 'release.json').read_bytes())
+if pointer != update.RELEASES + '/' + identity['version'] + '-' + identity['commit']:
+    raise SystemExit('Installed identity/pointer mismatch.')
+if Path('/etc/messagebox-onboarding/enabled').exists():
+    raise SystemExit('Onboarding active; stop maintenance.')
+PY
+# Fixed units remain unchanged for this repair. Any mismatch needs its own
+# recovery-tested unit maintenance, rather than an ordinary app installation.
+for unit in "$SOURCE"/systemd/messagebox-update-*; do
+  cmp "$unit" "/etc/systemd/system/$(basename "$unit")"
+done
+[ -d "$FIXED" ] && [ ! -L "$FIXED" ]
+[ ! -e "$NEXT" ] && [ ! -L "$NEXT" ]
+install -d -o root -g root -m 0755 "$NEXT"
+for module in bounded_update release_verify trust_update update_controller update_discovery health-probe; do
+  install -o root -g root -m 0644 "$SOURCE/scripts/install/$module.py" "$NEXT/$module.py"
+  cmp "$SOURCE/scripts/install/$module.py" "$NEXT/$module.py"
+done
+# Compile in memory, fsync the complete staged directory, and exchange both
+# directories atomically on Linux. A power cut sees a complete old or new set.
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import ctypes
+import os
+from pathlib import Path
+stage = Path('/usr/lib/messagebox-update.next')
+for path in stage.iterdir():
+    compile(path.read_bytes(), path.name, 'exec')
+    with path.open('rb') as source:
+        os.fsync(source.fileno())
+for directory in (stage, stage.parent):
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+libc = ctypes.CDLL(None, use_errno=True)
+exchange = libc.renameat2
+exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+exchange.restype = ctypes.c_int
+if exchange(-100, b'/usr/lib/messagebox-update', -100,
+            b'/usr/lib/messagebox-update.next', 2) != 0:
+    raise OSError(ctypes.get_errno(), 'fixed controller exchange failed')
+fd = os.open('/usr/lib', os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+# NEXT now holds the previous complete controller for attended fallback.
+flock -u 7
+flock -u 8
+flock -u 9
+flock -u 6
+systemctl start messagebox-update-controller.service
+# Reconcile any old installing operation against its terminal rollback receipt.
+python3 "$FIXED/bounded_update.py" supervise
+systemctl start messagebox-update-supervisor.timer messagebox-update-discovery.timer
+systemctl is-active messagebox-update-recovery.service messagebox-update-controller.service \
+  messagebox-update-supervisor.timer messagebox-update-discovery.timer
+python3 "$FIXED/health-probe.py" --current
+```
+
+Compare all installed module bytes/ownership/modes with the reviewed source and
+check controller/supervisor journals. Read back the operation and result to
+confirm terminal rollback reconciliation. A legacy `--current` failure due to
+missing evidence/manifest needs an explicit explanation; do not call it a
+healthy candidate. If any pre-exchange check fails, keep the fixed copy intact,
+release locks and restore the updater services/timers to their recorded state.
+If post-exchange controller startup fails, quiesce the same updater services,
+acquire the same locks, exchange the directories back with the same atomic
+command, and restore recorded states. Retain the old directory until attended
+recovery acceptance; no household-data backup is a prerequisite.
+
+The onboarding voice watcher previously watched all of `/var/lib/messagebox-cloud`.
+Atomic Cloud state/ledger writes can change that directory repeatedly, even
+outside onboarding, triggering a gate skipped by its marker condition. The
+watcher now targets `claim.json`; the wacli voice-request watch is unchanged.
+It remains suspended during application probation, so this trigger noise does
+not itself establish the cause of a probation health dip. Confirm the live unit
+contents, trigger rate and actual failing health codes during the next canary.
+
+Finally queue a **new higher-sequence signed candidate** through the attended
+installer, retaining all signature/platform/channel/sequence/idle checks. A
+failed candidate remains quarantined; do not clear quarantine or lower the
+sequence floor to retry it. Observe probation and its probe, preserved result,
+rollback/reboot recovery, then physical send/play/reply, NFC, quiet hours and
+listened notices. Fixed-controller promotion, atomic exchange/power-loss
+behavior and physical canary acceptance require device verification; local
+checks establish none of those outcomes.

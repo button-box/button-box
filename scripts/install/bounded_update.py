@@ -1123,6 +1123,9 @@ MODE_LOCK = '/run/lock/messagebox-mode-transition.lock'
 MAINTENANCE_LOCK = '/run/messagebox-update/maintenance.lock'
 HEALTH_DEADLINE = 300
 HEALTH_STABLE = 60
+HEALTH_UNREADY = 20
+HEALTH_FAILURE_LIMIT = 32
+HEALTH_CODE_LIMIT = 160
 FIXED_UNITS = {
     'messagebox-update-recovery.service', 'messagebox-update-controller.service',
     'messagebox-update-install.service', 'messagebox-update-supervisor.service',
@@ -1257,9 +1260,11 @@ def _result(root, journal, state, reason):
         identity = {'software_version': metadata['version'], 'software_commit': metadata['commit']}
     except (OSError, ValueError, KeyError, UpdateError):
         pass
+    detail = journal.get('detail', reason) if state in {'rolled_back', 'rollback_failed'} else None
     save_state(root, 'result.json', {
         'operation_id': journal.get('operation_id'), 'version': journal.get('version'),
-        'state': state, 'reason': reason, **identity,
+        'state': state, 'reason': reason,
+        **({'detail': detail[:HEALTH_CODE_LIMIT]} if detail else {}), **identity,
     }, 0o644)
 
 
@@ -1310,6 +1315,14 @@ def _recover_locked(root, run, *, start=True, reason='interrupted'):
             _result(root, journal, 'installed', 'healthy')
         prune_releases(root)
         return journal
+    # Persist the initiating cause before restoration so recovery after a cut
+    # cannot replace it with the generic interruption reason.
+    monitor = read_state(root, 'supervisor.json', {})
+    if monitor.get('transaction') == journal.get('transaction'):
+        reason = monitor.get('rollback_reason', reason)
+        if monitor.get('last_failures'):
+            journal['detail'] = monitor['last_failures'][0][:HEALTH_CODE_LIMIT]
+    reason = journal.setdefault('rollback_reason', reason)
     _journal(root, journal, 'rolling_back')
     _inhibit(root, True)
     try:
@@ -1367,6 +1380,46 @@ def _sync_tree(directory):
     _fsync_directory(directory.parent)
 
 
+def _fifo_held(path, *, proc=Path('/proc')):
+    """Fail closed if we cannot inspect a process; disappearing FDs are normal."""
+    identity = path.lstat()
+    for process in proc.iterdir():
+        if not process.name.isdigit():
+            continue
+        try:
+            for descriptor in (process / 'fd').iterdir():
+                try:
+                    link = os.readlink(descriptor)
+                    if link == str(path):
+                        return True
+                    # An open descriptor may refer to the FIFO via another path.
+                    observed = descriptor.stat()
+                    if (observed.st_dev, observed.st_ino) == (identity.st_dev, identity.st_ino):
+                        return True
+                except FileNotFoundError:
+                    continue
+        except FileNotFoundError:
+            continue
+    return False
+
+
+def _remove_unused_lgpio_fifos(pointer):
+    for path in pointer.glob('.lgd-nfy*'):
+        info = path.lstat()
+        if stat.S_ISFIFO(info.st_mode):
+            try:
+                held = _fifo_held(path)
+            except OSError as exc:
+                raise UpdateError('unsafe_legacy_tree') from exc
+            if not held:
+                # Recheck identity before unlinking; never remove a replacement.
+                current = path.lstat()
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    raise UpdateError('unsafe_legacy_tree')
+                path.unlink()
+                _fsync_directory(pointer)
+
+
 def bootstrap_layout(*, root=Path('/'), run=subprocess.run):
     import uuid
     root = Path(root).resolve()
@@ -1387,6 +1440,7 @@ def bootstrap_layout(*, root=Path('/'), run=subprocess.run):
         releases.mkdir(parents=True, exist_ok=True, mode=0o755)
         if _rooted(root, old).exists():
             raise UpdateError('release_exists')
+        _remove_unused_lgpio_fifos(pointer)
         # Legacy venvs may contain Python symlinks; only this dependency subtree
         # is exempt from the no-symlink rule. App trees must be root-owned.
         for path in (pointer, *pointer.rglob('*')):
@@ -1444,77 +1498,111 @@ def _boot():
     return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 
 
-def health_sample(root, journal, run=subprocess.run):
-    """Enumerate devices only. No recording or test microphone capture."""
+def health_checks(root, journal, run=subprocess.run):
+    """Named booleans only: no evidence values, command output or audio capture."""
     now = time.monotonic()
-    ready, pids = True, {}
+    checks, pids = [], {}
+
+    def check(name, passed):
+        checks.append((name[:HEALTH_CODE_LIMIT], bool(passed)))
+
     expected_units = {**journal['units'], **{unit: {'active': 'active'} for unit in journal.get('auxiliary_units', [])}}
     for unit, state in expected_units.items():
         expected = state['active']
         if journal.get('activators_suspended') and unit.endswith(('.path', '.timer')):
             expected = 'inactive'
-        # Named properties avoid reliance on systemd's output ordering.
-        result = _run(['systemctl', 'show', unit, '--property=ActiveState,MainPID,NRestarts'],
-                      run, capture_output=True, text=True, check=True, timeout=5)
-        values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        # Only fixed/validated unit names become diagnostic codes.
+        label = unit if unit in UNITS or _valid_auxiliary_unit(unit) else 'unknown'
+        values = {}
+        try:
+            result = _run(['systemctl', 'show', unit, '--property=ActiveState,MainPID,NRestarts'],
+                          run, capture_output=True, text=True, check=True, timeout=5)
+            values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        except (OSError, UpdateError, subprocess.SubprocessError):
+            pass
+        active = values.get('ActiveState')
+        code = active if active in {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'} else 'unknown'
         if unit == 'comitup-web.service' and (state['active'] != 'active'
                 or journal['units'].get('comitup.service', {}).get('active') == 'active'):
-            ready &= values.get('ActiveState') in {'active', 'inactive', 'failed'}
+            passed = active in {'active', 'inactive', 'failed'}
         else:
-            ready &= values.get('ActiveState') == expected
-        if expected == 'active' and unit.endswith('.service') and unit in {'messagebox-button.service', 'messagebox-poller.service',
+            passed = active == expected
+        check('unit:' + label + ':' + code, passed)
+        if expected == 'active' and unit in {'messagebox-button.service', 'messagebox-poller.service',
                 'messagebox-dash.service', 'messagebox-nfc.service', 'messagebox-sync.service'}:
             pids[unit] = (values.get('MainPID'), values.get('NRestarts'))
-            ready &= values.get('MainPID') not in {None, '0'}
+            check('mainpid:' + label, values.get('MainPID') not in {None, '0'})
     for name in ('heartbeat', 'button'):
-        path = _rooted(root, '/run/messagebox-update/' + name + '.json')
         try:
-            evidence = json.loads(path.read_bytes())
-            ready &= (evidence.get('transaction') == journal['transaction']
-                      and evidence.get('boot') == journal['boot']
-                      and evidence.get('software_version') == journal['version']
-                      and evidence.get('software_commit') == journal['commit']
-                      and journal['started_mono'] <= evidence.get('monotonic', -1) <= now
-                      and (now - evidence['monotonic'] <= 90 if name == 'heartbeat'
-                           else str(evidence.get('pid')) == pids.get('messagebox-button.service', (None,))[0])
-                      and evidence.get('ready') is True)
-        except (OSError, ValueError, TypeError, KeyError):
-            ready = False
-    audio_env = _rooted(root, '/run/messagebox-audio/audio.env')
+            evidence = json.loads(_rooted(root, '/run/messagebox-update/' + name + '.json').read_bytes())
+            if not isinstance(evidence, dict):
+                raise ValueError('invalid evidence')
+        except (OSError, ValueError):
+            evidence = {}
+        for field, key in (('transaction', 'transaction'), ('boot', 'boot'),
+                           ('software_version', 'version'), ('software_commit', 'commit')):
+            # --current is identity/boot-bound, without a pending transaction.
+            if key in journal:
+                check('evidence:' + name + ':' + field, evidence.get(field) == journal[key])
+        observed = evidence.get('monotonic')
+        valid_time = type(observed) in {int, float} and journal['started_mono'] <= observed <= now
+        check('evidence:' + name + ':monotonic', valid_time)
+        if name == 'heartbeat':
+            check('evidence:heartbeat:fresh', valid_time and now - observed <= 90)
+        else:
+            check('evidence:button:pid', str(evidence.get('pid')) == pids.get('messagebox-button.service', (None,))[0])
+        check('evidence:' + name + ':ready', evidence.get('ready') is True)
     try:
-        values = dict(line.split('=', 1) for line in audio_env.read_text().splitlines() if '=' in line)
-        cards = {}
-        for field in ('MSGBOX_MIC_DEV', 'MSGBOX_SPK_DEV'):
-            device = re.fullmatch(r'(?:plug)?hw:CARD=([A-Za-z0-9_-]+),DEV=([0-9]+)', values.get(field, ''))
-            if not device:
-                ready = False
-            else:
-                cards[field] = (device[1], device[2])
-        for tool in ('arecord', 'aplay'):
+        values = dict(line.split('=', 1) for line in _rooted(root, '/run/messagebox-audio/audio.env').read_text().splitlines() if '=' in line)
+    except (OSError, ValueError):
+        values = {}
+    for field, tool, suffix in (('MSGBOX_MIC_DEV', 'arecord', 'c'), ('MSGBOX_SPK_DEV', 'aplay', 'p')):
+        device = re.fullmatch(r'(?:plug)?hw:CARD=([A-Za-z0-9_-]+),DEV=([0-9]+)', values.get(field, ''))
+        check('audio:' + field + ':configured', device is not None)
+        try:
             listing = _run(['runuser', '-u', 'messagebox', '--', tool, '-l'], run,
                            capture_output=True, text=True, check=False, timeout=5)
-            ready &= listing.returncode == 0 and 'card ' in listing.stdout
-            field = 'MSGBOX_MIC_DEV' if tool == 'arecord' else 'MSGBOX_SPK_DEV'
-            card, device_number = cards.get(field, ('', ''))
-            match = re.search(r'card ([0-9]+): ' + re.escape(card) + r' \[.*?\], device ' + re.escape(device_number) + r':', listing.stdout)
-            ready &= bool(card) and match is not None
+            match = None if not device else re.search(r'card ([0-9]+): ' + re.escape(device[1])
+                + r' \[.*?\], device ' + re.escape(device[2]) + r':', listing.stdout)
+            check('audio:' + field + ':enumerated', listing.returncode == 0 and match is not None)
             if match:
-                node = '/dev/snd/' + f'pcmC{match[1]}D{device_number}' + ('c' if field == 'MSGBOX_MIC_DEV' else 'p')
-                for access in ('-r', '-w'):
+                node = '/dev/snd/' + f'pcmC{match[1]}D{device[2]}' + suffix
+                for access, label in (('-r', 'readable'), ('-w', 'writable')):
                     observed = _run(['runuser', '-u', 'messagebox', '--', 'test', access, node],
                                     run, check=False, timeout=5)
-                    ready &= observed.returncode == 0
-        # Enumerating through ALSA as the runtime user checks access to the
-        # selected cards without opening a PCM capture stream.
-        ready &= len(cards) == 2
-    except (OSError, ValueError, UpdateError):
-        ready = False
-    pointer = controlled_release(root)
-    ready &= pointer == journal['new']
+                    check('audio:' + field + ':' + label, observed.returncode == 0)
+        except (OSError, UpdateError, subprocess.SubprocessError):
+            check('audio:' + field + ':probe', False)
+    try:
+        pointer = controlled_release(root)
+        check('pointer', pointer == journal['new'])
+    except (OSError, UpdateError):
+        pointer = None
+        check('pointer', False)
     for entry in journal['hashes']:
-        path = _rooted(root, pointer) / entry['relative']
-        ready &= path.is_file() and _sha256(path) == entry['sha256']
-    return bool(ready), pids
+        relative = entry['relative']
+        # Journal paths are program paths, never household paths; still reject
+        # traversal and bound names before using them in diagnostics or reads.
+        safe = (isinstance(relative, str) and len(relative) <= 150
+                and re.fullmatch(r'[A-Za-z0-9_./-]+', relative)
+                and not PurePosixPath(relative).is_absolute() and '..' not in PurePosixPath(relative).parts)
+        passed = False
+        if pointer and safe:
+            try:
+                path = _rooted(root, pointer) / relative
+                passed = path.is_file() and _sha256(path) == entry['sha256']
+            except OSError:
+                pass
+        check('hash:' + (relative if safe else 'invalid'), passed)
+    return checks, pids
+
+
+def health_sample(root, journal, run=subprocess.run, *, failures=None):
+    checks, pids = health_checks(root, journal, run)
+    if failures is not None:
+        failures.extend(name for name, passed in checks if not passed)
+        del failures[HEALTH_FAILURE_LIMIT:]
+    return all(passed for _name, passed in checks), pids
 
 
 def sustain_health(root, journal, run=subprocess.run, *, sample=health_sample,
@@ -1587,7 +1675,7 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                 target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
                 _atomic_install(entry['source_path'], target, entry['mode'])
                 hashes.append({'relative': relative, 'sha256': entry['sha256']})
-            for name in ('bounded_update', 'release_verify', 'trust_update', 'update_controller', 'update_discovery'):
+            for name in ('bounded_update', 'release_verify', 'trust_update', 'update_controller', 'update_discovery', 'health-probe'):
                 source = Path(source_root) / 'scripts/install' / (name + '.py')
                 _validate_staged_file(source, Path(source_root), 0 if root == Path('/') else os.geteuid())
                 try:
@@ -1713,12 +1801,19 @@ def prune_releases(root):
 
 def supervise_transaction(*, root=Path('/'), run=subprocess.run):
     journal = read_state(root, 'journal.json')
-    if not journal or journal['phase'] in {'committed', 'rolled_back'}:
+    if not journal or journal['phase'] in {'committed', 'rolled_back', 'rollback_failed'}:
         ticket = read_state(root, 'ticket.json')
         if ticket and isinstance(ticket.get('operation_id'), str):
             name = 'operations/' + hashlib.sha256(ticket['operation_id'].encode()).hexdigest() + '.json'
             operation = read_state(root, name, {})
             if operation.get('state') == 'installing':
+                result = read_state(root, 'result.json', {})
+                if (result.get('operation_id') == ticket['operation_id']
+                        and result.get('state') in {'installed', 'rolled_back', 'rollback_failed'}):
+                    operation.update({key: result[key] for key in
+                                      ('state', 'reason', 'detail', 'software_version', 'software_commit') if key in result})
+                    save_state(root, name, operation)
+                    return
                 old_boot = ticket.get('boot') != _boot()
                 if old_boot or time.monotonic() - ticket.get('queued_mono', time.monotonic()) >= 30:
                     observed = _run(['systemctl', 'is-active', 'messagebox-update-install.service'],
@@ -1737,7 +1832,8 @@ def supervise_transaction(*, root=Path('/'), run=subprocess.run):
         reason = 'health_timeout'
     if not reason and journal['phase'] == 'probation':
         try:
-            ready, pids = health_sample(Path(root), journal, run)
+            failures = []
+            ready, pids = health_sample(Path(root), journal, run, failures=failures)
             monitor = read_state(root, 'supervisor.json', {})
             if monitor.get('transaction') != journal['transaction']:
                 monitor = {'transaction': journal['transaction'], 'pids': {}, 'restarts': {}, 'was_ready': False}
@@ -1754,13 +1850,23 @@ def supervise_transaction(*, root=Path('/'), run=subprocess.run):
                     if len(history) >= 3:
                         reason = 'crash_loop'
                 monitor['pids'][unit] = list(identity)
-            if monitor['was_ready'] and not ready:
-                reason = reason or 'readiness_lost'
+            if ready:
+                monitor.pop('first_unready_mono', None)
+            else:
+                monitor['last_failures'] = failures
+                first = monitor.setdefault('first_unready_mono', now)
+                if monitor['was_ready'] and now - first >= HEALTH_UNREADY:
+                    reason = reason or 'readiness_lost'
             monitor['was_ready'] |= ready
             save_state(root, 'supervisor.json', monitor)
         except Exception:
             reason = 'health_probe_failed'
     if reason:
+        monitor = read_state(root, 'supervisor.json', {})
+        if monitor.get('transaction') != journal.get('transaction'):
+            monitor = {'transaction': journal.get('transaction')}
+        monitor['rollback_reason'] = reason
+        save_state(root, 'supervisor.json', monitor)
         # Stop the independent worker before acquiring its locks. The broker,
         # supervisor and recovery never belong to the application target.
         _run(['systemctl', 'stop', 'messagebox-update-install.service'], run, check=True, timeout=30)

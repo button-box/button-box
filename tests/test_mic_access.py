@@ -142,7 +142,7 @@ class MicAccessTests(unittest.TestCase):
                     self.assertEqual(len(calls), 1)
                     self.assertEqual(ast.unparse(calls[0].args[0]),
                                      "['runuser', '-u', 'messagebox', '--', tool, '-l']")
-                    self.assertEqual(text.count("arecord"), 2)
+                    self.assertEqual(text.count("arecord"), 1)
                     self.assertIsNone(forbidden.search(text.replace("arecord", "")), relative)
                 else:
                     # Error messages refer to the recorder without executing it.

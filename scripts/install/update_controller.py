@@ -90,10 +90,15 @@ def installed_identity():
 
 
 def record(operation, state, reason='none'):
+    if state in {'rolled_back', 'rollback_failed'}:
+        prior = read('result.json', {})
+        if prior.get('operation_id') == operation['operation_id'] and prior.get('detail'):
+            operation['detail'] = prior['detail'][:update.HEALTH_CODE_LIMIT]
     operation.update(state=state, reason=reason, **installed_identity())
     save(operation_name(operation['operation_id']), operation)
     result = {key: operation.get(key) for key in
-              ('operation_id', 'version', 'state', 'reason', 'software_version', 'software_commit')}
+              ('operation_id', 'version', 'state', 'reason', 'software_version', 'software_commit', 'detail')
+              if key != 'detail' or operation.get(key)}
     save('result.json', result, 0o644)
     return result
 
@@ -269,7 +274,9 @@ class Controller:
                     if operation and operation['state'] not in TERMINAL:
                         record(operation, transaction_result['state'], transaction_result['reason'])
                         operation = read(operation_name(operation_id))
-                return {key: operation.get(key) for key in ('operation_id', 'version', 'state', 'reason', 'software_version', 'software_commit')}
+                return {key: operation.get(key) for key in
+                        ('operation_id', 'version', 'state', 'reason', 'software_version', 'software_commit', 'detail')
+                        if key != 'detail' or operation.get(key)}
             if command in {'install', 'mode'}:
                 return self.new_operation(data)
             if command == 'hint':

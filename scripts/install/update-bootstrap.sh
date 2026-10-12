@@ -34,7 +34,7 @@ getent passwd messagebox-update >/dev/null || useradd --system --user-group --ho
 install -d -o root -g root -m 0755 /usr/lib/messagebox-update /etc/button-box-update /var/lib/button-box-update /run/messagebox-update
 install -d -o root -g root -m 0700 /var/lib/button-box-update/snapshots /var/lib/button-box-update/staging /var/lib/button-box-update/downloads
 install -d -o messagebox-update -g messagebox-update -m 0750 /var/cache/button-box-update
-for module in bounded_update release_verify trust_update update_controller update_discovery; do
+for module in bounded_update release_verify trust_update update_controller update_discovery health-probe; do
   if [ -e "/usr/lib/messagebox-update/$module.py" ] && ! cmp -s "$REPO_DIR/scripts/install/$module.py" "/usr/lib/messagebox-update/$module.py"; then
     echo "Existing fixed controller differs; attended recovery-tested maintenance required." >&2
     exit 1

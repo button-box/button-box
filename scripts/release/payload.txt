@@ -72,6 +72,7 @@ scripts/dev/onboard.sh
 scripts/dev/release-manifest.py
 scripts/install/audio_config.py
 scripts/install/bounded_update.py
+scripts/install/health-probe.py
 scripts/install/messagebox-mode-migrate.py
 scripts/install/release_verify.py
 scripts/install/trust_update.py

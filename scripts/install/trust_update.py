@@ -208,6 +208,15 @@ def bootstrap_keys(source, config):
         raise ReleaseError('key_role_overlap')
     if len({public_key_id(line) for line in release}) != len(release):
         raise ReleaseError('duplicate_release_key')
+    # Validate existing emergency pins before changing either role. A retry
+    # must not overwrite a different pin or follow an unsafe pin symlink.
+    destination = config / 'emergency-keys'
+    if destination.is_symlink():
+        raise ReleaseError('emergency_pin_changed')
+    expected = {public_key_id(line): line for line in emergency}
+    for key in destination.glob('*.pub'):
+        if key.is_symlink() or public_key_line(key) != expected.get(key.stem):
+            raise ReleaseError('emergency_pin_changed')
     config.mkdir(mode=0o755, parents=True, exist_ok=True)
     switch_keys(config, {'release_keys': release})
     destination = config / 'emergency-keys'
@@ -215,6 +224,8 @@ def bootstrap_keys(source, config):
     destination.chmod(0o755)
     for line in emergency:
         key = destination / (public_key_id(line) + '.pub')
+        if key.exists():
+            continue  # The canonical public-key line was checked above.
         with key.open('x') as output:
             key.chmod(0o644)
             output.write('untrusted comment: Button Box emergency public key\n' + line + '\n')

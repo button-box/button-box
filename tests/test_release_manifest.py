@@ -21,9 +21,9 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
         payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
-        self.assertEqual(len(payload), 422)
+        self.assertEqual(len(payload), 423)
         for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
-                     'config/emergency-keys/README.md'):
+                     'config/emergency-keys/README.md', 'scripts/install/health-probe.py'):
             self.assertIn(name, payload)
         # The installed program mapping remains 409 files. Fixed trust code is
         # staged separately in updater/, and public pins are bootstrap-only.

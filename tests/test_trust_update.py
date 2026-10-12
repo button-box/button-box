@@ -203,6 +203,34 @@ class TrustTests(unittest.TestCase):
             self.assertEqual(key.stat().st_mode & 0o777, 0o644)
             self.assertEqual(key.stat().st_uid, os.geteuid())
 
+    def test_bootstrap_retry_accepts_identical_pin_and_rejects_different_before_writes(self):
+        pins = list((self.config / 'emergency-keys').glob('*.pub'))
+        original = pins[0].read_bytes()
+        trust.bootstrap_keys(self.source, self.config)
+        self.assertEqual(pins[0].read_bytes(), original)
+        self.assertEqual(self.pins(), {verify.public_key_line(self.old[0])})
+        # Keep the ID/filename but replace the public-key bytes.
+        pins[0].write_bytes(self.new[0].read_bytes())
+        previous = os.readlink(self.config / 'release-keys')
+        with self.assertRaisesRegex(verify.ReleaseError, 'emergency_pin_changed'):
+            trust.bootstrap_keys(self.source, self.config)
+        self.assertEqual(os.readlink(self.config / 'release-keys'), previous)
+        self.assertEqual(pins[0].read_bytes(), self.new[0].read_bytes())
+
+    def test_worker_record_preserves_bounded_rollback_detail(self):
+        operation = {'operation_id': 'synthetic-operation', 'version': 'v0.3.0'}
+        controller.update.save_state(self.root, 'result.json', {
+            'operation_id': operation['operation_id'], 'state': 'rolled_back',
+            'reason': 'readiness_lost', 'detail': 'evidence:heartbeat:fresh'})
+        with mock.patch.object(controller, 'read', side_effect=lambda name, default=None:
+                               controller.update.read_state(self.root, name, default)), \
+             mock.patch.object(controller, 'save', side_effect=lambda name, value, mode=0o600:
+                               controller.update.save_state(self.root, name, value, mode)), \
+             mock.patch.object(controller, 'installed_identity', return_value={}):
+            controller.record(operation, 'rolled_back', 'readiness_lost')
+        self.assertEqual(controller.update.read_state(self.root, 'result.json')['detail'],
+                         'evidence:heartbeat:fresh')
+
     def test_install_lock_defers_trust_without_blocking_broker(self):
         self.signed()
         with trust.trust_lock(self.state):
