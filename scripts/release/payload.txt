@@ -1,6 +1,7 @@
 # Exact tracked files permitted in the release archive. No globs or directories.
 LICENSE
 config/journald.conf.d/messagebox.conf
+config/release-keys/README.md
 config/requirements-nfc.txt
 messagebox/QR-PROVENANCE.md
 messagebox/__init__.py
@@ -11,6 +12,7 @@ messagebox/cloud_device.py
 messagebox/cloud_events.py
 messagebox/cloud_quiet.py
 messagebox/cloud_runtime.py
+messagebox/cloud_update.py
 messagebox/cloud_voice.py
 messagebox/contacts.py
 messagebox/dashboard/__init__.py
@@ -20,6 +22,7 @@ messagebox/event_log.py
 messagebox/guided_reply.py
 messagebox/identity.py
 messagebox/listened_receipts.py
+messagebox/maintenance.py
 messagebox/make_ringtones.py
 messagebox/mic_capture.py
 messagebox/nfc.py
@@ -68,6 +71,10 @@ scripts/dev/release-manifest.py
 scripts/install/audio_config.py
 scripts/install/bounded_update.py
 scripts/install/messagebox-mode-migrate.py
+scripts/install/release_verify.py
+scripts/install/update-bootstrap.sh
+scripts/install/update_controller.py
+scripts/install/update_discovery.py
 scripts/messageboxctl
 sounds/cloud/manifest.json
 sounds/cloud/more-1.wav
@@ -384,6 +391,13 @@ systemd/messagebox-mode-reconcile.service
 systemd/messagebox-nfc.service
 systemd/messagebox-poller.service
 systemd/messagebox-sync.service
+systemd/messagebox-update-controller.service
+systemd/messagebox-update-discovery.service
+systemd/messagebox-update-discovery.timer
+systemd/messagebox-update-install.service
+systemd/messagebox-update-recovery.service
+systemd/messagebox-update-supervisor.service
+systemd/messagebox-update-supervisor.timer
 systemd/messagebox-wifi-change.path
 systemd/messagebox-wifi-change.service
 systemd/messagebox-wifi-watchdog.service
