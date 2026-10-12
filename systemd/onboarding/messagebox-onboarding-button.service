@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box guided button during setup
 After=network-online.target sound.target messagebox-audio-detect.service
 Requires=messagebox-audio-detect.service

@@ -11,6 +11,10 @@ ONBOARDING_USER=messagebox-onboarding
 ONBOARDING_GROUP=messagebox-onboarding
 SETTINGS_GROUP=messagebox-settings
 APP_DIR=/opt/messagebox
+if [ -L "$APP_DIR" ]; then
+  echo "Versioned installations require the signed updater; setup cannot overwrite them." >&2
+  exit 1
+fi
 PACKAGE_DIR=$APP_DIR/messagebox
 CONFIG_DIR=/etc/messagebox
 DATA_DIR=/var/lib/messagebox
@@ -19,7 +23,7 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="__init__.py device_http.py software.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
+PACKAGE_PYTHON="__init__.py device_http.py software.py cloud_update.py maintenance.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
 nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py

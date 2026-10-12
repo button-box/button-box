@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Watch Button Box boot-mode authority
 
 [Path]

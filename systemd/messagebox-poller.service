@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box incoming voice note poller
 After=network-online.target messagebox-audio-detect.service
 Wants=network-online.target

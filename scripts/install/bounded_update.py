@@ -265,7 +265,12 @@ def _rooted(root, absolute):
     pure = PurePosixPath(absolute)
     if not pure.is_absolute() or ".." in pure.parts:
         raise UpdateError("manifest contains an unsafe installed path")
-    return Path(root).joinpath(*pure.parts[1:])
+    selected = Path(root)
+    pointer = selected / "opt/messagebox"
+    if selected != Path("/") and str(pure).startswith("/opt/messagebox/") and pointer.is_symlink():
+        controlled = controlled_release(selected)
+        return selected.joinpath(controlled.lstrip("/"), str(pure).removeprefix("/opt/messagebox/"))
+    return selected.joinpath(*pure.parts[1:])
 
 
 def _check_parents(path, root):
@@ -280,6 +285,9 @@ def _check_parents(path, root):
         try:
             metadata = current.lstat()
         except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode) and current == _rooted(root, "/opt/messagebox"):
+            controlled_release(root)
             continue
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise UpdateError("destination has an unsafe parent")
@@ -636,7 +644,7 @@ def _active_auxiliary_units(states, run):
     return active
 
 
-def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=()):
+def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=(), *, external_only=False):
     backup_dir = Path(backup_dir)
     _check_absolute_parents(backup_dir)
     if backup_dir.exists() or backup_dir.is_symlink():
@@ -650,8 +658,9 @@ def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=()):
     backup_files.mkdir(mode=0o700)
     records = []
     targets = [item["target"] for item in entries]
-    targets.extend(RETIRED_SOUNDS)
-    targets.append(RELEASE_METADATA)
+    if not external_only:
+        targets.extend(RETIRED_SOUNDS)
+        targets.append(RELEASE_METADATA)
     for absolute in targets:
         records.append(
             _record_path(_rooted(root, absolute), absolute, backup_files, len(records))
@@ -703,13 +712,16 @@ def _atomic_install(source, destination, mode, *, uid=0, gid=0):
             temporary.unlink(missing_ok=True)
 
 
-def _stop_active(states, run):
+def _stop_active(states, run, *, auxiliary_units=()):
     active = [
         unit for unit in reversed(UNITS)
         if states[unit]["active"] in {"active"} | TRANSITIONAL_ACTIVE_STATES
     ]
-    if active:
-        _run(["systemctl", "stop", *active], run, check=True)
+    activators = [unit for unit in [*active, *auxiliary_units] if unit.endswith((".path", ".timer"))]
+    services = [unit for unit in active if unit not in activators]
+    for batch in (activators, services):
+        if batch:
+            _run(["systemctl", "stop", *batch], run, check=True, timeout=30)
 
 
 def _restore_enabled(states, run):
@@ -727,7 +739,7 @@ def _restore_enabled(states, run):
             _run(["systemctl", "mask", "--runtime", unit], run, check=True)
 
 
-def _restore_active(states, run, *, also_active=()):
+def _restore_active(states, run, *, also_active=(), skip=()):
     if set(START_ORDER) != set(UNITS) or len(START_ORDER) != len(UNITS):
         raise UpdateError("managed unit start order is incomplete")
     # ComItUp replaces portal jobs while moving HOTSPOT -> CONNECTED. It must
@@ -738,7 +750,7 @@ def _restore_active(states, run, *, also_active=()):
             "comitup-web.service", "messagebox-onboarding-home.service"
         }:
             continue
-        if states[unit]["active"] == "active" and unit not in also_active:
+        if states[unit]["active"] == "active" and unit not in also_active and unit not in skip:
             _run(
                 ["systemctl", "--job-mode=ignore-dependencies", "start", unit],
                 run,
@@ -746,8 +758,10 @@ def _restore_active(states, run, *, also_active=()):
             )
 
 
-def _restore_auxiliary_active(auxiliary_units, run):
+def _restore_auxiliary_active(auxiliary_units, run, *, skip=()):
     for unit in auxiliary_units:
+        if unit in skip:
+            continue
         _run(
             ["systemctl", "--job-mode=ignore-dependencies", "start", unit],
             run, check=True,
@@ -1091,10 +1105,666 @@ def apply(source_root, manifest_path, backup_dir, *, root=Path("/"), run=subproc
     root = Path(root).resolve()
     if root == Path("/") and os.geteuid() != 0:
         raise UpdateError("bounded update requires root")
+    if _rooted(root, "/opt/messagebox").is_symlink():
+        raise UpdateError("converted installations require a signed transaction")
     with _update_lock(root):
         return _apply_locked(
             source_root, manifest_path, backup_dir, root=root, run=run
         )
+
+
+# The fixed controller installs this module outside /opt/messagebox. A candidate
+# cannot replace its own recovery code or the executing installer.
+UPDATE_STATE = '/var/lib/button-box-update'
+RELEASES = '/opt/messagebox-releases'
+STABLE_NFC = '/opt/messagebox-deps/venv-nfc'
+INHIBIT = UPDATE_STATE + '/install-inhibit'
+MODE_LOCK = '/run/lock/messagebox-mode-transition.lock'
+MAINTENANCE_LOCK = '/run/messagebox-update/maintenance.lock'
+HEALTH_DEADLINE = 300
+HEALTH_STABLE = 60
+FIXED_UNITS = {
+    'messagebox-update-recovery.service', 'messagebox-update-controller.service',
+    'messagebox-update-install.service', 'messagebox-update-supervisor.service',
+    'messagebox-update-supervisor.timer', 'messagebox-update-discovery.service',
+    'messagebox-update-discovery.timer',
+}
+
+
+def durable_json(path, document, mode=0o600):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    with tempfile.NamedTemporaryFile('w', dir=path.parent, prefix='.' + path.name, delete=False) as output:
+        temporary = Path(output.name)
+        os.fchmod(output.fileno(), mode)
+        json.dump(document, output, sort_keys=True)
+        output.write('\n')
+        output.flush()
+        os.fsync(output.fileno())
+    try:
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def read_state(root, name, default=None):
+    path = _rooted(root, UPDATE_STATE + '/' + name)
+    try:
+        _check_parents(path, root)
+        metadata = path.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or metadata.st_uid != (0 if Path(root) == Path('/') else os.geteuid())
+                or metadata.st_mode & 0o022 or metadata.st_size > 2 * 1024 * 1024):
+            raise UpdateError('unsafe updater state')
+        return json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return default
+    except (OSError, ValueError) as exc:
+        raise UpdateError('invalid updater state') from exc
+
+
+def save_state(root, name, document, mode=0o600):
+    path = _rooted(root, UPDATE_STATE + '/' + name)
+    _check_parents(path, root)
+    durable_json(path, document, mode)
+
+
+def controlled_release(root):
+    pointer = _rooted(root, '/opt/messagebox')
+    metadata = pointer.lstat()
+    trusted = 0 if Path(root) == Path('/') else os.geteuid()
+    target = os.readlink(pointer) if stat.S_ISLNK(metadata.st_mode) else ''
+    pure = PurePosixPath(target)
+    if (metadata.st_uid != trusted or pure.parent != PurePosixPath(RELEASES)
+            or not re.fullmatch(r'[A-Za-z0-9._-]+-[0-9a-f]{40}', pure.name)):
+        raise UpdateError('unsafe application pointer')
+    directory = _rooted(root, target)
+    _check_parents(directory, root)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != trusted or info.st_mode & 0o022:
+        raise UpdateError('unsafe release directory')
+    return target
+
+
+def switch_release(root, target):
+    pure = PurePosixPath(target)
+    if (pure.parent != PurePosixPath(RELEASES)
+            or not re.fullmatch(r'[A-Za-z0-9._-]+-[0-9a-f]{40}', pure.name)):
+        raise UpdateError('unsafe application pointer')
+    directory = _rooted(root, target)
+    _check_parents(directory, root)
+    if not directory.is_dir() or directory.is_symlink():
+        raise UpdateError('release directory unavailable')
+    pointer = _rooted(root, '/opt/messagebox')
+    _check_parents(pointer, root)
+    temporary = pointer.with_name('.messagebox-switch')
+    temporary.unlink(missing_ok=True)
+    temporary.symlink_to(target)
+    os.replace(temporary, pointer)
+    _fsync_directory(pointer.parent)
+
+
+def _inhibit(root, enabled):
+    path = _rooted(root, INHIBIT)
+    if enabled:
+        durable_json(path, {'inhibited': True}, 0o644)
+    else:
+        path.unlink(missing_ok=True)
+        _fsync_directory(path.parent)
+
+
+@contextlib.contextmanager
+def transaction_locks(root, *, maintenance=True):
+    # Global order: update -> mode transition -> audio/interaction reservation.
+    # Reconciliation rechecks inhibit after acquiring the mode lock.
+    with _update_lock(root):
+        descriptors = []
+        try:
+            for absolute, mode in ((MODE_LOCK, 0o600), (MAINTENANCE_LOCK, 0o644)):
+                if not maintenance and absolute == MAINTENANCE_LOCK:
+                    continue
+                path = _rooted(root, absolute)
+                _check_parents(path, root)
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, mode)
+                descriptors.append(descriptor)
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_uid != (0 if Path(root) == Path('/') else os.geteuid())
+                        or stat.S_IMODE(info.st_mode) != mode):
+                    raise UpdateError('unsafe transaction lock')
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise UpdateError('not_idle') from exc
+            yield descriptors
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+
+def _journal(root, journal, phase):
+    journal['phase'] = phase
+    save_state(root, 'journal.json', journal)
+
+
+def _result(root, journal, state, reason):
+    identity = {}
+    try:
+        pointer = controlled_release(root)
+        metadata = json.loads((_rooted(root, pointer) / 'release.json').read_bytes())
+        identity = {'software_version': metadata['version'], 'software_commit': metadata['commit']}
+    except (OSError, ValueError, KeyError, UpdateError):
+        pass
+    save_state(root, 'result.json', {
+        'operation_id': journal.get('operation_id'), 'version': journal.get('version'),
+        'state': state, 'reason': reason, **identity,
+    }, 0o644)
+
+
+def _external_restore(root, journal, run, *, start):
+    backup = _rooted(root, journal['backup'])
+    state = json.loads((backup / 'state.json').read_bytes())
+    records = _validate_backup_state(state, backup, root)
+    for record, path in records:
+        _restore_record(record, path, backup)
+    _run(['systemctl', 'daemon-reload'], run, check=True, timeout=30)
+    _restore_enabled(state['units'], run)
+    _inhibit(root, False)
+    if start:
+        _restore_active(state['units'], run)
+        _restore_auxiliary_active(state.get('auxiliary_units', ()), run)
+        _verify_enabled(state['units'], run)
+        _verify_active(state['units'], run, auxiliary_units=state.get('auxiliary_units', ()))
+
+
+def _validate_journal(root, journal):
+    if (not isinstance(journal, dict) or journal.get('format') != 1
+            or journal.get('phase') not in {'prepared', 'quiesced', 'switched', 'probation',
+                'restoring_activators', 'committed', 'rolling_back', 'rolled_back', 'rollback_failed'}
+            or journal.get('kind') not in {'application', 'bootstrap'}):
+        raise UpdateError('invalid update journal')
+    for key in ('old', 'new'):
+        pure = PurePosixPath(journal.get(key, ''))
+        if (pure.parent != PurePosixPath(RELEASES)
+                or not re.fullmatch(r'[A-Za-z0-9._-]+-[0-9a-f]{40}', pure.name)):
+            raise UpdateError('invalid journal pointer')
+    pure = PurePosixPath(journal.get('backup', ''))
+    if pure.parent != PurePosixPath(UPDATE_STATE + '/snapshots') or not re.fullmatch(r'[0-9a-f]{32}', pure.name):
+        raise UpdateError('invalid journal snapshot')
+    return journal
+
+
+def _recover_locked(root, run, *, start=True, reason='interrupted'):
+    journal = read_state(root, 'journal.json')
+    if journal is None:
+        prune_releases(root)
+        return None
+    _validate_journal(root, journal)
+    if journal['phase'] in {'committed', 'rolled_back'}:
+        if journal['phase'] == 'committed' and journal['kind'] == 'application':
+            if controlled_release(root) != journal['new']:
+                raise UpdateError('committed_pointer_mismatch')
+            save_state(root, 'known-good.json', {'current': journal['new'], 'previous': journal['old']})
+            _result(root, journal, 'installed', 'healthy')
+        prune_releases(root)
+        return journal
+    _journal(root, journal, 'rolling_back')
+    _inhibit(root, True)
+    try:
+        current = _unit_states(run, allow_transitional=True, deadline=time.monotonic() + 30)
+        _stop_active(current, run, auxiliary_units=journal.get('auxiliary_units', ()))
+        if journal['kind'] == 'bootstrap':
+            pointer = _rooted(root, '/opt/messagebox')
+            old = _rooted(root, journal['old'])
+            if pointer.is_symlink():
+                pointer.unlink()
+            if old.exists() and not pointer.exists():
+                nfc = old / 'venv-nfc'
+                if not nfc.exists() and not nfc.is_symlink() and _rooted(root, STABLE_NFC).exists():
+                    nfc.symlink_to(STABLE_NFC)
+                    _fsync_directory(old)
+                os.replace(old, pointer)
+                _fsync_directory(pointer.parent)
+        else:
+            switch_release(root, journal['old'])
+        _external_restore(root, journal, run, start=start)
+        quarantine = read_state(root, 'quarantine.json', [])
+        if journal['kind'] == 'application' and journal['new'] not in quarantine:
+            quarantine.append(journal['new'])
+            save_state(root, 'quarantine.json', quarantine)
+        _result(root, journal, 'rolled_back', reason)
+        _journal(root, journal, 'rolled_back')
+        if journal['kind'] == 'application':
+            known = read_state(root, 'known-good.json', {})
+            save_state(root, 'known-good.json', {'current': journal['old'], 'previous': journal.get('previous_good', known.get('previous'))})
+        prune_releases(root)
+    except Exception as exc:
+        _inhibit(root, True)
+        _result(root, journal, 'rollback_failed', 'restoration_failed')
+        _journal(root, journal, 'rollback_failed')
+        raise UpdateError('rollback_failed') from exc
+    return journal
+
+
+def recover_transaction(*, root=Path('/'), run=subprocess.run, start=True, reason='interrupted'):
+    root = Path(root).resolve()
+    with transaction_locks(root, maintenance=False):
+        return _recover_locked(root, run, start=start, reason=reason)
+
+
+def _sync_tree(directory):
+    for path in sorted(directory.rglob('*'), reverse=True):
+        if path.is_symlink():
+            continue
+        if path.is_dir():
+            _fsync_directory(path)
+        else:
+            with path.open('rb') as file:
+                os.fsync(file.fileno())
+    _fsync_directory(directory)
+    _fsync_directory(directory.parent)
+
+
+def bootstrap_layout(*, root=Path('/'), run=subprocess.run):
+    import uuid
+    root = Path(root).resolve()
+    with transaction_locks(root):
+        pointer = _rooted(root, '/opt/messagebox')
+        if pointer.is_symlink():
+            return controlled_release(root)
+        pending = read_state(root, 'journal.json')
+        if pending and pending['phase'] not in {'committed', 'rolled_back'}:
+            raise UpdateError('recovery_required')
+        metadata = json.loads((pointer / 'release.json').read_bytes())
+        version, commit = metadata['version'], metadata['commit']
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', version) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+            raise UpdateError('installed_identity_required')
+        old = RELEASES + '/' + version + '-' + commit
+        releases = _rooted(root, RELEASES)
+        _check_parents(releases, root)
+        releases.mkdir(parents=True, exist_ok=True, mode=0o755)
+        if _rooted(root, old).exists():
+            raise UpdateError('release_exists')
+        # Legacy venvs may contain Python symlinks; only this dependency subtree
+        # is exempt from the no-symlink rule. App trees must be root-owned.
+        for path in (pointer, *pointer.rglob('*')):
+            if 'venv-nfc' in path.relative_to(pointer).parts:
+                continue
+            info = path.lstat()
+            if (info.st_uid != (0 if root == Path('/') else os.geteuid()) or info.st_mode & 0o022
+                    or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode))):
+                raise UpdateError('unsafe_legacy_tree')
+        states = _unit_states(run)
+        backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
+        create_backup(_rooted(root, backup), root, [], states, external_only=True)
+        journal = {'format': 1, 'kind': 'bootstrap', 'old': old, 'new': old,
+                   'backup': backup, 'version': version, 'operation_id': None}
+        _journal(root, journal, 'prepared')
+        try:
+            _inhibit(root, True)
+            _stop_active(states, run)
+            os.replace(pointer, _rooted(root, old))
+            _fsync_directory(pointer.parent)
+            _fsync_directory(releases)
+            nfc = _rooted(root, old) / 'venv-nfc'
+            stable = _rooted(root, STABLE_NFC)
+            stable.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            if nfc.exists() and not nfc.is_symlink():
+                if stable.exists():
+                    raise UpdateError('stable_dependency_exists')
+                os.replace(nfc, stable)
+                _fsync_directory(stable.parent)
+            if not nfc.exists() and not nfc.is_symlink() and stable.exists():
+                nfc.symlink_to(STABLE_NFC)
+                _fsync_directory(nfc.parent)
+            switch_release(root, old)
+            _journal(root, journal, 'switched')
+            _inhibit(root, False)
+            _restore_active(states, run)
+            _verify_active(states, run)
+            _journal(root, journal, 'committed')
+            save_state(root, 'known-good.json', {'current': old, 'previous': None})
+            prune_releases(root)
+        except Exception:
+            _recover_locked(root, run, reason='bootstrap_failed')
+            raise
+        return old
+
+
+def _process_token(pid):
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _boot():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def health_sample(root, journal, run=subprocess.run):
+    """Enumerate devices only. No recording or test microphone capture."""
+    now = time.monotonic()
+    ready, pids = True, {}
+    expected_units = {**journal['units'], **{unit: {'active': 'active'} for unit in journal.get('auxiliary_units', [])}}
+    for unit, state in expected_units.items():
+        expected = state['active']
+        if journal.get('activators_suspended') and unit.endswith(('.path', '.timer')):
+            expected = 'inactive'
+        # Named properties avoid reliance on systemd's output ordering.
+        result = _run(['systemctl', 'show', unit, '--property=ActiveState,MainPID,NRestarts'],
+                      run, capture_output=True, text=True, check=True, timeout=5)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        if unit == 'comitup-web.service' and (state['active'] != 'active'
+                or journal['units'].get('comitup.service', {}).get('active') == 'active'):
+            ready &= values.get('ActiveState') in {'active', 'inactive', 'failed'}
+        else:
+            ready &= values.get('ActiveState') == expected
+        if expected == 'active' and unit.endswith('.service') and unit in {'messagebox-button.service', 'messagebox-poller.service',
+                'messagebox-dash.service', 'messagebox-nfc.service', 'messagebox-sync.service'}:
+            pids[unit] = (values.get('MainPID'), values.get('NRestarts'))
+            ready &= values.get('MainPID') not in {None, '0'}
+    for name in ('heartbeat', 'button'):
+        path = _rooted(root, '/run/messagebox-update/' + name + '.json')
+        try:
+            evidence = json.loads(path.read_bytes())
+            ready &= (evidence.get('transaction') == journal['transaction']
+                      and evidence.get('boot') == journal['boot']
+                      and evidence.get('software_version') == journal['version']
+                      and evidence.get('software_commit') == journal['commit']
+                      and journal['started_mono'] <= evidence.get('monotonic', -1) <= now
+                      and (now - evidence['monotonic'] <= 90 if name == 'heartbeat'
+                           else str(evidence.get('pid')) == pids.get('messagebox-button.service', (None,))[0])
+                      and evidence.get('ready') is True)
+        except (OSError, ValueError, TypeError, KeyError):
+            ready = False
+    audio_env = _rooted(root, '/run/messagebox-audio/audio.env')
+    try:
+        values = dict(line.split('=', 1) for line in audio_env.read_text().splitlines() if '=' in line)
+        cards = {}
+        for field in ('MSGBOX_MIC_DEV', 'MSGBOX_SPK_DEV'):
+            device = re.fullmatch(r'(?:plug)?hw:CARD=([A-Za-z0-9_-]+),DEV=([0-9]+)', values.get(field, ''))
+            if not device:
+                ready = False
+            else:
+                cards[field] = (device[1], device[2])
+        for tool in ('arecord', 'aplay'):
+            listing = _run(['runuser', '-u', 'messagebox', '--', tool, '-l'], run,
+                           capture_output=True, text=True, check=False, timeout=5)
+            ready &= listing.returncode == 0 and 'card ' in listing.stdout
+            field = 'MSGBOX_MIC_DEV' if tool == 'arecord' else 'MSGBOX_SPK_DEV'
+            card, device_number = cards.get(field, ('', ''))
+            match = re.search(r'card ([0-9]+): ' + re.escape(card) + r' \[.*?\], device ' + re.escape(device_number) + r':', listing.stdout)
+            ready &= bool(card) and match is not None
+            if match:
+                node = '/dev/snd/' + f'pcmC{match[1]}D{device_number}' + ('c' if field == 'MSGBOX_MIC_DEV' else 'p')
+                for access in ('-r', '-w'):
+                    observed = _run(['runuser', '-u', 'messagebox', '--', 'test', access, node],
+                                    run, check=False, timeout=5)
+                    ready &= observed.returncode == 0
+        # Enumerating through ALSA as the runtime user checks access to the
+        # selected cards without opening a PCM capture stream.
+        ready &= len(cards) == 2
+    except (OSError, ValueError, UpdateError):
+        ready = False
+    pointer = controlled_release(root)
+    ready &= pointer == journal['new']
+    for entry in journal['hashes']:
+        path = _rooted(root, pointer) / entry['relative']
+        ready &= path.is_file() and _sha256(path) == entry['sha256']
+    return bool(ready), pids
+
+
+def sustain_health(root, journal, run=subprocess.run, *, sample=health_sample,
+                   monotonic=time.monotonic, sleep=time.sleep):
+    stable, prior = None, {}
+    restarts = {}
+    while monotonic() < journal['deadline_mono']:
+        ready, pids = sample(root, journal, run)
+        now = monotonic()
+        changed = False
+        for unit, identity in pids.items():
+            if unit in prior and prior[unit] != identity:
+                changed = True
+                try:
+                    count = max(1, int(identity[1]) - int(prior[unit][1]))
+                except (TypeError, ValueError):
+                    count = 1
+                restarts[unit] = [at for at in restarts.get(unit, []) if now - at <= 60] + [now] * min(3, count)
+                if len(restarts[unit]) >= 3:
+                    raise UpdateError('crash_loop')
+            prior[unit] = identity
+        if not ready or changed:
+            stable = None
+        elif stable is None:
+            stable = now
+        elif now - stable >= HEALTH_STABLE and now < journal['deadline_mono']:
+            return
+        sleep(min(2, max(0, journal['deadline_mono'] - now)))
+    raise UpdateError('health_timeout')
+
+
+def install_transaction(source_root, manifest_path, *, operation_id=None, root=Path('/'),
+                        run=subprocess.run, health=sustain_health, sequence=None):
+    import uuid
+    root = Path(root).resolve()
+    with transaction_locks(root) as locks:
+        pending = read_state(root, 'journal.json')
+        if pending and pending['phase'] not in {'committed', 'rolled_back'}:
+            raise UpdateError('recovery_required')
+        if _rooted(root, MODE_MARKER).exists():
+            raise UpdateError('onboarding_active')
+        old = controlled_release(root)
+        manifest, entries, manifest_hash = load_candidate(source_root, manifest_path, root)
+        new = RELEASES + '/' + manifest['version'] + '-' + manifest['commit']
+        if old == new:
+            return manifest
+        if new in read_state(root, 'quarantine.json', []):
+            raise UpdateError('quarantined')
+        if sequence is None or type(sequence) is not int or sequence <= read_state(root, 'sequence.json', 0):
+            raise UpdateError('downgrade')
+        candidate = _rooted(root, new)
+        if candidate.exists():
+            raise UpdateError('release_exists')
+        external = [entry for entry in entries if not entry['target'].startswith('/opt/messagebox/')]
+        for entry in entries:
+            frozen = entry['target'].endswith('/requirements-nfc.txt') or Path(entry['target']).name in FIXED_UNITS
+            if frozen and (not entry['destination'].is_file() or _sha256(entry['destination']) != entry['sha256']):
+                raise UpdateError('maintenance_release_required')
+        size = sum(entry['source_path'].stat().st_size for entry in entries)
+        if shutil.disk_usage(_rooted(root, RELEASES)).free < size * 2 + 64 * 1024 * 1024:
+            raise UpdateError('low_disk')
+        candidate.mkdir(mode=0o755)
+        hashes = []
+        try:
+            for entry in entries:
+                if entry in external:
+                    continue
+                relative = entry['target'].removeprefix('/opt/messagebox/')
+                target = candidate / relative
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                _atomic_install(entry['source_path'], target, entry['mode'])
+                hashes.append({'relative': relative, 'sha256': entry['sha256']})
+            for name in ('bounded_update', 'release_verify', 'update_controller', 'update_discovery'):
+                source = Path(source_root) / 'scripts/install' / (name + '.py')
+                _validate_staged_file(source, Path(source_root), 0 if root == Path('/') else os.geteuid())
+                try:
+                    compile(source.read_bytes(), name + '.py', 'exec')
+                except SyntaxError as exc:
+                    raise UpdateError('invalid_candidate_controller') from exc
+                target = candidate / 'updater' / (name + '.py')
+                target.parent.mkdir(exist_ok=True, mode=0o755)
+                _atomic_install(source, target, 0o644)
+                hashes.append({'relative': 'updater/' + name + '.py', 'sha256': _sha256(target)})
+            durable_json(candidate / 'release.json', {'version': manifest['version'], 'commit': manifest['commit'],
+                         'manifest_sha256': manifest_hash}, 0o644)
+            (candidate / 'VERSION').write_text(manifest['version'] + '\n')
+            (candidate / 'VERSION').chmod(0o644)
+            hashes.extend({'relative': name, 'sha256': _sha256(candidate / name)} for name in ('release.json', 'VERSION'))
+            shutil.copyfile(manifest_path, candidate / 'release-manifest.json')
+            (candidate / 'release-manifest.json').chmod(0o644)
+            (candidate / 'venv-nfc').symlink_to(STABLE_NFC)
+            _sync_tree(candidate)
+            states = _unit_states(run)
+            auxiliary = _active_auxiliary_units(states, run)
+            backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
+            create_backup(_rooted(root, backup), root, external, states, auxiliary, external_only=True)
+        except Exception:
+            shutil.rmtree(candidate)
+            raise
+        transaction = uuid.uuid4().hex
+        journal = {'format': 1, 'kind': 'application', 'transaction': transaction,
+                   'operation_id': operation_id, 'version': manifest['version'], 'commit': manifest['commit'],
+                   'old': old, 'new': new, 'backup': backup, 'units': states, 'hashes': hashes,
+                   'auxiliary_units': auxiliary, 'activators_suspended': True,
+                   'boot': _boot(), 'started_mono': time.monotonic(),
+                   'deadline_mono': time.monotonic() + HEALTH_DEADLINE,
+                   'pid': os.getpid(), 'process_token': _process_token(os.getpid()),
+                   'previous_good': read_state(root, 'known-good.json', {}).get('previous')}
+        _journal(root, journal, 'prepared')
+        # Advance outside application rollback. A failed signed candidate still
+        # cannot allow a network downgrade; recovery permits only journal.old.
+        save_state(root, 'sequence.json', sequence)
+        try:
+            _result(root, journal, 'installing', 'none')
+            _inhibit(root, True)
+            _stop_active(states, run, auxiliary_units=auxiliary)
+            _journal(root, journal, 'quiesced')
+            for entry in external:
+                if Path(entry['target']).name not in FIXED_UNITS:
+                    _atomic_install(entry['source_path'], entry['destination'], entry['mode'])
+            switch_release(root, new)
+            _journal(root, journal, 'switched')
+            _run(['systemctl', 'daemon-reload'], run, check=True, timeout=30)
+            # Evidence is authored only by the current systemd main processes,
+            # through the independent controller socket; old files cannot pass.
+            durable_json(_rooted(root, '/run/messagebox-update/transaction.json'), {
+                'transaction': transaction, 'boot': journal['boot'], 'software_version': manifest['version'],
+                'software_commit': manifest['commit']}, 0o644)
+            _inhibit(root, False)
+            # Reopen application interactions for probation; the update and mode
+            # locks still prevent another installation or reconciliation.
+            fcntl.flock(locks[-1], fcntl.LOCK_UN)
+            activators = {unit for unit in (*UNITS, *auxiliary) if unit.endswith(('.path', '.timer'))}
+            _restore_active(states, run, skip=activators)
+            _restore_auxiliary_active(auxiliary, run, skip=activators)
+            _journal(root, journal, 'probation')
+            health(root, journal, run)
+            _journal(root, journal, 'restoring_activators')
+            _restore_active(states, run, skip=set(UNITS) - activators)
+            _restore_auxiliary_active(auxiliary, run, skip=set(auxiliary) - activators)
+            for unit in activators:
+                if unit in states and states[unit]['active'] != 'active':
+                    continue
+                observed = _run(['systemctl', 'is-active', unit], run, capture_output=True, text=True, check=False, timeout=5)
+                if observed.stdout.strip() != 'active':
+                    raise UpdateError('activator_restore_failed')
+            journal['activators_suspended'] = False
+            _journal(root, journal, 'committed')
+            _result(root, journal, 'installed', 'healthy')
+            save_state(root, 'known-good.json', {'current': new, 'previous': old})
+            prune_releases(root)
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, UpdateError) and str(exc) in {'health_timeout', 'crash_loop'} else 'install_failed'
+            _recover_locked(root, run, reason=reason)
+            raise UpdateError(reason) from exc
+        return manifest
+
+
+def prune_releases(root):
+    journal = read_state(root, 'journal.json')
+    keep = set()
+    if journal and journal['phase'] not in {'committed', 'rolled_back'}:
+        keep.update((journal['old'], journal['new']))
+        return  # Never prune snapshots or staging during an unfinished journal.
+    known = read_state(root, 'known-good.json', {})
+    keep.update(value for value in known.values() if value)
+    try:
+        keep.add(controlled_release(root))
+    except (FileNotFoundError, UpdateError):
+        pass
+    releases = _rooted(root, RELEASES)
+    if releases.exists():
+        for child in releases.iterdir():
+            if (RELEASES + '/' + child.name not in keep and child.is_dir() and not child.is_symlink()
+                    and re.fullmatch(r'[A-Za-z0-9._-]+-[0-9a-f]{40}', child.name)):
+                shutil.rmtree(child)
+        _fsync_directory(releases)
+    available = read_state(root, 'available.json', {})
+    if journal and journal.get('kind') == 'application' and available.get('version') == journal.get('version'):
+        save_state(root, 'available.json', {})
+        available = {}
+    downloads = _rooted(root, UPDATE_STATE + '/downloads')
+    if downloads.exists():
+        for child in downloads.iterdir():
+            if str(child) != available.get('bundle') and child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+        _fsync_directory(downloads)
+    for name in ('snapshots', 'staging'):
+        directory = _rooted(root, UPDATE_STATE + '/' + name)
+        if directory.exists():
+            for child in directory.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+            _fsync_directory(directory)
+
+
+def supervise_transaction(*, root=Path('/'), run=subprocess.run):
+    journal = read_state(root, 'journal.json')
+    if not journal or journal['phase'] in {'committed', 'rolled_back'}:
+        ticket = read_state(root, 'ticket.json')
+        if ticket and isinstance(ticket.get('operation_id'), str):
+            name = 'operations/' + hashlib.sha256(ticket['operation_id'].encode()).hexdigest() + '.json'
+            operation = read_state(root, name, {})
+            if operation.get('state') == 'installing':
+                old_boot = ticket.get('boot') != _boot()
+                if old_boot or time.monotonic() - ticket.get('queued_mono', time.monotonic()) >= 30:
+                    observed = _run(['systemctl', 'is-active', 'messagebox-update-install.service'],
+                                    run, check=False, capture_output=True, text=True, timeout=5)
+                    if old_boot or observed.stdout.strip() in {'failed', 'inactive'}:
+                        _result(root, ticket, 'failed', 'updater_died')
+                        operation.update(state='failed', reason='updater_died')
+                        save_state(root, name, operation)
+        return
+    _validate_journal(root, journal)
+    reason = None
+    if (journal.get('boot') != _boot() or _process_token(journal.get('pid')) is None
+            or _process_token(journal.get('pid')) != journal.get('process_token')):
+        reason = 'updater_died'
+    elif time.monotonic() >= journal['deadline_mono']:
+        reason = 'health_timeout'
+    if not reason and journal['phase'] == 'probation':
+        try:
+            ready, pids = health_sample(Path(root), journal, run)
+            monitor = read_state(root, 'supervisor.json', {})
+            if monitor.get('transaction') != journal['transaction']:
+                monitor = {'transaction': journal['transaction'], 'pids': {}, 'restarts': {}, 'was_ready': False}
+            now = time.monotonic()
+            for unit, identity in pids.items():
+                previous = monitor['pids'].get(unit)
+                if previous and list(identity) != previous:
+                    try:
+                        count = max(1, int(identity[1]) - int(previous[1]))
+                    except (TypeError, ValueError):
+                        count = 1
+                    history = [at for at in monitor['restarts'].get(unit, []) if now - at <= 60] + [now] * min(3, count)
+                    monitor['restarts'][unit] = history
+                    if len(history) >= 3:
+                        reason = 'crash_loop'
+                monitor['pids'][unit] = list(identity)
+            if monitor['was_ready'] and not ready:
+                reason = reason or 'readiness_lost'
+            monitor['was_ready'] |= ready
+            save_state(root, 'supervisor.json', monitor)
+        except Exception:
+            reason = 'health_probe_failed'
+    if reason:
+        # Stop the independent worker before acquiring its locks. The broker,
+        # supervisor and recovery never belong to the application target.
+        _run(['systemctl', 'stop', 'messagebox-update-install.service'], run, check=True, timeout=30)
+        recover_transaction(root=root, run=run, reason=reason)
 
 
 def main(arguments=None):
@@ -1107,6 +1777,10 @@ def main(arguments=None):
     apply_parser.add_argument("--backup-dir", required=True)
     rollback_parser = subparsers.add_parser("rollback", help="restore a bounded-update backup")
     rollback_parser.add_argument("--backup-dir", required=True)
+    subparsers.add_parser("bootstrap", help="convert an attended in-place installation")
+    recovery = subparsers.add_parser("recover", help="recover an interrupted transaction")
+    recovery.add_argument("--boot", action="store_true")
+    subparsers.add_parser("supervise", help="enforce the independent transaction deadline")
     options = parser.parse_args(arguments)
     try:
         if options.command == "apply":
@@ -1117,6 +1791,13 @@ def main(arguments=None):
                 root=options.root,
             )
             print(f"Installed {manifest['version']} ({manifest['commit']}).")
+        elif options.command == "bootstrap":
+            bootstrap_layout(root=options.root)
+            print("Converted the installed application layout.")
+        elif options.command == "recover":
+            recover_transaction(root=options.root, start=not options.boot)
+        elif options.command == "supervise":
+            supervise_transaction(root=options.root)
         else:
             rollback(options.backup_dir, root=options.root)
             print("Restored the recorded pre-update state.")

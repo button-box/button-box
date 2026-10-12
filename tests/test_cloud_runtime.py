@@ -128,6 +128,46 @@ class CloudRuntimeTests(unittest.TestCase):
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
 
+    def test_software_update_progress_and_terminal_receipt_replay_preserve_version(self):
+        from messagebox import cloud_update
+        progress = {"operation_id": OP, "version": "v0.3.0", "state": "waiting_for_button", "reason": "none"}
+        fields = {"software_update": {"effective_mode": "ask", "channel": "stable", "available_version": "v0.3.0", "last_result": progress}}
+        with mock.patch.object(cloud_update, "capability", return_value={"software_update": {"protocol": 1}}), \
+             mock.patch.object(cloud_update, "heartbeat_fields", return_value=fields), \
+             mock.patch.object(cloud_update, "heartbeat_succeeded") as evidence, \
+             mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as heartbeat, \
+             mock.patch.object(cloud_update, "install_request", return_value=progress) as install:
+            self.runtime.heartbeat()
+            self.assertEqual(heartbeat.call_args.args[0]["version"], "cloud-mvp-1")
+            self.assertEqual(heartbeat.call_args.args[0]["software_update"]["effective_mode"], "ask")
+            evidence.assert_called_once()
+            item = {"kind": "install_update", "operation_id": OP, "payload": {"version": "v0.3.0"}, "expires_at": NOW + 300}
+            self.runtime._command(item, NOW)
+            self.assertIn(OP, self.runtime.state["pending_updates"])
+            terminal = {**progress, "state": "rolled_back", "reason": "health_timeout", "software_version": "v0.2.0", "software_commit": "a" * 40}
+            with mock.patch.object(cloud_update, "operation_result", return_value=terminal):
+                self.runtime._finish_updates()
+            self.assertNotIn(OP, self.runtime.state["pending_updates"])
+            self.runtime._command(item, NOW)
+            install.assert_called_once()
+            receipt = json.loads(self.runtime._completed_path(OP).read_text())
+            self.assertEqual(receipt["state"], "rolled_back")
+            self.assertEqual(receipt["software_version"], "v0.2.0")
+
+    def test_software_update_command_requires_capability_and_exact_payload(self):
+        from messagebox import cloud_update
+        self.runtime.heartbeat()
+        item = {"kind": "install_update", "operation_id": OP, "payload": {"version": "v0.3.0", "url": "https://example.org"}, "expires_at": NOW + 300}
+        with mock.patch.object(cloud_update, "capability", return_value={"software_update": {"protocol": 1}}), \
+             mock.patch.object(cloud_update, "install_request") as install:
+            with self.assertRaises(CloudRuntimeError):
+                self.runtime._command(item, NOW)
+            install.assert_not_called()
+        item["payload"] = {"version": "v0.3.0"}
+        with mock.patch.object(cloud_update, "capability", return_value={}):
+            with self.assertRaisesRegex(CloudRuntimeError, "unavailable"):
+                self.runtime._command(item, NOW)
+
     def update_settings(self, **changes):
         current, _ = self.runtime.settings.load()
         candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}

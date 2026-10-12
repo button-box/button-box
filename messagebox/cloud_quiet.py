@@ -88,20 +88,32 @@ def start_player(args, *, allow_muted=False, **kwargs):
     before = silence_store.load()
     if before["muted"] and not allow_muted:
         raise AudioSilenced("box is muted")
-    process = subprocess.Popen(args, **kwargs)
+    from messagebox.maintenance import interaction
+    reservation = interaction()
+    if not reservation.__enter__():
+        reservation.__exit__(None, None, None)
+        raise AudioSilenced("software installation in progress")
+    try:
+        process = subprocess.Popen(args, **kwargs)
+    except BaseException:
+        reservation.__exit__(None, None, None)
+        raise
 
     def watch():
-        while process.poll() is None:
-            state = silence_store.load()
-            if state["muted"] and not allow_muted or state["stop_sequence"] > before["stop_sequence"]:
-                process.terminate()
-                try:
-                    process.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=0.2)
-                return
-            time.sleep(0.02)
+        try:
+            while process.poll() is None:
+                state = silence_store.load()
+                if state["muted"] and not allow_muted or state["stop_sequence"] > before["stop_sequence"]:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=0.2)
+                    return
+                time.sleep(0.02)
+        finally:
+            reservation.__exit__(None, None, None)
 
     threading.Thread(target=watch, daemon=True).start()
     return process

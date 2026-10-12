@@ -2205,6 +2205,20 @@ def claim_only_loop():
 
 
 def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
+    if transport_mode() == "cloud":
+        from messagebox.cloud_update import confirmation
+        if confirmation.intercept(button):
+            return True
+        from messagebox.maintenance import interaction
+        with interaction() as allowed:
+            if not allowed:
+                wait_for_stable_open()
+                return False
+            return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
+    return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
+
+
+def _capture_confirmed_press(closed_at, *, card_prompt_uid=None):
     global _capture_permit
     try:
         with capture_session(button) as permit:
@@ -2311,6 +2325,9 @@ def main():
 
     threading.Thread(target=sender_loop, daemon=True).start()
     button = Button(BUTTON_PIN)
+    if transport_mode() == "cloud":
+        from messagebox.cloud_update import button_ready
+        button_ready(button)
     led = LED(LED_PIN)
     apply_master_volume()
     if button.is_pressed:
@@ -2331,6 +2348,9 @@ def main():
         wait_for_stable_open()
         while not button.is_pressed:
             time.sleep(POLL_S)
+            if transport_mode() == "cloud":
+                from messagebox.cloud_update import confirmation
+                confirmation.idle(button, play_sound)
             apply_master_volume()
             maybe_play_send_success()
             maybe_play_cloud_sound()

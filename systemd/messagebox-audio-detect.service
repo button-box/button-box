@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Detect Button Box USB microphone and speaker
 After=sound.target
 

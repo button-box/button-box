@@ -133,6 +133,17 @@ class MicAccessTests(unittest.TestCase):
                 relative = path.relative_to(ROOT).as_posix()
                 if relative == "messagebox/mic_capture.py":
                     self.assertEqual(text.count("arecord"), 1)
+                elif relative == "scripts/install/bounded_update.py":
+                    # The health probe is permitted to enumerate capture cards,
+                    # never open a capture PCM. Lock this exact command shape.
+                    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                             and isinstance(node.func, ast.Name) and node.func.id == "_run"
+                             and node.args and "tool" in ast.unparse(node.args[0])]
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(ast.unparse(calls[0].args[0]),
+                                     "['runuser', '-u', 'messagebox', '--', tool, '-l']")
+                    self.assertEqual(text.count("arecord"), 2)
+                    self.assertIsNone(forbidden.search(text.replace("arecord", "")), relative)
                 else:
                     # Error messages refer to the recorder without executing it.
                     text = text.replace("arecord exited unexpectedly", "")
@@ -140,10 +151,11 @@ class MicAccessTests(unittest.TestCase):
 
     def test_capture_call_graph_has_no_remote_entry(self):
         expected = {
-            "capture_session": {("messagebox/button_send.py", "handle_confirmed_press")},
+            "capture_session": {("messagebox/button_send.py", "_capture_confirmed_press")},
             "open_microphone": {("messagebox/button_send.py", "capture_guided_recording")},
             "capture_guided_recording": {("messagebox/button_send.py", "record")},
-            "_handle_confirmed_press": {("messagebox/button_send.py", "handle_confirmed_press")},
+            "_handle_confirmed_press": {("messagebox/button_send.py", "_capture_confirmed_press")},
+            "_capture_confirmed_press": {("messagebox/button_send.py", "handle_confirmed_press")},
             "run_guided_once": {("messagebox/button_send.py", "_handle_confirmed_press")},
             "record_and_send_legacy": {("messagebox/button_send.py", "_handle_confirmed_press")},
         }

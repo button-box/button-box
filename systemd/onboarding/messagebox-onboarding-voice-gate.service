@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Validate and activate Button Box setup voice flow
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 After=messagebox-whatsapp-pairing.service

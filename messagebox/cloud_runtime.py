@@ -33,7 +33,7 @@ from messagebox.settings import (
     in_quiet_hours, ignored_settings, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
-from messagebox import cloud_quiet
+from messagebox import cloud_quiet, cloud_update
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
 ACK_DIR = CLOUD_DIR / "acks"
@@ -179,6 +179,8 @@ class CloudRuntime:
                 or state.get("queue_hold_sequence", -1) < -1):
             raise CloudRuntimeError("cloud state is invalid")
         if not isinstance(state.setdefault("pending_previews", {}), dict):
+            raise CloudRuntimeError("cloud state is invalid")
+        if not isinstance(state.setdefault("pending_updates", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
         if not isinstance(state.setdefault("pending_listened", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
@@ -345,6 +347,7 @@ class CloudRuntime:
             "queue": {"held": bool((self.state.get("snapshot") or {}).get("queue_hold", False)),
                       "count": len(list(self.queue_dir.glob("*.wav"))), "playing_message_id": None},
             "last_error": None,
+            **cloud_update.heartbeat_fields(),
             **({"nfc_inventory": inventory} if inventory is not None else {}),
         })
         people = response.get("people")
@@ -412,6 +415,8 @@ class CloudRuntime:
         self._sync_contacts(snapshot)
         self.state["snapshot"] = snapshot
         self._save()
+        cloud_update.heartbeat_succeeded()
+        self._finish_updates()
         self._prune_listened_clips()
         self._preload_voice_lines()
         return response
@@ -458,11 +463,32 @@ class CloudRuntime:
                 if previous and previous.get("state") == "played" and state == "received":
                     return
                 ack = {"operation_id": operation_id, "state": state, **fields}
-                if state in {"applied", "played", "rejected", "expired"}:
+                if state in {"applied", "played", "rejected", "expired", "installed", "failed", "rolled_back", "rollback_failed"}:
                     atomic_json(completed_path, ack)
                 atomic_json(path, ack)
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _report_update(self, operation_id, result):
+        state = result.get("state")
+        if state not in cloud_update.TERMINAL | {"downloading", "waiting_for_button", "waiting_for_window", "installing"}:
+            raise CloudRuntimeError("software update result is invalid")
+        self._ack(operation_id, state, **{key: result[key] for key in
+            ("version", "reason", "software_version", "software_commit") if key in result})
+        if state in cloud_update.TERMINAL:
+            self.state.setdefault("pending_updates", {}).pop(operation_id, None)
+            self._save()
+
+    def _finish_updates(self):
+        for operation_id, previous in list(self.state.setdefault("pending_updates", {}).items()):
+            try:
+                result = cloud_update.operation_result(operation_id)
+                if result.get("state") and result["state"] != previous:
+                    self.state["pending_updates"][operation_id] = result["state"]
+                    self._report_update(operation_id, result)
+                    self._save()
+            except cloud_update.UpdateUnavailable:
+                continue
 
     def flush_acks(self, allowed=None):
         for path in sorted(ACK_DIR.glob("*.json")):
@@ -1129,6 +1155,23 @@ class CloudRuntime:
                 or item["operation_id"] in self.state["pending_listened"]):
             return
         kind, payload = item["kind"], item["payload"]
+        if kind in {"install_update", "set_update_mode"}:
+            if not cloud_update.capability():
+                raise CloudRuntimeError("software updater is unavailable")
+            self._snapshot()
+            remaining = item["expires_at"] - self.server_now()
+            if kind == "install_update":
+                if set(payload) != {"version"}:
+                    raise CloudRuntimeError("software update payload is invalid")
+                result = cloud_update.install_request(item["operation_id"], payload["version"], remaining)
+            else:
+                if set(payload) != {"mode"}:
+                    raise CloudRuntimeError("software update mode is invalid")
+                result = cloud_update.mode_request(item["operation_id"], payload["mode"], remaining)
+            self.state.setdefault("pending_updates", {})[item["operation_id"]] = result.get("state")
+            self._save()
+            self._report_update(item["operation_id"], result)
+            return
         if kind == "audio":
             return self._audio(item, server_time)
         if kind == "reaction":
@@ -1352,7 +1395,7 @@ class CloudRuntime:
                 entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute"}
+                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (

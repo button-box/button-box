@@ -824,11 +824,15 @@ def create_app(
             raise RequestError("409 Conflict", "Button Box audio is busy")
 
         try:
-            subprocess.run(
-                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
-                check=True,
-                timeout=30,
-            )
+            from messagebox.maintenance import interaction
+            with interaction() as allowed:
+                if not allowed:
+                    raise RequestError("409 Conflict", "Software installation in progress")
+                subprocess.run(
+                    ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                    check=True,
+                    timeout=30,
+                )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RequestError(
                 "503 Service Unavailable", "Button Box audio could not play"

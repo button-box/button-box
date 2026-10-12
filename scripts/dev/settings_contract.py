@@ -34,16 +34,21 @@ def literal(node, constants):
         values = [literal(value, constants) for value in node.elts]
         return set(values) if isinstance(node, ast.Set) else values
     if isinstance(node, ast.Dict):
-        return {literal(key, constants): literal(value, constants)
-                for key, value in zip(node.keys, node.values)}
+        result = {}
+        for key, value in zip(node.keys, node.values):
+            if key is None:
+                result.update(literal(value, constants))
+            else:
+                result[literal(key, constants)] = literal(value, constants)
+        return result
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
         return literal(node.left, constants) - literal(node.right, constants)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.func.id in {"frozenset", "list", "bool", "set"}:
             constructor = {"frozenset": frozenset, "list": list, "bool": bool, "set": set}[node.func.id]
             return constructor(literal(node.args[0], constants)) if node.args else constructor()
-        if node.func.id == "installed_voice_packs" and not node.args:
-            return constants["installed_voice_packs"]()
+        if node.func.id in {"installed_voice_packs", "_update_capability"} and not node.args:
+            return constants[node.func.id]()
     raise ContractError(f"unsupported expression: {ast.unparse(node)}")
 
 
@@ -188,6 +193,10 @@ def export_contract(repo):
     device = read_source(repo, "cloud_device")
     constants = source_constants(device, namespace)
     constants["nfc"] = False
+    # Runtime capability is gated by local installation; export the complete
+    # release contract without contacting a device or importing runtime code.
+    if any(isinstance(node, ast.FunctionDef) and node.name == "_update_capability" for node in device.body):
+        constants["_update_capability"] = lambda: {"software_update": {"protocol": 1, "modes": ["auto", "ask"], "physical_confirmation": True}}
     capability_function = next(node for node in device.body if isinstance(node, ast.FunctionDef) and node.name == "capabilities")
     if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
            and node.func.id == "installed_voice_packs" for node in ast.walk(capability_function)):

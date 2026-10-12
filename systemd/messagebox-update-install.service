@@ -1,0 +1,15 @@
+[Unit]
+Description=Button Box signed software transaction worker
+Requires=messagebox-update-controller.service messagebox-update-supervisor.timer
+After=messagebox-update-controller.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/messagebox-update/update_controller.py install
+TimeoutStartSec=330
+TimeoutStopSec=10
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX

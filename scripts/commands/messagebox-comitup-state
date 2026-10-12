@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+[ ! -e /var/lib/button-box-update/install-inhibit ] || exit 0
 
 case "${1:-}" in
   HOTSPOT|CONNECTING)

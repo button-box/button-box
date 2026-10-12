@@ -1,5 +1,9 @@
 # Manifest-bounded updates
 
+For converted Cloud installations, use the [signed on-box updater](on-box-updates.md).
+The manual apply/rollback instructions below remain for legacy in-place installations.
+They do not provide independent reboot recovery; converted boxes reject `apply`.
+
 Use the bounded updater for a reviewed application release on an existing
 Button Box. It installs only paths named by the release manifest, preserves the
 current boot mode, records the installed release identity, and retains a local

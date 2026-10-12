@@ -407,6 +407,11 @@ class CloudDeviceClient:
         return result
 
 
+def _update_capability():
+    from messagebox.cloud_update import capability
+    return capability()
+
+
 def capabilities(*, nfc=False) -> dict:
     from messagebox.sound_pack import installed_voice_packs
     return {
@@ -434,4 +439,5 @@ def capabilities(*, nfc=False) -> dict:
         "morning_ring": True,
         "quiet_now": True,
         "mute": True,
+        **_update_capability(),
     }

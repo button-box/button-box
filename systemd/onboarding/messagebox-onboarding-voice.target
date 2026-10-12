@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box setup two-way voice proof
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 ConditionPathExists=/var/lib/messagebox/state/onboarding-voice-request.json

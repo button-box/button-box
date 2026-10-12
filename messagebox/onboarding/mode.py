@@ -133,6 +133,8 @@ def transition_lock(path=MODE_TRANSITION_LOCK_PATH, *, trusted_uid=None):
         ):
             raise ModeError("mode transition lock is unavailable or unsafe")
         fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if Path("/var/lib/button-box-update/install-inhibit").exists():
+            raise ModeError("software installation in progress")
         yield
     except ModeError:
         raise

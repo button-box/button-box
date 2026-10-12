@@ -41,10 +41,11 @@ class SettingsContractTests(unittest.TestCase):
                 with self.subTest(key=key, value=value):
                     validate({**defaults({}), key: value})
         with mock.patch("messagebox.sound_pack.SOUND_DIR", REPO / "sounds"):
-            self.assertEqual(contract["capabilities"], capabilities(nfc=False))
+            self.assertEqual({key: value for key, value in contract["capabilities"].items() if key != "software_update"}, capabilities(nfc=False))
+            self.assertEqual(contract["capabilities"]["software_update"]["protocol"], 1)
         self.assertEqual(contract["command_kinds"], sorted([
             "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview",
-            "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message",
+            "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "install_update", "set_update_mode", "delete_message",
             "quiet_now", "mute", "reaction",
         ]))
 

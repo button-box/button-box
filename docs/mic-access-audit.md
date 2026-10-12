@@ -15,7 +15,7 @@ The application plays the recording-start sound before opening the microphone an
 
 ### What the box accepts from the internet
 
-A Cloud box makes authenticated connections to Button Box Cloud to receive messages, settings, family-card setup requests, playback previews, reactions, and quiet/mute instructions. These are a fixed set of operations. There is no Cloud operation to record, run a shell command, upload executable code, or install an update in this source. A notification connection only tells the box to check for work. A self-hosted box uses its linked WhatsApp account through wacli instead of contacting Button Box Cloud.
+A Cloud box makes authenticated connections to Button Box Cloud to receive messages, settings, family-card setup requests, playback previews, reactions, and quiet/mute instructions. These are a fixed set of operations. There is no Cloud operation to record, run a shell command or upload executable code. The updater follow-up adds exact-version install requests, which require a local physical hold and independent signature verification. A notification connection only tells the box to check for work. A self-hosted box uses its linked WhatsApp account through wacli instead of contacting Button Box Cloud.
 
 Settings can change how the *next button session* behaves, including whether it invites a reply after playback. They cannot create the button permission needed to open the microphone. The permission is held only inside the current process and thread, works once, and is discarded when the session ends. It is not stored in a file or accepted from the network.
 
@@ -25,7 +25,7 @@ Voice-message handling through the Cloud is outside this audit. Downloaded messa
 
 Today an operator can install software through SSH/provisioning or run the existing local bounded installer as an administrator. That installer checks its file manifest and has rollback behavior; it is not an owner-approved, signed, public-release updater. Existing administrator access can replace the audited code. A public release tag or hash identifies source; it does not, by itself, enforce which software a box runs.
 
-A planned updater will use signed public releases and offer an owner-approval mode with physical confirmation. That planned protection is **not implemented by this audit**. Removing remote support also needs its own rollout and verification. Tailscale, when configured, carries ordinary SSH and a private HTTPS dashboard; disabling Tailscale SSH does not disable ordinary SSH through it. Removing Tailscale does not remove administrator keys or LAN SSH access.
+The original microphone audit did not implement signed updates. The updater follow-up below adds that source implementation; signing-key provisioning, deployment and real-device recovery tests remain required. Removing remote support also needs its own rollout and verification. Tailscale, when configured, carries ordinary SSH and a private HTTPS dashboard; disabling Tailscale SSH does not disable ordinary SSH through it. Removing Tailscale does not remove administrator keys or LAN SSH access.
 
 ### Local network access
 
@@ -74,7 +74,8 @@ Cloud entry: `messagebox/voicepoll.py:348` selects the transport. Cloud polling 
 | `queue_hold`, `delete_message` | `cloud_runtime.py:1149`, `:1197` | Holds delivery or deletes identified queued/retained media; no capture. |
 | `quiet_now`, `mute` | `cloud_runtime.py:1140`; `cloud_quiet.py` | Stops/suppresses output and updates silence state. Mute blocks new button recording sessions; cannot start one. |
 | Pair/claim state | `cloud_claim.py`; `button_send.py:2168`, `:2188`, `:2263` | Claim-only Cloud setup loop confirms ownership with the button and never reaches normal capture. In wacli setup voice mode the normal guarded button flow may run. |
-| Software updates, shell, arbitrary command, recording | `cloud_runtime.py:1246`, `:1355` | **Not supported.** Unknown command kinds are rejected. No update-install handler or arbitrary-command escape exists in this API implementation. |
+| Software updates | `cloud_runtime.py`; `cloud_update.py` | Exact-version `install_update` and bounded `set_update_mode` requests use independent verification and local physical confirmation. No capture permit is created. |
+| Shell, arbitrary command, recording | `cloud_runtime.py` | **Not supported.** Unknown command kinds are rejected. |
 | wacli/WhatsApp sync and poll results | `syncloop.sh:12`, `:25`, `:54`; `voicepoll.py:182`, `:203`, `:327` | WhatsApp network connection runs in wacli; read-only media download uses a generated local path; allowlisted chats feed the queue. Optional webhook is an outbound receipt POST, not a shell callback. |
 | Physical NFC reader and runtime sidecars | `nfc.py:212`; `nfc_state.py`; `button_send.py:525` | Card UID selects/enrolls/removes a mapping or triggers a reaction. Atomic private enrollment/selection/announcement files coordinate the processes. A card or a written sidecar cannot mint microphone permission. |
 | Shared settings, silence, audio requests, queues/outbox, receipts, pairing pause file | `runtime_paths.py`; `audio_requests.py:85`; `syncloop.sh:7`; `button_send.py` | Fixed local files, locks and account checks carry bounded state between processes. No file is interpreted as a recording token, executable, or shell command. Writers sharing a Linux user remain a trust boundary, discussed below. |
@@ -179,14 +180,14 @@ Severity describes the privacy impact if the stated prerequisite holds; it is no
 | High, conditional | `setup.sh:228`, `:229`; runtime units' `User=messagebox`; `docs/remote-support.md:17` | Administrator/root or compromised audio-capable service can independently open ALSA capture or replace software. Several services share the audio-capable user. | **Open:** OS permission/process separation, remote-access changes and a hardware mic gate require their own design/rollout. Restricting audio without testing speaker, NFC and setup workers could break both transports. No claim of attacker-proof mic exclusion. |
 | Medium | `dashboard/app.py:1135`; `onboarding/app.py:839`; portal units | Local browser controls have no login; setup home page binds all IPv4 interfaces. | **Open:** existing local-access model; adding authentication is a product/access change beyond a safe mic fix. LAN users can change settings/manage available audio and self-hosted account data. Host/Origin checks do not authenticate them. No capture endpoint. |
 | Medium, conditional | `scripts/provision.sh:14`; `README.md:199` | Admin passwords, keys, sshd policy and sudo scope are outside provisioning's control. | **Unverified:** coordinator must inspect the actual box. The repository supplies no default password/NOPASSWD policy to fix. |
-| Informational | `cloud_runtime.py:1246`, `:1355`; subprocess/download inventory above | Cloud contract has no arbitrary-command, shell, update-install or microphone operation; no runtime shell injection or downloaded-ID traversal identified. | **Confirmed in source:** unknown commands rejected. Decoder/dependency vulnerabilities and hostile local writers are not ruled out. |
+| Informational | `cloud_runtime.py:1246`, `:1355`; subprocess/download inventory above | Cloud contract has no arbitrary-command, shell or microphone operation; update requests use the separate signed and physical-confirmation path; no runtime shell injection or downloaded-ID traversal identified. | **Confirmed in source:** unknown commands rejected. Decoder/dependency vulnerabilities and hostile local writers are not ruled out. |
 | Informational | `messagebox/`, `scripts/`, `systemd/`, `config/` search | No port 8082 endpoint remains in this checkout. | **Source confirmed; live unverified:** inspect listeners and stale installed units. |
 
 ### Automated validation and wacli impact
 
 `tests/test_mic_access.py` rejects absent/invalid permissions, short/synthetic presses, cross-thread capture, permission reuse and capture after a failed/finished session. It exercises post-open failure cleanup including termination timeout. Its source inventory rejects new capture tools/backends outside the single entry, and its call-graph check rejects new runtime callers of session/recording functions. This is a regression guard, not a complete static proof against dynamically generated code or malicious replacement software.
 
-The normal capture/review contract tests model a physical press and still cover Hold/Tap, review on/off, maximum duration, short/silent deletion, playback, card routing, quiet behavior and listened notices. The shared changes are `button_send.py`, new `mic_capture.py`, setup/provision allowlists and the developer hardware test. **wacli impact:** healthy physical-button sending, playback/reply, family-card routing, quiet hours and listened notices retain their existing behavior; recording additionally requires the session permission, NFC prompt interruption has a 60 ms debounce, and capture failure cleanup is stronger. Terminal/synthetic microphone starts intentionally stop working. No Cloud concept was added to wacli routing. No accepted setting or command kind changed, so no new settings-contract fixture is needed.
+The normal capture/review contract tests model a physical press and still cover Hold/Tap, review on/off, maximum duration, short/silent deletion, playback, card routing, quiet behavior and listened notices. The shared changes are `button_send.py`, new `mic_capture.py`, setup/provision allowlists and the developer hardware test. **wacli impact:** healthy physical-button sending, playback/reply, family-card routing, quiet hours and listened notices retain their existing behavior; recording additionally requires the session permission, NFC prompt interruption has a 60 ms debounce, and capture failure cleanup is stronger. Terminal/synthetic microphone starts intentionally stop working. No Cloud concept was added to wacli routing. The original mic audit changed no command kind. The signed updater follow-up adds two bounded commands and requires a regenerated fleet contract.
 
 Validation on 12 October 2026: **both commands passed** syntax, Python/shell/frontend lint, **908 Python tests**, and **54 frontend tests**. `git diff --check` also passed. These suites model hardware; they do not verify a deployed device.
 
@@ -257,3 +258,15 @@ sudo tailscale funnel status
 ```
 
 For the microphone check, observe `sudo fuser -v /dev/snd/pcm*c` and the matching `/proc/asound/card*/pcm*c/sub*/status` files while idle, during network commands/previews/card presentation, during capture, and after release/timeout/failure/restart. Confirm no active capture stream during the idle/network-only cases and no lingering `arecord` child after recording ends. Also check for hidden extra programs; an `arecord` process search alone cannot detect all capture backends. Verify cues and the physical wacli matrix on the device before claiming owner acceptance.
+
+### Signed updater follow-up
+
+The Cloud software updater adds bounded `install_update {version}` and
+`set_update_mode {mode}` commands. It intercepts update confirmation before
+`_capture_confirmed_press` opens B71's physical capture session. Confirmation
+never creates a capture permit, and every confirmation press is consumed until
+release. Tests verify short, held, expired and successful confirmation gestures
+never start a microphone process. The only update-health capture-tool invocation
+is `runuser -u messagebox -- arecord -l`, which enumerates ALSA devices without
+recording. The source inventory locks that command shape separately from the
+one permitted microphone entry. See [on-box updates](on-box-updates.md).
