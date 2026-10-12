@@ -367,3 +367,16 @@ Check the deletion tone, the 5-second reminder, cue exclusion from recordings,
 short/silent rejection, family-card priority and quiet hours. Before merging a
 release, complete the required physical wacli send/play/reply/card/quiet-hours/
 listened-notice check. Automated checks do not establish those physical outcomes.
+
+
+## Microphone permission regression
+
+See [the microphone access audit](mic-access-audit.md). `test_mic_access.py`
+checks one physical-button capture entry, session permission lifetime, synthetic
+input rejection and failure cleanup. Run `make check` with both
+`MSGBOX_TEST_TRANSPORT=cloud` and `MSGBOX_TEST_TRANSPORT=wacli`.
+
+The developer input/selected-message simulators use synthetic switches; these
+cannot grant microphone permission on a real Pi. For microphone acceptance use
+the normal physical-button flow or the interactive hardware test, which also
+requires a physical press. Hardware-free tests can inject modeled GPIO.

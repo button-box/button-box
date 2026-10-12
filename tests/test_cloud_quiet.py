@@ -193,7 +193,8 @@ class SilenceTests(unittest.TestCase):
         self.store.apply("mute", True, 1)
         settings = defaults({})
         led = Mock()
-        with patch.object(button_send, "caregiver_settings", return_value=settings), \
+        with patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             patch.object(button_send, "caregiver_settings", return_value=settings), \
              patch.object(button_send.cloud_claim, "consume_claim_press", return_value=False), \
              patch.object(button_send, "led", led, create=True), \
              patch.object(button_send, "wait_for_stable_open"), \
@@ -227,7 +228,8 @@ class SilenceTests(unittest.TestCase):
 
     def test_deliberate_press_during_quiet_now_still_starts_normal_flow(self):
         self.store.apply("quiet_now", "manual", 1)
-        with patch.object(button_send.cloud_claim, "consume_claim_press", return_value=False), \
+        with patch.object(button_send, "button", types.SimpleNamespace(is_pressed=True), create=True), \
+             patch.object(button_send.cloud_claim, "consume_claim_press", return_value=False), \
              patch.object(button_send, "caregiver_settings", return_value=defaults({})), \
              patch.object(button_send, "acknowledge_guided_press"), \
              patch.object(button_send, "wait_for_stable_open"), \

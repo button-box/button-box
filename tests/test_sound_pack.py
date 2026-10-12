@@ -1,3 +1,4 @@
+from mic_helpers import physical_capture
 import contextlib
 import json
 import queue
@@ -139,7 +140,9 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
              mock.patch.object(runtime, "RecordingLimitCue"), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])):
-            session = GuidedSession(runtime.PiGuidedIO("synthetic", "session", 60),
+            io = runtime.PiGuidedIO("synthetic", "session", 60)
+            io.record = lambda: physical_capture(runtime, "synthetic", "session", 60)
+            session = GuidedSession(io,
                                     OutboxStore(self.root / "outbox"), lambda *a, **kw: None)
             result = session.run(recipient="synthetic", flow_kind="standalone",
                                  deleted_cue_path=str(sound_pack.cue_path("deleted")))
@@ -326,14 +329,14 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad):
-            self.assertFalse(runtime.capture_guided_recording("synthetic").meaningful)
+            self.assertFalse(physical_capture(runtime, "synthetic").meaningful)
         self.assertEqual(order, ["cue_finished", "arecord"])
 
     def test_failed_go_cue_never_opens_microphone(self):
         with mock.patch.object(runtime.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "aplay")), \
              mock.patch.object(runtime.subprocess, "Popen") as popen:
             with self.assertRaises(subprocess.CalledProcessError):
-                runtime.capture_guided_recording("synthetic")
+                physical_capture(runtime, "synthetic")
         popen.assert_not_called()
 
     def test_still_trying_deferred_during_capture_and_once_per_job(self):
@@ -396,7 +399,7 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime.time, "monotonic", side_effect=[0, 55, 55.55, 60, 60, 60]), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad):
-            result = runtime.capture_guided_recording("synthetic", max_seconds=60)
+            result = physical_capture(runtime, "synthetic", max_seconds=60)
         with wave.open(result.path, "rb") as saved:
             actual = saved.readframes(saved.getnframes())
         # The recording is saved unchanged; speech during the warning is kept.
@@ -419,7 +422,7 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime.time, "monotonic", side_effect=[0, 25, 25.55, 30, 30, 30]), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad):
-            result = runtime.capture_guided_recording("synthetic", max_seconds=30, talk_mode="hold")
+            result = physical_capture(runtime, "synthetic", max_seconds=30, talk_mode="hold")
         self.assertFalse(result.timed_out)
         with wave.open(result.path, "rb") as source:
             self.assertEqual(source.readframes(source.getnframes()), pcm)

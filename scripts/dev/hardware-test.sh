@@ -130,9 +130,52 @@ else
 fi
 
 printf '\n3. Microphone\n'
-printf 'After pressing Enter, say "test test test" into the microphone for 4 seconds.\n'
+printf 'Release the physical button, then press it within 15 seconds. Say "test test test" for 4 seconds after the LED lights.\n'
 continue_prompt
-if arecord -q -D "$MIC_DEV" -f S16_LE -r 48000 -c 1 -d 4 "$RECORDING"; then
+if PYTHONPATH=/opt/messagebox GPIOZERO_PIN_FACTORY=lgpio BUTTON_PIN="$BUTTON_PIN" \
+  LED_PIN="$LED_PIN" MIC_DEV="$MIC_DEV" RECORDING="$RECORDING" python3 - <<'PY'
+import os
+import signal
+import subprocess
+import time
+import wave
+from gpiozero import Button, LED
+from messagebox.mic_capture import capture_session, open_microphone
+
+with Button(int(os.environ["BUTTON_PIN"])) as button, LED(int(os.environ["LED_PIN"])) as led:
+    deadline = time.monotonic() + 15
+    while button.is_pressed:
+        if time.monotonic() >= deadline:
+            raise SystemExit("Release the button before the microphone test")
+        time.sleep(0.02)
+    while not button.is_pressed:
+        if time.monotonic() >= deadline:
+            raise SystemExit("No physical button press; microphone stays off")
+        time.sleep(0.02)
+    with capture_session(button) as permit:
+        process = None
+        try:
+            led.on()
+            process = open_microphone(permit, os.environ["MIC_DEV"])
+            try:
+                pcm, _ = process.communicate(timeout=4)
+            except subprocess.TimeoutExpired:
+                process.send_signal(signal.SIGINT)
+                pcm, _ = process.communicate(timeout=3)
+            if process.returncode:
+                raise SystemExit("Microphone capture failed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=3)
+            led.off()
+        with wave.open(os.environ["RECORDING"], "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(16000)
+            output.writeframes(pcm)
+PY
+then
   printf 'Playing the recording through the speaker.\n'
   if ffmpeg -nostdin -hide_banner -loglevel error \
     -i "$RECORDING" -filter:a volume=0.10 \

@@ -60,6 +60,7 @@ rsync -azR \
   "$REPO_DIR/./sounds/" \
   "$REPO_DIR/./messagebox/__init__.py" \
   "$REPO_DIR/./messagebox/button_send.py" \
+  "$REPO_DIR/./messagebox/mic_capture.py" \
   "$REPO_DIR/./messagebox/device_http.py" \
   "$REPO_DIR/./messagebox/software.py" \
   "$REPO_DIR/./messagebox/cloud_device.py" \

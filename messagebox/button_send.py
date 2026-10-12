@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
+from messagebox.mic_capture import CaptureDenied, capture_session, require_permit, open_microphone
+
 from messagebox.event_log import append_event, UnavailableEvents
 from messagebox.guided_reply import (
     EnergyVAD,
@@ -295,6 +297,7 @@ def compatible_legacy_outbox_files():
 
 
 _recording = False
+_capture_permit = None
 _guided_active = False
 outbox_store = None
 receipt_store = None
@@ -1773,8 +1776,9 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap"):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None):
     global _recording
+    require_permit(press_token)
     # Synchronous playback must complete before the microphone is opened.
     play_sound(sound_pack.cue_path("rec_go"), timeout=5)
     if talk_mode == "hold" and not button.is_pressed:
@@ -1783,37 +1787,20 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
     raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
     wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
     vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
-    process = subprocess.Popen(
-        [
-            "arecord",
-            "-q",
-            "-D",
-            MIC_DEV,
-            "-t",
-            "raw",
-            "-f",
-            "S16_LE",
-            "-r",
-            "16000",
-            "-c",
-            "1",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    _recording = True
-    led.on()
     started = time.monotonic()
     vad.start(started)
     warning = RecordingLimitCue(started, max_seconds)
-    presence("recording", recipient)
     presence_last = started
     closed_since = None
     stopped_by_press = False
     timed_out = False
     open_since = None
     stop_armed = not button.is_pressed
+    process = open_microphone(press_token, MIC_DEV, popen=subprocess.Popen)
+    _recording = True
     try:
+        led.on()
+        presence("recording", recipient)
         with open(raw_path, "wb") as raw:
             while True:
                 now = time.monotonic()
@@ -1859,10 +1846,14 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                 vad.feed(remainder, now=time.monotonic())
             raw.flush()
             os.fsync(raw.fileno())
-    except Exception:
+    except BaseException:
         if process.poll() is None:
             process.terminate()
-            process.wait(timeout=3)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
         for path in (raw_path, wav_path):
             try:
                 path.unlink()
@@ -1870,10 +1861,14 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                 pass
         raise
     finally:
-        warning.finish(time.monotonic())
-        presence("paused", recipient)
-        led.off()
-        _recording = False
+        try:
+            warning.finish(time.monotonic())
+            presence("paused", recipient)
+        finally:
+            try:
+                led.off()
+            finally:
+                _recording = False
         if stopped_by_press:
             acknowledge_guided_press("stop_recording", session_id)
             wait_for_stable_open()
@@ -1890,6 +1885,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
 
 class PiGuidedIO:
     def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False, talk_mode="tap"):
+        self.press_token = _capture_permit
         self.recipient = recipient
         self.session_id = session_id
         self.max_seconds = max_seconds
@@ -1902,7 +1898,7 @@ class PiGuidedIO:
     def record(self):
         return capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
-            card_prompt=self.card_prompt, talk_mode=self.talk_mode,
+            card_prompt=self.card_prompt, talk_mode=self.talk_mode, press_token=self.press_token,
         )
 
     def wait_for_approval(self, timeout):
@@ -2209,6 +2205,18 @@ def claim_only_loop():
 
 
 def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
+    global _capture_permit
+    try:
+        with capture_session(button) as permit:
+            _capture_permit = permit
+            return _handle_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
+    except CaptureDenied:
+        return False
+    finally:
+        _capture_permit = None
+
+
+def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
     """Dispatch a debounced press through the normal routing and audio flow."""
     if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
         log_event("cloud_claim_button_pressed")
@@ -2344,14 +2352,6 @@ def main():
             maybe_manual_ring()
             maybe_ring()
         closed_at = time.monotonic()
-        solid = True
-        while time.monotonic() - closed_at < CONFIRM_PRESS_S:
-            time.sleep(POLL_S)
-            if not button.is_pressed:
-                solid = False
-                break
-        if not solid:
-            continue
         handle_confirmed_press(closed_at)
 
 

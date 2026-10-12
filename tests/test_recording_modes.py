@@ -1,3 +1,4 @@
+from mic_helpers import physical_capture
 import contextlib
 import struct
 import sys
@@ -59,7 +60,7 @@ class RecordingModesTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(runtime, "presence"))
             stack.enter_context(mock.patch.object(runtime, "acknowledge_guided_press"))
             stack.enter_context(mock.patch.object(runtime, "wait_for_stable_open"))
-            result = runtime.capture_guided_recording("person@example.invalid", max_seconds=maximum,
+            result = physical_capture(runtime, "person@example.invalid", max_seconds=maximum,
                                                      talk_mode=talk, card_prompt=carried_press)
         self.assertEqual(order, ["cue_finished", "microphone"])
         return result
@@ -110,6 +111,7 @@ class RecordingModesTests(unittest.TestCase):
             for review in (False, True):
                 settings = {**defaults({}), "talk_mode": talk, "review_before_send": review}
                 with self.subTest(talk=talk, review=review), \
+                     mock.patch.object(runtime, "button", types.SimpleNamespace(is_pressed=True), create=True), \
                      mock.patch.object(runtime, "transport_mode", return_value="wacli"), \
                      mock.patch.object(runtime, "caregiver_settings", return_value=settings), \
                      mock.patch.object(runtime, "run_guided_once") as tap, \

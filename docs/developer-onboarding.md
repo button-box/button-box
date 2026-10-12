@@ -147,7 +147,9 @@ runtime NFC daemon.
 The hardware test checks network access, speaker, microphone, LED, button,
 PN532/card detection, and WhatsApp authentication. It does not send a message or
 display NFC IDs. Run it directly only in an interactive terminal as the
-`messagebox` service user:
+`messagebox` service user. The microphone step requires a fresh physical button
+press within 15 seconds; terminal Enter alone cannot start capture. Stop the
+normal button service first so the test has exclusive GPIO/audio access:
 
 ```sh
 sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh
