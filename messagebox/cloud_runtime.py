@@ -34,6 +34,7 @@ from messagebox.settings import (
 )
 from messagebox.voicepoll import queue_message
 from messagebox import cloud_quiet, cloud_update
+from messagebox.remote_access import remote_access
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
 ACK_DIR = CLOUD_DIR / "acks"
@@ -348,6 +349,7 @@ class CloudRuntime:
                       "count": len(list(self.queue_dir.glob("*.wav"))), "playing_message_id": None},
             "last_error": None,
             **cloud_update.heartbeat_fields(),
+            **remote_access(),
             **({"nfc_inventory": inventory} if inventory is not None else {}),
         })
         people = response.get("people")
