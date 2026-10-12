@@ -1912,6 +1912,7 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
              mock.patch.object(button_send, "SPK_DEV", "plughw:CARD=ExampleSpeaker,DEV=2"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.subprocess, "Popen", return_value=process) as play:
             self.assertTrue(button_send.maybe_play_cloud_sound())
         play.assert_called_once_with(["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",

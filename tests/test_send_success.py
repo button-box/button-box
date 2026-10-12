@@ -136,6 +136,7 @@ class SendSuccessTests(unittest.TestCase):
         with mock.patch.object(button_send, "unavailable_events", limiter), \
              mock.patch.object(button_send, "receipt_store", store), \
              mock.patch.object(button_send, "announcement_gate"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
              mock.patch.object(button_send.os.path, "exists", return_value=False) as exists, \
              mock.patch.object(button_send, "play_audio_ordinary"), \
              mock.patch.object(button_send, "log_event") as event:
