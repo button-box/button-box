@@ -85,9 +85,9 @@ trap 'exit 1' HUP INT TERM
 [ "$(dpkg --print-architecture)" = arm64 ] || die "Comitup onboarding requires Debian arm64."
 [ -r /proc/device-tree/model ] || die "Raspberry Pi model information is unavailable."
 case $(tr -d '\000' </proc/device-tree/model) in
-  # Pi 3 (A+/B/B+) runs the same 64-bit OS; it is being validated on BOX-7.
-  *"Raspberry Pi 4 Model"*|*"Raspberry Pi 3 Model"*) ;;
-  *) die "Comitup onboarding supports Raspberry Pi 4 and Pi 3 only." ;;
+  # Pi 3 (A+/B/B+) and Pi Zero 2 W run the same 64-bit OS; they are being validated on BOX-7.
+  *"Raspberry Pi 4 Model"*|*"Raspberry Pi 3 Model"*|*"Raspberry Pi Zero 2 W"*) ;;
+  *) die "Comitup onboarding supports Raspberry Pi 4, Pi 3 and Pi Zero 2 W only." ;;
 esac
 . /etc/os-release
 [ "${VERSION_CODENAME:-}" = trixie ] || die "Raspberry Pi OS/Debian trixie is required."
