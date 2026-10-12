@@ -393,7 +393,7 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
                 button_send, "beep", return_value=result
             ) as beep, patch.object(button_send, "log_event") as log_event, patch.object(
                 button_send, "log"
-            ):
+            ), patch.object(button_send, "quiet_hours", return_value=False):
                 button_send.announce_runtime_ready()
             beep.assert_called_once_with("ready")
             self.assertEqual(log_event.call_args.args[0], event)
