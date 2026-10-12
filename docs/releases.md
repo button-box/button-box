@@ -29,7 +29,8 @@ The declared target is Raspberry Pi OS Lite 64-bit based on Debian 13
 (`raspios-trixie`, `aarch64`), with `Raspberry Pi 3 Model A Plus` and
 `Raspberry Pi 4 Model B` model identifiers. Inclusion is a packaging contract;
 Pi 3 A+ memory, timing and hardware acceptance remains required before deployment
-or advertising physical support.
+or advertising physical support. Raspberry Pi Zero 2 W is accepted by the setup
+installer only; it is not a supported update model.
 
 The packaged `VERSION` and `release.json.version` are generated as the exact tag,
 even when the source's development VERSION differs. The source checkout remains
