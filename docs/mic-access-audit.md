@@ -25,7 +25,7 @@ Voice-message handling through the Cloud is outside this audit. Downloaded messa
 
 Today an operator can install software through SSH/provisioning or run the existing local bounded installer as an administrator. That installer checks its file manifest and has rollback behavior; it is not an owner-approved, signed, public-release updater. Existing administrator access can replace the audited code. A public release tag or hash identifies source; it does not, by itself, enforce which software a box runs.
 
-The original microphone audit did not implement signed updates. The updater follow-up below adds that source implementation; signing-key provisioning, deployment and real-device recovery tests remain required. Removing remote support also needs its own rollout and verification. Tailscale, when configured, carries ordinary SSH and a private HTTPS dashboard; disabling Tailscale SSH does not disable ordinary SSH through it. Removing Tailscale does not remove administrator keys or LAN SSH access.
+The original microphone audit did not implement signed updates. The updater follow-up below adds that source implementation and pins the public release and emergency keys; deployment and real-device recovery tests remain required. Removing remote support also needs its own rollout and verification. Tailscale, when configured, carries ordinary SSH and a private HTTPS dashboard; disabling Tailscale SSH does not disable ordinary SSH through it. Removing Tailscale does not remove administrator keys or LAN SSH access.
 
 ### Local network access
 

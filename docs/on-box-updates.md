@@ -1,14 +1,20 @@
 # On-box software updates
 
-This updater is for Cloud boxes on Raspberry Pi 4 Model B, Raspberry Pi OS
-Trixie and aarch64. It installs signed application releases directly from
-`button-box/button-box` GitHub Releases. OS, package and dependency upgrades are
-attended maintenance. Pi 3 support is deliberately rejected by the updater until
-its hardware acceptance is complete.
+This updater is for Cloud boxes on Raspberry Pi OS Trixie and aarch64. The
+supported models are `Raspberry Pi 4 Model B` and `Raspberry Pi 3 Model A Plus`
+(`SUPPORTED_MODELS` in `scripts/install/release_verify.py`). The updater and
+bootstrap reject other models. It installs signed application releases directly
+from `button-box/button-box` GitHub Releases. OS, package and dependency
+upgrades are attended maintenance. Pi 3 A+ memory, timing and hardware
+acceptance is still required before deployment.
 
-The production signing key is not provisioned in this checkout. Without a pinned
-minisign `.pub` key in `/etc/button-box-update/release-keys`, verification fails
-closed. Generate signing keys offline; never transfer private keys to a box.
+This checkout pins two public keys. The release key is
+`config/release-keys/button-box-release-2026.pub` (key ID 221CAE6604AC0F93).
+The emergency key is `config/emergency-keys/button-box-emergency-2026.pub`
+(key ID 73BD56BB8F9940FC). Bootstrap copies them to
+`/etc/button-box-update/release-keys` and `/etc/button-box-update/emergency-keys`.
+Without a pinned release key there, verification fails closed. Generate signing
+keys offline; never transfer private keys to a box.
 
 ## Layout and bootstrap
 
@@ -59,8 +65,9 @@ authenticates only a bounded `trust-update.json` and its
 as root-owned 0644 files at `/etc/button-box-update/emergency-keys/` and refuses
 overlapping release/emergency key IDs. No emergency public pin means this feature
 is off; ordinary release verification and discovery retain their existing path.
-The coordinator supplies the real emergency public pin; this checkout contains
-no throwaway trusted key.
+This checkout pins the emergency public key
+`config/emergency-keys/button-box-emergency-2026.pub` (key ID 73BD56BB8F9940FC).
+It contains no throwaway trusted key.
 
 The schema is exactly `schema: 1`, `product: "button-box"`, positive integer
 `trust_sequence`, `release_keys` (1–3 canonical minisign base64 public-key lines,
@@ -290,7 +297,7 @@ rejected before either key role is modified. This does not make the complete
 bootstrap safe to rerun on an installed box.
 
 For an **already bootstrapped** Cloud Pi, changing application `updater/` copies
-will not activate these fixes. The coordinator must promote the reviewed fixed
+will not activate these fixes. The maintainer must promote the reviewed fixed
 controller separately. Do not remove `/etc/button-box-update/installed`, rerun
 `update-bootstrap.sh`, call `bootstrap_keys`, run setup, or reconvert the layout.
 Keep policy, pins, trust/sequence floors, quarantine, journals and snapshots.
@@ -345,11 +352,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, '/usr/lib/messagebox-update')
 import bounded_update as update
-from release_verify import local_platform
+from release_verify import SUPPORTED_MODELS, local_platform
 platform = local_platform()
 if (platform['os'] != 'raspios-trixie' or platform['architecture'] != 'aarch64'
-        or platform['model'] != 'Raspberry Pi 4 Model B'):
-    raise SystemExit('This canary maintenance requires Pi 4 / Trixie / aarch64.')
+        or platform['model'] not in SUPPORTED_MODELS):
+    raise SystemExit('This canary maintenance requires a supported Pi / Trixie / aarch64.')
 marker = Path('/etc/button-box-update/installed').lstat()
 if not stat.S_ISREG(marker.st_mode) or marker.st_uid != 0 or marker.st_mode & 0o022:
     raise SystemExit('Installed marker is unsafe.')

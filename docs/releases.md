@@ -183,9 +183,10 @@ physical Pi, GPIO, audio, NFC, Wi-Fi or WhatsApp acceptance.
 
 Use two separately held offline password-encrypted minisign secret keys. The
 **release** key signs normal `SHA256SUMS`; the **emergency** key never signs an
-application release. It signs only `trust-update.json`. The coordinator adds the
-reviewed emergency public pin to `config/emergency-keys/` and the explicit payload
-allowlist. Bootstrap installs the pins in separate root-owned directories and
+application release. It signs only `trust-update.json`. The reviewed emergency
+public pin is `config/emergency-keys/button-box-emergency-2026.pub` (key ID
+73BD56BB8F9940FC). Public pins are bootstrap-only; they are not in the release
+payload. Bootstrap installs the pins in separate root-owned directories and
 refuses matching key IDs. If there is no emergency pin, trust replacement is off.
 Adding one to an already bootstrapped box needs attended fixed-updater maintenance;
 an ordinary application release cannot install a new root of trust.
