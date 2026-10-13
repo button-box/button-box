@@ -99,6 +99,11 @@ def start_player(args, *, allow_muted=False, **kwargs):
         reservation.__exit__(None, None, None)
         raise
 
+    # Set once the shared maintenance reservation is released, so a caller can
+    # wait for it before asking the updater for the exclusive one.
+    released = threading.Event()
+    process.reservation_released = released
+
     def watch():
         try:
             while process.poll() is None:
@@ -114,6 +119,7 @@ def start_player(args, *, allow_muted=False, **kwargs):
                 time.sleep(0.02)
         finally:
             reservation.__exit__(None, None, None)
+            released.set()
 
     threading.Thread(target=watch, daemon=True).start()
     return process

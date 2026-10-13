@@ -108,11 +108,29 @@ def _voice(text, play):
         play(path, timeout=30)
 
 
+# Upper bound on waiting for the hold cue before `confirm`. Playback holds a
+# shared maintenance reservation; the install needs the exclusive one, so a
+# confirm sent while the cue still plays would fail `not_idle` and burn the
+# one-use approval.
+HOLD_CUE_WAIT_S = 1.5
+
+
 class Confirmation:
-    def __init__(self, *, ipc=request, monotonic=time.monotonic, sleep=time.sleep, voice=_voice):
+    def __init__(self, *, ipc=request, monotonic=time.monotonic, sleep=time.sleep, voice=_voice, on_hold=None):
         self.ipc, self.monotonic, self.sleep, self.voice = ipc, monotonic, sleep, voice
+        # Optional: called once when a valid hold reaches 3 s. Returns a
+        # wait(timeout) callable (or None). Default: no sound.
+        self.on_hold = on_hold
         self.binding = None
         self.consume_release = False
+
+    def _hold_reached(self):
+        if self.on_hold is None:
+            return None
+        try:
+            return self.on_hold()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
 
     def idle(self, button, play):
         """Only the actual button-owner PID can arm a root-owned window."""
@@ -155,18 +173,28 @@ class Confirmation:
                         and started < approval.get('deadline_mono', 0))
         # Debounce is part of the continuous hold; an open edge resets it.
         confirmed = False
+        cue_wait = None
         while button.is_pressed:
             now = self.monotonic()
             if (eligible and not confirmed and now - started >= 3
                     and now < approval['deadline_mono']):
                 confirmed = True
+                # Audible "yes" while the button is still held.
+                cue_wait = self._hold_reached()
             if approval and now >= approval.get('deadline_mono', now + 1):
                 eligible = False
             self.sleep(0.02)
+        held_seconds = self.monotonic() - started
+        if cue_wait is not None:
+            # Release the shared audio reservation before the exclusive install.
+            try:
+                cue_wait(HOLD_CUE_WAIT_S)
+            except (OSError, subprocess.SubprocessError):
+                pass
         # The gesture is consumed completely, including short or expired holds.
         if confirmed and eligible:
             try:
-                self.ipc('confirm', binding=approval['binding'], held_seconds=self.monotonic() - started,
+                self.ipc('confirm', binding=approval['binding'], held_seconds=held_seconds,
                          released=True)
             except UpdateUnavailable:
                 pass
@@ -177,6 +205,63 @@ class Confirmation:
 
 
 confirmation = Confirmation()
+
+
+INSTALL_POLL_S = 10
+INSTALL_WINDOW_S = 15 * 60
+
+
+def owner_install_verdict(result, fields):
+    """'announce', 'stop' or None (keep polling) for one `last_result`."""
+    if not isinstance(result, dict) or result.get('state') not in TERMINAL:
+        return None
+    operation_id = result.get('operation_id')
+    if (result.get('state') == 'installed' and result.get('reason') == 'healthy'
+            and isinstance(operation_id, str) and operation_id
+            and not operation_id.startswith(('auto:', 'bootstrap:'))
+            and fields.get('software_version') and fields.get('software_commit')
+            and result.get('software_version') == fields['software_version']
+            and result.get('software_commit') == fields['software_commit']):
+        return 'announce'
+    return 'stop'
+
+
+class InstallAnnouncer:
+    """After startup, watch for a healthy owner-approved install of this release.
+
+    Polling only; playback happens in the button idle loop via `take()`.
+    """
+
+    def __init__(self, *, get_status=None, fields=software_fields, monotonic=time.monotonic, sleep=time.sleep):
+        self.get_status = get_status or (lambda: status())
+        self.fields, self.monotonic, self.sleep = fields, monotonic, sleep
+        self.pending = None
+        self.deadline = None
+
+    def run(self):
+        self.deadline = self.monotonic() + INSTALL_WINDOW_S
+        while self.monotonic() < self.deadline:
+            try:
+                result = (self.get_status() or {}).get('last_result')
+                verdict = owner_install_verdict(result, self.fields())
+            except (OSError, ValueError, UpdateUnavailable):
+                verdict = None
+            if verdict == 'announce':
+                self.pending = result['operation_id']
+                return
+            if verdict == 'stop':
+                return
+            self.sleep(INSTALL_POLL_S)
+
+    def take(self):
+        """Return the operation id to announce once, inside the window only."""
+        operation_id, self.pending = self.pending, None
+        if operation_id and self.deadline is not None and self.monotonic() < self.deadline:
+            return operation_id
+        return None
+
+
+install_announcer = InstallAnnouncer()
 
 
 def button_ready(button):

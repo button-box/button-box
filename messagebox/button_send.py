@@ -242,6 +242,40 @@ def announce_all_set():
         play_moment("all_set", "all-set")
 
 
+def start_update_hold_cue():
+    """Play the short "yes" when an update hold reaches 3 s; return a bounded waiter."""
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("card_saved"))])
+
+    def wait(timeout):
+        deadline = time.monotonic() + timeout
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.2)
+        released = getattr(process, "reservation_released", None)
+        if released is not None:
+            released.wait(max(0.25, deadline - time.monotonic()))
+
+    return wait
+
+
+def announce_update_installed():
+    """Play "all set" once after this release was installed by an owner hold."""
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed or quiet_hours():
+        return
+    from messagebox.cloud_update import install_announcer
+    operation_id = install_announcer.take()
+    # Receipt before playback: at most once per operation, across restarts.
+    if operation_id and sound_pack.consume_moment("update_installed", token=operation_id):
+        log_event("update_installed_cue")
+        play_idle_sound(sound_pack.cue_path("all_set"), 10)
+
+
 def announce_runtime_ready():
     """Signal readiness once without making audio availability a boot gate."""
     if quiet_hours():
@@ -2326,8 +2360,10 @@ def main():
     threading.Thread(target=sender_loop, daemon=True).start()
     button = Button(BUTTON_PIN)
     if transport_mode() == "cloud":
-        from messagebox.cloud_update import button_ready
+        from messagebox.cloud_update import button_ready, confirmation, install_announcer
         button_ready(button)
+        confirmation.on_hold = start_update_hold_cue
+        threading.Thread(target=install_announcer.run, daemon=True).start()
     led = LED(LED_PIN)
     apply_master_volume()
     if button.is_pressed:
@@ -2357,6 +2393,7 @@ def main():
             try:
                 maybe_play_connectivity()
                 announce_all_set()
+                announce_update_installed()
                 maybe_play_still_trying()
                 unavailable_events.available("sound_moments")
             except (OSError, ValueError, CloudRuntimeError, subprocess.SubprocessError):

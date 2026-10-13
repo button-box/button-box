@@ -307,6 +307,75 @@ class ButtonBoundaryTests(unittest.TestCase):
                 confirmed = [call for call in ipc.call_args_list if call.args[0] == 'confirm']
                 self.assertEqual(len(confirmed), int(duration >= 3 and not expired and not cue_pending))
 
+    def run_hold(self, duration, *, expired=False, cue_pending=False, already_held=False):
+        clock = Clock()
+        deadline = clock.now - 1 if expired else clock.now + 120
+        approval = {'binding': 'operation-manifest-version-boot', 'deadline_mono': deadline, 'cue_pending': cue_pending}
+        events = []
+        def ipc(command, **fields):
+            events.append((command, clock.now))
+            return {'approval': None if already_held else approval}
+        button = types.SimpleNamespace(is_pressed=True)
+        def sleep(seconds):
+            clock.sleep(seconds)
+            if clock.now >= 10 + duration:
+                button.is_pressed = False
+        def on_hold():
+            events.append(('cue', clock.now, button.is_pressed))
+            def wait(timeout):
+                events.append(('cue_wait', timeout))
+            return wait
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep, on_hold=on_hold)
+        if already_held:
+            confirmation.consume_release = True
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            self.assertTrue(confirmation.intercept(button))
+        return events
+
+    def test_hold_cue_fires_once_at_threshold_while_held_and_confirm_waits_for_it(self):
+        events = self.run_hold(5)
+        cues = [event for event in events if event[0] == 'cue']
+        self.assertEqual(len(cues), 1)
+        self.assertGreaterEqual(cues[0][1], 13)
+        self.assertLess(cues[0][1], 13.1)
+        self.assertTrue(cues[0][2])
+        names = [event[0] for event in events]
+        self.assertEqual(names[-2:], ['cue_wait', 'confirm'])
+        self.assertEqual(events[-2][1], cloud_update.HOLD_CUE_WAIT_S)
+
+    def test_hold_cue_never_for_short_expired_cue_pending_or_already_held_presses(self):
+        for kwargs in ({'duration': 1}, {'duration': 2.9}, {'duration': 5, 'expired': True},
+                       {'duration': 5, 'cue_pending': True}, {'duration': 5, 'already_held': True}):
+            with self.subTest(**kwargs):
+                events = self.run_hold(**kwargs)
+                self.assertFalse([event for event in events if event[0] in {'cue', 'cue_wait', 'confirm'}])
+
+    def test_hold_cue_failure_still_confirms(self):
+        clock = Clock()
+        approval = {'binding': 'b', 'deadline_mono': clock.now + 120, 'cue_pending': False}
+        ipc = mock.Mock(return_value={'approval': approval})
+        button = types.SimpleNamespace(is_pressed=True)
+        def sleep(seconds):
+            clock.sleep(seconds)
+            button.is_pressed = clock.now < 14
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep,
+                                                 on_hold=mock.Mock(side_effect=OSError('no speaker')))
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            confirmation.intercept(button)
+        self.assertEqual([call.args[0] for call in ipc.call_args_list], ['button', 'confirm'])
+
+    def test_runtime_hold_cue_waits_for_player_and_reservation(self):
+        released = mock.Mock()
+        process = mock.Mock(reservation_released=released)
+        with mock.patch.object(runtime, 'start_player', return_value=process) as start:
+            wait = runtime.start_update_hold_cue()
+            self.assertIn('cue-card_saved.wav', start.call_args.args[0][-1])
+            process.wait.assert_not_called()
+            wait(1.5)
+        process.wait.assert_called_once_with(timeout=1.5)
+        released.wait.assert_called_once()
+        self.assertLessEqual(released.wait.call_args.args[0], 1.5)
+
     def test_window_begins_after_fixed_voice_cue_and_observed_release(self):
         clock = Clock()
         button = types.SimpleNamespace(is_pressed=False)
@@ -340,6 +409,102 @@ class ButtonBoundaryTests(unittest.TestCase):
             self.assertEqual(cloud_update.heartbeat_fields(), {})
             ipc.assert_not_called()
 
+
+
+class InstallAnnouncerTests(unittest.TestCase):
+    FIELDS = {'software_version': 'v0.9.0', 'software_commit': 'a' * 40}
+
+    def result(self, **changes):
+        return {'operation_id': 'owner-op-1', 'version': 'v0.9.0', 'state': 'installed', 'reason': 'healthy',
+                'software_version': 'v0.9.0', 'software_commit': 'a' * 40, **changes}
+
+    def announcer(self, results):
+        clock = Clock()
+        sequence = list(results)
+        polls = []
+        def get_status():
+            polls.append(clock.now)
+            return {'last_result': sequence.pop(0) if len(sequence) > 1 else sequence[0]}
+        announcer = cloud_update.InstallAnnouncer(get_status=get_status, fields=lambda: self.FIELDS,
+                                                  monotonic=clock.monotonic, sleep=clock.sleep)
+        return announcer, polls, clock
+
+    def test_owner_install_announces_once_after_health(self):
+        announcer, polls, _ = self.announcer([self.result(state='installing', reason='none'), self.result()])
+        announcer.run()
+        self.assertEqual(len(polls), 2)
+        self.assertEqual(polls[1] - polls[0], cloud_update.INSTALL_POLL_S)
+        self.assertEqual(announcer.take(), 'owner-op-1')
+        self.assertIsNone(announcer.take())
+
+    def test_never_for_auto_bootstrap_rollback_failure_mode_change_or_other_release(self):
+        for result in (self.result(operation_id='auto:' + 'b' * 64), self.result(operation_id='bootstrap:' + 'c' * 64),
+                       self.result(state='rolled_back', reason='health_failed'), self.result(state='failed', reason='x'),
+                       self.result(reason='mode_changed'), self.result(software_version='v0.8.0'),
+                       self.result(software_commit='b' * 40)):
+            with self.subTest(result=result):
+                announcer, polls, _ = self.announcer([result])
+                announcer.run()
+                self.assertEqual(len(polls), 1)
+                self.assertIsNone(announcer.take())
+
+    def test_polling_stops_after_window(self):
+        announcer, polls, clock = self.announcer([self.result(state='installing', reason='none')])
+        announcer.run()
+        self.assertGreaterEqual(clock.now - 10, cloud_update.INSTALL_WINDOW_S)
+        self.assertEqual(len(polls), cloud_update.INSTALL_WINDOW_S // cloud_update.INSTALL_POLL_S)
+        self.assertIsNone(announcer.take())
+
+    def test_pending_expires_with_window(self):
+        announcer, _, clock = self.announcer([self.result()])
+        announcer.run()
+        clock.now += cloud_update.INSTALL_WINDOW_S
+        self.assertIsNone(announcer.take())
+
+    def test_unavailable_updater_and_wacli_stay_silent(self):
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'wacli'}), \
+             mock.patch.object(cloud_update, 'request') as ipc:
+            clock = Clock()
+            announcer = cloud_update.InstallAnnouncer(fields=lambda: self.FIELDS, monotonic=clock.monotonic, sleep=clock.sleep)
+            announcer.run()
+            self.assertIsNone(announcer.take())
+            ipc.assert_not_called()
+
+    def runtime_announce(self, operation_id, *, quiet=False, pressed=False, state=None):
+        announcer = mock.Mock()
+        announcer.take.return_value = operation_id
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'sound-state.json'
+            consume = runtime.sound_pack.consume_moment
+            with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+                 mock.patch.object(runtime, 'quiet_hours', return_value=quiet), \
+                 mock.patch.object(runtime, 'button', types.SimpleNamespace(is_pressed=pressed), create=True), \
+                 mock.patch.object(runtime, 'log_event'), \
+                 mock.patch.object(cloud_update, 'install_announcer', announcer), \
+                 mock.patch.object(runtime.sound_pack, 'consume_moment',
+                                   side_effect=lambda name, **kw: consume(name, state, **kw)), \
+                 mock.patch.object(runtime, 'play_idle_sound', return_value=True) as play:
+                runtime.announce_update_installed()
+                runtime.announce_update_installed()
+                announcer.take.return_value = operation_id
+                runtime.announce_update_installed()
+            return play, announcer
+
+    def test_runtime_plays_all_set_once_per_operation(self):
+        play, _ = self.runtime_announce('owner-op-1')
+        play.assert_called_once()
+        self.assertTrue(str(play.call_args.args[0]).endswith('cue-all_set.wav'))
+
+    def test_runtime_respects_quiet_mute_and_press(self):
+        for kwargs in ({'quiet': True}, {'pressed': True}):
+            with self.subTest(**kwargs):
+                play, announcer = self.runtime_announce('owner-op-1', **kwargs)
+                play.assert_not_called()
+                announcer.take.assert_not_called()
+
+    def test_runtime_no_pending_operation_is_silent(self):
+        play, _ = self.runtime_announce(None)
+        play.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
