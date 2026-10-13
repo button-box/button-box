@@ -1,6 +1,7 @@
 import hashlib
 import contextlib
 import json
+import os
 import subprocess
 import tempfile
 import sys
@@ -88,6 +89,11 @@ def write_pcm_wav(path, duration_seconds, sample_rate=8000):
 
 class CloudRuntimeTests(unittest.TestCase):
     def setUp(self):
+        # Default settings take their timezone from TZ. NOW is 08:00 UTC, which
+        # falls inside the default quiet hours in western timezones. Pin UTC.
+        tz = mock.patch.dict(os.environ, {"TZ": "UTC"})
+        tz.start()
+        self.addCleanup(tz.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
