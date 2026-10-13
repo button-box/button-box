@@ -76,6 +76,19 @@ class Systemctl:
         self.fail_operation_once = None
         self.part_of = {}
         self.comitup_portal = "messagebox-onboarding-home.service" if fixture.mode == "setup" else None
+        # systemd Result per unit; "success" unless a test sets a failure.
+        self.results = {}
+        # unit -> callable(states) run after a successful start of that unit.
+        self.after_start = {}
+        # Model the mode generator's runtime wants link (enabled-runtime).
+        self.generator_enables = False
+
+    def _generated_enablement(self):
+        if not self.generator_enables:
+            return
+        selected = "comitup.service" if self.fixture.marker.exists() else "messagebox.target"
+        if self.states[selected]["enabled"] == "disabled":
+            self.states[selected]["enabled"] = "enabled-runtime"
 
     def _reload_generator(self):
         if self.fixture.generated.exists():
@@ -119,6 +132,16 @@ class Systemctl:
             return subprocess.CompletedProcess(command, 0, " ".join(dependents) + "\n")
         if command == ["systemctl", "daemon-reload"]:
             self._reload_generator()
+            self._generated_enablement()
+            return subprocess.CompletedProcess(command, 0)
+        if command[:4] == ["systemctl", "show", "--property=Result", "--value"]:
+            unit = command[4]
+            return subprocess.CompletedProcess(command, 0, self.results.get(unit, "success") + "\n")
+        if command[:2] == ["systemctl", "reset-failed"]:
+            for unit in command[2:]:
+                if self.states[unit]["active"] == "failed":
+                    self.states[unit]["active"] = "inactive"
+                self.results.pop(unit, None)
             return subprocess.CompletedProcess(command, 0)
         if command[:3] == ["systemctl", "enable", "--now"]:
             unit = command[3]
@@ -151,6 +174,8 @@ class Systemctl:
             self.states[unit]["active"] = "active"
             self.started.append(unit)
             self.ever_activated.append(unit)
+            if unit in self.after_start:
+                self.after_start[unit](self.states)
             if unit == "comitup.service" and self.comitup_portal:
                 self.states[self.comitup_portal]["active"] = "active"
                 self.ever_activated.append(self.comitup_portal)
@@ -195,6 +220,8 @@ class Systemctl:
                         else f"/etc/systemd/system/{unit}"
                     )
                     link.symlink_to(target)
+            # enable/disable reload systemd, which reruns the mode generator.
+            self._generated_enablement()
             return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "mask"]:
             offset = 3 if command[2] == "--runtime" else 2

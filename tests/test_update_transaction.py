@@ -26,8 +26,8 @@ class TransactionTests(unittest.TestCase):
         boot.start()
         self.addCleanup(boot.stop)
 
-    def prepare(self, directory):
-        fixture = Fixture(directory)
+    def prepare(self, directory, mode='runtime'):
+        fixture = Fixture(directory, mode)
         fixture.metadata.write_text(json.dumps({'version': 'v0.2.0', 'commit': 'b' * 40}))
         # Routine updates freeze dependencies and independent recovery units.
         for entry in fixture.manifest_data['files']:
@@ -44,9 +44,138 @@ class TransactionTests(unittest.TestCase):
         fixture.write_manifest()
         return fixture, old
 
-    def install(self, fixture, sequence=1, health=lambda *args: None):
+    def install(self, fixture, sequence=1, health=lambda *args: None, **options):
         return update.install_transaction(fixture.source, fixture.manifest, root=fixture.root,
-                                         run=fixture.systemctl, operation_id='synthetic-operation', sequence=sequence, health=health)
+                                         run=fixture.systemctl, operation_id='synthetic-operation', sequence=sequence,
+                                         health=health, **options)
+
+    @staticmethod
+    def health_run(fixture):
+        """Fake systemd show/ALSA for health_checks on top of the fixture systemctl."""
+        import subprocess
+
+        def run(command, **options):
+            if command[:2] == ['systemctl', 'show'] and command[3].startswith('--property=ActiveState'):
+                active = fixture.systemctl.states[command[2]]['active']
+                return subprocess.CompletedProcess(command, 0, f'ActiveState={active}\nMainPID=0\nNRestarts=0\n')
+            if command[0] == 'runuser':
+                return subprocess.CompletedProcess(command, 1, '')
+            return fixture.systemctl(command, **options)
+        return run
+
+    def test_attended_install_in_setup_mode_keeps_marker_and_uses_setup_health(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory, 'setup')
+            # Owner and automatic installs still defer to onboarding.
+            with self.assertRaisesRegex(update.UpdateError, 'onboarding_active'):
+                self.install(fixture)
+            self.assertEqual(update.controlled_release(fixture.root), old)
+            observed = {}
+
+            def health(root, journal, run):
+                self.assertEqual(journal['mode'], 'setup')
+                self.assertTrue(fixture.marker.exists())
+                checks, _pids = update.health_checks(root, journal, self.health_run(fixture))
+                observed.update(checks)
+            self.install(fixture, health=health, allow_setup=True)
+            self.assertTrue(fixture.marker.exists())
+            self.assertEqual(update.controlled_release(fixture.root), update.RELEASES + '/v0.3.0-canary.1-' + 'a' * 40)
+            # No household app runs in setup mode: no heartbeat/button evidence.
+            self.assertFalse([name for name in observed if name.startswith('evidence:')])
+            self.assertTrue(observed['setup:marker'])
+            self.assertTrue(observed['unit:comitup.service:active'])
+            self.assertTrue(observed['pointer'])
+            self.assertTrue(all(passed for name, passed in observed.items() if not name.startswith('audio:')))
+
+    def test_setup_mode_install_refuses_without_comitup_and_fails_if_mode_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory, 'setup')
+            fixture.systemctl.states['comitup.service']['active'] = 'failed'
+            with self.assertRaisesRegex(update.UpdateError, 'setup_not_ready'):
+                self.install(fixture, allow_setup=True)
+            self.assertEqual(update.controlled_release(fixture.root), old)
+            self.assertEqual(update.read_state(fixture.root, 'journal.json')['kind'], 'bootstrap')
+            fixture.systemctl.states['comitup.service']['active'] = 'active'
+
+            def health(root, journal, run):
+                fixture.marker.unlink()
+                checks = dict(update.health_checks(root, journal, self.health_run(fixture))[0])
+                self.assertFalse(checks['setup:marker'])
+                fixture.marker.write_bytes(b'enabled\n')
+                fixture.marker.chmod(0o600)
+                raise update.UpdateError('health_timeout')
+            with self.assertRaisesRegex(update.UpdateError, 'health_timeout'):
+                self.install(fixture, health=health, allow_setup=True)
+            self.assertEqual(update.controlled_release(fixture.root), old)
+            self.assertEqual(update.read_state(fixture.root, 'result.json')['state'], 'rolled_back')
+            self.assertTrue(fixture.marker.exists())
+
+    def test_rate_limited_old_watcher_does_not_fail_rollback_but_a_failed_service_does(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            path = 'messagebox-onboarding-voice.path'
+            reconcile = 'messagebox-mode-reconcile.path'
+            # The old watcher was already rate-limited before the update.
+            fixture.systemctl.states[path] = {'active': 'failed', 'enabled': 'enabled'}
+            fixture.systemctl.results[path] = 'unit-start-limit-hit'
+            fixture.systemctl.states[reconcile]['active'] = 'active'
+            starts = []
+
+            def flap(states):
+                starts.append(reconcile)
+                if len(starts) > 1:  # the restored watcher trips its trigger limit again
+                    states[reconcile]['active'] = 'failed'
+                    fixture.systemctl.results[reconcile] = 'trigger-limit-hit'
+            fixture.systemctl.after_start[reconcile] = flap
+
+            def unhealthy(root, journal, run):
+                checks = dict(update.health_checks(root, journal, self.health_run(fixture))[0])
+                # Not running before the update: inactive or failed is acceptable.
+                self.assertTrue(checks['unit:messagebox-onboarding-voice.path:failed'])
+                raise update.UpdateError('health_timeout')
+            fixture.systemctl.states['messagebox-mode-reconcile.path']['active'] = 'active'
+            starts.append('initial')
+            with self.assertRaisesRegex(update.UpdateError, 'health_timeout'):
+                self.install(fixture, health=unhealthy)
+            self.assertEqual(update.read_state(fixture.root, 'result.json')['state'], 'rolled_back')
+            self.assertFalse(update._rooted(fixture.root, update.INHIBIT).exists())
+            self.assertIn(['systemctl', 'reset-failed', path], fixture.systemctl.commands)
+            self.assertEqual(fixture.systemctl.states[path]['active'], 'inactive')
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            service = 'messagebox-dash.service'
+
+            def crash(states):
+                states[service]['active'] = 'failed'
+                fixture.systemctl.results[service] = 'start-limit-hit'
+
+            def unhealthy(*args):
+                # The restored old service then crashes: a real restore failure.
+                fixture.systemctl.after_start[service] = crash
+                raise update.UpdateError('health_timeout')
+            with self.assertRaisesRegex(update.UpdateError, 'rollback_failed'):
+                self.install(fixture, health=unhealthy)
+            self.assertEqual(update.read_state(fixture.root, 'result.json')['state'], 'rollback_failed')
+            self.assertTrue(update._rooted(fixture.root, update.INHIBIT).exists())
+            self.assertNotIn(['systemctl', 'reset-failed', service], fixture.systemctl.commands)
+            self.assertIn(service, update.read_state(fixture.root, 'journal.json')['restore_error'])
+
+    def test_regenerated_mode_link_after_out_of_band_marker_change_is_not_a_restore_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            # The marker was removed without a daemon-reload: the snapshot still
+            # records setup-mode generator output for the runtime target.
+            fixture.systemctl.states['messagebox.target'] = {'active': 'active', 'enabled': 'disabled'}
+            fixture.systemctl.generator_enables = True
+
+            def unhealthy(*args):
+                raise update.UpdateError('health_timeout')
+            with self.assertRaisesRegex(update.UpdateError, 'health_timeout'):
+                self.install(fixture, health=unhealthy)
+            self.assertEqual(fixture.systemctl.states['messagebox.target']['enabled'], 'enabled-runtime')
+            self.assertEqual(update.read_state(fixture.root, 'result.json')['state'], 'rolled_back')
+            self.assertEqual(update.controlled_release(fixture.root), old)
 
     def test_each_release_owns_sounds_and_failed_upgrade_restores_previous_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -291,6 +420,39 @@ class TransactionTests(unittest.TestCase):
             capture_commands = [command for command in commands if 'arecord' in command]
             self.assertTrue(capture_commands)
             self.assertTrue(all(command == ['runuser', '-u', 'messagebox', '--', 'arecord', '-l'] for command in capture_commands))
+
+    def test_app_evidence_is_required_only_from_selected_producers_outside_setup_mode(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            new = update.RELEASES + '/v0.3.0-' + 'a' * 40
+            update._rooted(root, new).mkdir(parents=True)
+            update.switch_release(root, new)
+
+            def run(command, **options):
+                if command[0] == 'systemctl':
+                    return subprocess.CompletedProcess(command, 0, 'ActiveState=inactive\nMainPID=0\nNRestarts=0\n')
+                return subprocess.CompletedProcess(command, 1, '')
+
+            def names(units, **extra):
+                journal = {'transaction': 't', 'boot': 'b', 'version': 'v0.3.0', 'commit': 'a' * 40,
+                           'started_mono': 0, 'new': new, 'hashes': [], 'units': units, **extra}
+                return {name for name, _passed in update.health_checks(root, journal, run)[0]}
+            unclaimed = {unit: {'active': 'inactive', 'enabled': 'disabled'}
+                         for unit in ('messagebox-button.service', 'messagebox-poller.service')}
+            # An unclaimed Cloud box never selected the app: nothing to prove.
+            self.assertFalse({name for name in names(unclaimed) if name.startswith('evidence:')})
+            # A selected but crashed producer still has to prove itself.
+            crashed = {**unclaimed, 'messagebox-poller.service': {'active': 'failed', 'enabled': 'enabled'}}
+            evidence = {name for name in names(crashed) if name.startswith('evidence:')}
+            self.assertIn('evidence:heartbeat:ready', evidence)
+            self.assertNotIn('evidence:button:ready', evidence)
+            # Legacy journals without enablement keep the strict default.
+            self.assertIn('evidence:button:ready', names({}))
+            # Setup mode: never app evidence, and the marker must remain.
+            setup = names(crashed, mode='setup')
+            self.assertFalse({name for name in setup if name.startswith('evidence:')})
+            self.assertIn('setup:marker', setup)
 
     def test_supervisor_reports_death_during_preflight_without_claiming_rollback(self):
         import hashlib

@@ -207,6 +207,12 @@ EXECUTABLE_TARGETS = {
 ENABLED_STATES = {"enabled"}
 DISABLED_STATES = {"disabled"}
 PASSIVE_ENABLED_STATES = {"alias", "generated", "indirect", "not-found", "static", "transient"}
+# systemd refuses further activation after these results. For a .path/.timer
+# activator this is a rate limit on an old watcher, not a broken restoration.
+LIMIT_RESULTS = {"start-limit-hit", "unit-start-limit-hit", "trigger-limit-hit"}
+# The boot-mode generator adds one runtime wants link from the marker on every
+# daemon-reload; systemctl reports that unit as enabled-runtime.
+GENERATED_MODE_UNITS = {"setup": "comitup.service", "runtime": "messagebox.target"}
 
 
 class UpdateError(RuntimeError):
@@ -800,6 +806,38 @@ def _restore_active(states, run, *, also_active=(), skip=()):
             )
 
 
+def _is_activator(unit):
+    return unit.endswith((".path", ".timer"))
+
+
+def _limit_hit(unit, run, *, timeout=5):
+    result = _run(
+        ["systemctl", "show", "--property=Result", "--value", unit], run,
+        check=False, capture_output=True, text=True, timeout=timeout,
+    )
+    return isinstance(result.stdout, str) and result.stdout.strip() in LIMIT_RESULTS
+
+
+def _reset_limited_activators(run, units):
+    """Clear only rate-limited activators so systemd may start them again.
+
+    Services and activators that failed for any other reason keep their failed
+    state and still fail verification when they were expected to run.
+    """
+    reset = []
+    for unit in units:
+        if not _is_activator(unit):
+            continue
+        observed = _run(["systemctl", "is-active", unit], run,
+                        check=False, capture_output=True, text=True, timeout=5)
+        state = observed.stdout.strip() if isinstance(observed.stdout, str) else None
+        if state == "failed" and _limit_hit(unit, run):
+            reset.append(unit)
+    if reset:
+        _run(["systemctl", "reset-failed", *reset], run, check=True, timeout=30)
+    return reset
+
+
 def _restore_auxiliary_active(auxiliary_units, run, *, skip=()):
     for unit in auxiliary_units:
         if unit in skip:
@@ -821,9 +859,17 @@ def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
     optional_web = (states["comitup-web.service"]["active"] != "active"
                     or states["comitup.service"]["active"] == "active")
 
+    limited = set()
+
     def matches(unit, observed):
         if unit == "comitup-web.service" and optional_web:
             return observed in {"active", "inactive", "failed"}
+        if expected[unit] == "failed":
+            # A unit that was failed before the update was not running. The
+            # restoration does not start it; a reset-failed unit is inactive.
+            return observed in {"inactive", "failed"}
+        if observed == "failed" and unit in limited:
+            return True
         return observed == expected[unit]
 
     deadline = time.monotonic() + UNIT_SETTLE_TIMEOUT
@@ -834,6 +880,13 @@ def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
             detail = "; ".join(differences) or "the restored state did not remain stable"
             raise UpdateError(f"managed unit state did not settle within {UNIT_SETTLE_TIMEOUT:g}s: {detail}")
         current = _unit_states(run, allow_transitional=True, deadline=deadline)
+        for unit in UNITS:
+            # The restored release's own activator hit systemd's rate limit.
+            # Accept it only for .path/.timer units that were meant to run.
+            if (current[unit]["active"] == "failed" and unit not in limited
+                    and _is_activator(unit) and expected[unit] == "active"
+                    and _limit_hit(unit, run, timeout=max(0.1, deadline - time.monotonic()))):
+                limited.add(unit)
         differences = [
             f"{unit} expected {expected[unit]}, observed {current[unit]['active']}"
             for unit in UNITS if not matches(unit, current[unit]["active"])
@@ -872,13 +925,24 @@ def _verify_active(states, run, *, also_active=(), auxiliary_units=()):
         time.sleep(min(UNIT_SETTLE_POLL, max(0, deadline - now)))
 
 
-def _verify_enabled(states, run):
+def _verify_enabled(states, run, *, root=None):
     actual = _unit_states(
         run, allow_transitional=True, deadline=time.monotonic() + UNIT_SETTLE_TIMEOUT
     )
+    generated = None
+    if root is not None:
+        # daemon-reload reruns the mode generator from the restored marker. A
+        # snapshot taken after the marker changed without a reload recorded the
+        # previous generator output; the regenerated link is the correct state.
+        mode = "setup" if _rooted(root, MODE_MARKER).exists() else "runtime"
+        generated = GENERATED_MODE_UNITS[mode]
     for unit in UNITS:
-        if actual[unit]["enabled"] != states[unit]["enabled"]:
-            raise UpdateError(f"managed enabled unit state does not match the recorded state: {unit}")
+        observed = actual[unit]["enabled"]
+        if observed == states[unit]["enabled"]:
+            continue
+        if unit == generated and observed == "enabled-runtime":
+            continue
+        raise UpdateError(f"managed enabled unit state does not match the recorded state: {unit}")
 
 
 def _failure_cause(error):
@@ -1037,9 +1101,10 @@ def _rollback_locked(backup_dir, *, root, run):
         _restore_record(record, path, backup_dir)
     _run(["systemctl", "daemon-reload"], run, check=True)
     _restore_enabled(state["units"], run)
+    _reset_limited_activators(run, [*UNITS, *auxiliary_units])
     _restore_active(state["units"], run)
     _restore_auxiliary_active(auxiliary_units, run)
-    _verify_enabled(state["units"], run)
+    _verify_enabled(state["units"], run, root=root)
     _verify_active(state["units"], run, auxiliary_units=auxiliary_units)
     return state
 
@@ -1320,9 +1385,10 @@ def _external_restore(root, journal, run, *, start):
     _restore_enabled(state['units'], run)
     _inhibit(root, False)
     if start:
+        _reset_limited_activators(run, [*UNITS, *state.get('auxiliary_units', ())])
         _restore_active(state['units'], run)
         _restore_auxiliary_active(state.get('auxiliary_units', ()), run)
-        _verify_enabled(state['units'], run)
+        _verify_enabled(state['units'], run, root=root)
         _verify_active(state['units'], run, auxiliary_units=state.get('auxiliary_units', ()))
 
 
@@ -1397,6 +1463,9 @@ def _recover_locked(root, run, *, start=True, reason='interrupted'):
         prune_releases(root)
     except Exception as exc:
         _inhibit(root, True)
+        # The result keeps the initiating health code; the root-only journal
+        # also names the restoration step that failed (updater text only).
+        journal['restore_error'] = _failure_cause(exc)[:HEALTH_CODE_LIMIT]
         _result(root, journal, 'rollback_failed', 'restoration_failed')
         _journal(root, journal, 'rollback_failed')
         raise UpdateError('rollback_failed') from exc
@@ -1548,10 +1617,11 @@ def health_checks(root, journal, run=subprocess.run):
         checks.append((name[:HEALTH_CODE_LIMIT], bool(passed)))
 
     expected_units = {**journal['units'], **{unit: {'active': 'active'} for unit in journal.get('auxiliary_units', [])}}
+    setup = journal.get('mode') == 'setup'
     for unit, state in expected_units.items():
         expected = state['active']
         if journal.get('activators_suspended') and unit.endswith(('.path', '.timer')):
-            expected = 'inactive'
+            expected = 'inactive' if expected != 'failed' else 'failed'
         # Only fixed/validated unit names become diagnostic codes.
         label = unit if unit in UNITS or _valid_auxiliary_unit(unit) else 'unknown'
         values = {}
@@ -1566,6 +1636,10 @@ def health_checks(root, journal, run=subprocess.run):
         if unit == 'comitup-web.service' and (state['active'] != 'active'
                 or journal['units'].get('comitup.service', {}).get('active') == 'active'):
             passed = active in {'active', 'inactive', 'failed'}
+        elif expected == 'failed':
+            # Not running before the update (for example a rate-limited old
+            # watcher); the candidate need not reproduce that failure.
+            passed = active in {'inactive', 'failed'}
         else:
             passed = active == expected
         check('unit:' + label + ':' + code, passed)
@@ -1573,7 +1647,20 @@ def health_checks(root, journal, run=subprocess.run):
                 'messagebox-dash.service', 'messagebox-nfc.service', 'messagebox-sync.service'}:
             pids[unit] = (values.get('MainPID'), values.get('NRestarts'))
             check('mainpid:' + label, values.get('MainPID') not in {None, '0'})
-    for name in ('heartbeat', 'button'):
+    if setup:
+        # Setup mode at transaction start: the household application is not
+        # running, so it cannot author evidence. The recorded setup units above
+        # (ComItUp, setup portal and guided button) carry readiness instead,
+        # and the box must still be in setup mode.
+        check('setup:marker', _rooted(root, MODE_MARKER).exists())
+    for name, producer in (('heartbeat', 'messagebox-poller.service'), ('button', 'messagebox-button.service')):
+        recorded = journal['units'].get(producer)
+        # Evidence is required unless setup mode was recorded, or the producing
+        # unit was neither running nor enabled (an unclaimed Cloud box). A
+        # crashed but selected unit still has to prove itself.
+        if setup or (recorded is not None and recorded.get('active') != 'active'
+                     and recorded.get('enabled') not in ENABLED_STATES | {'enabled-runtime'}):
+            continue
         try:
             evidence = json.loads(_rooted(root, '/run/messagebox-update/' + name + '.json').read_bytes())
             if not isinstance(evidence, dict):
@@ -1679,14 +1766,17 @@ def sustain_health(root, journal, run=subprocess.run, *, sample=health_sample,
 
 
 def install_transaction(source_root, manifest_path, *, operation_id=None, root=Path('/'),
-                        run=subprocess.run, health=sustain_health, sequence=None):
+                        run=subprocess.run, health=sustain_health, sequence=None, allow_setup=False):
     import uuid
     root = Path(root).resolve()
     with transaction_locks(root) as locks:
         pending = read_state(root, 'journal.json')
         if pending and pending['phase'] not in {'committed', 'rolled_back'}:
             raise UpdateError('recovery_required')
-        if _rooted(root, MODE_MARKER).exists():
+        # Only an attended install may run in setup mode. The marker stays in
+        # place: the snapshot, health and rollback all describe setup mode.
+        setup = _rooted(root, MODE_MARKER).exists()
+        if setup and not allow_setup:
             raise UpdateError('onboarding_active')
         old = controlled_release(root)
         manifest, entries, manifest_hash = load_candidate(source_root, manifest_path, root)
@@ -1740,6 +1830,9 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
             (candidate / 'venv-nfc').symlink_to(STABLE_NFC)
             _sync_tree(candidate)
             states = _unit_states(run)
+            if setup and states['comitup.service']['active'] != 'active':
+                # Setup readiness could never be proven; refuse before mutation.
+                raise UpdateError('setup_not_ready')
             auxiliary = _active_auxiliary_units(states, run)
             backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
             create_backup(_rooted(root, backup), root, external, states, auxiliary, external_only=True)
@@ -1751,6 +1844,7 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                    'operation_id': operation_id, 'version': manifest['version'], 'commit': manifest['commit'],
                    'old': old, 'new': new, 'backup': backup, 'units': states, 'hashes': hashes,
                    'auxiliary_units': auxiliary, 'activators_suspended': True,
+                   'mode': 'setup' if setup else 'runtime',
                    'boot': _boot(), 'started_mono': time.monotonic(),
                    'deadline_mono': time.monotonic() + HEALTH_DEADLINE,
                    'pid': os.getpid(), 'process_token': _process_token(os.getpid()),
@@ -1793,6 +1887,14 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                 observed = _run(['systemctl', 'is-active', unit], run, capture_output=True, text=True, check=False, timeout=5)
                 if observed.stdout.strip() != 'active':
                     raise UpdateError('activator_restore_failed')
+            # An enabled activator that was rate-limited under the old release
+            # gets one fresh start under the healthy candidate, best effort.
+            retry = [unit for unit in activators if unit in states
+                     and states[unit]['active'] == 'failed' and states[unit]['enabled'] in ENABLED_STATES]
+            if retry:
+                _run(['systemctl', 'reset-failed', *retry], run, check=False, timeout=30)
+                for unit in retry:
+                    _run(['systemctl', '--job-mode=ignore-dependencies', 'start', unit], run, check=False, timeout=30)
             journal['activators_suspended'] = False
             _journal(root, journal, 'committed')
             _result(root, journal, 'installed', 'healthy')

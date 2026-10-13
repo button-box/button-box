@@ -185,6 +185,20 @@ success: recorded intended units active; stable required daemon PID/restart
 counters; fresh successful Cloud heartbeat for the transaction's version,
 commit and boot; button owner with GPIO acquired; expected ALSA capture and
 playback cards enumerated as the runtime user; installed identity/file hashes.
+Heartbeat and button evidence are required only from producers that were
+selected (running or enabled) at transaction start; a crashed but enabled
+producer still has to prove itself. A unit that was already `failed` before
+the update was not running, so `inactive` or `failed` both satisfy it.
+
+**Setup mode.** Only an attended install may run while the box is in setup
+mode; owner and automatic installs still return `onboarding_active`. Leave the
+marker in place: do not move `/etc/messagebox-onboarding/enabled` around an
+install. The snapshot then records setup-mode units and generator output, and
+rollback restores setup mode exactly. The transaction refuses with
+`setup_not_ready` before any mutation if ComItUp is not active. The journal
+records `mode: setup`; health then skips app evidence (no household app runs),
+requires the recorded setup units (ComItUp, setup portal, guided button) in
+their recorded states, the `setup:marker` check, the pointer and file hashes.
 The only capture-tool health command is `arecord -l`, which lists devices and
 never opens a recording stream. No audio is recorded. Presence checks do not
 prove physical switch, microphone or speaker operation.
@@ -192,7 +206,15 @@ prove physical switch, microphone or speaker operation.
 The independent supervisor enforces timeout, worker death, lost readiness and
 three daemon restarts within 60 seconds. It stops the worker before acquiring
 its locks, then restores the exact previous pointer, integration files and
-recorded unit states. Boot recovery runs before runtime and onboarding units;
+recorded unit states. Before restarting units it runs `systemctl reset-failed`
+only on `.path`/`.timer` activators whose result is `start-limit-hit`,
+`unit-start-limit-hit` or `trigger-limit-hit`. A restored activator that trips
+its own rate limit again is accepted as the old release's behavior; services,
+and activators that failed for any other reason, still fail restoration. The
+mode generator reruns on every reload, so the unit it selects from the restored
+marker may verify as `enabled-runtime`. When restoration fails, the root-only
+journal keeps `restore_error` (an updater-authored step name) next to the
+health `detail`. Boot recovery runs before runtime and onboarding units;
 it leaves their starts to normal boot ordering, avoiding a dependency deadlock.
 Power loss during rollback resumes the same restoration. A failed restoration
 keeps inhibit in place and reports `rollback_failed`; it never claims rollback
@@ -365,7 +387,12 @@ onboarding in progress. Verify the SSH host is the intended box, Pi model,
 Trixie/aarch64, Cloud mode, root-owned installed marker, controlled application
 pointer and installed identity. Confirm the journal is absent or terminal
 `committed`/`rolled_back`; resolve `rollback_failed` with the existing recovery
-procedure first. Review the exact maintenance source revision and its hashes,
+procedure first: read `restore_error` in the journal, fix the cause, then run
+`sudo python3 /usr/lib/messagebox-update/bounded_update.py recover`. It repeats
+the restoration and, on success, records `rolled_back`, quarantines the
+candidate and clears the inhibit. Never delete the inhibit by hand. A box that
+left setup mode during recovery returns with `sudo messageboxctl
+enter-cloud-claim` (this keeps Wi-Fi and Cloud identity). Review the exact maintenance source revision and its hashes,
 run both transport checks, and complete the release privacy review before
 transferring any artifacts. Transfer only the reviewed installer modules and
 fixed unit files into a root-owned, non-writable-by-others maintenance source,

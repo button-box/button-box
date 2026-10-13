@@ -583,8 +583,11 @@ def _worker():
         extract_bundle(bundle, source, ticket['version'])
         if digest(source / 'release-manifest.json') != ticket['manifest_sha256']:
             raise ReleaseError('archive_manifest_mismatch')
+        # Only the attended SSH path may install while the box is in setup
+        # mode; owner and automatic installs still defer to onboarding.
         update.install_transaction(source, source / 'release-manifest.json', operation_id=ticket['operation_id'],
-                                   sequence=manifest['release_sequence'])
+                                   sequence=manifest['release_sequence'],
+                                   allow_setup=operation.get('action') == 'attended')
     except update.UpdateError as exc:
         result = read('result.json', {})
         if result.get('operation_id') == ticket['operation_id'] and result.get('state') in {'rolled_back', 'rollback_failed'}:

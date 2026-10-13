@@ -282,6 +282,24 @@ class PolicyTests(unittest.TestCase):
         closed = controller.read(controller.operation_name(stale))
         self.assertEqual((closed['state'], closed['reason']), ('installed', 'already_installed'))
 
+    def test_only_the_attended_worker_may_install_in_setup_mode(self):
+        for action, allowed in (('attended', True), ('explicit', False), ('automatic', False)):
+            with self.subTest(action=action):
+                bundle = controller.STATE / 'downloads' / ('d' * 32)
+                bundle.mkdir(parents=True, exist_ok=True)
+                operation = {'operation_id': f'{action}:' + 'a' * 64, 'action': action, 'version': 'v0.3.6',
+                             'boot': 'boot-one', 'expires_mono': 1000}
+                controller.record(operation, 'installing')
+                controller.save('ticket.json', {'operation_id': operation['operation_id'], 'version': 'v0.3.6',
+                                                'manifest_sha256': 'a' * 64, 'bundle': str(bundle)})
+                with mock.patch.object(controller, 'digest', return_value='a' * 64), \
+                     mock.patch.object(controller, 'verify_bundle', return_value={'release_sequence': 4}), \
+                     mock.patch.object(controller, 'extract_bundle'), \
+                     mock.patch.object(controller, 'local_platform', return_value={}), \
+                     mock.patch.object(controller.update, 'install_transaction') as install:
+                    controller._worker()
+                self.assertIs(install.call_args.kwargs['allow_setup'], allowed)
+
     def test_rejections_carry_only_bounded_codes(self):
         self.assertEqual(controller.rejection_code(ValueError('update_busy')), 'update_busy')
         self.assertEqual(controller.rejection_code(controller.ReleaseError('trust_update_busy')), 'trust_update_busy')
