@@ -16,6 +16,7 @@ from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
 from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
 from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
 from messagebox.played_history import list_played_history, recent_reply_recipient
+from messagebox.contacts import ContactError
 from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcRouter, SelectionStore
 from messagebox.settings import SettingsStore
 
@@ -1686,6 +1687,146 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertTrue(self.runtime.state["snapshot"]["queue_hold"])
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
+
+    def kit_heartbeat(self, cards=None, *, scope="a" * 64, boxes=None):
+        original = FakeClient.heartbeat
+        self.client.connected_boxes = [BOX] if boxes is None else boxes
+        def heartbeat(state):
+            response = {**original(self.client, state), "account_scope": scope}
+            if cards is not None:
+                response["kit_cards"] = cards
+            return response
+        self.client.heartbeat = heartbeat
+        return self.runtime.heartbeat()
+
+    def kit_uids(self, jid=BOX_JID):
+        return self.runtime.contacts.load()["contacts"].get(jid, {}).get("card_uids", [])
+
+    KIT = [{"card_uid": "04:AB:CD:12", "label": "Maple", "recipient_id": BOX["id"]}]
+
+    def test_kit_cards_capability_is_reported(self):
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        self.assertEqual(send.call_args.args[0]["capabilities"]["kit_cards"], 1)
+
+    def test_kit_card_is_inert_until_active_then_routes_to_linked_box(self):
+        self.kit_heartbeat()
+        self.assertEqual(self.kit_uids(), [])
+        self.assertIsNone(self.runtime.contacts.resolve_card("04ABCD12"))
+        self.kit_heartbeat([{**self.KIT[0], "card_uid": "04abcd12", "future_field": True}])
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.assertEqual(self.runtime.contacts.resolve_card("04:AB:CD:12")["jid"], BOX_JID)
+        self.assertEqual(self.runtime.recipient_id(BOX_JID), BOX["id"])
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        inventory = send.call_args.args[0]["nfc_inventory"]
+        self.assertEqual([card["recipient_id"] for card in inventory["cards"]], [BOX["id"]])
+        self.assertNotIn("04:AB:CD:12", json.dumps(send.call_args.args[0]))
+        revision = self.runtime.contacts.load()["revision"]
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.runtime.contacts.load()["revision"], revision)
+
+    def test_kit_card_list_rejects_invalid_routes_without_failing_heartbeat(self):
+        self.kit_heartbeat(self.KIT)
+        for invalid in ("bad", [self.KIT[0], self.KIT[0]], [{**self.KIT[0], "label": ""}],
+                        [{**self.KIT[0], "card_uid": "zz"}], [{**self.KIT[0], "label": "a\nb"}],
+                        [self.KIT[0]] * 51):
+            self.kit_heartbeat(invalid)
+            self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.kit_heartbeat([{**self.KIT[0], "recipient_id": "unknown1234567890123"}])
+        self.assertEqual(self.kit_uids(), [])
+        self.assertIsNone(self.runtime.contacts.resolve_card("04:AB:CD:12"))
+
+    def test_kit_card_never_moves_or_removes_a_locally_paired_card(self):
+        self.kit_heartbeat()
+        person = PERSON["wa_id"] + "@s.whatsapp.net"
+        self.runtime.contacts.enroll_card(person, "04ABCD12", label="Family")
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.runtime.contacts.resolve_card("04:AB:CD:12")["jid"], person)
+        self.runtime.contacts.remove_card("04:AB:CD:12")
+        self.runtime.contacts.enroll_card(BOX_JID, "04ABCD12", label="Example Box")
+        self.kit_heartbeat(self.KIT)
+        self.kit_heartbeat([])
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+
+    def test_kit_card_unlink_peer_loss_and_cloud_rollback_remove_only_managed_cards(self):
+        self.kit_heartbeat()
+        self.runtime.contacts.enroll_card(BOX_JID, "04111111", label="Example Box")
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(sorted(self.kit_uids()), ["04:11:11:11", "04:AB:CD:12"])
+        self.kit_heartbeat([])  # the peer lost the capability or the kit was revoked
+        self.assertEqual(self.kit_uids(), ["04:11:11:11"])
+        self.kit_heartbeat(self.KIT)  # reconnect
+        self.assertIn("04:AB:CD:12", self.kit_uids())
+        self.kit_heartbeat(None)  # Cloud rollback omits the extension
+        self.assertEqual(self.kit_uids(), ["04:11:11:11"])
+        self.kit_heartbeat(self.KIT)
+        self.kit_heartbeat(self.KIT, boxes=[])  # unlink
+        self.assertIsNone(self.runtime.contacts.resolve_card("04:AB:CD:12"))
+        self.assertEqual(self.runtime.state["kit_cards"]["managed"], {})
+        self.kit_heartbeat(self.KIT)  # the same link is restored
+        self.assertIn("04:AB:CD:12", self.kit_uids())
+
+    def test_removed_kit_card_stays_removed_until_paired_again_locally(self):
+        self.kit_heartbeat(self.KIT)
+        with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        inventory = send.call_args.args[0]["nfc_inventory"]
+        self.runtime._nfc({"operation_id": "remove-kit1234567890", "kind": "nfc_unpair",
+            "payload": {"card_ref": inventory["cards"][0]["card_ref"], "recipient_id": BOX["id"],
+                        "inventory_revision": inventory["revision"]}})
+        self.kit_heartbeat(self.KIT)
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.kit_uids(), [])
+        self.assertEqual(self.runtime.state["kit_cards"]["removed"], [["a" * 64, "04:AB:CD:12"]])
+        self.runtime.contacts.enroll_card(BOX_JID, "04ABCD12", label="Example Box")
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.runtime.state["kit_cards"]["removed"], [])
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+
+    def test_kit_card_account_reset_unbinds_and_scopes_removal_markers(self):
+        self.kit_heartbeat(self.KIT)
+        self.runtime.contacts.remove_card("04:AB:CD:12")
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.kit_uids(), [])
+        self.kit_heartbeat(self.KIT, scope="b" * 64)  # transfer or reset to a new account
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.kit_heartbeat(self.KIT, scope="c" * 64)
+        self.assertEqual(self.kit_uids(), [])  # a scope change first removes managed cards
+        self.kit_heartbeat(self.KIT, scope="c" * 64)
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.kit_heartbeat(["malformed"], scope="d" * 64)
+        self.assertEqual(self.kit_uids(), [])  # another scope's list is never reused
+        self.kit_heartbeat(["malformed"], scope="d" * 64)
+        self.assertEqual(self.kit_uids(), [])
+
+    def test_kit_card_binding_survives_restart_at_each_write_boundary(self):
+        self.kit_heartbeat()
+        write = self.runtime.contacts._write
+        with mock.patch.object(self.runtime.contacts, "_write", side_effect=OSError("power loss")):
+            self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.kit_uids(), [])
+        self.assertEqual(self.runtime.state["kit_cards"]["managed"]["04:AB:CD:12"]["status"], "binding")
+        restarted = CloudRuntime(self.client, state_path=self.root / "runtime.json",
+            contacts_path=self.root / "cloud-contacts.json", queue_dir=self.root / "queue",
+            outbox_dir=self.root / "outbox", settings_path=self.root / "settings.json",
+            clock=lambda: NOW, monotonic=lambda: self.mono[0], boot_id="test-boot", converter=queued_audio)
+        self.runtime = restarted
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.assertEqual(self.runtime.state["kit_cards"]["managed"]["04:AB:CD:12"]["status"], "bound")
+        saved = json.loads((self.root / "runtime.json").read_text())
+        self.assertEqual(saved["kit_cards"]["managed"]["04:AB:CD:12"]["status"], "bound")
+        state = self.runtime.state
+        def crash_after_write(document):
+            write(document)
+            raise ContactError("power loss")
+        with mock.patch.object(self.runtime.contacts, "_write", side_effect=crash_after_write):
+            self.kit_heartbeat([])
+        self.assertEqual(state["kit_cards"]["managed"]["04:AB:CD:12"]["status"], "unbinding")
+        self.kit_heartbeat(self.KIT)
+        self.assertEqual(self.kit_uids(), ["04:AB:CD:12"])
+        self.assertEqual(self.runtime.state["kit_cards"]["removed"], [])
 
     def test_heartbeat_requires_scope_and_records_transfer(self):
         original = self.client.heartbeat
