@@ -213,6 +213,62 @@ class TransactionTests(unittest.TestCase):
                 self.install(fixture)
             self.assertEqual(update.controlled_release(fixture.root), old)
 
+    @staticmethod
+    def transitioning(fixture, unit, times):
+        """Report a timer-started oneshot as activating for the first scans."""
+        import subprocess
+        seen = []
+
+        def run(command, **options):
+            if command == ['systemctl', 'is-active', unit] and (times is None or len(seen) < times):
+                seen.append(command)
+                fixture.systemctl.commands.append(command[:])
+                return subprocess.CompletedProcess(command, 3, 'activating\n')
+            return fixture.systemctl(command, **options)
+        run.seen = seen
+        return run
+
+    def test_preflight_waits_for_a_briefly_activating_oneshot(self):
+        unit = 'messagebox-wifi-watchdog.service'
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            run = self.transitioning(fixture, unit, 1)
+            start = self.clock.now
+            update.install_transaction(fixture.source, fixture.manifest, root=fixture.root, run=run,
+                                       operation_id='synthetic-operation', sequence=1, health=lambda *args: None)
+            self.assertEqual(len(run.seen), 1)
+            self.assertGreaterEqual(self.clock.now - start, update.UNIT_SETTLE_POLL)
+            self.assertEqual(update.controlled_release(fixture.root), update.RELEASES + '/v0.3.0-canary.1-' + 'a' * 40)
+            self.assertEqual(update.read_state(fixture.root, 'result.json')['state'], 'installed')
+
+    def test_preflight_fails_before_mutation_when_a_unit_stays_activating(self):
+        unit = 'messagebox-wifi-watchdog.service'
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            run = self.transitioning(fixture, unit, None)
+            start = self.clock.now
+            fixture.systemctl.commands.clear()
+            with self.assertRaisesRegex(update.UpdateError,
+                                        rf'still transitioning: {unit} \(activating\); did not settle within 30s'):
+                update.install_transaction(fixture.source, fixture.manifest, root=fixture.root, run=run,
+                                           operation_id='synthetic-operation', sequence=1, health=lambda *args: None)
+            self.assertGreaterEqual(self.clock.now - start, update.UNIT_SETTLE_TIMEOUT)
+            self.assertGreater(len(run.seen), 2)
+            self.assertEqual(update.controlled_release(fixture.root), old)
+            self.assertFalse(any(command[1] in {'stop', 'start', '--job-mode=ignore-dependencies'}
+                                 for command in fixture.systemctl.commands))
+            self.assertEqual(update.read_state(fixture.root, 'journal.json')['kind'], 'bootstrap')
+
+    def test_bootstrap_waits_for_a_briefly_activating_oneshot(self):
+        unit = 'messagebox-wifi-watchdog.service'
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.metadata.write_text(json.dumps({'version': 'v0.2.0', 'commit': 'b' * 40}))
+            run = self.transitioning(fixture, unit, 1)
+            old = update.bootstrap_layout(root=fixture.root, run=run)
+            self.assertEqual(len(run.seen), 1)
+            self.assertEqual(update.controlled_release(fixture.root), old)
+
     def test_success_retains_current_previous_and_removes_snapshots(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture, old = self.prepare(directory)

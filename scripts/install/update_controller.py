@@ -601,6 +601,8 @@ def _worker():
             # Explicit approval is one use: never save it for a later interaction.
             record(operation, 'failed', str(exc))
         else:
+            # Keep the updater-authored cause for diagnosis; never shown to users.
+            operation['detail'] = update._failure_cause(exc)[:update.HEALTH_CODE_LIMIT]
             record(operation, 'failed', 'install_failed')
         raise
     except (OSError, ValueError):

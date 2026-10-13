@@ -219,6 +219,10 @@ class UpdateError(RuntimeError):
     pass
 
 
+class UnitTransitioning(UpdateError):
+    """A unit is between states; a later scan can see it settled."""
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as source:
@@ -627,7 +631,7 @@ def _unit_states(run, *, allow_transitional=False, deadline=None):
         active = query("is-active", unit)
         enabled = query("is-enabled", unit)
         if active in TRANSITIONAL_ACTIVE_STATES and not allow_transitional:
-            raise UpdateError(f"managed unit is still transitioning: {unit} ({active})")
+            raise UnitTransitioning(f"managed unit is still transitioning: {unit} ({active})")
         known_active = {"active", "inactive", "failed"}
         if allow_transitional:
             known_active |= TRANSITIONAL_ACTIVE_STATES
@@ -683,13 +687,31 @@ def _active_auxiliary_units(states, run):
             )
             state = result.stdout.strip() if isinstance(result.stdout, str) else None
             if state in TRANSITIONAL_ACTIVE_STATES:
-                raise UpdateError("auxiliary unit is still transitioning")
+                raise UnitTransitioning(f"auxiliary unit is still transitioning: {dependent} ({state})")
             if state not in {"active", "inactive", "failed"}:
                 raise UpdateError("auxiliary unit has an unsupported active state")
             if state == "active":
                 active.append(dependent)
             pending.append(dependent)
     return active
+
+
+def _settled_unit_scan(run, *, auxiliary=True):
+    """Return settled managed states and active auxiliary units.
+
+    Timer-started oneshots pass through "activating" for a moment on every
+    tick. Poll until no scanned unit is transitioning before failing.
+    """
+    deadline = time.monotonic() + UNIT_SETTLE_TIMEOUT
+    while True:
+        try:
+            states = _unit_states(run)
+            return states, (_active_auxiliary_units(states, run) if auxiliary else [])
+        except UnitTransitioning as exc:
+            now = time.monotonic()
+            if now >= deadline:
+                raise UpdateError(f"{exc}; did not settle within {UNIT_SETTLE_TIMEOUT:g}s") from exc
+            time.sleep(min(UNIT_SETTLE_POLL, deadline - now))
 
 
 def create_backup(backup_dir, root, entries, unit_states, auxiliary_units=(), *, external_only=False):
@@ -1561,7 +1583,7 @@ def bootstrap_layout(*, root=Path('/'), run=subprocess.run):
             if (info.st_uid != (0 if root == Path('/') else os.geteuid()) or info.st_mode & 0o022
                     or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode))):
                 raise UpdateError('unsafe_legacy_tree')
-        states = _unit_states(run)
+        states, _auxiliary = _settled_unit_scan(run, auxiliary=False)
         backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
         create_backup(_rooted(root, backup), root, [], states, external_only=True)
         journal = {'format': 1, 'kind': 'bootstrap', 'old': old, 'new': old,
@@ -1829,11 +1851,10 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
             (candidate / 'release-manifest.json').chmod(0o644)
             (candidate / 'venv-nfc').symlink_to(STABLE_NFC)
             _sync_tree(candidate)
-            states = _unit_states(run)
+            states, auxiliary = _settled_unit_scan(run)
             if setup and states['comitup.service']['active'] != 'active':
                 # Setup readiness could never be proven; refuse before mutation.
                 raise UpdateError('setup_not_ready')
-            auxiliary = _active_auxiliary_units(states, run)
             backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
             create_backup(_rooted(root, backup), root, external, states, auxiliary, external_only=True)
         except Exception:
