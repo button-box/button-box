@@ -244,7 +244,16 @@ def announce_all_set():
 
 def start_update_hold_cue():
     """Play the short "yes" when an update hold reaches 3 s; return a bounded waiter."""
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("card_saved"))])
+    return start_update_cue(sound_pack.cue_path("card_saved"))
+
+
+def start_update_cue(path):
+    """Start one update cue ("yes" beep or "Got it!" line); return a bounded waiter.
+
+    The waiter also waits for the shared audio reservation, so the updater can
+    take the exclusive one right after it returns.
+    """
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
 
     def wait(timeout):
         deadline = time.monotonic() + timeout
@@ -2378,6 +2387,7 @@ def main():
         from messagebox.cloud_update import button_ready, confirmation, install_announcer
         button_ready(button)
         confirmation.on_hold = start_update_hold_cue
+        confirmation.on_confirmed = start_update_cue
         threading.Thread(target=install_announcer.run, daemon=True).start()
     led = LED(LED_PIN)
     apply_master_volume()

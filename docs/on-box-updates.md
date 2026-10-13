@@ -261,6 +261,24 @@ I'm updated and ready." If that recording is missing or invalid, it uses
 `cue-all_set.wav`. The completion receipt, quiet-hours and idle rules remain the
 same; automatic and attended bootstrap installs do not announce completion.
 
+The box asks again once if nobody holds the button. Forty seconds after the
+first ask, while at least 20 seconds of the window remain, it plays
+`update-reminder.wav`: "I'm still waiting! Hold my button for three seconds to
+install the update." (Ask-to-Auto repeats `auto-updates.wav`.) A short hold
+keeps this one reminder. A missing or invalid reminder recording is skipped.
+
+At three seconds the box plays the short `cue-card_saved.wav` "yes" while the
+button is still held. After release, and before the button owner sends
+`confirm`, it plays `update-installing.wav`: "Got it! I'm installing the update
+now. I'll be back in a few minutes." (Ask-to-Auto: `auto-updates-on.wav`, "Got
+it! Automatic updates are on.") The line waits at most 6 seconds and is skipped
+when fewer than 7 seconds of the window remain, or when its recording is
+missing or invalid. Like the "yes", it ends and releases its shared audio
+reservation before `confirm`, so the install's exclusive reservation is never
+blocked by playback. These lines live in the application
+(`messagebox/cloud_update.py` and `messagebox/button_send.py`); the fixed
+controller is unchanged.
+
 The two-minute monotonic window starts after the cue finishes and release is
 observed. A fresh continuous three-second hold must finish with release before
 the deadline. Approval is one-use and bound to operation, manifest, version and

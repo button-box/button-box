@@ -21,19 +21,19 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
         payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
-        self.assertEqual(len(payload), 530)
+        self.assertEqual(len(payload), 533)
         for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
                      'config/emergency-keys/README.md', 'scripts/install/health-probe.py'):
             self.assertIn(name, payload)
-        # The installed program mapping remains 516 files. Fixed trust code is
+        # The installed program mapping remains 519 files. Fixed trust code is
         # staged separately in updater/, and public pins are bootstrap-only.
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 516)
+        self.assertEqual(len(paths), 519)
         self.assertFalse(any('/etc/button-box-update/' in target for target in paths.values()))
 
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 516)
+        self.assertEqual(len(paths), 519)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
@@ -87,7 +87,7 @@ class ReleaseManifestTests(unittest.TestCase):
 
     def test_generator_includes_additional_sounds_and_update_lines(self):
         paths = release_manifest.installed_paths(ROOT)
-        for name in ('update-ready', 'auto-updates', 'update-done'):
+        for name in ('update-ready', 'auto-updates', 'update-done', 'update-reminder', 'update-installing', 'auto-updates-on'):
             source = f'sounds/cues/{name}.wav'
             self.assertEqual(paths[source], '/opt/messagebox/' + source)
         with tempfile.TemporaryDirectory() as directory:
@@ -128,7 +128,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 516)
+            self.assertEqual(len(entries), 519)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(

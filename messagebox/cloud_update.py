@@ -20,6 +20,11 @@ SOCKET = '/run/messagebox-update/control.sock'
 STATUS = Path('/var/lib/button-box-update/status.json')
 CUE = 'Software update ready. Hold the button for three seconds to install.'
 AUTO_CUE = 'Automatic software updates ready. Hold the button for three seconds to enable.'
+# Played once if nobody holds the button after the first ask. Recording only.
+REMINDER_CUES = {'install': 'update-reminder.wav', 'enable_auto': 'auto-updates.wav'}
+# Played after a successful hold is released, before the box confirms. Recording only;
+# the 3-second beep is the fallback.
+CONFIRMED_CUES = {'install': 'update-installing.wav', 'enable_auto': 'auto-updates-on.wav'}
 TERMINAL = {'installed', 'failed', 'expired', 'rolled_back', 'rollback_failed'}
 
 
@@ -142,16 +147,30 @@ def _voice(text, play):
 # confirm sent while the cue still plays would fail `not_idle` and burn the
 # one-use approval.
 HOLD_CUE_WAIT_S = 1.5
+# Ask again once when the window is still open this long after the first ask.
+REMIND_AFTER_S = 40
+# The reminder must finish well before the two-minute window closes.
+REMIND_MARGIN_S = 20
+# Upper bound on the "Got it!" line after release. It plays before `confirm`
+# for the same reason as the hold cue, and only when the window can absorb it.
+CONFIRMED_CUE_WAIT_S = 6
 
 
 class Confirmation:
-    def __init__(self, *, ipc=request, monotonic=time.monotonic, sleep=time.sleep, voice=_voice, on_hold=None):
+    def __init__(self, *, ipc=request, monotonic=time.monotonic, sleep=time.sleep, voice=_voice, on_hold=None,
+                 on_confirmed=None, cue=bundled_cue):
         self.ipc, self.monotonic, self.sleep, self.voice = ipc, monotonic, sleep, voice
         # Optional: called once when a valid hold reaches 3 s. Returns a
         # wait(timeout) callable (or None). Default: no sound.
         self.on_hold = on_hold
+        # Optional: called with a bundled recording after a valid hold is
+        # released. Returns a wait(timeout) callable (or None). Default: no sound.
+        self.on_confirmed = on_confirmed
+        self.cue = cue
         self.binding = None
         self.consume_release = False
+        # One reminder per armed window: (binding, monotonic time to remind).
+        self.reminder = None
 
     def _hold_reached(self):
         if self.on_hold is None:
@@ -160,6 +179,37 @@ class Confirmation:
             return self.on_hold()
         except (OSError, subprocess.SubprocessError, ValueError):
             return None
+
+    def _confirmed(self, approval):
+        """Say "Got it!" on the box before the updater takes the speaker."""
+        name = CONFIRMED_CUES.get(approval.get('action'))
+        if self.on_confirmed is None or name is None:
+            return
+        if approval['deadline_mono'] - self.monotonic() <= CONFIRMED_CUE_WAIT_S + 1:
+            return  # Never let the line push the confirmation past the window.
+        path = self.cue(name)
+        if path is None:
+            return
+        try:
+            wait = self.on_confirmed(path)
+            if wait is not None:
+                wait(CONFIRMED_CUE_WAIT_S)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+
+    def _remind(self, approval, play):
+        """Ask once more if nobody held the button after the first ask."""
+        if not self.reminder or self.reminder[0] != approval.get('binding'):
+            return
+        now = self.monotonic()
+        if now < self.reminder[1]:
+            return
+        self.reminder = None
+        name = REMINDER_CUES.get(approval.get('action'))
+        path = self.cue(name) if name else None
+        if path is None or approval.get('deadline_mono', 0) - now <= REMIND_MARGIN_S:
+            return
+        play(path, timeout=30)
 
     def idle(self, button, play):
         """Only the actual button-owner PID can arm a root-owned window."""
@@ -170,15 +220,22 @@ class Confirmation:
             approval = response.get('approval')
             if not approval:
                 self.binding = None
+                self.reminder = None
                 return
-            if approval.get('cue_pending'):
-                self.voice(AUTO_CUE if approval['action'] == 'enable_auto' else CUE, play)
-                # Cue completion alone cannot approve: observe release first.
-                while button.is_pressed:
-                    self.consume_release = True
-                    self.sleep(0.02)
-                response = self.ipc('arm', binding=approval['binding'], released=True)
-                approval = response.get('approval')
+            if not approval.get('cue_pending'):
+                self.binding = approval
+                self._remind(approval, play)
+                return
+            self.voice(AUTO_CUE if approval['action'] == 'enable_auto' else CUE, play)
+            # Cue completion alone cannot approve: observe release first.
+            while button.is_pressed:
+                self.consume_release = True
+                self.sleep(0.02)
+            response = self.ipc('arm', binding=approval['binding'], released=True)
+            approval = response.get('approval')
+            if approval and not approval.get('cue_pending'):
+                # Short holds keep this window and its one reminder.
+                self.reminder = (approval['binding'], self.monotonic() + REMIND_AFTER_S)
             self.binding = approval
         except (UpdateUnavailable, OSError, subprocess.SubprocessError):
             self.binding = None
@@ -222,6 +279,7 @@ class Confirmation:
                 pass
         # The gesture is consumed completely, including short or expired holds.
         if confirmed and eligible:
+            self._confirmed(approval)
             try:
                 self.ipc('confirm', binding=approval['binding'], held_seconds=held_seconds,
                          released=True)
