@@ -1654,6 +1654,18 @@ def react_with_card(card_id):
         return "nothing_to_react_to"
 
 
+def reaction_card_emoji(card_id):
+    """The saved emoji for a reaction card, read locally; never a network call."""
+    try:
+        runtime = CloudRuntime(client=object())
+        for card in runtime._reaction_cards(runtime._snapshot()):
+            if card["id"] == card_id:
+                return card["emoji"]
+    except (CloudRuntimeError, OSError, ValueError, KeyError, TypeError):
+        pass
+    return "\u2764\ufe0f" if card_id == "reaction_heart" else ""
+
+
 def card_saved_clip(jid, pack):
     return CloudRuntime(client=object()).named_card_clip(jid, pack, "card_saved")
 

@@ -133,5 +133,98 @@
    "seconds": 3.532,
    "sha256": "560d7ce2db82be97a529f9af8749f7ee198a7df824dc03b5dbd4b118ced467e7"
   }
+ ],
+ "reaction_lines": [
+  {
+   "file": "voice-sent-heart.wav",
+   "text": "You just sent a heart!",
+   "seconds": 1.77,
+   "seed": 7,
+   "sha256": "dfe14b0fd0c421425f9833a7cd54e19387b452f46477f0b2614d600d7ed8b42a"
+  },
+  {
+   "file": "voice-sent-big-laugh.wav",
+   "text": "You just sent a big laugh!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "62e420f6d60e1d1f598edd46b7acd3aac46a9edc73e709fe54fc9b9eb7c9db01"
+  },
+  {
+   "file": "voice-sent-applause.wav",
+   "text": "You just sent applause!",
+   "seconds": 1.69,
+   "seed": 7,
+   "sha256": "1aed0510cee696a5a535738701e9a6fee785bc29ceefa377c9eb8e50207a97da"
+  },
+  {
+   "file": "voice-sent-heart-eyes.wav",
+   "text": "You just sent heart eyes!",
+   "seconds": 2.01,
+   "seed": 7,
+   "sha256": "5155406d355f9f4e926225cc86d475e54559d2130de2b985a2e03f80e866395e"
+  },
+  {
+   "file": "voice-sent-thumbs-up.wav",
+   "text": "You just sent a thumbs up!",
+   "seconds": 1.77,
+   "seed": 7,
+   "sha256": "ea2d62e505d1b5819421b78f09e086e5d5464391a12dd5500ebc563315a2436a"
+  },
+  {
+   "file": "voice-sent-fire.wav",
+   "text": "You just sent fire!",
+   "seconds": 1.77,
+   "seed": 1,
+   "sha256": "3cd09b483af1492287406f732544e9d2e3249669abeac42c0429678e9e9fed73"
+  },
+  {
+   "file": "voice-sent-celebration.wav",
+   "text": "You just sent a celebration!",
+   "seconds": 2.01,
+   "seed": 7,
+   "sha256": "34354303825fbab6382f760d343d232a07ab4bda2380801147609a80371f020e"
+  },
+  {
+   "file": "voice-sent-kiss.wav",
+   "text": "You just sent a kiss!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "e81ec2d360ccc8280cdfbe1d5c56bcb477127bb67e1075119df897f56699be10"
+  },
+  {
+   "file": "voice-sent-surprise.wav",
+   "text": "You just sent a surprise!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "543dd3ad129f79c41809e616b5c1efb2ab4fe2854dfcaed51ef8447b28735aea"
+  },
+  {
+   "file": "voice-sent-tear.wav",
+   "text": "You just sent a tear!",
+   "seconds": 1.77,
+   "seed": 7,
+   "sha256": "b0d7ea5d86ddb1066ea37fc017c7b9b1128cc6cfefcfdc843580926b80954a21"
+  },
+  {
+   "file": "voice-sent-hooray.wav",
+   "text": "You just sent a hooray!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "6ba5c2ac330ca36974fb3aeb7a3a2f0700c9a22e10267db4d42ac42ec6772216"
+  },
+  {
+   "file": "voice-sent-smile.wav",
+   "text": "You just sent a smile!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "27f2edbecc30f36cb9e0990782ea148ffd415e6b8e5b34c896aa8b8e909cb55a"
+  },
+  {
+   "file": "voice-sent-reaction.wav",
+   "text": "You just sent a reaction!",
+   "seconds": 1.93,
+   "seed": 7,
+   "sha256": "171ae623ea0f4772b3090ac1653779c2ce0575ee1f1533c68a10a17956c116e5"
+  }
  ]
 }

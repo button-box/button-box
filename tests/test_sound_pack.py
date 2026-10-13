@@ -426,3 +426,72 @@ class SoundPackTests(unittest.TestCase):
         self.assertFalse(result.timed_out)
         with wave.open(result.path, "rb") as source:
             self.assertEqual(source.readframes(source.getnframes()), pcm)
+
+
+class ReactionSentLineTests(unittest.TestCase):
+    """Reaction cards say "You just sent ..." in every voice, offline."""
+
+    EXPECTED = {
+        "heart": "You just sent a heart!", "big-laugh": "You just sent a big laugh!",
+        "applause": "You just sent applause!", "heart-eyes": "You just sent heart eyes!",
+        "thumbs-up": "You just sent a thumbs up!", "fire": "You just sent fire!",
+        "celebration": "You just sent a celebration!", "kiss": "You just sent a kiss!",
+        "surprise": "You just sent a surprise!", "tear": "You just sent a tear!",
+        "hooray": "You just sent a hooray!", "smile": "You just sent a smile!",
+        "reaction": "You just sent a reaction!",
+    }
+
+    def directories(self, root=ROOT / "sounds"):
+        from messagebox.settings import VOICE_PACKS
+        return [root / "voice", *(root / "voices" / pack for pack in VOICE_PACKS[1:])]
+
+    def test_every_voice_ships_every_line_with_its_manifest_transcript_and_checksum(self):
+        import hashlib
+        self.assertEqual(set(sound_pack.REACTION_SENT_LINES.values()) | {sound_pack.GENERIC_REACTION_SENT},
+                         set(self.EXPECTED))
+        for directory in self.directories():
+            with self.subTest(directory=directory.name):
+                rows = {row["file"]: row for row in
+                        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["reaction_lines"]}
+                self.assertEqual(set(rows), {f"voice-sent-{key}.wav" for key in self.EXPECTED})
+                for key, text in self.EXPECTED.items():
+                    path = directory / f"voice-sent-{key}.wav"
+                    self.assertEqual(rows[path.name]["text"], text)
+                    self.assertEqual(rows[path.name]["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+                    self.assertTrue(sound_pack._playable_wav(path))
+
+    def test_emoji_keys_ignore_variation_selectors_and_skin_tones(self):
+        self.assertEqual(sound_pack.reaction_sent_key("❤️"), "heart")
+        self.assertEqual(sound_pack.reaction_sent_key("❤"), "heart")
+        self.assertEqual(sound_pack.reaction_sent_key("\U0001f44d\U0001f3fd"), "thumbs-up")
+        self.assertEqual(sound_pack.reaction_sent_key("\U0001f680"), "reaction")
+        self.assertEqual(sound_pack.reaction_sent_key(""), "reaction")
+        self.assertEqual(sound_pack.reaction_sent_key(None), "reaction")
+
+    def test_missing_lines_fall_back_to_jessica_then_generic_then_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "sounds/voice", root / "voice")
+            shutil.copytree(ROOT / "sounds/voices/pirate", root / "voices/pirate")
+            with mock.patch.object(sound_pack, "SOUND_DIR", root):
+                heart = "❤️"
+                self.assertEqual(sound_pack.reaction_sent_path(heart, "pirate"), root / "voices/pirate/voice-sent-heart.wav")
+                (root / "voices/pirate/voice-sent-heart.wav").unlink()
+                self.assertEqual(sound_pack.reaction_sent_path(heart, "pirate"), root / "voice/voice-sent-heart.wav")
+                (root / "voice/voice-sent-heart.wav").write_bytes(b"not a wav")
+                self.assertEqual(sound_pack.reaction_sent_path(heart, "pirate"), root / "voices/pirate/voice-sent-reaction.wav")
+                (root / "voices/pirate/voice-sent-reaction.wav").unlink()
+                (root / "voice/voice-sent-reaction.wav").unlink()
+                self.assertIsNone(sound_pack.reaction_sent_path(heart, "pirate"))
+                self.assertEqual(sound_pack.reaction_sent_path("\U0001f525", "jessica"), root / "voice/voice-sent-fire.wav")
+
+    def test_optional_lines_never_block_a_voice_pack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "sounds"
+            shutil.copytree(ROOT / "sounds", root)
+            for path in root.glob("voice*/**/voice-sent-*.wav"):
+                path.unlink()
+            for path in (root / "voice").glob("voice-sent-*.wav"):
+                path.unlink()
+            sound_pack.validate_sounds(root)
+            self.assertIn("pirate", sound_pack.installed_voice_packs(root))

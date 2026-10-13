@@ -429,6 +429,7 @@ def capabilities(*, nfc=False) -> dict:
         "voice_lines": 1,
         "reactions": 1,
         "reaction_cards": 1,
+        "reaction_sent_voice": 1,
         "text_to_voice": 1,
         "card_name_prompt": True,
         "box_link": True,

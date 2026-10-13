@@ -236,6 +236,21 @@ played within ten minutes. Repeated taps use a stable operation ID. A removed
 card is rejected by Cloud and its contact is removed on the next heartbeat.
 The setup screens require no change. Add and remove cards in dashboard People.
 
+Boxes also report `reaction_sent_voice: 1`. When Cloud accepts the reaction
+(`state: "sent"`), the box plays the card cue, as before, and then says what
+was sent in the current voice, for example "You just sent a heart!".
+The line follows "Say the name when a card is tapped" (`card_name_prompt`); with
+it off, the box plays only the card cue, as before. Any other result plays only
+`cue-oops.wav` and never claims a send. The lines are bundled, so a tap never
+downloads or synthesizes audio: `voice-sent-<key>.wav` in `sounds/voice` and in
+every `sounds/voices/<pack>`, listed under `reaction_lines` in each manifest.
+Keys are `heart`, `big-laugh`, `applause`, `heart-eyes`, `thumbs-up`, `fire`,
+`celebration`, `kiss`, `surprise`, `tear`, `hooray` and `smile` (the dashboard's
+common emojis, using Cloud's emoji words). Any other emoji says "You just sent a
+reaction!". A missing or invalid file falls back to Jessica, then to the generic
+line, then to the card cue. These optional lines never block a voice pack.
+Signed releases that add them need `min_updater_version: "1.1.0"`.
+
 When Cloud omits the new section, the Pi keeps the old heart-only contact and
 request body. Malformed optional card reports do not invalidate heartbeat.
 The self-hosted wacli path stays unchanged and never calls the Cloud reaction API.

@@ -22,6 +22,16 @@ VOICE_NAMES = (
     "listened", "card-needed", "card-unknown", "card-prompt", "card-saved", "stuck", "fail",
 )
 SETUP_VOICE_NAMES = ("setup-online",)
+# Reaction-card emoji (variation selectors and skin tones removed) to its
+# bundled "You just sent ..." line. Words follow Cloud's emoji words and card
+# names. Any other emoji uses the generic "You just sent a reaction!" line.
+REACTION_SENT_LINES = {
+    "\u2764": "heart", "\U0001f602": "big-laugh", "\U0001f44f": "applause", "\U0001f60d": "heart-eyes",
+    "\U0001f44d": "thumbs-up", "\U0001f525": "fire", "\U0001f389": "celebration", "\U0001f618": "kiss",
+    "\U0001f62e": "surprise", "\U0001f622": "tear", "\U0001f64c": "hooray", "\U0001f60a": "smile",
+}
+GENERIC_REACTION_SENT = "reaction"
+MAX_OPTIONAL_LINE_BYTES = 2 * 1024 * 1024
 SOUND_DIR = APP_DIR / "sounds"
 SOUND_STATE = STATE_DIR / "sound-state.json"
 ALL_SET_REQUEST = Path("/var/lib/messagebox-cloud/setup-complete-sound.json")
@@ -56,6 +66,45 @@ def voice_path(name, pack=None):
         _missing_voice_files.add(key)
         logging.getLogger(__name__).warning("Missing %s voice line %s; using jessica", pack, name)
     return fallback
+
+
+def _playable_wav(path):
+    """Accept only a local, bounded 48 kHz mono 16-bit PCM file."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_OPTIONAL_LINE_BYTES:
+            return False
+        with wave.open(str(path), "rb") as sound:
+            frames = sound.getnframes()
+            return (sound.getnchannels() == 1 and sound.getsampwidth() == 2
+                    and sound.getframerate() == 48000 and sound.getcomptype() == "NONE"
+                    and frames > 0 and len(sound.readframes(frames)) == frames * 2)
+    except (OSError, EOFError, wave.Error):
+        return False
+
+
+def reaction_sent_key(emoji):
+    plain = "".join(character for character in str(emoji or "")
+                    if character not in "\ufe0e\ufe0f" and not "\U0001f3fb" <= character <= "\U0001f3ff")
+    return REACTION_SENT_LINES.get(plain, GENERIC_REACTION_SENT)
+
+
+def reaction_sent_path(emoji, pack=None):
+    """The "You just sent ..." line for a reaction card, or None.
+
+    Order: this emoji in the current pack, then in Jessica, then the generic
+    line in the current pack, then in Jessica. Optional lines are never
+    required for a pack to be installed.
+    """
+    pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
+    for name in dict.fromkeys((reaction_sent_key(emoji), GENERIC_REACTION_SENT)):
+        filename = f"voice-sent-{name}.wav"
+        candidates = [SOUND_DIR / "voice" / filename]
+        if pack != "jessica":
+            candidates.insert(0, SOUND_DIR / "voices" / pack / filename)
+        for path in candidates:
+            if _playable_wav(path):
+                return path
+    return None
 
 
 def _validate_pack(directory, names, key, prefix):
