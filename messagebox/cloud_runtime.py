@@ -1162,14 +1162,19 @@ class CloudRuntime:
                 raise CloudRuntimeError("software updater is unavailable")
             self._snapshot()
             remaining = item["expires_at"] - self.server_now()
-            if kind == "install_update":
-                if set(payload) != {"version"}:
-                    raise CloudRuntimeError("software update payload is invalid")
-                result = cloud_update.install_request(item["operation_id"], payload["version"], remaining)
-            else:
-                if set(payload) != {"mode"}:
-                    raise CloudRuntimeError("software update mode is invalid")
-                result = cloud_update.mode_request(item["operation_id"], payload["mode"], remaining)
+            try:
+                if kind == "install_update":
+                    if set(payload) != {"version"}:
+                        raise CloudRuntimeError("software update payload is invalid")
+                    result = cloud_update.install_request(item["operation_id"], payload["version"], remaining)
+                else:
+                    if set(payload) != {"mode"}:
+                        raise CloudRuntimeError("software update mode is invalid")
+                    result = cloud_update.mode_request(item["operation_id"], payload["mode"], remaining)
+            except cloud_update.UpdateUnavailable as exc:
+                # The Cloud update ledger reads `reason`; generic ACKs read `error_code`.
+                self._ack(item["operation_id"], "rejected", error_code=str(exc), reason=str(exc))
+                return
             self.state.setdefault("pending_updates", {})[item["operation_id"]] = result.get("state")
             self._save()
             self._report_update(item["operation_id"], result)

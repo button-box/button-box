@@ -116,8 +116,9 @@ class PolicyTests(unittest.TestCase):
             (bundle / name).write_text('synthetic bundle bytes')
         marker = self.root / 'installed'
         marker.touch()
+        stale = self.auto_waiting('v0.3.0', 'b')
         with mock.patch.object(controller, 'INSTALLED', marker), \
-             mock.patch.object(controller, 'os', types.SimpleNamespace(geteuid=lambda: 0)), \
+             mock.patch.object(controller, 'os', types.SimpleNamespace(geteuid=lambda: 0, open=os.open, fdopen=os.fdopen, O_WRONLY=os.O_WRONLY, O_CREAT=os.O_CREAT, O_NOFOLLOW=os.O_NOFOLLOW)), \
              mock.patch.object(controller, "local_platform", return_value={"os": "raspios-trixie", "architecture": "aarch64", "model": "Raspberry Pi 4 Model B"}), \
              mock.patch.object(controller.update, '_validate_staged_file'), \
              mock.patch.object(controller.update, '_atomic_install', side_effect=lambda source, target, mode: shutil.copyfile(source, target)), \
@@ -128,6 +129,10 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(verify.call_args.args[1], controller.KEYS)
             self.assertEqual(start.call_args.args[0]['action'], 'attended')
             self.assertEqual(start.call_args.args[1]['version'], 'v0.3.0')
+            # The attended install owns the slot; the waiting automatic one is closed.
+            self.assertEqual(controller.read('active.json'), start.call_args.args[0]['operation_id'])
+            closed = controller.read(controller.operation_name(stale))
+            self.assertEqual((closed['state'], closed['reason']), ('expired', 'superseded'))
             start.reset_mock()
             verify.side_effect = controller.ReleaseError('bad_signature')
             with self.assertRaises(controller.ReleaseError):
@@ -155,6 +160,107 @@ class PolicyTests(unittest.TestCase):
         with mock.patch.object(controller, 'receive_bundle') as receive, self.assertRaisesRegex(ValueError, 'reserved'):
             self.send('downloaded', uid=101, version='v0.3.2')
         receive.assert_not_called()
+
+    def auto_waiting(self, version='v0.3.0', manifest='a'):
+        configuration = controller.policy()
+        configuration['mode'] = 'auto'
+        controller.save('policy.json', configuration)
+        controller.save('available.json', {'version': version, 'manifest_sha256': manifest * 64, 'sequence': 4})
+        with mock.patch.object(controller, 'auto_window', return_value=False):
+            self.send('button', released=True)
+        operation_id = 'auto:' + manifest * 64
+        self.assertEqual(controller.read('active.json'), operation_id)
+        self.assertEqual(controller.read(controller.operation_name(operation_id))['state'], 'waiting_for_window')
+        return operation_id
+
+    def test_installed_target_closes_stale_automatic_operation_and_owner_install_proceeds(self):
+        # Regression: an attended install of the same candidate finished while an
+        # automatic operation still waited; a newer explicit install was rejected.
+        stale = self.auto_waiting('v0.3.6-canary.4', 'a')
+        controller.save('result.json', {'operation_id': 'bootstrap:' + 'a' * 64, 'state': 'installed',
+                                        'reason': 'healthy', 'version': 'v0.3.6-canary.4'}, 0o644)
+        controller.save('available.json', {'version': 'v0.3.6', 'manifest_sha256': 'b' * 64, 'sequence': 5})
+        with mock.patch.object(controller, 'installed_identity',
+                               return_value={'software_version': 'v0.3.6-canary.4', 'software_commit': 'c' * 40}), \
+             mock.patch.object(controller, 'public_status', return_value={}):
+            self.send('status', uid=101)
+            closed = controller.read(controller.operation_name(stale))
+            self.assertEqual((closed['state'], closed['reason']), ('installed', 'already_installed'))
+            # Closing the stale receipt never replaces the reported transaction result.
+            self.assertEqual(controller.read('result.json')['operation_id'], 'bootstrap:' + 'a' * 64)
+            result = self.send('install', operation_id='synthetic-owner', version='v0.3.6', remaining=300)
+        self.assertEqual(result['state'], 'waiting_for_button')
+
+    def test_explicit_install_replaces_unstarted_automatic_but_keeps_one_use_approval(self):
+        stale = self.auto_waiting('v0.3.0', 'a')
+        with self.assertRaisesRegex(ValueError, 'update_busy'):
+            self.send('install', operation_id='synthetic-older', version='v0.2.9', remaining=300)
+        with self.assertRaisesRegex(ValueError, 'update_busy'):
+            self.send('mode', operation_id='synthetic-mode', mode='ask', remaining=300)
+        result = self.send('install', operation_id='synthetic-owner', version='v0.3.0', remaining=300)
+        self.assertEqual(result['state'], 'waiting_for_button')
+        self.assertTrue(result['cue_pending'])
+        closed = controller.read(controller.operation_name(stale))
+        self.assertEqual((closed['state'], closed['reason']), ('expired', 'superseded_by_owner'))
+        # The owner request now holds the slot; no automatic operation can take it back.
+        with mock.patch.object(controller, 'auto_window', return_value=True), \
+             mock.patch.object(controller, 'start_install') as start:
+            self.send('button', released=True)
+            start.assert_not_called()
+        self.assertEqual(controller.read('active.json'), 'synthetic-owner')
+        # Installing (started) automatic work still blocks owner requests.
+        operation = controller.read(controller.operation_name('synthetic-owner'))
+        controller.record(operation, 'expired', 'button_window_expired')
+        started = self.auto_waiting('v0.3.0', 'a')
+        operation = controller.read(controller.operation_name(started))
+        controller.record(operation, 'installing')
+        with self.assertRaisesRegex(ValueError, 'update_busy'):
+            self.send('install', operation_id='synthetic-later', version='v0.3.0', remaining=300)
+
+    def test_newer_candidate_replaces_waiting_automatic_operation(self):
+        stale = self.auto_waiting('v0.3.0', 'a')
+        controller.save('available.json', {'version': 'v0.3.1', 'manifest_sha256': 'b' * 64, 'sequence': 5})
+        with mock.patch.object(controller, 'auto_window', return_value=True), \
+             mock.patch.object(controller, 'local_time_ready', return_value=True), \
+             mock.patch.object(controller, 'start_install') as start:
+            self.send('button', released=True)
+        closed = controller.read(controller.operation_name(stale))
+        self.assertEqual((closed['state'], closed['reason']), ('expired', 'superseded'))
+        operation, available = start.call_args.args
+        self.assertEqual(operation['operation_id'], 'auto:' + 'b' * 64)
+        self.assertEqual((operation['version'], available['version']), ('v0.3.1', 'v0.3.1'))
+
+    def test_completed_install_closes_automatic_operation_left_by_a_race(self):
+        stale = self.auto_waiting('v0.3.6-canary.4', 'a')
+        bundle = controller.STATE / 'downloads' / ('c' * 32)
+        bundle.mkdir(parents=True)
+        operation = {'operation_id': 'bootstrap:' + 'a' * 64, 'action': 'attended', 'version': 'v0.3.6-canary.4',
+                     'boot': 'boot-one', 'expires_mono': 1000}
+        controller.record(operation, 'installing')
+        controller.save('ticket.json', {'operation_id': operation['operation_id'], 'version': 'v0.3.6-canary.4',
+                                        'manifest_sha256': 'a' * 64, 'bundle': str(bundle)})
+        controller.save('active.json', stale)  # the broker raced the attended pointer write
+        identity = {'software_version': 'v0.3.6-canary.4', 'software_commit': 'c' * 40}
+        with mock.patch.object(controller, 'digest', return_value='a' * 64), \
+             mock.patch.object(controller, 'verify_bundle', return_value={'release_sequence': 4}), \
+             mock.patch.object(controller, 'extract_bundle'), \
+             mock.patch.object(controller, 'local_platform', return_value={}), \
+             mock.patch.object(controller.update, 'install_transaction'), \
+             mock.patch.object(controller, 'installed_identity', return_value=identity):
+            controller._worker()
+        self.assertEqual(controller.read('result.json')['state'], 'installed')
+        closed = controller.read(controller.operation_name(stale))
+        self.assertEqual((closed['state'], closed['reason']), ('installed', 'already_installed'))
+
+    def test_rejections_carry_only_bounded_codes(self):
+        self.assertEqual(controller.rejection_code(ValueError('update_busy')), 'update_busy')
+        self.assertEqual(controller.rejection_code(controller.ReleaseError('trust_update_busy')), 'trust_update_busy')
+        self.assertEqual(controller.rejection_code(ValueError('/var/lib/secret')), 'request_rejected')
+        self.assertEqual(controller.rejection_code(OSError('update_busy')), 'request_rejected')
+        self.assertLessEqual(controller.REJECTION_CODES, cloud_update.REJECTION_CODES)
+        self.assertEqual(controller.version_key('v0.3.6-canary.4') < controller.version_key('v0.3.6'), True)
+        self.assertEqual(controller.version_key('0.3.5') < controller.version_key('v0.3.6-canary.1'), True)
+        self.assertIsNone(controller.version_key('latest'))
 
     def test_dowloader_and_runtime_peers_cannot_forge_button_or_heartbeat_evidence(self):
         for command in ('arm', 'confirm', 'button', 'heartbeat'):

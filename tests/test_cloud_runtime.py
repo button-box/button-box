@@ -154,6 +154,26 @@ class CloudRuntimeTests(unittest.TestCase):
             self.assertEqual(receipt["state"], "rolled_back")
             self.assertEqual(receipt["software_version"], "v0.2.0")
 
+    def test_software_update_rejection_reaches_cloud_as_bounded_reason(self):
+        from messagebox import cloud_update
+        self.runtime.heartbeat()
+        item = {"kind": "install_update", "operation_id": OP, "payload": {"version": "v0.3.6"}, "expires_at": NOW + 300}
+        with mock.patch.object(cloud_update, "capability", return_value={"software_update": {"protocol": 1}}), \
+             mock.patch.object(cloud_update, "install_request", side_effect=cloud_update.UpdateUnavailable("update_busy")):
+            self.runtime._command(item, NOW)
+        receipt = json.loads(self.runtime._completed_path(OP).read_text())
+        self.assertEqual(receipt, {"operation_id": OP, "state": "rejected", "error_code": "update_busy", "reason": "update_busy"})
+        self.assertNotIn(OP, self.runtime.state.get("pending_updates", {}))
+        # The IPC client never forwards an unlisted updater string.
+        for raw, code in (({"error": "update_busy"}, "update_busy"), ({"error": "/etc/secret path"}, "updater_rejected"),
+                          ({"error": "request_rejected"}, "request_rejected"), ([1], "updater_rejected")):
+            with self.subTest(raw=raw), mock.patch.object(cloud_update.socket, "socket") as factory:
+                connection = factory.return_value.__enter__.return_value
+                connection.recv.side_effect = [json.dumps(raw).encode() + b"\n"]
+                with self.assertRaises(cloud_update.UpdateUnavailable) as caught:
+                    cloud_update.request("install", operation_id=OP, version="v0.3.6", remaining=300)
+                self.assertEqual(str(caught.exception), code)
+
     def test_software_update_command_requires_capability_and_exact_payload(self):
         from messagebox import cloud_update
         self.runtime.heartbeat()

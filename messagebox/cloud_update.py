@@ -21,8 +21,18 @@ AUTO_CUE = 'Automatic software updates ready. Hold the button for three seconds 
 TERMINAL = {'installed', 'failed', 'expired', 'rolled_back', 'rollback_failed'}
 
 
+# Bounded codes the fixed updater may return. Unknown values never reach the Cloud.
+REJECTION_CODES = frozenset({
+    'update_busy', 'invalid_operation', 'invalid_version', 'invalid_mode', 'operation_conflict',
+    'request_expired', 'invalid_policy', 'unauthorized_peer', 'not_button_owner', 'not_heartbeat_owner',
+    'not_downloader', 'approval_candidate_reserved', 'candidate_changed', 'approval_expired',
+    'short_or_expired_hold', 'unsupported_command', 'invalid_request', 'invalid_trust_request',
+    'trust_update_busy', 'request_rejected',
+})
+
+
 class UpdateUnavailable(ValueError):
-    pass
+    """str(exc) is always a bounded code: updater_unavailable, updater_rejected or a REJECTION_CODES value."""
 
 
 def request(command, **fields):
@@ -41,7 +51,8 @@ def request(command, **fields):
         except (OSError, ValueError) as exc:
             raise UpdateUnavailable('updater_unavailable') from exc
     if not isinstance(value, dict) or value.get('error'):
-        raise UpdateUnavailable('updater_rejected')
+        code = value.get('error') if isinstance(value, dict) else None
+        raise UpdateUnavailable(code if code in REJECTION_CODES else 'updater_rejected')
     return value
 
 

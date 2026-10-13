@@ -189,6 +189,17 @@ an active reservation defers installation. Busy automatic attempts remain
 `waiting_for_window` and retry through the existing button idle loop after a
 bounded delay. Downloading may happen earlier.
 
+An automatic operation that is still `waiting_for_window` never blocks other
+work. It closes as `installed`/`already_installed` once any install (attended,
+owner or automatic) reaches its target version or a newer one, and as
+`expired`/`superseded` when a different candidate replaces it. An owner
+`install_update` for the same or a newer version replaces it
+(`expired`/`superseded_by_owner`) and still needs its own one-use button hold.
+A started (`installing`) automatic operation still returns `update_busy`. These
+closures update only the operation receipt, never `result.json`. The broker and
+`attended-install` serialize operation-pointer writes through
+`controller.lock`.
+
 `install_update {version}` always asks for physical confirmation, including on
 an Auto box. Once the exact version is independently verified and the box is
 idle, its sole GPIO owner voices:
@@ -228,6 +239,11 @@ page's existing footer reads the same installed record. Heartbeats include
 `downloading`, `waiting_for_button`, `waiting_for_window`, `installing`,
 `installed`, `failed`, `expired`, `rolled_back`, `rollback_failed`, with exact
 target/installed identity and bounded reason codes. Acceptance is not installation.
+When the broker refuses a request, it returns one fixed allowlisted code (for
+example `update_busy`, `operation_conflict` or `request_expired`; otherwise
+`request_rejected`). The runtime ACKs the Cloud operation `rejected` with that
+code in both `reason` and `error_code`; an unreachable broker reports
+`updater_unavailable`.
 
 Without an emergency pin, the unprivileged downloader uses the GitHub stable
 latest endpoint or bounded paginated release lists for canary. With a pin, both

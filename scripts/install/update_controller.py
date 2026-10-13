@@ -2,6 +2,8 @@
 """Fixed, local updater broker. No root network, audio, GPIO or arbitrary commands."""
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import math
@@ -32,6 +34,39 @@ SOCKET = RUN / 'control.sock'
 INSTALLED = Path('/etc/button-box-update/installed')
 TERMINAL = {'installed', 'failed', 'expired', 'rolled_back', 'rollback_failed'}
 ID = re.compile(r'[A-Za-z0-9:._-]{1,240}\Z')
+VERSION = re.compile(r'v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-canary\.([0-9]{1,9}))?\Z')
+# Fixed, bounded rejection codes. Anything else is reported as request_rejected.
+REJECTION_CODES = frozenset({
+    'update_busy', 'invalid_operation', 'invalid_version', 'invalid_mode', 'operation_conflict',
+    'request_expired', 'invalid_policy', 'unauthorized_peer', 'not_button_owner', 'not_heartbeat_owner',
+    'not_downloader', 'approval_candidate_reserved', 'candidate_changed', 'approval_expired',
+    'short_or_expired_hold', 'unsupported_command', 'invalid_request', 'invalid_trust_request',
+    'trust_update_busy',
+})
+
+
+def rejection_code(exc):
+    code = str(exc) if isinstance(exc, ValueError) else ''
+    return code if code in REJECTION_CODES else 'request_rejected'
+
+
+def version_key(value):
+    match = VERSION.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        return None
+    major, minor, patch, canary = match.groups()
+    # A stable release sorts after every canary of the same base version.
+    return (int(major), int(minor), int(patch), 0 if canary else 1, int(canary or 0))
+
+
+@contextlib.contextmanager
+def state_lock():
+    """Serialize operation-pointer writes between the broker and attended installs."""
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    descriptor = os.open(STATE / 'controller.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def auto_window(now, timezone, jitter):
@@ -141,11 +176,35 @@ def remaining_valid(operation):
             and time.monotonic() < operation['expires_mono'])
 
 
+def close_operation(operation, state, reason):
+    """Close an operation receipt without replacing the last transaction result."""
+    operation.update(state=state, reason=reason, **installed_identity())
+    save(operation_name(operation['operation_id']), operation)
+
+
+def automatic_superseded(operation, available=None):
+    """An unstarted automatic operation is stale once its target or candidate is gone."""
+    if not operation or operation.get('action') != 'automatic' or operation.get('state') != 'waiting_for_window':
+        return None
+    target = version_key(operation.get('version'))
+    current = version_key(installed_identity().get('software_version'))
+    if target is None or current is not None and current >= target:
+        return 'already_installed' if current == target else 'superseded'
+    available = read('available.json', {}) if available is None else available
+    if available and 'auto:' + str(available.get('manifest_sha256')) != operation['operation_id']:
+        return 'superseded'
+    return None
+
+
 def active_operation():
     operation_id = read('active.json')
     if not operation_id:
         return None
     operation = read(operation_name(operation_id))
+    reason = automatic_superseded(operation)
+    if reason:
+        # A completed attended/explicit install or a newer candidate replaces it.
+        close_operation(operation, 'installed' if reason == 'already_installed' else 'expired', reason)
     transaction_result = read('result.json', {})
     if (operation and operation['state'] not in TERMINAL and transaction_result.get('operation_id') == operation_id
             and transaction_result.get('state') in TERMINAL):
@@ -255,7 +314,7 @@ class Controller:
             raise ValueError('not_heartbeat_owner')
         if command in {'downloaded', 'download_failed', 'trust_downloaded'} and uid != discovery_uid:
             raise ValueError('not_downloader')
-        with self.lock:
+        with self.lock, state_lock():
             if command == 'status':
                 value = public_status()
                 operation = active_operation()
@@ -404,7 +463,16 @@ class Controller:
             raise ValueError('request_expired')
         current = active_operation()
         if current and current['state'] not in TERMINAL:
-            raise ValueError('update_busy')
+            target = version_key(version)
+            waiting = version_key(current.get('version'))
+            replaceable = (command == 'install' and current.get('action') == 'automatic'
+                           and current.get('state') == 'waiting_for_window'
+                           and target is not None and waiting is not None and target >= waiting)
+            if not replaceable:
+                raise ValueError('update_busy')
+            # An unstarted automatic install never blocks an explicit owner request.
+            # The owner request still needs its own one-use button approval.
+            close_operation(current, 'expired', 'superseded_by_owner')
         operation = {'operation_id': operation_id, 'action': action, 'version': version,
                      'boot': update._boot(), 'expires_mono': time.monotonic() + min(remaining, 86400)}
         save('active.json', operation_id)
@@ -446,11 +514,16 @@ class Controller:
             return
         if installed_identity().get('software_version') == available['version']:
             return
+        if automatic_superseded(operation, available):
+            close_operation(operation, 'expired', 'superseded')
+            operation = None
         if not operation or operation['state'] in TERMINAL:
             operation = {'operation_id': 'auto:' + available['manifest_sha256'], 'action': 'automatic',
                          'version': available['version'], 'boot': update._boot(), 'expires_mono': time.monotonic() + 86400}
             # Persisted terminal receipts prevent automatic retries after rollback.
-            if read(operation_name(operation['operation_id'])):
+            # A receipt closed only because something replaced it may be reopened.
+            prior = read(operation_name(operation['operation_id']))
+            if prior and prior.get('reason') not in {'superseded', 'superseded_by_owner'}:
                 return
             save('active.json', operation['operation_id'])
             record(operation, 'waiting_for_window')
@@ -536,6 +609,9 @@ def _worker():
             shutil.rmtree(bundle, ignore_errors=True)
             save('available.json', {})
     record(operation, 'installed', 'healthy')
+    with state_lock():
+        # active_operation() closes an automatic operation this install made stale.
+        active_operation()
 
 
 def attended_install(directory, version):
@@ -564,13 +640,18 @@ def attended_install(directory, version):
                  'manifest_sha256': digest(destination / 'release-manifest.json'), 'bundle': str(destination)}
     operation = {'operation_id': operation_id, 'action': 'attended', 'version': version,
                  'boot': update._boot(), 'expires_mono': time.monotonic() + 86400}
-    prior = read(operation_name(operation_id))
-    if prior:
-        shutil.rmtree(destination)
-        raise ValueError('bootstrap_operation_already_attempted')
-    save('available.json', available)
-    save('active.json', operation_id)
-    start_install(operation, available)
+    with state_lock():
+        # The broker cannot interleave an automatic operation between these writes.
+        prior = read(operation_name(operation_id))
+        if prior:
+            shutil.rmtree(destination)
+            raise ValueError('bootstrap_operation_already_attempted')
+        current = active_operation()
+        if current and current.get('action') == 'automatic' and current['state'] == 'waiting_for_window':
+            close_operation(current, 'expired', 'superseded')
+        save('available.json', available)
+        save('active.json', operation_id)
+        start_install(operation, available)
 
 
 def serve():
@@ -602,9 +683,10 @@ def serve():
                     if not isinstance(payload, dict):
                         raise ValueError('invalid_request')
                     result = controller.dispatch(payload, peer)
-                except Exception:
-                    # Never return network strings, paths or subprocess output.
-                    result = {'error': 'request_rejected'}
+                except Exception as exc:
+                    # Never return network strings, paths or subprocess output;
+                    # only a fixed allowlisted code reaches the runtime.
+                    result = {'error': rejection_code(exc)}
                 try:
                     connection.sendall(json.dumps(result).encode() + b'\n')
                 except OSError:
