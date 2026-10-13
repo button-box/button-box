@@ -10,9 +10,11 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+import wave
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -1494,6 +1496,52 @@ def play_audio_ordinary(path):
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
 
 
+# A new playback stream that opens right after the cue's stream closes can
+# lose the USB speaker after its first syllable. Leading silence lets the
+# device settle while the message's own stream is already open.
+LEAD_IN_S = 0.15
+
+
+def with_lead_in(path, seconds=LEAD_IN_S):
+    """Return a temporary copy of a PCM WAV with leading silence, or None."""
+    try:
+        with wave.open(str(path), "rb") as source:
+            params = source.getparams()
+            if params.comptype != "NONE" or params.sampwidth not in (1, 2, 3, 4):
+                return None
+            # The unit's private tmpfs (RuntimeDirectory) when set; removed on stop.
+            descriptor, name = tempfile.mkstemp(prefix="messagebox-lead-in-", suffix=".wav",
+                                                dir=os.environ.get("RUNTIME_DIRECTORY") or None)
+            os.close(descriptor)
+            try:
+                with wave.open(name, "wb") as target:
+                    target.setparams(params)
+                    frames = int(params.framerate * seconds)
+                    # 8-bit WAV is unsigned: its silence is 0x80.
+                    zero = b"\x80" if params.sampwidth == 1 else b"\x00"
+                    target.writeframes(zero * (frames * params.sampwidth * params.nchannels))
+                    while True:
+                        block = source.readframes(48000)
+                        if not block:
+                            break
+                        target.writeframes(block)
+            except BaseException:
+                os.unlink(name)
+                raise
+            return Path(name)
+    except (OSError, EOFError, wave.Error):
+        return None
+
+
+def play_audio_after_cue(path):
+    """Play an inbound message that follows a cue, with a short lead-in."""
+    padded = with_lead_in(path)
+    try:
+        play_audio_ordinary(padded or path)
+    finally:
+        if padded is not None:
+            padded.unlink(missing_ok=True)
+
 
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
@@ -1965,6 +2013,9 @@ class PiGuidedIO:
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
+
+    def play_after_cue(self, path):
+        play_audio_after_cue(path)
 
     def record(self):
         return capture_guided_recording(
