@@ -579,6 +579,37 @@ class ButtonBoundaryTests(unittest.TestCase):
         process.wait.assert_called_once_with(timeout=cloud_update.CONFIRMED_CUE_WAIT_S)
         released.wait.assert_called_once()
 
+    def test_owner_approved_update_audio_plays_while_muted(self):
+        with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(runtime.cloud_quiet, 'play') as play, \
+             mock.patch.object(runtime.cloud_quiet, 'start_player') as start:
+            runtime.play_update_sound(Path('/c/update-reminder.wav'), timeout=30)
+            self.assertIs(play.call_args.kwargs['allow_muted'], True)
+            runtime.start_update_hold_cue()
+            runtime.start_update_cue(Path('/c/update-installing.wav'))
+            self.assertEqual([call.kwargs.get('allow_muted') for call in start.call_args_list], [True, True])
+            # Everything else keeps normal mute.
+            runtime.play_sound(Path('/c/cue-press.wav'), timeout=5)
+            self.assertIs(play.call_args.kwargs['allow_muted'], False)
+
+    def test_muted_player_blocks_ordinary_audio_but_not_update_audio(self):
+        state = {'muted': True, 'quiet_until': None, 'stop_sequence': 0}
+        reservation = mock.MagicMock()
+        reservation.__enter__.return_value = True
+        with mock.patch.object(runtime.cloud_quiet.silence_store, 'load', return_value=state), \
+             mock.patch('messagebox.maintenance.interaction', return_value=reservation), \
+             mock.patch.object(runtime.cloud_quiet.subprocess, 'Popen') as popen:
+            popen.return_value.poll.return_value = 0
+            with self.assertRaises(runtime.cloud_quiet.AudioSilenced):
+                runtime.cloud_quiet.start_player(['aplay', 'x'])
+            runtime.cloud_quiet.start_player(['aplay', 'x'], allow_muted=True)
+        popen.assert_called_once()
+
+    def test_button_loop_asks_with_update_player(self):
+        source = Path(runtime.__file__).read_text()
+        self.assertIn('confirmation.idle(button, play_update_sound)', source)
+        self.assertIn('confirmation.on_confirmed = start_update_cue', source)
+
     def test_wacli_bypasses_updater_and_maintenance_keeps_physical_capture_path(self):
         with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'wacli'}), \
              mock.patch.object(runtime, 'transport_mode', return_value='wacli'), \

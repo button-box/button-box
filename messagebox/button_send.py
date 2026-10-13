@@ -172,11 +172,20 @@ def start_player(args, **kwargs):
     return subprocess.Popen(args, **kwargs)
 
 
-def play_sound(path, *, timeout):
+def play_sound(path, *, timeout, allow_muted=False):
     args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
     if transport_mode() == "cloud":
-        return cloud_quiet.play(args, timeout=timeout)
+        return cloud_quiet.play(args, timeout=timeout, allow_muted=allow_muted)
     return subprocess.run(args, check=True, timeout=timeout)
+
+
+def play_update_sound(path, *, timeout):
+    """An owner-approved update ask or reminder. Mute never blocks it.
+
+    The owner tapped Install, so the box must be able to ask for the hold.
+    Only the approval flow uses this; automatic installs never speak.
+    """
+    return play_sound(path, timeout=timeout, allow_muted=True)
 
 
 _applied_volume_revision = None
@@ -253,7 +262,10 @@ def start_update_cue(path):
     The waiter also waits for the shared audio reservation, so the updater can
     take the exclusive one right after it returns.
     """
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
+    # Part of an owner-approved install or mode change: plays even when muted.
+    process = (start_player(args, allow_muted=True) if transport_mode() == "cloud"
+               else start_player(args))
 
     def wait(timeout):
         deadline = time.monotonic() + timeout
@@ -1482,6 +1494,7 @@ def play_audio_ordinary(path):
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
 
 
+
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
     if quiet_hours():
@@ -2411,7 +2424,7 @@ def main():
             time.sleep(POLL_S)
             if transport_mode() == "cloud":
                 from messagebox.cloud_update import confirmation
-                confirmation.idle(button, play_sound)
+                confirmation.idle(button, play_update_sound)
             apply_master_volume()
             maybe_play_send_success()
             maybe_play_cloud_sound()

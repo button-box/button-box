@@ -275,7 +275,15 @@ it! Automatic updates are on.") The line waits at most 6 seconds and is skipped
 when fewer than 7 seconds of the window remain, or when its recording is
 missing or invalid. Like the "yes", it ends and releases its shared audio
 reservation before `confirm`, so the install's exclusive reservation is never
-blocked by playback. These lines live in the application
+blocked by playback.
+
+Mute does not block this owner-approved flow: the ask, the reminder, the
+three-second beep and the "Got it!" line play with `allow_muted`, because the
+owner just tapped Install (or chose Auto) and a muted box could otherwise never
+open the window. Quiet times never blocked the ask. Mute still silences all
+other audio, including `update-done.wav`. Automatic installs have no ask and
+never speak. A mute or Quiet now command sent during a line still stops it.
+These lines live in the application
 (`messagebox/cloud_update.py` and `messagebox/button_send.py`); the fixed
 controller is unchanged.
 
