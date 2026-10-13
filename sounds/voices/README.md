@@ -36,3 +36,13 @@ Native French woman voice; the original 19 lines are in French (language fr).
 The online-ready handoff added here uses the supplied English copy. ElevenLabs
 voice yN0lwsGSD3mAgqilMvDS (saved), eleven_v3, seed 7, loudnorm I=-16.
 "carte famille" is the French for family card.
+
+## Reaction-card lines
+
+Every pack, and Jessica in `../voice/`, has 13 `voice-sent-<key>.wav` lines such
+as "You just sent a heart!", listed under `reaction_lines` in its manifest with
+transcript, seed and SHA-256. All voices speak the same English text (Tata
+included), `eleven_v3` with the same post chains. Most takes use seed 7; takes
+that said the wrong word use the seed in the manifest. These lines are optional:
+a pack without them still installs, and the box falls back to Jessica, then to
+"You just sent a reaction!", then to the card cue.

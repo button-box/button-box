@@ -377,6 +377,29 @@ bytes, account scope and route. A removed link cannot authorize a retry or a
 queued inbound message. Presenting its old family card uses the existing
 unrecognized card feedback.
 
+### Pre-connected kit cards
+
+The device advertises `kit_cards: 1`. The Cloud then may send a `kit_cards`
+list of up to 50 entries (`card_uid`, `label`, `recipient_id`) for family cards
+that were packed in a kit and accepted by this box's owner. Each `recipient_id`
+is a link ID from the same heartbeat's `connected_boxes`. Before acceptance the
+Cloud sends nothing, so the card uses the existing unrecognized card feedback.
+
+The runtime binds each listed UID to the `box:{link_id}` contact under the
+contact store lock. It never moves a card that is already paired on this box,
+and it never removes a card a person paired here. Kit bindings are tracked in
+`runtime.json`, apart from local pairings. A binding is removed when its entry,
+its link, or the account scope disappears, or when the heartbeat has no
+`kit_cards` field. A malformed list keeps the last valid list for the same
+account scope, limited to current links, and does not fail the heartbeat.
+When a parent removes a kit card, a marker for that account scope and UID stops
+the next heartbeat from pairing it again. Pairing the card again on the box
+clears the marker. Inventory reports kit cards like any other family card.
+
+Rolling the box back to a release without this receiver leaves kit cards in the
+contact store as ordinary family cards. They still route only to their link
+and are removed with it.
+
 Inbound `sender_kind: box` audio uses the same playback path and ordinary cues,
 with no spoken box name. Its local chat route is `box:{sender_id}`, so both invited
 replies and recent-message replies target the sending box. The current heartbeat

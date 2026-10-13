@@ -15,3 +15,7 @@ The B48 additions are `voice-card-prompt.wav` (generic recording invitation) and
 `voice-card-saved.wav` (successful pairing), supplied on 9 October 2026. Their
 transcripts were matched to the source manifests by SHA-256. Message playback
 uses only `cue-msg_start.wav`; `voice-msg-start.wav` is retained for voice previews.
+
+`voice-sent-*.wav` are the 13 optional reaction-card lines ("You just sent a
+heart!"), made on 13 October 2026 with the same voice, model and loudness. They
+are listed under `reaction_lines` in `manifest.json`; see `../voices/README.md`.

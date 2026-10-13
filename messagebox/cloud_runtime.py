@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
-from messagebox.contacts import ContactError, ContactStore
+from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
 from messagebox.cloud_voice import VoiceCache, ReactionQueue, fallback
@@ -97,6 +97,29 @@ def _connected_boxes(value):
         if len(boxes) == 50:
             break
     return boxes
+
+
+def _kit_card_list(value):
+    """Return Cloud kit-card routes, or None when the optional list is malformed."""
+    if not isinstance(value, list) or len(value) > 50:
+        return None
+    cards, uids = [], set()
+    for card in value:
+        if not isinstance(card, dict) or not _valid_id(card.get("recipient_id")):
+            return None
+        label = card.get("label")
+        if (not isinstance(label, str) or not label.strip() or len(label) > 60
+                or any(ord(char) < 32 or ord(char) == 127 for char in label)):
+            return None
+        try:
+            uid = normalize_card_uid(card.get("card_uid"))
+        except ContactError:
+            return None
+        if uid in uids:
+            return None
+        uids.add(uid)
+        cards.append({"card_uid": uid, "recipient_id": card["recipient_id"]})
+    return cards
 
 
 def _effective_expiry(metadata, snapshot):
@@ -304,6 +327,95 @@ class CloudRuntime:
             return changed, None
         self.contacts._mutate(sync)
 
+    def _sync_kit_cards(self, snapshot, response):
+        """Bind Cloud-assigned kit cards to their connected-box contacts.
+
+        Kit cards are tracked apart from cards a person paired on this box, so
+        only Cloud-managed bindings are ever removed when authority ends. Each
+        binding is recorded as pending before the contact store is written, so
+        a restart can tell an unfinished write from a card a parent removed.
+        """
+        scope = snapshot["account_scope"]
+        state = self.state.get("kit_cards")
+        if not isinstance(state, dict) or not isinstance(state.get("managed"), dict):
+            state = {"account_scope": scope, "cards": [], "managed": {}, "removed": []}
+        same_scope = state.get("account_scope") == scope
+        if "kit_cards" not in response:
+            cards = []
+        else:
+            cards = _kit_card_list(response["kit_cards"])
+            if cards is None:
+                cards = state.get("cards", []) if same_scope else []
+        boxes = {box["id"] for box in snapshot.get("connected_boxes", [])}
+        cards = [card for card in cards if card["recipient_id"] in boxes]
+        desired = {card["card_uid"]: "box:" + card["recipient_id"] for card in cards}
+        kept = desired if same_scope else {}
+        managed = {uid: dict(entry) for uid, entry in state["managed"].items()
+                   if isinstance(entry, dict) and isinstance(entry.get("jid"), str)}
+        removed = {tuple(marker) for marker in state.get("removed", [])
+                   if isinstance(marker, list) and len(marker) == 2}
+
+        def reconcile(document):
+            contacts = document["contacts"]
+            holders = {uid: jid for jid, contact in contacts.items() for uid in contact["card_uids"]}
+            changed = False
+            for uid, entry in list(managed.items()):
+                jid, holder = entry.get("jid"), holders.get(uid)
+                if entry.get("status") == "bound" and holder != jid:
+                    # A parent removed or re-paired this card while it was
+                    # authorized. Do not pair it again on the next heartbeat.
+                    if jid in contacts and kept.get(uid) == jid:
+                        removed.add((scope, uid))
+                    del managed[uid]
+                elif kept.get(uid) == jid:
+                    if holder is None:
+                        contacts[jid]["card_uids"].append(uid)
+                        holders[uid] = jid
+                        entry["status"] = "binding"
+                        changed = True
+                    elif holder == jid:
+                        entry["status"] = "bound"
+                    else:
+                        del managed[uid]
+                else:
+                    if holder == jid:
+                        contacts[jid]["card_uids"].remove(uid)
+                        del holders[uid]
+                        entry["status"] = "unbinding"
+                        changed = True
+                    else:
+                        del managed[uid]
+            for uid, jid in desired.items():
+                if uid in managed or (scope, uid) in removed or jid not in contacts:
+                    continue
+                # A card already paired here, to this or another contact, is
+                # never moved or taken over by the Cloud.
+                if holders.get(uid) is None:
+                    contacts[jid]["card_uids"].append(uid)
+                    holders[uid] = jid
+                    managed[uid] = {"jid": jid, "status": "binding"}
+                    changed = True
+            # A deliberate later local pairing clears the removal marker.
+            for marker in list(removed):
+                if marker[1] in holders and marker[1] not in managed:
+                    removed.discard(marker)
+            self.state["kit_cards"] = {"account_scope": scope, "cards": cards, "managed": managed,
+                                       "removed": sorted(list(marker) for marker in removed)[-200:]}
+            if changed:
+                self._save()
+            return changed, None
+
+        try:
+            self.contacts._mutate(reconcile)
+        except ContactError:
+            return
+        for uid, entry in list(managed.items()):
+            if entry["status"] == "binding":
+                entry["status"] = "bound"
+            elif entry["status"] == "unbinding":
+                del managed[uid]
+        self._save()
+
     def _nfc_inventory(self):
         snapshot = self.state.get("snapshot")
         if not snapshot:
@@ -416,6 +528,7 @@ class CloudRuntime:
                     "queue_hold": response["queue_hold"]}
         self._sync_contacts(snapshot)
         self.state["snapshot"] = snapshot
+        self._sync_kit_cards(snapshot, response)
         self._save()
         cloud_update.heartbeat_succeeded()
         self._finish_updates()
@@ -1652,6 +1765,18 @@ def react_with_card(card_id):
         return runtime.client.send_reaction(last["message_id"], operation)["state"]
     except (CloudDeviceError, OSError, ValueError, KeyError, CloudRuntimeError):
         return "nothing_to_react_to"
+
+
+def reaction_card_emoji(card_id):
+    """The saved emoji for a reaction card, read locally; never a network call."""
+    try:
+        runtime = CloudRuntime(client=object())
+        for card in runtime._reaction_cards(runtime._snapshot()):
+            if card["id"] == card_id:
+                return card["emoji"]
+    except (CloudRuntimeError, OSError, ValueError, KeyError, TypeError):
+        pass
+    return "\u2764\ufe0f" if card_id == "reaction_heart" else ""
 
 
 def card_saved_clip(jid, pack):

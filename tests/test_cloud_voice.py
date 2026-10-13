@@ -15,6 +15,8 @@ import test_cloud_runtime as runtime_tests
 from test_cloud_runtime import NOW, PERSON, OP, MID
 import test_wacli_contract as wacli_tests
 
+SOUNDS = Path(__file__).resolve().parents[1] / "sounds"
+
 
 def wav():
     stream = io.BytesIO()
@@ -181,11 +183,57 @@ class WacliVoiceBoundaryTests(unittest.TestCase):
         self.contacts.assign_card("box:reaction_laugh", wacli_tests.CARD)
         with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(cloud_runtime, "react_with_card", return_value="sent") as react, \
-             mock.patch.object(button_send, "play_idle_sound") as sound:
+             mock.patch.object(cloud_runtime, "reaction_card_emoji", return_value="\U0001f602"), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", SOUNDS), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as sound:
             self.assertTrue(button_send._play_nfc_prompt(wacli_tests.CARD, "selected", ""))
             react.assert_called_once_with("reaction_laugh")
-            sound.assert_called_once()
+            self.assertEqual([call.args[0].name for call in sound.call_args_list],
+                             ["cue-card.wav", "voice-sent-big-laugh.wav"])
             self.assertIsNone(SelectionStore(button_send.NFC_SELECTION_FILE).load())
+
+    def reaction_tap(self, result, *, beep=True, say=True, emoji="\u2764\ufe0f", pack="jessica"):
+        from messagebox import button_send
+        if "box:reaction_heart" not in self.contacts.load()["contacts"]:
+            self.contacts.add_contact("box:reaction_heart", "Heart card", receive_after=100)
+            self.contacts.assign_card("box:reaction_heart", wacli_tests.CARD)
+        settings = {**button_send.caregiver_settings(), "nfc_confirmation_beep": beep,
+                    "card_name_prompt": say, "voice_pack": pack}
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "caregiver_settings", return_value=settings), \
+             mock.patch.object(cloud_runtime, "react_with_heart", return_value=result), \
+             mock.patch.object(cloud_runtime, "reaction_card_emoji", return_value=emoji), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", SOUNDS), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as sound:
+            self.assertTrue(button_send._play_nfc_prompt(wacli_tests.CARD, "selected", ""))
+        return [str(call.args[0].relative_to(call.args[0].parents[2])) if "voices" in call.args[0].parts
+                else call.args[0].name for call in sound.call_args_list]
+
+    def test_reaction_card_says_what_was_sent_only_after_the_send_is_accepted(self):
+        self.assertEqual(self.reaction_tap("sent"), ["cue-card.wav", "voice-sent-heart.wav"])
+        self.assertEqual(self.reaction_tap("sent", pack="pirate"), ["cue-card.wav", "voices/pirate/voice-sent-heart.wav"])
+        self.assertEqual(self.reaction_tap("sent", emoji="\U0001f680"), ["cue-card.wav", "voice-sent-reaction.wav"])
+        # The card cue is the success signal; the family-card beep switch does not apply.
+        self.assertEqual(self.reaction_tap("sent", beep=False), ["cue-card.wav", "voice-sent-heart.wav"])
+        self.assertEqual(self.reaction_tap("sent", say=False), ["cue-card.wav"])
+        self.assertEqual(self.reaction_tap("sent", beep=False, say=False), ["cue-card.wav"])
+        # A failed or uncertain send keeps the failure sound and never claims it was sent.
+        for result in ("nothing_to_react_to", "uncertain", "failed"):
+            with self.subTest(result=result):
+                self.assertEqual(self.reaction_tap(result), ["cue-oops.wav"])
+
+    def test_reaction_card_emoji_is_read_from_the_local_snapshot(self):
+        runtime = mock.Mock()
+        runtime._snapshot.return_value = {}
+        runtime._reaction_cards.return_value = [{"id": "reaction_heart", "emoji": "\u2764\ufe0f"},
+                                                {"id": "reaction_abc", "emoji": "\U0001f44d"}]
+        with mock.patch.object(cloud_runtime, "CloudRuntime", return_value=runtime):
+            self.assertEqual(cloud_runtime.reaction_card_emoji("reaction_abc"), "\U0001f44d")
+            self.assertEqual(cloud_runtime.reaction_card_emoji("reaction_gone"), "")
+        runtime._snapshot.side_effect = cloud_runtime.CloudRuntimeError("no snapshot")
+        with mock.patch.object(cloud_runtime, "CloudRuntime", return_value=runtime):
+            self.assertEqual(cloud_runtime.reaction_card_emoji("reaction_heart"), "\u2764\ufe0f")
+            self.assertEqual(cloud_runtime.reaction_card_emoji("reaction_abc"), "")
 
     def test_self_hosted_card_and_press_never_call_cloud_voice_service(self):
         with mock.patch.object(cloud_runtime,'play_reactions',side_effect=AssertionError('Cloud in wacli')), \

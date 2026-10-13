@@ -567,10 +567,25 @@ def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
     if transport_mode() == "cloud" and action in {"recognized", "selected"}:
         contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
         if contact and contact["jid"].startswith("box:reaction_"):
-            result = (cloud_runtime.react_with_heart() if contact["jid"] == "box:reaction_heart"
-                      else cloud_runtime.react_with_card(contact["jid"][4:]))
-            play_idle_sound(sound_pack.cue_path("card") if result == "sent" else sound_pack.cue_path("oops"), 5)
+            card_id = contact["jid"][4:]
+            result = (cloud_runtime.react_with_heart() if card_id == "reaction_heart"
+                      else cloud_runtime.react_with_card(card_id))
             nfc_announcement_store.acknowledge(uid)
+            if result != "sent":
+                play_idle_sound(sound_pack.cue_path("oops"), 5)
+                return True
+            # The card cue still confirms the send; "You just sent a heart!"
+            # follows only after Cloud accepted it, when names are spoken.
+            paths = [sound_pack.cue_path("card")]
+            line = (sound_pack.reaction_sent_path(cloud_runtime.reaction_card_emoji(card_id), settings.get("voice_pack"))
+                    if settings.get("card_name_prompt", True) else None)
+            if line is not None:
+                paths.append(line)
+            for path in paths:
+                if not play_idle_sound(path, 5 if path == sound_pack.cue_path("card")
+                                       else cloud_runtime._ringtone_preview_timeout(path)):
+                    break
+            log_event("reaction_sent", spoken=line is not None)
             return True
     paths = []
     if action == "enrolled":
