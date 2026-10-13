@@ -38,10 +38,17 @@ def installed_paths(root):
             if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
                 relative = source.relative_to(root).as_posix()
                 paths[relative] = "/opt/messagebox/" + relative
-    for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
-        for suffix in (".wav", ".lamp.json"):
-            paths[f"sounds/ringtones/{name}{suffix}"] = f"/opt/messagebox/ringtones/{name}{suffix}"
-    paths["sounds/ringtones/manifest.json"] = "/opt/messagebox/ringtones/manifest.json"
+    for source in sorted((root / "sounds/ringtones").iterdir()):
+        if not source.is_file() or source.suffix not in {".wav", ".json"}:
+            continue
+        relative = source.relative_to(root).as_posix()
+        legacy = {"manifest.json"} | {
+            name + suffix
+            for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele")
+            for suffix in (".wav", ".lamp.json")
+        }
+        paths[relative] = ("/opt/messagebox/ringtones/" + source.name if source.name in legacy
+                           else "/opt/messagebox/" + relative)
     paths.update({
         "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
         "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",

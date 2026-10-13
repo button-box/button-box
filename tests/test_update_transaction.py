@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_bounded_update import Fixture, FakeTime, bounded_update as update
+from test_bounded_update import Fixture, FakeTime, add_sound, sha256, bounded_update as update
 
 
 class PowerLoss(BaseException):
@@ -47,6 +47,42 @@ class TransactionTests(unittest.TestCase):
     def install(self, fixture, sequence=1, health=lambda *args: None):
         return update.install_transaction(fixture.source, fixture.manifest, root=fixture.root,
                                          run=fixture.systemctl, operation_id='synthetic-operation', sequence=sequence, health=health)
+
+    def test_each_release_owns_sounds_and_failed_upgrade_restores_previous_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, _old = self.prepare(directory)
+            path, entry = add_sound(fixture, 'sounds/cloud/extra.wav')
+            previous_bytes = path.read_bytes()
+            self.install(fixture)
+            previous = update.controlled_release(fixture.root)
+            previous_sound = update._rooted(fixture.root, previous) / 'sounds/cloud/extra.wav'
+            fixture.manifest_data.update(version='v0.3.0', commit='c' * 40)
+            path.write_bytes((fixture.source / 'sounds/cues/cue-press.wav').read_bytes())
+            entry['sha256'] = sha256(path)
+            add_sound(fixture, 'sounds/cues/next-only.wav')
+            def unhealthy(root, journal, run):
+                current_sound = update._rooted(root, '/opt/messagebox/sounds/cloud/extra.wav')
+                self.assertEqual(current_sound.read_bytes(), path.read_bytes())
+                self.assertEqual(previous_sound.read_bytes(), previous_bytes)
+                self.assertNotEqual(current_sound.stat().st_ino, previous_sound.stat().st_ino)
+                raise update.UpdateError('health_timeout')
+            with self.assertRaisesRegex(update.UpdateError, 'health_timeout'):
+                self.install(fixture, 2, health=unhealthy)
+            self.assertEqual(update.controlled_release(fixture.root), previous)
+            self.assertEqual(update._rooted(fixture.root, '/opt/messagebox/sounds/cloud/extra.wav').read_bytes(), previous_bytes)
+            self.assertFalse(update._rooted(fixture.root, '/opt/messagebox/sounds/cues/next-only.wav').exists())
+
+    def test_converted_box_cannot_omit_entire_required_cloud_pack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            import shutil
+            shutil.rmtree(fixture.source / 'sounds/cloud')
+            fixture.manifest_data['files'] = [entry for entry in fixture.manifest_data['files']
+                                              if not entry['source'].startswith('sounds/cloud/')]
+            fixture.write_manifest()
+            with self.assertRaisesRegex(update.UpdateError, 'sound pack is incomplete'):
+                self.install(fixture)
+            self.assertEqual(update.controlled_release(fixture.root), old)
 
     def test_success_retains_current_previous_and_removes_snapshots(self):
         with tempfile.TemporaryDirectory() as directory:

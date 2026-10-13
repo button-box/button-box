@@ -25,6 +25,36 @@ class Clock:
         self.now += value
 
 
+class UpdateCueTests(unittest.TestCase):
+    def test_recordings_selected_for_install_and_auto(self):
+        with mock.patch.object(cloud_update.sound_pack, 'SOUND_DIR', Path(__file__).resolve().parents[1] / 'sounds'), \
+             mock.patch.object(cloud_update.subprocess, 'run') as synthesize:
+            for text, name in ((cloud_update.CUE, 'update-ready.wav'), (cloud_update.AUTO_CUE, 'auto-updates.wav')):
+                play = mock.Mock()
+                cloud_update._voice(text, play)
+                self.assertEqual(play.call_args.args[0].name, name)
+            synthesize.assert_not_called()
+
+    def test_missing_invalid_or_symlink_recording_uses_espeak_and_completion_fallback(self):
+        for kind in ('missing', 'invalid', 'symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'cues').mkdir()
+                for name in ('update-ready.wav', 'auto-updates.wav', 'update-done.wav'):
+                    path = root / 'cues' / name
+                    if kind == 'invalid':
+                        path.write_bytes(b'invalid WAV')
+                    elif kind == 'symlink':
+                        path.symlink_to(Path(__file__).resolve().parents[1] / 'sounds/cues/cue-press.wav')
+                with mock.patch.object(cloud_update.sound_pack, 'SOUND_DIR', root), \
+                     mock.patch.object(cloud_update.subprocess, 'run') as synthesize:
+                    for text in (cloud_update.CUE, cloud_update.AUTO_CUE):
+                        cloud_update._voice(text, mock.Mock())
+                        self.assertEqual(synthesize.call_args.args[0][0], 'espeak-ng')
+                        self.assertEqual(synthesize.call_args.args[0][-1], text)
+                    self.assertEqual(cloud_update.installed_cue(), root / 'cues/cue-all_set.wav')
+
+
 class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -407,6 +437,11 @@ class ButtonBoundaryTests(unittest.TestCase):
             cloud_update.confirmation.idle(types.SimpleNamespace(is_pressed=False), mock.Mock())
             self.assertEqual(cloud_update.capability(), {})
             self.assertEqual(cloud_update.heartbeat_fields(), {})
+            with mock.patch.object(cloud_update.install_announcer, 'take') as take, \
+                 mock.patch.object(runtime, 'play_idle_sound') as play:
+                runtime.announce_update_installed()
+                take.assert_not_called()
+                play.assert_not_called()
             ipc.assert_not_called()
 
 
@@ -477,6 +512,7 @@ class InstallAnnouncerTests(unittest.TestCase):
             state = Path(directory) / 'sound-state.json'
             consume = runtime.sound_pack.consume_moment
             with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+                 mock.patch.object(cloud_update.sound_pack, 'SOUND_DIR', Path(__file__).resolve().parents[1] / 'sounds'), \
                  mock.patch.object(runtime, 'quiet_hours', return_value=quiet), \
                  mock.patch.object(runtime, 'button', types.SimpleNamespace(is_pressed=pressed), create=True), \
                  mock.patch.object(runtime, 'log_event'), \
@@ -490,9 +526,14 @@ class InstallAnnouncerTests(unittest.TestCase):
                 runtime.announce_update_installed()
             return play, announcer
 
-    def test_runtime_plays_all_set_once_per_operation(self):
+    def test_runtime_plays_update_done_once_per_operation(self):
         play, _ = self.runtime_announce('owner-op-1')
         play.assert_called_once()
+        self.assertTrue(str(play.call_args.args[0]).endswith('update-done.wav'))
+
+    def test_runtime_completion_falls_back_to_all_set(self):
+        with mock.patch.object(cloud_update, 'bundled_cue', return_value=None):
+            play, _ = self.runtime_announce('owner-op-1')
         self.assertTrue(str(play.call_args.args[0]).endswith('cue-all_set.wav'))
 
     def test_runtime_respects_quiet_mute_and_press(self):

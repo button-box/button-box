@@ -6,9 +6,11 @@ import socket
 import subprocess
 import tempfile
 import time
+import wave
 from pathlib import Path
 
 from messagebox.software import software_fields
+from messagebox import sound_pack
 
 
 def transport_mode():
@@ -99,7 +101,34 @@ def operation_result(operation_id):
     return request('result', operation_id=operation_id)
 
 
+def bundled_cue(name):
+    """Choose only a local, bounded PCM recording; callers own the fallback."""
+    path = sound_pack.SOUND_DIR / 'cues' / name
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+            return None
+        with wave.open(str(path), 'rb') as sound:
+            frames = sound.getnframes()
+            if (sound.getnchannels() != 1 or sound.getsampwidth() != 2
+                    or sound.getframerate() != 48000 or sound.getcomptype() != 'NONE'
+                    or frames <= 0 or frames * 2 > 2 * 1024 * 1024
+                    or len(sound.readframes(frames)) != frames * 2):
+                return None
+    except (OSError, EOFError, wave.Error):
+        return None
+    return path
+
+
+def installed_cue():
+    return bundled_cue('update-done.wav') or sound_pack.cue_path('all_set')
+
+
 def _voice(text, play):
+    name = 'auto-updates.wav' if text == AUTO_CUE else 'update-ready.wav'
+    path = bundled_cue(name)
+    if path is not None:
+        play(path, timeout=30)
+        return
     # Fixed English text only; no network strings or microphone input.
     with tempfile.TemporaryDirectory(prefix='messagebox-update-cue-') as directory:
         path = Path(directory) / 'cue.wav'

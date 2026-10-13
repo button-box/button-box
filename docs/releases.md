@@ -68,6 +68,31 @@ user state, logs, test reports, or arbitrary migrations are packaged. New instal
 files must be added deliberately to this list. New public keys must also be added
 explicitly when a bootstrap release needs to carry them.
 
+Each signed release chooses its bundled sound set. The controller still requires
+the original shipped cues, voices, voice packs, ringtones and Cloud fallback
+files, and keeps the same rules for installing program code, units and configs.
+Extra WAVs may be added in the existing sound folders; optional additions may
+be removed in a later release. Add every new sound to `payload.txt` and its
+sound manifest. The installed-file manifest generator includes extra sounds.
+The signature covers the manifest list and every byte through the hashes;
+sound flexibility does not change the trust model.
+
+WAVs must be RIFF/WAVE PCM, 48 kHz, 16-bit mono and nonempty, with complete data.
+Names match `[a-z0-9][a-z0-9._-]{0,80}\.wav`. Only the existing cue, Cloud,
+voice, ringtone and named voice-pack folders are supported; no arbitrary nested
+folders or links. Metadata additions are limited to `manifest.json` and
+`cues.json`; existing README and lamp files retain their exact mappings.
+The limits are 2 MiB per sound file, 128 MiB total including sound metadata, and
+2,000 sound files. The current pack already exceeds 64 MiB. Each installed
+release owns its sounds, including original ringtones at their existing path,
+so rollback restores the previous pack's bytes.
+
+Set `--min-updater-version 1.1.0` for releases using additional sounds. Previously
+bootstrapped boxes need [attended fixed-controller maintenance](on-box-updates.md#health-diagnostics-and-attended-fixed-controller-maintenance)
+first; an ordinary signed release only stages controller copies and cannot
+replace the fixed running controller. Bootstrap copies the fixed modules from
+its source tree, so new boxes get this support immediately.
+
 The tar archive has sorted file entries, uid/gid zero, empty owner/group names,
 0644/0755 modes determined from tracked Git modes, and the commit timestamp for
 all entries. It uses USTAR and `gzip -n -9` without filename or wall-clock gzip

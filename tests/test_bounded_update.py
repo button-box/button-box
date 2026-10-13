@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +31,19 @@ MANIFEST_SPEC.loader.exec_module(release_manifest)
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def add_sound(fixture, source="sounds/cues/extra.wav", *, channels=1, width=2, rate=48000):
+    path = fixture.source / source
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as sound:
+        sound.setparams((channels, width, rate, 0, "NONE", "not compressed"))
+        sound.writeframes(b"\0" * 480 * channels * width)
+    path.chmod(0o644)
+    entry = {"source": source, "installed": "/opt/messagebox/" + source, "sha256": sha256(path)}
+    fixture.manifest_data["files"].append(entry)
+    fixture.write_manifest()
+    return path, entry
 
 
 class Systemctl:
@@ -318,6 +332,76 @@ class BoundedUpdateTests(unittest.TestCase):
         patcher = mock.patch.object(bounded_update, "time", self.clock)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_extra_signed_sound_installs_and_legacy_rollback_restores_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            path, entry = add_sound(fixture)
+            target = fixture.root / entry["installed"].lstrip("/")
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"previous sound")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(target.read_bytes(), path.read_bytes())
+            bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(target.read_bytes(), b"previous sound")
+
+    def test_invalid_extra_sound_rejected_before_mutation(self):
+        cases = ("header", "stereo", "width", "rate", "truncated", "size", "symlink",
+                 "parent_symlink", "traversal", "name", "long_name", "nested", "folder", "code", "target", "hash")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                source = {
+                    "traversal": "sounds/cues/../extra.wav", "name": "sounds/cues/Extra.wav",
+                    "long_name": "sounds/cues/" + "a" * 82 + ".wav",
+                    "nested": "sounds/cues/nested/extra.wav", "folder": "sounds/custom/extra.wav",
+                    "code": "scripts/install/extra.py",
+                }.get(case, "sounds/cues/extra.wav")
+                path, entry = add_sound(fixture, source, channels=2 if case == "stereo" else 1,
+                                        width=1 if case == "width" else 2, rate=44100 if case == "rate" else 48000)
+                if case == "header":
+                    path.write_bytes(b"invalid WAV")
+                elif case == "truncated":
+                    path.write_bytes(path.read_bytes()[:-2])
+                elif case == "size":
+                    with path.open("ab") as sound:
+                        sound.truncate(bounded_update.MAX_SOUND_FILE + 1)
+                elif case == "symlink":
+                    path.unlink()
+                    path.symlink_to(fixture.source / "sounds/cues/cue-press.wav")
+                elif case == "parent_symlink":
+                    moved = fixture.source / "moved-cues"
+                    path.parent.rename(moved)
+                    path.parent.symlink_to(moved)
+                elif case == "target":
+                    entry["installed"] = "/etc/extra.wav"
+                entry["sha256"] = "0" * 64 if case == "hash" else sha256(path)
+                fixture.write_manifest()
+                with self.assertRaises(bounded_update.UpdateError):
+                    bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                         root=fixture.root, run=fixture.systemctl)
+                self.assertFalse(fixture.backup.exists())
+                self.assertFalse(fixture.systemctl.commands)
+
+    def test_missing_required_sound_rejected_even_with_extra(self):
+        for missing in ("sounds/cues/cue-press.wav", "sounds/ringtones/hello.wav"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                add_sound(fixture)
+                (fixture.source / missing).unlink()
+                fixture.manifest_data["files"] = [row for row in fixture.manifest_data["files"] if row["source"] != missing]
+                fixture.write_manifest()
+                with self.assertRaisesRegex(bounded_update.UpdateError, "sound pack is incomplete"):
+                    bounded_update.load_candidate(fixture.source, fixture.manifest, fixture.root)
+
+    def test_sound_total_and_count_limits(self):
+        for limit in ("MAX_SOUND_TOTAL", "MAX_SOUND_FILES"):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                with mock.patch.object(bounded_update, limit, 1), self.assertRaisesRegex(
+                        bounded_update.UpdateError, "sound pack exceeds"):
+                    bounded_update.load_candidate(fixture.source, fixture.manifest, fixture.root)
 
     def test_retired_audio_removed_and_restored_without_touching_family_media(self):
         with tempfile.TemporaryDirectory() as directory:

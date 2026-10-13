@@ -18,6 +18,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import wave
 from pathlib import Path, PurePosixPath
 
 
@@ -174,8 +175,20 @@ CLOUD_SOUND_SOURCES = ("sounds/cloud/manifest.json", "sounds/cloud/reaction.wav"
     f"sounds/cloud/more-{count}.wav" for count in range(1, 98)
 )
 SOUND_SOURCES += CLOUD_SOUND_SOURCES
+# The original shipped files are a floor, not a ceiling. Existing ringtone
+# destinations remain stable for the shared runtime and legacy installations.
+REQUIRED_SOUND_SOURCES = frozenset(SOUND_SOURCES) | frozenset(
+    source for source in EXPLICIT_TARGETS if source.startswith("sounds/")
+)
 for source in SOUND_SOURCES:
     EXPLICIT_TARGETS[source] = "/opt/messagebox/" + source
+SOUND_PATH = re.compile(
+    r"sounds/(?:cues|cloud|ringtones|voice|voices/(?:pirate|alien|dj|robot|french|charlie|tata))/"
+    r"(?:[a-z0-9][a-z0-9._-]{0,80}\.wav|manifest\.json|cues\.json)\Z"
+)
+MAX_SOUND_FILE = 2 * 1024 * 1024
+MAX_SOUND_TOTAL = 128 * 1024 * 1024
+MAX_SOUND_FILES = 2000
 RETIRED_SOUNDS = tuple(
     "/opt/messagebox/sounds/guided-reply/" + name + ".wav"
     for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent")
@@ -219,6 +232,8 @@ def _fsync_directory(path):
 def _expected_target(source):
     if source in EXPLICIT_TARGETS:
         return EXPLICIT_TARGETS[source]
+    if SOUND_PATH.fullmatch(source):
+        return "/opt/messagebox/" + source
     path = PurePosixPath(source)
     if len(path.parts) >= 2 and path.parts[0] == "messagebox":
         if path.suffix not in {".css", ".html", ".js", ".py", ".sh"}:
@@ -250,7 +265,8 @@ def _rollback_target_allowed(absolute):
             "/etc/systemd/system/comitup-web.service.d/messagebox.conf",
         }
     )
-    return absolute in exact or (
+    sound_source = absolute.removeprefix("/opt/messagebox/")
+    return (SOUND_PATH.fullmatch(sound_source) and _expected_target(sound_source) == absolute) or absolute in exact or (
         absolute.startswith("/opt/messagebox/messagebox/")
         or absolute.startswith("/opt/messagebox/sounds/guided-reply/")
         or absolute.startswith("/etc/systemd/system/messagebox-")
@@ -345,6 +361,23 @@ def _validate_staged_file(path, source_root, trusted_uid):
     return metadata
 
 
+def _validate_sound(path, metadata):
+    if metadata.st_size > MAX_SOUND_FILE:
+        raise UpdateError("release sound file exceeds size limit")
+    if path.suffix != ".wav":
+        return
+    try:
+        with wave.open(str(path), "rb") as sound:
+            frames = sound.getnframes()
+            if (sound.getnchannels() != 1 or sound.getsampwidth() != 2
+                    or sound.getframerate() != 48000 or sound.getcomptype() != "NONE"
+                    or frames <= 0 or frames * 2 > MAX_SOUND_FILE
+                    or len(sound.readframes(frames)) != frames * 2):
+                raise ValueError("unsupported or truncated WAV")
+    except (OSError, EOFError, wave.Error, ValueError) as exc:
+        raise UpdateError("release sound WAV is invalid") from exc
+
+
 def _load_module(name, path):
     loader = importlib.machinery.SourceFileLoader(name, str(path))
     specification = importlib.util.spec_from_loader(loader.name, loader)
@@ -431,6 +464,7 @@ def load_candidate(source_root, manifest_path, root):
     entries = []
     sources = set()
     targets = set()
+    sound_total = sound_count = 0
     for raw in manifest["files"]:
         if not isinstance(raw, dict):
             raise UpdateError("release manifest has an invalid file entry")
@@ -449,7 +483,13 @@ def load_candidate(source_root, manifest_path, root):
         if len(expected_hash) != 64 or any(c not in "0123456789abcdef" for c in expected_hash):
             raise UpdateError("release manifest contains an invalid hash")
         source_path = source_root.joinpath(*source_pure.parts)
-        _validate_staged_file(source_path, source_root, trusted_uid)
+        metadata = _validate_staged_file(source_path, source_root, trusted_uid)
+        if source.startswith("sounds/"):
+            sound_total += metadata.st_size
+            sound_count += 1
+            if sound_total > MAX_SOUND_TOTAL or sound_count > MAX_SOUND_FILES:
+                raise UpdateError("release sound pack exceeds size or file count limit")
+            _validate_sound(source_path, metadata)
         if _sha256(source_path) != expected_hash:
             raise UpdateError("release source hash does not match the manifest")
         destination = _rooted(root, target)
@@ -472,17 +512,19 @@ def load_candidate(source_root, manifest_path, root):
         )
         sources.add(source)
         targets.add(target)
-    sound_entries = {entry["source"] for entry in entries if entry["source"] in SOUND_SOURCES}
-    if sound_entries:
-        required_sounds = set(SOUND_SOURCES)
-        if not sound_entries.intersection(CLOUD_SOUND_SOURCES):
-            required_sounds.difference_update(CLOUD_SOUND_SOURCES)
-        if sound_entries != required_sounds:
-            raise UpdateError("release sound pack is incomplete")
-        try:
-            _candidate_sound_pack(source_root).validate_sounds(source_root / "sounds")
-        except (OSError, ValueError, ImportError) as exc:
-            raise UpdateError("release sound assets are invalid") from exc
+    # A converted Cloud box always needs the complete floor, including Cloud
+    # fallbacks. Preserve the older non-Cloud operator release contract.
+    sound_entries = {source for source in sources if source.startswith("sounds/")}
+    required_sounds = set(REQUIRED_SOUND_SOURCES)
+    if not _rooted(root, "/opt/messagebox").is_symlink() and not any(
+            source.startswith("sounds/cloud/") for source in sound_entries):
+        required_sounds.difference_update(CLOUD_SOUND_SOURCES)
+    if not required_sounds.issubset(sound_entries):
+        raise UpdateError("release sound pack is incomplete")
+    try:
+        _candidate_sound_pack(source_root).validate_sounds(source_root / "sounds")
+    except (OSError, ValueError, ImportError) as exc:
+        raise UpdateError("release sound assets are invalid") from exc
     for absolute in RETIRED_SOUNDS:
         destination = _rooted(root, absolute)
         _check_parents(destination, root)

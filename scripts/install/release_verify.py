@@ -8,7 +8,7 @@ import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 
-UPDATER_VERSION = (1, 0, 0)
+UPDATER_VERSION = (1, 1, 0)
 TAG = re.compile(r"(?=.{1,64}\Z)v[0-9]+\.[0-9]+\.[0-9]+(?:-canary\.[0-9]+)?\Z")
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024

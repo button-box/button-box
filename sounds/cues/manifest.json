@@ -97,5 +97,25 @@
    "meaning": "Deleted. Two soft descending wooden notes, without a voice.",
    "sha256": "e95cf8bfd2f53507adeccdf21c6f0096aafb2a5710bb0c27732469f7773c1894"
   }
+ ],
+ "update_lines": [
+  {
+   "file": "update-ready.wav",
+   "seconds": 3.9189,
+   "text": "A new update is ready! Hold my button for three seconds to install it.",
+   "sha256": "a91e8fa5831f40b62b1573d28a8957f5220e4b9a9785217f4b6d3b5bbe98cb51"
+  },
+  {
+   "file": "auto-updates.wav",
+   "seconds": 3.8133,
+   "text": "Hold my button for three seconds to turn on automatic updates.",
+   "sha256": "eff7de76b18cf3afa4af28a41f6e7de52a6708221b695d3f9d65d54c1007a829"
+  },
+  {
+   "file": "update-done.wav",
+   "seconds": 2.4782,
+   "text": "All done! I'm updated and ready.",
+   "sha256": "17f33b32b8a85583764864b25d079a8ee06814b045b339570d7587b0510721b4"
+  }
  ]
 }

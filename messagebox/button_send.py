@@ -268,12 +268,12 @@ def announce_update_installed():
     """Play "all set" once after this release was installed by an owner hold."""
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed or quiet_hours():
         return
-    from messagebox.cloud_update import install_announcer
+    from messagebox.cloud_update import install_announcer, installed_cue
     operation_id = install_announcer.take()
     # Receipt before playback: at most once per operation, across restarts.
     if operation_id and sound_pack.consume_moment("update_installed", token=operation_id):
         log_event("update_installed_cue")
-        play_idle_sound(sound_pack.cue_path("all_set"), 10)
+        play_idle_sound(installed_cue(), 10)
 
 
 def announce_runtime_ready():

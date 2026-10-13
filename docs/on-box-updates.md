@@ -49,6 +49,9 @@ the second may be `canary`. Provision the box timezone before bootstrap; bootstr
 Install `minisign` and `espeak-ng` in this attended step; routine updates never
 run apt, pip, setup, provisioning or migration hooks. A completed bootstrap
 cannot be rerun to override Ask policy or replace its executing controller.
+Bootstrap copies the six fixed Python modules directly from the source tree
+containing `update-bootstrap.sh`, under `scripts/install/`. Newly bootstrapped
+boxes therefore get that tree's sound-validation controller from the start.
 
 The controller and recovery launcher remain fixed for B72. Releases stage and
 syntax-check controller copies in `updater/`; they do not overwrite the running
@@ -133,10 +136,32 @@ The schema matches the release tooling: `schema: 1`, `product: "button-box"`,
 `release_sequence`, `channel: "stable" | "canary"`, `supported_os`,
 `supported_arch`, `supported_models`, `min_updater_version` as `major.minor.patch`,
 and the existing complete installed-file mapping/hashes. This controller is
-`1.0.0`. Sequence ordering is global across channels; version strings are never
+`1.1.0`. Releases that add sounds require `min_updater_version: "1.1.0"`.
+Sequence ordering is global across channels; version strings are never
 sorted to decide eligibility. Stable boxes reject canaries; canary boxes may
 accept a stable release with a higher signed sequence. Recovery permits only
 the journal's exact previous tree, regardless of the higher sequence floor.
+
+The signed release defines its own bundled sound list. The original cue, voice,
+voice-pack, ringtone and Cloud files remain required; additional sounds may be
+added and later removed without changing the controller. Program code, units
+and configuration retain their existing install allowlists. The trust model is
+unchanged: the signature covers the manifest list and every file byte through
+the signed hashes.
+
+New files are allowed directly in `sounds/cues`, `sounds/cloud`, `sounds/voice`,
+`sounds/ringtones`, or the existing `sounds/voices/{pirate,alien,dj,robot,french,charlie,tata}`
+folders. WAV basenames must match `[a-z0-9][a-z0-9._-]{0,80}\.wav`.
+`manifest.json` and `cues.json` are also permitted in those folders. Existing
+README files and ringtone lamp files retain only their exact existing mappings.
+Other folders, nested paths, traversal, links and nonregular files are rejected.
+Each WAV must be nonempty RIFF/WAVE PCM, 48 kHz, 16-bit mono, with complete frame
+data. Limits are 2 MiB per sound file, 128 MiB for all sound files (including
+metadata), and 2,000 sound files. The shipped tree already exceeds 64 MiB.
+New sounds map beneath `/opt/messagebox/sounds`; original ringtones retain
+`/opt/messagebox/ringtones` for the shared runtime. Both paths live in each
+release directory. Previous releases keep their own bytes, so rollback restores
+their sounds without sharing or overwriting another release's pack.
 
 ## Transaction and recovery
 
@@ -204,7 +229,15 @@ closures update only the operation receipt, never `result.json`. The broker and
 an Auto box. Once the exact version is independently verified and the box is
 idle, its sole GPIO owner voices:
 
-> Software update ready. Hold the button for three seconds to install.
+> A new update is ready! Hold my button for three seconds to install it.
+
+This uses bundled `sounds/cues/update-ready.wav`. Ask-to-Auto uses
+`auto-updates.wav`: "Hold my button for three seconds to turn on automatic
+updates." Missing or invalid recordings retain the fixed English espeak fallback.
+A healthy owner-approved installation announces `update-done.wav`: "All done!
+I'm updated and ready." If that recording is missing or invalid, it uses
+`cue-all_set.wav`. The completion receipt, quiet-hours and idle rules remain the
+same; automatic and attended bootstrap installs do not announce completion.
 
 The two-minute monotonic window starts after the cue finishes and release is
 observed. A fresh continuous three-second hold must finish with release before
@@ -317,6 +350,15 @@ will not activate these fixes. The maintainer must promote the reviewed fixed
 controller separately. Do not remove `/etc/button-box-update/installed`, rerun
 `update-bootstrap.sh`, call `bootstrap_keys`, run setup, or reconvert the layout.
 Keep policy, pins, trust/sequence floors, quarantine, journals and snapshots.
+
+The release-defined sound support changes the fixed `bounded_update.py` module
+and bumps `release_verify.py` to controller version 1.1.0. An already bootstrapped
+canary needs the attended procedure below before it can accept extra sounds.
+The maintenance module list remains **bounded_update, release_verify, trust_update,
+update_controller, update_discovery, health-probe**; stage and exchange the complete
+set even though only two modules changed. All fixed systemd units are unchanged:
+compare them with the source, do not reinstall them. New boxes get this through
+bootstrap. Ordinary signed application updates cannot perform this promotion.
 
 Perform this maintenance in an attended idle session, with no install or
 onboarding in progress. Verify the SSH host is the intended box, Pi model,
