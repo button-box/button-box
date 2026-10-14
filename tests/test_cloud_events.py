@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from messagebox.cloud_events import CloudWorkEvents, connect_events
 from messagebox.cloud_runtime import CloudRuntime
-from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
+from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudRateLimited
 
 
 class ClockEvent:
@@ -231,6 +231,17 @@ class RuntimeSchedulingTests(unittest.TestCase):
             runtime.run(stop=stop, events=events)
         self.assertEqual(polls, [0])
         self.assertEqual(times, [2, 6, 14])
+
+    def test_rate_limited_poll_waits_for_retry_after(self):
+        runtime, stop, events, polls, _ = self.runtime(connected=False, until=125)
+        def poll():
+            polls.append(runtime.monotonic())
+            if len(polls) == 1:
+                raise CloudRateLimited("synthetic", 120)
+        runtime.poll_once = poll
+        with mock.patch("messagebox.cloud_runtime.random.random", return_value=0), mock.patch("builtins.print"):
+            runtime.run(stop=stop, events=events)
+        self.assertEqual(polls[:2], [0, 120])
 
     def test_duplicate_flood_is_coalesced_without_busy_loop(self):
         runtime, stop, events, polls, _ = self.runtime(until=2)

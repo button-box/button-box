@@ -54,6 +54,27 @@ class CloudVoiceNotFound(CloudDeviceError):
     """No outbound recording is bound to this idempotency key yet."""
 
 
+class CloudRateLimited(CloudDeviceError):
+    """The Cloud asked this device to slow down (HTTP 429)."""
+
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+RATE_LIMIT_DEFAULT_SECONDS = 60
+RATE_LIMIT_MAX_SECONDS = 3600
+
+
+def retry_after_seconds(value):
+    """Return Retry-After delta seconds, bounded; HTTP dates use the default."""
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return RATE_LIMIT_DEFAULT_SECONDS
+    return max(1, min(RATE_LIMIT_MAX_SECONDS, seconds))
+
+
 def open_private_lock(path: Path):
     """Open a group-shared lock without chmoding another service user's file."""
     flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
@@ -196,6 +217,10 @@ class CloudDeviceClient:
                 payload = response.read(limit + 1)
         except urllib.error.HTTPError as exc:
             try:
+                if exc.code == 429:
+                    headers = exc.headers if exc.headers is not None else {}
+                    raise CloudRateLimited("cloud asked the device to slow down",
+                                           retry_after_seconds(headers.get("Retry-After"))) from exc
                 if (ack_gone or voice_not_found) and exc.code == 404:
                     try:
                         error = json.loads(exc.read(1025))
