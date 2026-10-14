@@ -1265,7 +1265,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.client.items = [item]
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "rejected")
-        self.assertEqual(self.client.acks[-1]["error_code"], "device_command_rejected")
+        self.assertEqual(self.client.acks[-1]["error_code"], "settings_unsupported")
         self.assertEqual(self.runtime.settings.load()[0], original)
 
     def settings_audio_owner(self, revision=0):
@@ -1573,13 +1573,58 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
         self.assertEqual(self.client.acks[-1]["applied_revision"], 4)
-        stale = {**candidate, "revision": 5, "master_volume_percent": 90}
+        # A revision already on the box with other values is a real conflict.
+        stale = {**candidate, "master_volume_percent": 90}
         item = {**item, "operation_id": "other1234567890123456", "sequence": 2,
-                "payload": {"settings": stale, "expected_revision": 0, "desired_revision": 5}}
+                "payload": {"settings": stale, "expected_revision": 0, "desired_revision": 4}}
         self.client.items = [item]
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertEqual(self.client.acks[-1]["error_code"], "settings_revision_conflict")
         self.assertEqual(self.runtime.settings.load()[0], candidate)
+
+    def test_next_save_applies_when_cloud_missed_the_previous_confirmation(self):
+        # A revision reached the box during playback and was confirmed after the
+        # Cloud's 15-second window, so the Cloud kept the older revision as applied
+        # and based the next save on it.
+        self.runtime.heartbeat()
+        first = self.settings_command(card_name_prompt=False)
+        first.update(sequence=1, created_at=NOW, expires_at=NOW + 15)
+        self.client.items = [first]
+        self.runtime.poll_once()
+        applied = self.runtime.settings.load()[0]
+        self.assertEqual(applied["revision"], 1)
+        (self.root / "applied-settings.json").write_text(json.dumps({"revision": 1, "settings": applied}))
+        self.client.items = []
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "applied")
+        second = {**applied, "revision": 2, "card_name_prompt": True}
+        self.client.items = [{"operation_id": "settings_operation_late", "sequence": 2, "kind": "settings",
+            "created_at": NOW, "expires_at": NOW + 15,
+            "payload": {"settings": second, "expected_revision": 0, "desired_revision": 2}}]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "received")
+        self.assertEqual(self.runtime.settings.load()[0], second)
+
+    def test_next_save_still_refuses_a_local_edit_it_did_not_write(self):
+        self.runtime.heartbeat()
+        first = self.settings_command(master_volume_percent=40)
+        first.update(sequence=1, created_at=NOW, expires_at=NOW + 15)
+        self.client.items = [first]
+        self.runtime.poll_once()
+        cloud = self.runtime.settings.load()[0]
+        local = self.runtime.settings.update(
+            {key: value for key, value in {**cloud, "master_volume_percent": 55}.items()
+             if key not in {"version", "revision"}}, 1)
+        self.assertEqual(local["revision"], 2)
+        self.client.items = [{"operation_id": "settings_operation_late", "sequence": 2, "kind": "settings",
+            "created_at": NOW, "expires_at": NOW + 15,
+            "payload": {"settings": {**cloud, "revision": 3, "master_volume_percent": 90},
+                        "expected_revision": 0, "desired_revision": 3}}]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertEqual(self.client.acks[-1]["error_code"], "settings_revision_conflict")
+        self.assertEqual(self.runtime.settings.load()[0]["master_volume_percent"], 55)
 
     def test_expiry_removes_only_expired_cloud_audio(self):
         self.runtime.heartbeat()

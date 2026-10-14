@@ -31,7 +31,7 @@ from messagebox.played_history import played_history_lock
 from messagebox.runtime_paths import (NFC_CARD_REFERENCES_FILE, NFC_ENROLLMENT_FILE,
     NFC_HEALTH_FILE, NFC_SELECTION_FILE, OUTBOX_DIR, QUEUE_DIR, SETTINGS_FILE, STATE_DIR)
 from messagebox.settings import (
-    in_quiet_hours, ignored_settings, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
+    in_quiet_hours, ignored_settings, RevisionConflict, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
 from messagebox import cloud_quiet, cloud_update
@@ -84,6 +84,14 @@ class CloudRuntimeError(Exception):
 
 class CloudCommandDeferred(CloudRuntimeError):
     """Temporary local gate; the server must keep the operation pending."""
+
+
+class CloudSettingsRejected(CloudRuntimeError):
+    """A settings command the box refused, with a bounded reason for the Cloud."""
+
+    def __init__(self, error_code):
+        super().__init__(error_code)
+        self.error_code = error_code
 
 
 def _valid_id(value):
@@ -1415,17 +1423,29 @@ class CloudRuntime:
             if (warning or type(expected) is not int or type(desired) is not int or desired <= expected
                     or not isinstance(document, dict) or document.get("version") != 1
                     or document.get("revision") != desired):
-                raise CloudRuntimeError("settings revision is invalid")
+                raise CloudSettingsRejected("settings_revision_invalid")
             # Normalize pre-update commands before replay comparison and ACKs.
             ignored = ignored_settings(document)
-            document = validate_settings(document)
+            try:
+                document = validate_settings(document)
+            except SettingsError as exc:
+                raise CloudSettingsRejected("settings_unsupported") from exc
             candidate = {key: value for key, value in document.items()
                          if key not in {"version", "revision"}}
             intent_path = self._intent_path(item["operation_id"])
             if current["revision"] == desired:
                 if current != {"version": 1, "revision": desired, **candidate}:
-                    raise CloudRuntimeError("settings revision conflicts")
+                    raise CloudSettingsRejected("settings_revision_conflict")
             else:
+                # The Cloud builds each settings document on its previous one, but
+                # bases expected_revision on the last revision it saw confirmed.
+                # When the box confirmed that revision after the Cloud expired it
+                # (playback delays the confirmation), the next save still names the
+                # older revision. Accept it only when the newer revision on the box
+                # is the one this runtime wrote from the Cloud, never a local edit.
+                if (expected < current["revision"] < desired
+                        and current["revision"] == self.state.get("cloud_settings_revision")):
+                    expected = current["revision"]
                 # Persist before mutation so a command replay retains its origin
                 # and whether values changed, rather than just its revision.
                 if not intent_path.exists():
@@ -1440,15 +1460,21 @@ class CloudRuntime:
                         "ignored_settings": ignored,
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
-                updated = self.settings.update(candidate, expected, desired_revision=desired)
+                try:
+                    updated = self.settings.update(candidate, expected, desired_revision=desired)
+                except RevisionConflict as exc:
+                    raise CloudSettingsRejected("settings_revision_conflict") from exc
+                except SettingsError as exc:
+                    raise CloudSettingsRejected("settings_unsupported") from exc
                 if updated["revision"] != desired:
-                    raise CloudRuntimeError("settings revision conflicts")
+                    raise CloudSettingsRejected("settings_revision_conflict")
             if ignored:
                 # Also cover replay after the settings write but before pending-state persistence.
                 intent = json.loads(intent_path.read_text(encoding="utf-8")) if intent_path.exists() else {}
                 if intent.get("ignored_settings") != ignored:
                     atomic_json(intent_path, {**intent, "ignored_settings": ignored})
             self.state["pending_settings"][item["operation_id"]] = document
+            self.state["cloud_settings_revision"] = desired
             self._save()
             self._ack(item["operation_id"], "received", **({"ignored_settings": ignored} if ignored else {}))
         elif kind in {"nfc_enroll", "nfc_cancel", "nfc_unpair"}:
@@ -1639,8 +1665,9 @@ class CloudRuntime:
                     # Inbox cursors are hints; the service returns all pending
                     # operations until ACKed, including work before the cursor.
                     continue
-                except (CloudRuntimeError, SettingsError, ContactError, NfcError, OSError, ValueError):
-                    self._ack(item["operation_id"], "rejected", error_code="device_command_rejected")
+                except (CloudRuntimeError, SettingsError, ContactError, NfcError, OSError, ValueError) as exc:
+                    self._ack(item["operation_id"], "rejected",
+                              error_code=getattr(exc, "error_code", "device_command_rejected"))
             self.state["cursor"] = max(self.state["cursor"], item["sequence"])
             self._save()
             self.flush_acks(deletion_ids if deletion_only else None)
