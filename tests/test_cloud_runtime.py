@@ -12,8 +12,10 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
+from messagebox import cloud_runtime
 from messagebox.cloud_runtime import CloudRuntime, CloudRuntimeError
-from messagebox.cloud_device import CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json
+from messagebox.cloud_device import (CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudRateLimited,
+                                     CloudVoiceNotFound, atomic_json)
 from messagebox.guided_reply import OutboxStore, cloud_outbox_lock
 from messagebox.played_history import list_played_history, recent_reply_recipient
 from messagebox.contacts import ContactError
@@ -2221,15 +2223,24 @@ class CloudRuntimeTests(unittest.TestCase):
                             notices.finish(request, "played")
                         else:
                             self.assertIsNone(request)
-                    self.runtime.recover_outbox()
-                    if state in accepted:
-                        self.client.voice_status.return_value = {**result, "state": "delivered"}
-                    self.runtime.recover_outbox()
+                    # Retained uploads are checked on a slow schedule; step past it
+                    # and refresh the heartbeat so server time stays aligned.
+                    # Each subtest reuses one job name; a real send has a new one.
+                    self.runtime._status_schedule.clear()
+                    with mock.patch.object(cloud_runtime.random, "random", return_value=0):
+                        self.runtime.recover_outbox()
+                        if state in accepted:
+                            self.client.voice_status.return_value = {**result, "state": "delivered"}
+                        self.mono[0] += cloud_runtime.RETAINED_MAX_SECONDS * 1.2 + 1
+                        self.runtime.heartbeat()
+                        self.runtime.recover_outbox()
                     self.assertEqual(notices.outcome(key), "played" if state in accepted else None)
                     with notices.owner():
                         self.assertIsNone(notices.claim_next("a" * 64))
                 self.client.send_voice.assert_called_once()
-                self.assertEqual(self.client.voice_status.call_count, 2)
+                # A final Cloud state stops status lookups for that recording.
+                final = {"failed", "rejected", "canceled", "expired"}
+                self.assertEqual(self.client.voice_status.call_count, 0 if state in final else 2)
 
     def test_clock_step_during_enqueue_cannot_change_relative_sound_window(self):
         for step in (-20, 20):
@@ -2524,6 +2535,149 @@ class CloudRuntimeTests(unittest.TestCase):
                                                 "deleted": False}
         self.runtime.recover_outbox()
         self.assertFalse(job.exists())
+
+    # Outbox status schedule. The fake clock is self.mono; one pass is ~2.5 s,
+    # the average of the run loop's local-work delay.
+
+    def outbox_job(self, name, state, cloud_state=None):
+        job = self.root / "outbox" / f"{name}.job"
+        job.mkdir(parents=True)
+        (job / "audio.wav").write_bytes(b"synthetic recording")
+        metadata = {"transport": "cloud", "message_id": name, "account_scope": "a" * 64, "state": state}
+        if state == "cloud_retained":
+            metadata.update({"cloud_message_id": "cloud-" + name, "cloud_state": cloud_state,
+                             "expires_at": NOW + 30 * 86400, "cloud_status_checked_at": NOW - 5})
+        atomic_json(job / "job.json", metadata)
+        return job
+
+    def run_passes(self, seconds, step=2.5, heartbeat=False):
+        end = self.mono[0] + seconds
+        last_heartbeat = self.mono[0]
+        while self.mono[0] < end:
+            if heartbeat and self.mono[0] - last_heartbeat >= 30:
+                self.runtime.heartbeat()  # The run loop keeps a 30 s heartbeat.
+                last_heartbeat = self.mono[0]
+            self.runtime.recover_outbox()
+            self.mono[0] += step
+
+    def test_retained_uploads_poll_slowly_while_sending_uploads_poll_every_pass(self):
+        self.runtime.heartbeat()
+        retained = [self.outbox_job(f"retained_key_{index:02d}_123456", "cloud_retained", "accepted")
+                    for index in range(5)]
+        sending = self.outbox_job("sending_key_123456789", "sending")
+        calls = {}
+        def status(key):
+            calls[key] = calls.get(key, 0) + 1
+            if key == sending.stem:
+                raise CloudDeviceError("offline")  # Keeps the job in "sending".
+            return {"message_id": "cloud-" + key, "state": "accepted",
+                    "expires_at": NOW + 30 * 86400, "server_time": NOW, "deleted": False}
+        self.client.voice_status = status
+        with mock.patch.object(cloud_runtime.random, "random", return_value=0.5):
+            self.run_passes(3600)
+            first_hour = dict(calls)
+            calls.clear()
+            self.run_passes(23 * 3600, step=10)
+        # Before: 5 lookups per pass for these jobs (~7,200 per job per hour).
+        self.assertGreaterEqual(first_hour[sending.stem], 1400)
+        for job in retained:
+            self.assertTrue(1 <= first_hour[job.stem] <= 4, first_hour)
+            # Unchanged status backs off to the six-hour cap: at most ~6 per day.
+            self.assertLessEqual(calls[job.stem], 8, calls)
+            self.assertTrue(job.exists())
+
+    def test_pending_retained_upload_settles_fast_then_still_resolves_with_cue(self):
+        self.runtime.heartbeat()
+        job = self.outbox_job("held_key_1234567890", "cloud_retained", "held_for_review")
+        state = ["held_for_review"]
+        calls = []
+        def status(key):
+            calls.append(self.mono[0])
+            return {"message_id": "cloud-" + key, "state": state[0],
+                    "expires_at": NOW + 30 * 86400, "server_time": NOW, "deleted": False}
+        self.client.voice_status = status
+        with mock.patch.object(cloud_runtime.random, "random", return_value=0.5):
+            self.run_passes(cloud_runtime.RETAINED_SETTLE_WINDOW_SECONDS)
+            settled = len(calls)
+            self.run_passes(3000)
+            later = len(calls) - settled
+        # Lookups stay under the 30 s cue window while the Cloud decides...
+        self.assertGreaterEqual(settled, 20)
+        self.assertTrue(all(b - a < 30 for a, b in zip(calls[:settled], calls[1:settled])))
+        # ...then slow down.
+        self.assertLessEqual(later, 4)
+        # A late acceptance is still recorded on the next slow lookup.
+        state[0] = "accepted"
+        self.mono[0] += cloud_runtime.RETAINED_MAX_SECONDS * 1.2 + 1
+        self.runtime.recover_outbox()
+        self.assertEqual(json.loads((job / "job.json").read_text())["cloud_state"], "accepted")
+
+    def test_late_acceptance_inside_settle_window_still_cues_once(self):
+        self.runtime.heartbeat()
+        job = self.outbox_job("held_key_cue_1234567", "cloud_retained", "held_for_review")
+        state = ["held_for_review"]
+        start = self.mono[0]
+        # Server time advances with the fake monotonic clock, as on a real box.
+        self.client.voice_status = lambda key: {"message_id": "cloud-" + key, "state": state[0],
+            "expires_at": NOW + 30 * 86400, "server_time": NOW + int(self.mono[0] - start), "deleted": False}
+        with mock.patch.object(cloud_runtime.random, "random", return_value=0.5):
+            self.run_passes(120, heartbeat=True)
+            state[0] = "accepted"
+            accepted_at = self.mono[0]
+            while json.loads((job / "job.json").read_text())["cloud_state"] != "accepted":
+                self.run_passes(2.5, heartbeat=True)
+        # The next settle lookup comes within the 30 s cue window.
+        self.assertLess(self.mono[0] - accepted_at, 30)
+        key = success_key("a" * 64, job.stem)
+        self.assertEqual(self.runtime.audio_requests.outcome(key), "pending")
+
+    def test_rate_limit_pauses_all_status_lookups_for_retry_after(self):
+        self.runtime.heartbeat()
+        for index in range(3):
+            self.outbox_job(f"uncertain_key_{index}_1234567", "uncertain")
+        calls = []
+        limited = [True]
+        def status(key):
+            calls.append(self.mono[0])
+            if limited[0]:
+                raise CloudRateLimited("slow down", 120)
+            raise CloudDeviceError("offline")
+        self.client.voice_status = status
+        with mock.patch.object(cloud_runtime.random, "random", return_value=0.5):
+            start = self.mono[0]
+            self.runtime.recover_outbox()
+            self.assertEqual(len(calls), 1)  # The rest of the batch is not sent.
+            limited[0] = False
+            self.run_passes(120)
+            self.assertEqual(len(calls), 1)
+            self.run_passes(20)  # 120 s plus at most 10 % jitter.
+        self.assertGreater(len(calls), 1)
+        self.assertGreaterEqual(calls[1] - start, 120)
+
+    def test_final_or_gone_cloud_state_stops_lookups_without_losing_recording(self):
+        self.runtime.heartbeat()
+        failed = self.outbox_job("failed_key_123456789", "cloud_retained", "queued")
+        gone = self.outbox_job("gone_key_1234567890", "cloud_retained", "accepted")
+        deleted = self.outbox_job("deleted_key_12345678", "cloud_retained", "accepted")
+        calls = {}
+        def status(key):
+            calls[key] = calls.get(key, 0) + 1
+            if key == gone.stem:
+                raise CloudVoiceNotFound("missing")
+            result = {"message_id": "cloud-" + key, "state": "failed", "deleted": False,
+                      "expires_at": NOW + 30 * 86400, "server_time": NOW}
+            if key == deleted.stem:
+                result.update({"state": "deleted", "deleted": True})
+            return result
+        self.client.voice_status = status
+        self.run_passes(24 * 3600, step=30)
+        self.assertEqual(calls, {failed.stem: 1, gone.stem: 1, deleted.stem: 1})
+        self.assertEqual(json.loads((failed / "job.json").read_text())["cloud_state"], "failed")
+        self.assertTrue(json.loads((gone / "job.json").read_text())["cloud_status_gone"])
+        # Final jobs keep their local copy until expiry or a delete tombstone.
+        self.assertTrue((failed / "audio.wav").exists())
+        self.assertTrue((gone / "audio.wav").exists())
+        self.assertFalse(deleted.exists())
 
 
 if __name__ == "__main__":

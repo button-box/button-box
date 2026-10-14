@@ -18,7 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from messagebox.cloud_device import CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudVoiceNotFound, atomic_json, capabilities
+from messagebox.cloud_device import (CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudRateLimited,
+                                     CloudVoiceNotFound, RATE_LIMIT_DEFAULT_SECONDS, atomic_json, capabilities)
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
@@ -55,6 +56,18 @@ RINGTONE_PREVIEW_MIN_SECONDS = 17
 RINGTONE_PREVIEW_MAX_SECONDS = 30
 RINGTONE_PREVIEW_GRACE_SECONDS = 5
 RINGTONE_PREVIEW_MAX_PCM_BYTES = 32 * 1024 * 1024
+# Outbox status schedule. Local "sending" and "uncertain" jobs are checked on
+# every pass (about 2 s). A recording the Cloud already holds is checked
+# slowly: deletions arrive as inbox tombstones and expiry is known locally.
+OUTBOX_STATUS_BATCH = 5
+RETAINED_SETTLE_SECONDS = 20        # Below the 30 s freshness window of a late "sent" cue.
+RETAINED_SETTLE_WINDOW_SECONDS = 600
+RETAINED_MIN_SECONDS = 600
+RETAINED_MAX_SECONDS = 6 * 3600
+# The Cloud still decides delivery for these; the box may owe a "sent" cue.
+_CLOUD_PENDING = {None, "queued", "waiting_for_reply", "held_for_review", "uncertain", "delivery_uncertain"}
+# The Cloud will not change these; polling them again only costs requests.
+_CLOUD_FINAL = {"failed", "expired", "deleted", "canceled", "rejected"}
 
 
 def _current_boot_id():
@@ -174,6 +187,8 @@ class CloudRuntime:
         self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
+        self._status_schedule = {}
+        self._status_backoff_until = float("-inf")
 
     def quiet_state(self):
         state = self.silence.load()
@@ -690,6 +705,9 @@ class CloudRuntime:
 
     def recover_outbox(self):
         """Resolve keyed uploads; retry only a verified original payload."""
+        now = self.monotonic()
+        if now < self._status_backoff_until:
+            return  # The Cloud asked for a pause (HTTP 429 Retry-After).
         candidates = []
         for job_dir in self.outbox_dir.glob("*.job"):
             try:
@@ -698,25 +716,98 @@ class CloudRuntime:
                 continue
             if (metadata.get("transport") == "cloud"
                     and metadata.get("state") in {"sending", "uncertain", "cloud_retained"}
-                    and _valid_id(metadata.get("message_id"))):
-                candidates.append((job_dir.name, job_dir))
-        candidates.sort()
+                    and _valid_id(metadata.get("message_id"))
+                    and not self._status_final(metadata)):
+                candidates.append((job_dir.name, job_dir, metadata))
+        candidates.sort(key=lambda candidate: candidate[0])
+        names = {name for name, _, _ in candidates}
+        for name in list(self._status_schedule):
+            if name not in names:
+                del self._status_schedule[name]
         if not candidates:
             return
         start = self.state.get("outbox_status_cursor", 0) % len(candidates)
-        count = min(5, len(candidates))
-        selected = [candidates[(start + offset) % len(candidates)] for offset in range(count)]
+        selected = []
+        last = 0
+        for offset in range(len(candidates)):
+            name, job_dir, metadata = candidates[(start + offset) % len(candidates)]
+            if self._status_due(name, metadata, now):
+                selected.append((name, job_dir))
+                last = offset
+                if len(selected) == OUTBOX_STATUS_BATCH:
+                    break
+        if not selected:
+            return
         # Advance durably even when every lookup fails, so an offline key cannot
         # starve a later recording. This cursor is scheduling state, not time proof.
-        self.state["outbox_status_cursor"] = (start + count) % len(candidates)
+        self.state["outbox_status_cursor"] = (start + last + 1) % len(candidates)
         self._save()
-        for _, job_dir in selected:
+        for name, job_dir in selected:
             try:
                 with cloud_outbox_lock(job_dir) as acquired:
                     if acquired:
-                        self._recover_outbox_job(job_dir)
+                        try:
+                            self._recover_outbox_job(job_dir)
+                        finally:
+                            self._status_checked(name, job_dir)
+            except CloudRateLimited as exc:
+                delay = exc.retry_after or RATE_LIMIT_DEFAULT_SECONDS
+                self._status_backoff_until = self.monotonic() + delay * (1 + 0.1 * random.random())
+                return
             except (OSError, ValueError, CloudDeviceError):
                 continue
+
+    @staticmethod
+    def _status_final(metadata):
+        return (metadata.get("state") == "cloud_retained"
+                and (metadata.get("cloud_status_gone") is True
+                     or metadata.get("cloud_state") in _CLOUD_FINAL))
+
+    @staticmethod
+    def _status_signature(metadata):
+        return (metadata.get("state"), metadata.get("cloud_state"), metadata.get("cloud_status_checked_at"))
+
+    def _status_due(self, name, metadata, now):
+        if metadata.get("state") != "cloud_retained":
+            return True  # Sending and uncertain jobs keep the fast loop.
+        entry = self._status_schedule.get(name)
+        if entry is None or entry["signature"] != self._status_signature(metadata):
+            # New to this process, or another process (the sender) changed it.
+            pending = metadata.get("cloud_state") in _CLOUD_PENDING
+            self._status_schedule[name] = entry = {
+                "signature": self._status_signature(metadata), "first": now,
+                "interval": RETAINED_MIN_SECONDS,
+                # Spread accepted jobs over one slow interval after a restart.
+                "due": now if pending else now + RETAINED_MIN_SECONDS * random.random()}
+        return now >= entry["due"]
+
+    def _status_checked(self, name, job_dir):
+        """Schedule the next lookup of a job after one attempt."""
+        try:
+            metadata = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._status_schedule.pop(name, None)  # Removed or unreadable: nothing to poll.
+            return
+        if metadata.get("state") != "cloud_retained" or self._status_final(metadata):
+            self._status_schedule.pop(name, None)
+            return
+        now = self.monotonic()
+        entry = self._status_schedule.get(name)
+        signature = self._status_signature(metadata)
+        if entry is None:
+            entry = {"signature": signature, "first": now, "interval": RETAINED_MIN_SECONDS}
+        elif entry["signature"][:2] == signature[:2]:
+            # Unchanged status: back off up to the cap.
+            entry["interval"] = min(RETAINED_MAX_SECONDS, entry["interval"] * 2)
+        else:
+            entry["interval"] = RETAINED_MIN_SECONDS
+        if (metadata.get("cloud_state") in _CLOUD_PENDING
+                and now - entry["first"] < RETAINED_SETTLE_WINDOW_SECONDS):
+            delay = RETAINED_SETTLE_SECONDS + 5 * random.random()
+        else:
+            delay = entry["interval"] * (0.8 + 0.4 * random.random())
+        entry.update({"signature": signature, "due": now + delay})
+        self._status_schedule[name] = entry
 
     def _recover_outbox_job(self, job_dir):
         metadata = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
@@ -729,7 +820,12 @@ class CloudRuntime:
         except CloudVoiceNotFound:
             # A 404 may race the first request. Reusing its exact bytes/key is
             # safe under the server's unique message key; a new encoding is not.
-            if metadata.get("state") == "cloud_retained" or metadata.get("cloud_message_id"):
+            if metadata.get("state") == "cloud_retained":
+                # The Cloud no longer knows this recording; stop asking.
+                metadata["cloud_status_gone"] = True
+                atomic_json(job_dir / "job.json", metadata)
+                return
+            if metadata.get("cloud_message_id"):
                 return
             try:
                 _, upload = cloud_upload_payload(job_dir, metadata)
@@ -1592,14 +1688,18 @@ class CloudRuntime:
                             last_heartbeat = self.monotonic()
                         self.poll_once()
                         failures = 0
-                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
+                        retry_after = 0
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
                         print("cloud poll failed; local work remains pending", flush=True)
                         failures += 1
+                        retry_after = getattr(exc, "retry_after", None) or 0
                     now = self.monotonic()
                     connected = events is not None and events.connected.is_set()
                     interval = 30 if connected else 2 + random.random()
                     if failures:
                         interval = min(60, 2 * 2 ** min(failures, 5)) + random.random()
+                        # HTTP 429: wait at least as long as the Cloud asked.
+                        interval = max(interval, retry_after)
                     next_poll = now + interval
                     earliest_hint_poll = now + 0.25
                     next_local_check = now + (0.1 if self.state.get("pending_settings") else 2 + random.random())
@@ -1614,13 +1714,15 @@ class CloudRuntime:
                     last_heartbeat = self.monotonic()
                 connected = events is not None and events.connected.is_set()
                 if connected and not failures and self.monotonic() >= next_local_check:
+                    retry_after = 0
                     try:
                         self._maintain_local()
                         local_failures = 0
-                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
                         local_failures += 1
+                        retry_after = getattr(exc, "retry_after", None) or 0
                         print("cloud local work failed; receipts remain pending", flush=True)
-                    delay = min(60, 2 * 2 ** min(local_failures, 5)) + random.random()
+                    delay = max(min(60, 2 * 2 ** min(local_failures, 5)) + random.random(), retry_after)
                     next_local_check = self.monotonic() + delay
                 deadline = min(next_poll, last_heartbeat + 30)
                 if connected and not failures:

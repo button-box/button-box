@@ -116,6 +116,24 @@
    "seconds": 2.4782,
    "text": "All done! I'm updated and ready.",
    "sha256": "17f33b32b8a85583764864b25d079a8ee06814b045b339570d7587b0510721b4"
+  },
+  {
+   "file": "update-reminder.wav",
+   "seconds": 5.2,
+   "text": "I'm still waiting! Hold my button for three seconds to install the update.",
+   "sha256": "c7fbbf7f1d4ec785a618654c9ff3892e715795ae709afc3e0c247a0ef6dcf1b4"
+  },
+  {
+   "file": "update-installing.wav",
+   "seconds": 3.84,
+   "text": "Got it! I'm installing the update now. I'll be back in a few minutes.",
+   "sha256": "6e3efef93dbbf9c40343fcd2222e3d3585641184602a8d330e75b764fe992706"
+  },
+  {
+   "file": "auto-updates-on.wav",
+   "seconds": 2.64,
+   "text": "Got it! Automatic updates are on.",
+   "sha256": "c3d4b15140a85909c2ccbc88e50d5694d783272710772eddcb16ee1924f11304"
   }
  ]
 }

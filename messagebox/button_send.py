@@ -10,9 +10,11 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+import wave
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -172,11 +174,20 @@ def start_player(args, **kwargs):
     return subprocess.Popen(args, **kwargs)
 
 
-def play_sound(path, *, timeout):
+def play_sound(path, *, timeout, allow_muted=False):
     args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
     if transport_mode() == "cloud":
-        return cloud_quiet.play(args, timeout=timeout)
+        return cloud_quiet.play(args, timeout=timeout, allow_muted=allow_muted)
     return subprocess.run(args, check=True, timeout=timeout)
+
+
+def play_update_sound(path, *, timeout):
+    """An owner-approved update ask or reminder. Mute never blocks it.
+
+    The owner tapped Install, so the box must be able to ask for the hold.
+    Only the approval flow uses this; automatic installs never speak.
+    """
+    return play_sound(path, timeout=timeout, allow_muted=True)
 
 
 _applied_volume_revision = None
@@ -244,7 +255,19 @@ def announce_all_set():
 
 def start_update_hold_cue():
     """Play the short "yes" when an update hold reaches 3 s; return a bounded waiter."""
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("card_saved"))])
+    return start_update_cue(sound_pack.cue_path("card_saved"))
+
+
+def start_update_cue(path):
+    """Start one update cue ("yes" beep or "Got it!" line); return a bounded waiter.
+
+    The waiter also waits for the shared audio reservation, so the updater can
+    take the exclusive one right after it returns.
+    """
+    args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
+    # Part of an owner-approved install or mode change: plays even when muted.
+    process = (start_player(args, allow_muted=True) if transport_mode() == "cloud"
+               else start_player(args))
 
     def wait(timeout):
         deadline = time.monotonic() + timeout
@@ -1473,6 +1496,53 @@ def play_audio_ordinary(path):
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
 
 
+# A new playback stream that opens right after the cue's stream closes can
+# lose the USB speaker after its first syllable. Leading silence lets the
+# device settle while the message's own stream is already open.
+LEAD_IN_S = 0.15
+
+
+def with_lead_in(path, seconds=LEAD_IN_S):
+    """Return a temporary copy of a PCM WAV with leading silence, or None."""
+    try:
+        with wave.open(str(path), "rb") as source:
+            params = source.getparams()
+            if params.comptype != "NONE" or params.sampwidth not in (1, 2, 3, 4):
+                return None
+            # The unit's private tmpfs (RuntimeDirectory) when set; removed on stop.
+            descriptor, name = tempfile.mkstemp(prefix="messagebox-lead-in-", suffix=".wav",
+                                                dir=os.environ.get("RUNTIME_DIRECTORY") or None)
+            os.close(descriptor)
+            try:
+                with wave.open(name, "wb") as target:
+                    target.setparams(params)
+                    frames = int(params.framerate * seconds)
+                    # 8-bit WAV is unsigned: its silence is 0x80.
+                    zero = b"\x80" if params.sampwidth == 1 else b"\x00"
+                    target.writeframes(zero * (frames * params.sampwidth * params.nchannels))
+                    while True:
+                        block = source.readframes(48000)
+                        if not block:
+                            break
+                        target.writeframes(block)
+            except BaseException:
+                os.unlink(name)
+                raise
+            return Path(name)
+    except (OSError, EOFError, wave.Error):
+        return None
+
+
+def play_audio_after_cue(path):
+    """Play an inbound message that follows a cue, with a short lead-in."""
+    padded = with_lead_in(path)
+    try:
+        play_audio_ordinary(padded or path)
+    finally:
+        if padded is not None:
+            padded.unlink(missing_ok=True)
+
+
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
     if quiet_hours():
@@ -1944,6 +2014,9 @@ class PiGuidedIO:
     def play_ordinary(self, path):
         play_audio_ordinary(path)
 
+    def play_after_cue(self, path):
+        play_audio_after_cue(path)
+
     def record(self):
         return capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
@@ -2378,6 +2451,7 @@ def main():
         from messagebox.cloud_update import button_ready, confirmation, install_announcer
         button_ready(button)
         confirmation.on_hold = start_update_hold_cue
+        confirmation.on_confirmed = start_update_cue
         threading.Thread(target=install_announcer.run, daemon=True).start()
     led = LED(LED_PIN)
     apply_master_volume()
@@ -2401,7 +2475,7 @@ def main():
             time.sleep(POLL_S)
             if transport_mode() == "cloud":
                 from messagebox.cloud_update import confirmation
-                confirmation.idle(button, play_sound)
+                confirmation.idle(button, play_update_sound)
             apply_master_volume()
             maybe_play_send_success()
             maybe_play_cloud_sound()

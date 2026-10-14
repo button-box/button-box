@@ -546,10 +546,13 @@ class GuidedSession:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
         if incoming_path:
+            after_cue = None
             for path in (incoming_cue_path, incoming_voice_path):
                 if path:
                     self.io.play_ordinary(path)
-            self.io.play_ordinary(incoming_path)
+                    # The message stream opens right after the cue stream closes.
+                    after_cue = getattr(self.io, "play_after_cue", None)
+            (after_cue or self.io.play_ordinary)(incoming_path)
             if incoming_end_path:
                 self.io.play_ordinary(incoming_end_path)
             self.event("guided_inbound_played", session_id=session_id)

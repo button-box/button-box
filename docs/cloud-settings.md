@@ -54,7 +54,9 @@ the deadline with the current time; no expiry process or late alert is needed.
 Heartbeat `quiet_state` reports `{muted, quiet_until}`, using null after expiry.
 
 Both commands stop active button-service audio. Mute blocks all later audio,
-including cues, voice lines and previews, and arrival lamp blinking. A deliberate
+including cues, voice lines and previews, and arrival lamp blinking. One
+exception: after the owner requests an install (or Auto mode), the update ask,
+reminder, hold beep and "Got it!" line play while muted (see on-box-updates.md). A deliberate
 button press while muted flashes the lamp once without playing or claiming a
 message. Saved speaker volume remains intact. Quiet now suppresses unsolicited
 sounds and arrival lamp blinking but permits deliberate playback after the

@@ -183,6 +183,7 @@ sounds/cloud/nothing.wav
 sounds/cloud/reaction.wav
 sounds/cloud/text-message.wav
 sounds/cues/README.md
+sounds/cues/auto-updates-on.wav
 sounds/cues/auto-updates.wav
 sounds/cues/cue-all_set.wav
 sounds/cues/cue-card.wav
@@ -203,7 +204,9 @@ sounds/cues/cue-still_trying.wav
 sounds/cues/cues.json
 sounds/cues/manifest.json
 sounds/cues/update-done.wav
+sounds/cues/update-installing.wav
 sounds/cues/update-ready.wav
+sounds/cues/update-reminder.wav
 sounds/ringtones/bouncy.lamp.json
 sounds/ringtones/bouncy.wav
 sounds/ringtones/hello.lamp.json

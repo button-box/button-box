@@ -11,6 +11,7 @@ from messagebox.cloud_device import (
     capabilities,
     CloudDeviceClient,
     CloudDeviceError,
+    CloudRateLimited,
     CloudSendRejected,
     CloudSendUncertain,
     CloudVoiceNotFound,
@@ -284,6 +285,22 @@ class CloudIdentityTests(unittest.TestCase):
             client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=missing)
             with self.assertRaises(CloudVoiceNotFound):
                 client.voice_status("original_key_123456")
+
+    def test_rate_limit_is_distinct_and_carries_bounded_retry_after(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()
+            for header, expected in (({"Retry-After": "120"}, 120), ({}, 60),
+                                     ({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 60),
+                                     ({"Retry-After": "0"}, 1), ({"Retry-After": "999999"}, 3600)):
+                with self.subTest(header=header):
+                    def limited(request, *, timeout, header=header):
+                        raise urllib.error.HTTPError(request.full_url, 429, "slow down", header, io.BytesIO())
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=limited)
+                    with self.assertRaises(CloudRateLimited) as caught:
+                        client.voice_status("original_key_123456")
+                    self.assertEqual(caught.exception.retry_after, expected)
+                    # Callers that only know CloudDeviceError keep working.
+                    self.assertIsInstance(caught.exception, CloudDeviceError)
 
     def test_voice_rejection_and_unknown_result_stay_distinct(self):
         with tempfile.TemporaryDirectory() as directory:

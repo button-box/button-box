@@ -470,6 +470,146 @@ class ButtonBoundaryTests(unittest.TestCase):
         self.assertFalse(button.is_pressed)
         self.assertGreater(confirmation.binding['deadline_mono'], 130)
 
+    def run_confirmed(self, duration, *, action='install', deadline_in=120, recording=True):
+        clock = Clock()
+        approval = {'action': action, 'binding': 'b', 'deadline_mono': clock.now + deadline_in, 'cue_pending': False}
+        events = []
+        def ipc(command, **fields):
+            events.append((command,))
+            return {'approval': approval}
+        button = types.SimpleNamespace(is_pressed=True)
+        def sleep(seconds):
+            clock.sleep(seconds)
+            button.is_pressed = clock.now < 10 + duration
+        def on_confirmed(path):
+            events.append(('line', path, button.is_pressed))
+            return lambda timeout: events.append(('line_wait', timeout))
+        cue = (lambda name: Path('/sounds/cues') / name) if recording else (lambda name: None)
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep,
+                                                 on_hold=lambda: None, on_confirmed=on_confirmed, cue=cue)
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            confirmation.intercept(button)
+        return events
+
+    def test_got_it_line_plays_after_release_and_before_confirm(self):
+        for action, name in (('install', 'update-installing.wav'), ('enable_auto', 'auto-updates-on.wav')):
+            with self.subTest(action=action):
+                events = self.run_confirmed(4, action=action)
+                self.assertEqual([event[0] for event in events], ['button', 'line', 'line_wait', 'confirm'])
+                self.assertEqual(events[1][1].name, name)
+                self.assertFalse(events[1][2])
+                self.assertEqual(events[2][1], cloud_update.CONFIRMED_CUE_WAIT_S)
+
+    def test_got_it_line_skipped_for_short_hold_near_deadline_or_missing_recording(self):
+        self.assertEqual([event[0] for event in self.run_confirmed(1)], ['button'])
+        for kwargs in ({'deadline_in': 9}, {'recording': False}):
+            with self.subTest(**kwargs):
+                self.assertEqual([event[0] for event in self.run_confirmed(4, **kwargs)], ['button', 'confirm'])
+
+    def test_got_it_line_failure_still_confirms(self):
+        clock = Clock()
+        approval = {'action': 'install', 'binding': 'b', 'deadline_mono': clock.now + 120, 'cue_pending': False}
+        ipc = mock.Mock(return_value={'approval': approval})
+        button = types.SimpleNamespace(is_pressed=True)
+        def sleep(seconds):
+            clock.sleep(seconds)
+            button.is_pressed = clock.now < 14
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep,
+                                                 on_confirmed=mock.Mock(side_effect=OSError('no speaker')),
+                                                 cue=lambda name: Path('/x') / name)
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            confirmation.intercept(button)
+        self.assertEqual([call.args[0] for call in ipc.call_args_list], ['button', 'confirm'])
+
+    def test_box_asks_again_once_when_nobody_holds(self):
+        for action, name in (('install', 'update-reminder.wav'), ('enable_auto', 'auto-updates.wav')):
+            with self.subTest(action=action):
+                clock = Clock()
+                button = types.SimpleNamespace(is_pressed=False)
+                approval = {'action': action, 'binding': 'b', 'cue_pending': True}
+                armed = {**approval, 'cue_pending': False, 'deadline_mono': None}
+                def ipc(command, **fields):
+                    if command == 'arm':
+                        armed['deadline_mono'] = clock.now + 120
+                        approval.update(armed)
+                    return {'approval': dict(approval)}
+                play = mock.Mock()
+                confirmation = cloud_update.Confirmation(ipc=ipc, voice=mock.Mock(), monotonic=clock.monotonic,
+                                                         sleep=clock.sleep, cue=lambda name: Path('/c') / name)
+                with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+                    confirmation.idle(button, play)          # First ask, then arm.
+                    clock.now += cloud_update.REMIND_AFTER_S - 1
+                    confirmation.idle(button, play)
+                    play.assert_not_called()
+                    clock.now += 1
+                    confirmation.idle(button, play)
+                    clock.now += 10
+                    confirmation.idle(button, play)
+                self.assertEqual(play.call_count, 1)
+                self.assertEqual(play.call_args.args[0].name, name)
+
+    def test_no_reminder_near_deadline_for_other_window_or_without_recording(self):
+        for case in ('late', 'other', 'missing'):
+            with self.subTest(case=case):
+                clock = Clock()
+                approval = {'action': 'install', 'binding': 'b', 'cue_pending': False,
+                            'deadline_mono': clock.now + (cloud_update.REMIND_AFTER_S + 5 if case == 'late' else 120)}
+                confirmation = cloud_update.Confirmation(
+                    ipc=lambda command, **fields: {'approval': {**approval, 'binding': 'new' if case == 'other' else 'b'}},
+                    monotonic=clock.monotonic, cue=(lambda name: None) if case == 'missing' else (lambda name: Path('/c') / name))
+                confirmation.reminder = ('b', clock.now)
+                play = mock.Mock()
+                with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+                    clock.now += cloud_update.REMIND_AFTER_S
+                    confirmation.idle(types.SimpleNamespace(is_pressed=False), play)
+                play.assert_not_called()
+
+    def test_bundled_ask_reminder_and_got_it_recordings_are_valid(self):
+        with mock.patch.object(cloud_update.sound_pack, 'SOUND_DIR', Path(__file__).resolve().parents[1] / 'sounds'):
+            for name in {*cloud_update.REMINDER_CUES.values(), *cloud_update.CONFIRMED_CUES.values()}:
+                self.assertIsNotNone(cloud_update.bundled_cue(name), name)
+
+    def test_runtime_got_it_line_waits_for_player_and_reservation(self):
+        released = mock.Mock()
+        process = mock.Mock(reservation_released=released)
+        with mock.patch.object(runtime, 'start_player', return_value=process) as start:
+            wait = runtime.start_update_cue(Path('/sounds/cues/update-installing.wav'))
+            self.assertEqual(start.call_args.args[0][-1], '/sounds/cues/update-installing.wav')
+            wait(cloud_update.CONFIRMED_CUE_WAIT_S)
+        process.wait.assert_called_once_with(timeout=cloud_update.CONFIRMED_CUE_WAIT_S)
+        released.wait.assert_called_once()
+
+    def test_owner_approved_update_audio_plays_while_muted(self):
+        with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(runtime.cloud_quiet, 'play') as play, \
+             mock.patch.object(runtime.cloud_quiet, 'start_player') as start:
+            runtime.play_update_sound(Path('/c/update-reminder.wav'), timeout=30)
+            self.assertIs(play.call_args.kwargs['allow_muted'], True)
+            runtime.start_update_hold_cue()
+            runtime.start_update_cue(Path('/c/update-installing.wav'))
+            self.assertEqual([call.kwargs.get('allow_muted') for call in start.call_args_list], [True, True])
+            # Everything else keeps normal mute.
+            runtime.play_sound(Path('/c/cue-press.wav'), timeout=5)
+            self.assertIs(play.call_args.kwargs['allow_muted'], False)
+
+    def test_muted_player_blocks_ordinary_audio_but_not_update_audio(self):
+        state = {'muted': True, 'quiet_until': None, 'stop_sequence': 0}
+        reservation = mock.MagicMock()
+        reservation.__enter__.return_value = True
+        with mock.patch.object(runtime.cloud_quiet.silence_store, 'load', return_value=state), \
+             mock.patch('messagebox.maintenance.interaction', return_value=reservation), \
+             mock.patch.object(runtime.cloud_quiet.subprocess, 'Popen') as popen:
+            popen.return_value.poll.return_value = 0
+            with self.assertRaises(runtime.cloud_quiet.AudioSilenced):
+                runtime.cloud_quiet.start_player(['aplay', 'x'])
+            runtime.cloud_quiet.start_player(['aplay', 'x'], allow_muted=True)
+        popen.assert_called_once()
+
+    def test_button_loop_asks_with_update_player(self):
+        source = Path(runtime.__file__).read_text()
+        self.assertIn('confirmation.idle(button, play_update_sound)', source)
+        self.assertIn('confirmation.on_confirmed = start_update_cue', source)
+
     def test_wacli_bypasses_updater_and_maintenance_keeps_physical_capture_path(self):
         with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'wacli'}), \
              mock.patch.object(runtime, 'transport_mode', return_value='wacli'), \
