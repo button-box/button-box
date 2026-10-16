@@ -458,6 +458,7 @@ def capabilities(*, nfc=False) -> dict:
         "text_to_voice": 1,
         "card_name_prompt": True,
         "announce_messages_voice": True,
+        "message_age_phrase": True,
         "box_link": True,
         "kit_cards": 1,
         "quiet_periods": 3,

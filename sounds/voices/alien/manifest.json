@@ -226,5 +226,91 @@
    "seed": 7,
    "sha256": "05444674055f1bbf7fa2bc4e27af17e6189d388273fb2c9e2fea13d04f53d7d3"
   }
+ ],
+ "age_lines": [
+  {
+   "file": "voice-age-this-morning.wav",
+   "text": "Beep boop! From this morning!",
+   "seconds": 2.64,
+   "seed": 7,
+   "sha256": "c17083488ea1787e8328dff5b6c9ce9088ff99f4ff3d02afb01a7fc401d845f6"
+  },
+  {
+   "file": "voice-age-this-afternoon.wav",
+   "text": "Beep boop! From this afternoon!",
+   "seconds": 2.48,
+   "seed": 7,
+   "sha256": "253c9c62857be46525387acc38b128753c2b8706495f91d220711b4bed2b5bd8"
+  },
+  {
+   "file": "voice-age-this-evening.wav",
+   "text": "Beep boop! From this evening!",
+   "seconds": 2.4,
+   "seed": 7,
+   "sha256": "674842b243a07df3a616f38dd2c07b940c2b2f4187a94d377aeca3aa7339883c"
+  },
+  {
+   "file": "voice-age-last-night.wav",
+   "text": "Beep boop! From last night!",
+   "seconds": 2.4,
+   "seed": 1,
+   "sha256": "fd75dd8d4804e1ed3c3209b7491b15865b6d35d479c994afb97a1ae62b96dd91"
+  },
+  {
+   "file": "voice-age-yesterday.wav",
+   "text": "Beep boop! From yesterday!",
+   "seconds": 2.24,
+   "seed": 7,
+   "sha256": "bcbdd77b8d140fe1649b264da6277fabf61e265466e71f7c6e94bfc662098e34"
+  },
+  {
+   "file": "voice-age-2-days-ago.wav",
+   "text": "Beep boop! From two days ago!",
+   "seconds": 2.56,
+   "seed": 7,
+   "sha256": "94dc34bb2b7578fc475f615c765aa9d23a21576f241502c4ed100a78c5c99b90"
+  },
+  {
+   "file": "voice-age-3-days-ago.wav",
+   "text": "Beep boop! From three days ago!",
+   "seconds": 2.48,
+   "seed": 7,
+   "sha256": "fa36f8d7487931c428837fac58e232e4faaf1668385e44ec801fdcf70123c481"
+  },
+  {
+   "file": "voice-age-4-days-ago.wav",
+   "text": "Beep boop! From four days ago!",
+   "seconds": 2.32,
+   "seed": 7,
+   "sha256": "ba6c3ab1202c3167aaae1424cfde9755a27997271ee56c5e7ddb1b0d0ff19c1b"
+  },
+  {
+   "file": "voice-age-5-days-ago.wav",
+   "text": "Beep boop! From five days ago!",
+   "seconds": 2.56,
+   "seed": 7,
+   "sha256": "42d4adbcc77d7dfaf2b8e77ace31f3f4f3652b0e24e8aae76589ea9b2a8f2c57"
+  },
+  {
+   "file": "voice-age-6-days-ago.wav",
+   "text": "Beep boop! From six days ago!",
+   "seconds": 2.56,
+   "seed": 7,
+   "sha256": "e757ce1513a421351305d2475dfb6261a74500e17050f28c3df924a7fc3085ad"
+  },
+  {
+   "file": "voice-age-last-week.wav",
+   "text": "Beep boop! From last week!",
+   "seconds": 2.08,
+   "seed": 7,
+   "sha256": "45a982e3500624e25aac398554da120d73f4434f4ade2a17cac65d74cb073d0a"
+  },
+  {
+   "file": "voice-age-a-while-ago.wav",
+   "text": "Beep boop! From a while ago!",
+   "seconds": 2.48,
+   "seed": 7,
+   "sha256": "56a9a8d4fb55fd4cc46d3340c2652aca14fdadced77d33f44ea4ceb885300565"
+  }
  ]
 }

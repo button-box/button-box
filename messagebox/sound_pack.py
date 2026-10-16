@@ -9,6 +9,7 @@ import wave
 from pathlib import Path
 
 from messagebox.cloud_device import atomic_json, open_private_lock
+from messagebox.message_age import PHRASE_KEYS as AGE_PHRASE_KEYS
 from messagebox.runtime_paths import APP_DIR, STATE_DIR
 from messagebox.settings import SettingsReader, VOICE_PACKS, normalize_voice_pack
 
@@ -104,6 +105,25 @@ def reaction_sent_path(emoji, pack=None):
         for path in candidates:
             if _playable_wav(path):
                 return path
+    return None
+
+
+def age_line_path(key, pack=None):
+    """The "This one's from ..." line for a message age phrase, or None.
+
+    Order: the current pack, then Jessica. Optional lines are never required
+    for a pack to be installed; a missing line means the box says nothing.
+    """
+    if key not in AGE_PHRASE_KEYS:
+        return None
+    pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
+    filename = f"voice-age-{key}.wav"
+    candidates = [SOUND_DIR / "voice" / filename]
+    if pack != "jessica":
+        candidates.insert(0, SOUND_DIR / "voices" / pack / filename)
+    for path in candidates:
+        if _playable_wav(path):
+            return path
     return None
 
 
