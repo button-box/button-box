@@ -18,7 +18,7 @@ countdown, review, approval or deletion voices.
 | Accepted send | `play_send_success_cue`: `cue-sent.wav`; independent sender, interruptible on press, unchanged setting and no delivery claim. |
 | Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
-| Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then card-unknown voice (or explicit operator override), acknowledged once per presentation. |
+| Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then the current pack's card-unknown voice, resolved on each tap so a voice pack change applies at once (or explicit operator override), acknowledged once per presentation. |
 | Listened / listener announcement test | `play_pending_listened`: listened cue then saved family clip or `voice-listened.wav`; dashboard receipt ingestion uses the new default. All receipt playback shares this path. |
 | Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. `voice-msg-start.wav` remains bundled for voice previews only. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply. |

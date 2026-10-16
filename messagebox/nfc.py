@@ -32,7 +32,10 @@ from messagebox.runtime_paths import (
 )
 
 
-UNKNOWN_TOKEN_WAV = os.environ.get("MSGBOX_UNKNOWN_TOKEN_WAV", str(sound_pack.voice_path("card-unknown")))
+def unknown_token_wav():
+    """Resolve per tap so a voice pack change applies without a service restart."""
+    override = os.environ.get("MSGBOX_UNKNOWN_TOKEN_WAV")
+    return override if override is not None else str(sound_pack.voice_path("card-unknown"))
 REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
@@ -92,7 +95,7 @@ class Announcer:
         if result.contact is not None:
             prompt = result.contact.get("card_clip", "")
         elif result.action == "unknown":
-            prompt = UNKNOWN_TOKEN_WAV
+            prompt = unknown_token_wav()
         else:
             return
         self.store.put(action=result.action, uid=result.uid, prompt=prompt)

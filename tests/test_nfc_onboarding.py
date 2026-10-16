@@ -115,6 +115,25 @@ class NfcTests(unittest.TestCase):
                 with self.assertRaises(NfcError):
                     normalize_uid(invalid)
 
+    def test_new_card_prompt_follows_the_current_voice_pack_without_restart(self):
+        from messagebox import sound_pack
+        sounds = Path(__file__).resolve().parents[1] / "sounds"
+        store = mock.Mock()
+        result = mock.Mock(announce=True, uid=CARD_ONE, contact=None, action="unknown")
+        with mock.patch.object(sound_pack, "SOUND_DIR", sounds), \
+                mock.patch.dict("os.environ", {}, clear=False) as env, \
+                mock.patch.object(sound_pack, "current_voice_pack") as pack:
+            env.pop("MSGBOX_UNKNOWN_TOKEN_WAV", None)
+            announcer = Announcer(store)
+            for name, expected in (("jessica", sounds / "voice/voice-card-unknown.wav"),
+                                   ("french", sounds / "voices/french/voice-card-unknown.wav")):
+                pack.return_value = name  # wacli boxes stay on the default (jessica) line.
+                announcer.announce(result)
+                self.assertEqual(store.put.call_args.kwargs["prompt"], str(expected))
+            env["MSGBOX_UNKNOWN_TOKEN_WAV"] = "/synthetic/override.wav"
+            announcer.announce(result)
+            self.assertEqual(store.put.call_args.kwargs["prompt"], "/synthetic/override.wav")
+
     def test_zero_one_and_multi_contact_routing(self):
         unknown = self.router.card_seen(CARD_ONE)
         self.assertEqual(unknown.action, "unknown")
