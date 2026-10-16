@@ -267,8 +267,13 @@ first ask, while at least 20 seconds of the window remain, it plays
 install the update." (Ask-to-Auto repeats `auto-updates.wav`.) A short hold
 keeps this one reminder. A missing or invalid reminder recording is skipped.
 
-At three seconds the box plays the short `cue-card_saved.wav` "yes" while the
-button is still held. After release, and before the button owner sends
+When a valid hold starts, the box plays the short `cue-press.wav` tap at
+press-down, so the person knows the box is counting. It is the same tap as an
+ordinary press, and it ends long before three seconds. A hold released before
+three seconds plays only this tap: nothing is confirmed, the window stays open
+and the one reminder is kept. Expired, already-held and not-yet-armed presses
+get no tap. At three seconds the box plays the short `cue-card_saved.wav` "yes"
+while the button is still held. After release, and before the button owner sends
 `confirm`, it plays `update-installing.wav`: "Got it! I'm installing the update
 now. I'll be back in a few minutes." (Ask-to-Auto: `auto-updates-on.wav`, "Got
 it! Automatic updates are on.") The line waits at most 6 seconds and is skipped
@@ -278,7 +283,8 @@ reservation before `confirm`, so the install's exclusive reservation is never
 blocked by playback.
 
 Mute does not block this owner-approved flow: the ask, the reminder, the
-three-second beep and the "Got it!" line play with `allow_muted`, because the
+press-down tap, the three-second beep and the "Got it!" line play with
+`allow_muted`, because the
 owner just tapped Install (or chose Auto) and a muted box could otherwise never
 open the window. Quiet times never blocked the ask. Mute still silences all
 other audio, including `update-done.wav`. Automatic installs have no ask and

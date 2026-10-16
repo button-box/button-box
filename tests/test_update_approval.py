@@ -398,7 +398,11 @@ class ButtonBoundaryTests(unittest.TestCase):
             def wait(timeout):
                 events.append(('cue_wait', timeout))
             return wait
-        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep, on_hold=on_hold)
+        def on_press():
+            events.append(('tick', clock.now, button.is_pressed))
+            return lambda timeout: events.append(('tick_wait', timeout))
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep, on_hold=on_hold,
+                                                 on_press=on_press)
         if already_held:
             confirmation.consume_release = True
         with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
@@ -415,6 +419,50 @@ class ButtonBoundaryTests(unittest.TestCase):
         names = [event[0] for event in events]
         self.assertEqual(names[-2:], ['cue_wait', 'confirm'])
         self.assertEqual(events[-2][1], cloud_update.HOLD_CUE_WAIT_S)
+
+    def test_start_tick_plays_once_at_press_down_and_end_beep_is_unchanged(self):
+        events = self.run_hold(5)
+        names = [event[0] for event in events]
+        self.assertEqual(names, ['button', 'tick', 'tick_wait', 'cue', 'cue_wait', 'confirm'])
+        tick = events[1]
+        self.assertEqual(tick[1], 10)  # The moment the press is seen, before any wait.
+        self.assertTrue(tick[2])
+        self.assertEqual(events[2][1], cloud_update.PRESS_CUE_WAIT_S)
+        self.assertGreaterEqual(events[3][1], 13)
+
+    def test_early_release_plays_only_the_start_tick_and_never_confirms(self):
+        for duration in (0.1, 1, 2.9):
+            with self.subTest(duration=duration):
+                events = self.run_hold(duration)
+                self.assertEqual([event[0] for event in events], ['button', 'tick', 'tick_wait'])
+
+    def test_start_tick_never_for_expired_cue_pending_or_already_held_presses(self):
+        for kwargs in ({'expired': True}, {'cue_pending': True}, {'already_held': True}):
+            with self.subTest(**kwargs):
+                events = self.run_hold(5, **kwargs)
+                self.assertFalse([event for event in events if event[0] in {'tick', 'tick_wait'}])
+
+    def test_start_tick_failure_still_confirms(self):
+        clock = Clock()
+        approval = {'binding': 'b', 'deadline_mono': clock.now + 120, 'cue_pending': False}
+        ipc = mock.Mock(return_value={'approval': approval})
+        button = types.SimpleNamespace(is_pressed=True)
+        def sleep(seconds):
+            clock.sleep(seconds)
+            button.is_pressed = clock.now < 14
+        confirmation = cloud_update.Confirmation(ipc=ipc, monotonic=clock.monotonic, sleep=sleep,
+                                                 on_press=mock.Mock(side_effect=OSError('no speaker')))
+        with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            confirmation.intercept(button)
+        self.assertEqual([call.args[0] for call in ipc.call_args_list], ['button', 'confirm'])
+
+    def test_runtime_start_tick_uses_the_press_cue(self):
+        process = mock.Mock(reservation_released=mock.Mock())
+        with mock.patch.object(runtime, 'start_player', return_value=process) as start:
+            wait = runtime.start_update_press_cue()
+            self.assertIn('cue-press.wav', start.call_args.args[0][-1])
+            wait(cloud_update.PRESS_CUE_WAIT_S)
+        process.wait.assert_called_once_with(timeout=cloud_update.PRESS_CUE_WAIT_S)
 
     def test_hold_cue_never_for_short_expired_cue_pending_or_already_held_presses(self):
         for kwargs in ({'duration': 1}, {'duration': 2.9}, {'duration': 5, 'expired': True},
@@ -585,9 +633,11 @@ class ButtonBoundaryTests(unittest.TestCase):
              mock.patch.object(runtime.cloud_quiet, 'start_player') as start:
             runtime.play_update_sound(Path('/c/update-reminder.wav'), timeout=30)
             self.assertIs(play.call_args.kwargs['allow_muted'], True)
+            runtime.start_update_press_cue()
             runtime.start_update_hold_cue()
             runtime.start_update_cue(Path('/c/update-installing.wav'))
-            self.assertEqual([call.kwargs.get('allow_muted') for call in start.call_args_list], [True, True])
+            self.assertEqual([call.kwargs.get('allow_muted') for call in start.call_args_list], [True, True, True])
+            self.assertIn('cue-press.wav', start.call_args_list[0].args[0][-1])
             # Everything else keeps normal mute.
             runtime.play_sound(Path('/c/cue-press.wav'), timeout=5)
             self.assertIs(play.call_args.kwargs['allow_muted'], False)
@@ -609,6 +659,7 @@ class ButtonBoundaryTests(unittest.TestCase):
         source = Path(runtime.__file__).read_text()
         self.assertIn('confirmation.idle(button, play_update_sound)', source)
         self.assertIn('confirmation.on_confirmed = start_update_cue', source)
+        self.assertIn('confirmation.on_press = start_update_press_cue', source)
 
     def test_wacli_bypasses_updater_and_maintenance_keeps_physical_capture_path(self):
         with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'wacli'}), \

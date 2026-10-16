@@ -147,6 +147,10 @@ def _voice(text, play):
 # confirm sent while the cue still plays would fail `not_idle` and burn the
 # one-use approval.
 HOLD_CUE_WAIT_S = 1.5
+# Upper bound on reaping the short press tick that starts the hold. The tick
+# (0.4 s) has always ended before the 3 s "yes", and an early release waits at
+# most this long so its shared reservation never outlives the gesture.
+PRESS_CUE_WAIT_S = 0.6
 # Ask again once when the window is still open this long after the first ask.
 REMIND_AFTER_S = 40
 # The reminder must finish well before the two-minute window closes.
@@ -158,8 +162,12 @@ CONFIRMED_CUE_WAIT_S = 6
 
 class Confirmation:
     def __init__(self, *, ipc=request, monotonic=time.monotonic, sleep=time.sleep, voice=_voice, on_hold=None,
-                 on_confirmed=None, cue=bundled_cue):
+                 on_confirmed=None, cue=bundled_cue, on_press=None):
         self.ipc, self.monotonic, self.sleep, self.voice = ipc, monotonic, sleep, voice
+        # Optional: called once when a valid confirmation hold starts, so the
+        # person hears that the box is counting. Returns a wait(timeout)
+        # callable (or None). Default: no sound.
+        self.on_press = on_press
         # Optional: called once when a valid hold reaches 3 s. Returns a
         # wait(timeout) callable (or None). Default: no sound.
         self.on_hold = on_hold
@@ -173,12 +181,25 @@ class Confirmation:
         self.reminder = None
 
     def _hold_reached(self):
-        if self.on_hold is None:
+        return self._start_cue(self.on_hold)
+
+    @staticmethod
+    def _start_cue(start):
+        if start is None:
             return None
         try:
-            return self.on_hold()
+            return start()
         except (OSError, subprocess.SubprocessError, ValueError):
             return None
+
+    @staticmethod
+    def _reap(wait, timeout):
+        if wait is None:
+            return
+        try:
+            wait(timeout)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     def _confirmed(self, approval):
         """Say "Got it!" on the box before the updater takes the speaker."""
@@ -260,23 +281,26 @@ class Confirmation:
         # Debounce is part of the continuous hold; an open edge resets it.
         confirmed = False
         cue_wait = None
+        # Short tick on press-down: the box is counting the three seconds.
+        press_wait = self._start_cue(self.on_press) if eligible and button.is_pressed else None
         while button.is_pressed:
             now = self.monotonic()
             if (eligible and not confirmed and now - started >= 3
                     and now < approval['deadline_mono']):
                 confirmed = True
+                # The tick ended long ago; reap it before the "yes".
+                self._reap(press_wait, PRESS_CUE_WAIT_S)
+                press_wait = None
                 # Audible "yes" while the button is still held.
                 cue_wait = self._hold_reached()
             if approval and now >= approval.get('deadline_mono', now + 1):
                 eligible = False
             self.sleep(0.02)
         held_seconds = self.monotonic() - started
-        if cue_wait is not None:
-            # Release the shared audio reservation before the exclusive install.
-            try:
-                cue_wait(HOLD_CUE_WAIT_S)
-            except (OSError, subprocess.SubprocessError):
-                pass
+        # An early release still reaps the tick; it never confirms anything.
+        self._reap(press_wait, PRESS_CUE_WAIT_S)
+        # Release the shared audio reservation before the exclusive install.
+        self._reap(cue_wait, HOLD_CUE_WAIT_S)
         # The gesture is consumed completely, including short or expired holds.
         if confirmed and eligible:
             self._confirmed(approval)

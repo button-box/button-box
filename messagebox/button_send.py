@@ -253,6 +253,11 @@ def announce_all_set():
         play_moment("all_set", "all-set")
 
 
+def start_update_press_cue():
+    """Play the short press tap when an update hold starts; return a bounded waiter."""
+    return start_update_cue(sound_pack.cue_path("press"))
+
+
 def start_update_hold_cue():
     """Play the short "yes" when an update hold reaches 3 s; return a bounded waiter."""
     return start_update_cue(sound_pack.cue_path("card_saved"))
@@ -2486,6 +2491,7 @@ def main():
     if transport_mode() == "cloud":
         from messagebox.cloud_update import button_ready, confirmation, install_announcer
         button_ready(button)
+        confirmation.on_press = start_update_press_cue
         confirmation.on_hold = start_update_hold_cue
         confirmation.on_confirmed = start_update_cue
         threading.Thread(target=install_announcer.run, daemon=True).start()
