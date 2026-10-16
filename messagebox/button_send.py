@@ -243,6 +243,29 @@ def play_moment(cue=None, voice=None):
         play_audio_ordinary(path)
 
 
+def message_intro_voice(settings=None):
+    """Cloud option: the pack's "A message for you!" line after the sparkle cue.
+
+    The sparkle stays first because it is the short, familiar "something is
+    coming" sound; the voice line then names it, and the message follows.
+    Off by default and never during quiet controls, so it adds no new sound
+    when the box should be quiet. wacli boxes never play it.
+    """
+    if transport_mode() != "cloud":
+        return None
+    settings = settings or caregiver_settings()
+    if settings.get("announce_messages_voice") is not True or quiet_hours(settings):
+        return None
+    return sound_pack.voice_path("msg-start", settings.get("voice_pack"))
+
+
+def play_message_start():
+    play_moment("msg_start")
+    intro = message_intro_voice()
+    if intro is not None:
+        play_audio_ordinary(intro)
+
+
 def announce_first_online():
     if sound_pack.consume_moment("online"):
         play_moment(voice="online")
@@ -2095,7 +2118,7 @@ def play_next_legacy():
     path, meta = selected
     log(f"playing {path.name} ({len(names)} waiting)")
     try:
-        play_moment("msg_start")
+        play_message_start()
         play_sound(path, timeout=600)
         if len(names) == 1:
             play_moment("msg_end")
@@ -2231,7 +2254,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             if not inbound_audio_authorized(metadata):
                 release_claim(claim)
                 return
-            play_moment("msg_start")
+            play_message_start()
             play_audio_ordinary(claim["path"])
             if not queued():
                 play_moment("msg_end")
@@ -2262,6 +2285,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
         if claim and not inbound_audio_authorized(metadata):
             release_claim(claim)
             return
+        intro = message_intro_voice(settings) if claim else None
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
@@ -2272,6 +2296,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             auto_record_after_incoming=settings["after_listening"] == "invite_reply",
             account_scope=scope,
             incoming_cue_path=str(sound_pack.cue_path("msg_start")),
+            incoming_voice_path=str(intro) if intro else None,
             incoming_end_path=str(sound_pack.cue_path("msg_end")) if not queued() else None,
         )
         if claim:

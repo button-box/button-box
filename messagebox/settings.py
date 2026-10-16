@@ -66,9 +66,11 @@ _ROOT_KEYS = {
     "say_reactions",
     "card_name_prompt",
     "swoosh_sound_enabled",
+    "announce_messages_voice",
 }
 _REQUIRED_ROOT_KEYS = _ROOT_KEYS - set(QUIET_DEFAULTS) - {"say_reactions", "swoosh_sound_enabled", "voice_pack", "card_name_prompt",
-                                   "recording_mode", "talk_mode", "review_before_send"}
+                                   "recording_mode", "talk_mode", "review_before_send",
+                                   "announce_messages_voice"}
 
 
 class SettingsError(ValueError):
@@ -231,6 +233,7 @@ def defaults(environ=None):
         "card_name_prompt": True,
         "say_reactions": True,
         "voice_pack": "jessica",
+        "announce_messages_voice": False,
     }
 
 
@@ -268,7 +271,8 @@ def validate(document):
         {key: value for key, value in document.items() if key in _ROOT_KEYS})
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
         # Persisted settings from earlier releases retain their cue and default voice.
-        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True, **document})
+        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True,
+                                               "announce_messages_voice": False, **document})
         document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
         raise SettingsError("settings have an invalid schema")
@@ -318,6 +322,8 @@ def validate(document):
         raise SettingsError("card name prompt value is invalid")
     if type(document["swoosh_sound_enabled"]) is not bool:
         raise SettingsError("swoosh sound value is invalid")
+    if type(document["announce_messages_voice"]) is not bool:
+        raise SettingsError("message voice intro value is invalid")
     return copy.deepcopy(document)
 
 
@@ -427,7 +433,8 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
-        candidate = {**QUIET_DEFAULTS, "voice_pack": "jessica", "card_name_prompt": True, "say_reactions": True, **candidate}
+        candidate = {**QUIET_DEFAULTS, "voice_pack": "jessica", "card_name_prompt": True, "say_reactions": True,
+                     "announce_messages_voice": False, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
         candidate = normalize_recording_settings(
             {key: value for key, value in candidate.items() if key in _ROOT_KEYS})

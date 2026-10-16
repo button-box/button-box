@@ -187,6 +187,25 @@ class SettingsStoreTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
                 validate({**initial, "card_name_prompt": invalid})
 
+    def test_message_voice_intro_defaults_off_migrates_and_requires_boolean(self):
+        initial = defaults({"TZ": "UTC"})
+        self.assertIs(initial["announce_messages_voice"], False)
+        old = {key: value for key, value in initial.items() if key != "announce_messages_voice"}
+        self.assertEqual(validate(old), initial)  # Settings saved by v0.3.10 and earlier.
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for enabled in (True, False):
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, announce_messages_voice=enabled), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertIs(saved["announce_messages_voice"], enabled)
+        # The local (wacli) settings form does not send the key; it stays off.
+        current, _ = store.load()
+        local = {key: value for key, value in self.candidate(current).items() if key != "announce_messages_voice"}
+        self.assertIs(store.update(local, current["revision"])["announce_messages_voice"], False)
+        for invalid in (1, "true", None, []):
+            with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
+                validate({**initial, "announce_messages_voice": invalid})
+
     def test_unknown_keys_are_skipped_without_weakening_known_validation(self):
         document = defaults({"TZ": "UTC"})
         self.assertEqual(validate({**document, "future_setting": {"anything": True}}), document)

@@ -747,6 +747,7 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime.heartbeat()
         self.assertIs(send.call_args.args[0]["capabilities"]["listened_announcements"], True)
         self.assertIs(send.call_args.args[0]["capabilities"]["card_name_prompt"], True)
+        self.assertIs(send.call_args.args[0]["capabilities"]["announce_messages_voice"], True)
 
     def card_prompt_item(self, *, pack="jessica", operation_id="cardprompt:example", box=False):
         item = self.box_listened_item() if box else self.listened_item()
@@ -1605,6 +1606,21 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime.poll_once()
         self.assertEqual(self.client.acks[-1]["state"], "received")
         self.assertEqual(self.runtime.settings.load()[0], second)
+
+    def test_cloud_settings_turn_message_voice_intro_on_and_reject_non_boolean(self):
+        self.runtime.heartbeat()
+        command = self.settings_command(announce_messages_voice=True)
+        command.update(sequence=1, created_at=NOW, expires_at=NOW + 15)
+        self.client.items = [command]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "received")
+        self.assertIs(self.runtime.settings.load()[0]["announce_messages_voice"], True)
+        bad = self.settings_command(announce_messages_voice="yes")
+        bad.update(sequence=2, created_at=NOW, expires_at=NOW + 15)
+        self.client.items = [bad]
+        self.runtime.poll_once()
+        self.assertEqual(self.client.acks[-1]["state"], "rejected")
+        self.assertIs(self.runtime.settings.load()[0]["announce_messages_voice"], True)
 
     def test_next_save_still_refuses_a_local_edit_it_did_not_write(self):
         self.runtime.heartbeat()

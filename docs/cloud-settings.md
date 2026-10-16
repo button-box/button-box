@@ -122,6 +122,23 @@ current pack at playback; absent or mismatched values use the current pack's
 `voice-listened.wav`. This also handles a voice change while a notice is queued.
 Cloud generation and dashboard picker implementation belong to the Cloud repo.
 
+### Message voice intro
+
+`announce_messages_voice` is boolean, default false, including settings saved by
+older releases and local settings saves that do not send it. When true on a
+Cloud box, every played message (guided, legacy and unroutable-but-authorized
+paths) plays the sparkle cue `cue-msg_start.wav`, then the current pack's
+`voice-msg-start.wav` (for example "Ooh la la! A message for you!"), then the
+message. The cue stays first because it is the short, familiar arrival sound;
+the voice line then names it. The voice line is skipped during Mute, Quiet now
+and quiet schedules, so it never adds sound when the box should be quiet.
+False keeps the cue only. Non-boolean values reject the settings document, like
+other known booleans. wacli boxes never play the intro.
+
+Capable boxes advertise `announce_messages_voice: true`. Cloud must not send the
+key to boxes without that capability; older boxes skip it and report it in
+`ignored_settings`.
+
 ## Recording modes
 
 `talk_mode` is `tap` or `hold`; `review_before_send` is boolean. Fresh settings

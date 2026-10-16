@@ -211,6 +211,29 @@ class SoundPackTests(unittest.TestCase):
             runtime.announce_first_online()
             play.assert_called_once_with(voice="online")
 
+    def test_message_voice_intro_is_cloud_opt_in_current_pack_and_never_quiet(self):
+        french = {"master_volume_percent": 50, "voice_pack": "french"}
+        cases = (
+            ("cloud", {**french, "announce_messages_voice": True}, False,
+             ROOT / "sounds/voices/french/voice-msg-start.wav"),
+            ("cloud", {**french, "announce_messages_voice": False}, False, None),
+            ("cloud", french, False, None),  # Missing setting: today's cue only.
+            ("cloud", {**french, "announce_messages_voice": True}, True, None),  # Quiet or mute.
+            ("wacli", {**french, "announce_messages_voice": True}, False, None),
+        )
+        for mode, settings, quiet, expected in cases:
+            with self.subTest(mode=mode, settings=settings, quiet=quiet), \
+                 mock.patch.object(runtime, "transport_mode", return_value=mode), \
+                 mock.patch.object(runtime, "caregiver_settings", return_value=settings), \
+                 mock.patch.object(runtime, "quiet_hours", return_value=quiet), \
+                 mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
+                 mock.patch.object(runtime, "play_audio_ordinary") as play:
+                self.assertEqual(runtime.message_intro_voice(), expected)
+                runtime.play_message_start()
+                self.assertEqual(play.call_args_list,
+                                 [mock.call(ROOT / "sounds/cues/cue-msg_start.wav")]
+                                 + ([mock.call(expected)] if expected else []))
+
     def test_all_set_waits_for_completion_and_runs_once_across_restart(self):
         request = self.root / "setup-complete.json"
         with mock.patch.object(sound_pack, "ALL_SET_REQUEST", request), mock.patch.object(runtime, "play_moment") as play:

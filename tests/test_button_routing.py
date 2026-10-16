@@ -492,6 +492,54 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(sessions[0]["recipient"], FAMILY)
         self.assertEqual(Path(sessions[0]["incoming_path"]).name, wav.name)
 
+    def test_message_voice_intro_reaches_guided_playback_only_when_offered(self):
+        self.add_family()
+        self.queue_incoming()
+        sessions = []
+
+        class FakeSession:
+            def run(self, **kwargs):
+                sessions.append(kwargs)
+                return "played"
+
+        button_send.led = FakeLed()
+        settings = {"max_recording_seconds": 60, "after_listening": "play_only",
+                    "announce_messages_voice": True}
+        intro = Path("/synthetic/voice-msg-start.wav")
+        with mock.patch.object(button_send, "GuidedSession", return_value=FakeSession()), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send, "message_intro_voice", return_value=intro) as offered:
+            button_send.run_guided_once(settings)
+        offered.assert_called_once_with(settings)
+        self.assertEqual(sessions[0]["incoming_cue_path"], str(button_send.sound_pack.cue_path("msg_start")))
+        self.assertEqual(sessions[0]["incoming_voice_path"], str(intro))
+
+    def test_wacli_guided_playback_keeps_cue_only_even_with_voice_intro_setting(self):
+        self.add_family()
+        self.queue_incoming()
+        sessions = []
+
+        class FakeSession:
+            def run(self, **kwargs):
+                sessions.append(kwargs)
+                return "played"
+
+        button_send.led = FakeLed()
+        settings = {"max_recording_seconds": 60, "after_listening": "play_only",
+                    "announce_messages_voice": True}
+        with mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": "wacli"}), \
+             mock.patch.object(button_send, "GuidedSession", return_value=FakeSession()), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False):
+            button_send.run_guided_once(settings)
+        self.assertEqual(sessions[0]["flow_kind"], "reply")
+        self.assertIsNone(sessions[0]["incoming_voice_path"])
+
     def test_cancelled_guided_card_intent_expires_and_preserves_queue(self):
         self.add_grandma()
         self.contacts.assign_card(GRANDMA, CARD)
