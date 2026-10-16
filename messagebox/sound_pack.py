@@ -197,6 +197,9 @@ def next_send_prompt(path=SOUND_STATE):
     return voice_path(f"ask-send-{index + 1}")
 
 
+ONLINE_READY_MIN_GAP_S = 3600
+
+
 def online_transition(boot_id, online, *, audible=True, mono=None, wall=None, path=SOUND_STATE):
     """Consume Cloud online edges durably, including silent or rate-limited edges."""
     mono = time.monotonic() if mono is None else mono
@@ -216,12 +219,12 @@ def online_transition(boot_id, online, *, audible=True, mono=None, wall=None, pa
             raise ValueError("online receipt is invalid")
         if previous.get("boot_id") == boot_id and previous.get("online") is online:
             return False
-        elapsed = 600
+        elapsed = ONLINE_READY_MIN_GAP_S
         if "played_wall" in previous:
             # Same-boot rate limits tolerate wall-clock corrections; reboot uses UTC.
             elapsed = (mono - previous["played_mono"] if previous.get("played_boot") == boot_id
                        else wall - previous["played_wall"])
-        play = online and audible and elapsed >= 600
+        play = online and audible and elapsed >= ONLINE_READY_MIN_GAP_S
         receipt = {**previous, "boot_id": boot_id, "online": online}
         if play:
             receipt.update(played_boot=boot_id, played_mono=mono, played_wall=wall)

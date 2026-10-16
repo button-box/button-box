@@ -1195,6 +1195,9 @@ def maybe_play_still_trying():
 
 
 _offline_announced = False
+# Short heartbeat gaps (a slow or missed check-in) are normal. Only a gap of
+# ten minutes counts as an outage for the offline cue and the online line.
+CLOUD_OFFLINE_AFTER_S = 600
 
 
 def maybe_play_connectivity():
@@ -1217,9 +1220,10 @@ def maybe_play_connectivity():
         if sound_pack.online_transition(runtime.boot_id, True, audible=audible):
             play_moment("connected", "online-ready")
             return True
-    if age > 90:
-        sound_pack.online_transition(runtime.boot_id, False)
-    if age >= 180 and not _offline_announced and not quiet_hours():
+    if age < CLOUD_OFFLINE_AFTER_S:
+        return False
+    sound_pack.online_transition(runtime.boot_id, False)
+    if not _offline_announced and not quiet_hours():
         token = f"{runtime.boot_id}:{verified}"
         if sound_pack.consume_moment("offline", token=token):
             play_moment("offline")

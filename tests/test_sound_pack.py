@@ -169,13 +169,13 @@ class SoundPackTests(unittest.TestCase):
             return sound_pack.online_transition(boot, online, mono=mono, wall=wall, audible=audible)
         self.assertTrue(edge("boot", True, 10, 1000))
         self.assertFalse(edge("boot", True, 700, 1690))  # Service restart, still online.
-        self.assertFalse(edge("boot", False, 701, 1691))
-        self.assertTrue(edge("boot", True, 702, 1692))
-        self.assertFalse(edge("boot", False, 710, 1700))
-        self.assertFalse(edge("boot", True, 720, 1710))
-        self.assertFalse(edge("boot", True, 1400, 2390))  # No delayed flap replay.
-        self.assertFalse(edge("next-boot", True, 2, 1720))  # Reboot within cooldown.
-        self.assertTrue(edge("later-boot", True, 2, 2400))
+        self.assertFalse(edge("boot", False, 3700, 4690))
+        self.assertTrue(edge("boot", True, 3702, 4692))
+        self.assertFalse(edge("boot", False, 4000, 4990))
+        self.assertFalse(edge("boot", True, 4100, 5090))  # Second outage within the hour.
+        self.assertFalse(edge("boot", True, 9000, 9990))  # No delayed flap replay.
+        self.assertFalse(edge("next-boot", True, 2, 5100))  # Reboot within cooldown.
+        self.assertTrue(edge("later-boot", True, 2, 8400))
         self.assertFalse(edge("clock-back", True, 2, 1200))
 
     def test_runtime_online_ready_uses_current_pack_and_silent_edges_stay_silent(self):
@@ -238,7 +238,7 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime, "play_moment") as play, \
              mock.patch.object(runtime, "transport_mode", return_value="cloud"), \
              mock.patch.object(runtime.cloud_runtime, "CloudRuntime", return_value=cloud), \
-             mock.patch.object(runtime.time, "monotonic", return_value=300), \
+             mock.patch.object(runtime.time, "monotonic", return_value=700), \
              mock.patch.object(runtime, "_offline_announced", False), \
              mock.patch.object(runtime, "stuck_notices", queue.SimpleQueue()), \
              mock.patch.object(runtime, "beep") as beep:
@@ -257,20 +257,39 @@ class SoundPackTests(unittest.TestCase):
         cloud = types.SimpleNamespace(state={"snapshot": {"boot_id": "boot", "verified_mono": 0}}, boot_id="boot")
         with mock.patch.object(runtime, "transport_mode", return_value="cloud"), \
              mock.patch.object(runtime.cloud_runtime, "CloudRuntime", return_value=cloud), \
-             mock.patch.object(runtime.time, "monotonic", return_value=179) as now, \
+             mock.patch.object(runtime, "caregiver_settings", return_value={"master_volume_percent": 50}), \
+             mock.patch.object(runtime.time, "monotonic", return_value=599) as now, \
              mock.patch.object(runtime, "_offline_announced", False), \
              mock.patch.object(runtime, "play_moment") as play:
             self.assertFalse(runtime.maybe_play_connectivity())
-            now.return_value = 180
+            now.return_value = 600
             self.assertTrue(runtime.maybe_play_connectivity())
             self.assertFalse(runtime.maybe_play_connectivity())
             runtime._offline_announced = False  # Service restart, same heartbeat.
             self.assertFalse(runtime.maybe_play_connectivity())
-            cloud.state["snapshot"]["verified_mono"] = 180
+            cloud.state["snapshot"]["verified_mono"] = 600
             self.assertTrue(runtime.maybe_play_connectivity())
             self.assertEqual(play.call_args_list, [mock.call("offline"), mock.call("connected", "online-ready")])
             cloud.state["snapshot"] = None
             self.assertFalse(runtime.maybe_play_connectivity())
+
+    def test_short_heartbeat_gaps_never_say_offline_or_online(self):
+        # Heartbeats can go stale for 1-9 minutes many times a day.
+        snapshot = {"boot_id": "boot", "verified_mono": 0}
+        cloud = types.SimpleNamespace(state={"snapshot": snapshot}, boot_id="boot")
+        with mock.patch.object(runtime, "transport_mode", return_value="cloud"), \
+             mock.patch.object(runtime.cloud_runtime, "CloudRuntime", return_value=cloud), \
+             mock.patch.object(runtime, "caregiver_settings", return_value={"master_volume_percent": 50}), \
+             mock.patch.object(runtime.time, "monotonic", return_value=0) as now, \
+             mock.patch.object(runtime, "_offline_announced", False), \
+             mock.patch.object(runtime, "play_moment") as play:
+            self.assertTrue(runtime.maybe_play_connectivity())  # First check-in after boot.
+            for _ in range(12):  # Twelve 9-minute gaps, each followed by a good heartbeat.
+                now.return_value = snapshot["verified_mono"] + 590
+                self.assertFalse(runtime.maybe_play_connectivity())
+                snapshot["verified_mono"] = now.return_value
+                self.assertFalse(runtime.maybe_play_connectivity())
+            self.assertEqual(play.call_args_list, [mock.call("connected", "online-ready")])
 
     def test_listened_uses_cue_then_family_clip_or_default_voice(self):
         old_default = str(runtime.APP_DIR / "sounds/listen-receipts/someone-listened.wav")

@@ -14,7 +14,7 @@ countdown, review, approval or deletion voices.
 | Changed Cloud settings applied | `maybe_play_cloud_sound`: `cue-card_saved.wav` at the new master volume; three-second debounce, 30-second expiry, silent on boot adoption and in quiet hours. |
 | Runtime awake | `announce_runtime_ready`: `cue-ready.wav`. |
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
-| Online | Cloud `play_setup_online`: connected cue then Jessica setup handoff once. Claimed `maybe_play_connectivity`: connected cue then current pack's online-ready line, once per transition and at most once per ten minutes. Durable receipts precede playback. Legacy online voice stays bundled for wacli. |
+| Online | Cloud `play_setup_online`: connected cue then Jessica setup handoff once. Claimed `maybe_play_connectivity`: connected cue then current pack's online-ready line after boot or after an outage of at least ten minutes, at most once per hour. Shorter heartbeat gaps stay silent. Durable receipts precede playback. Legacy online voice stays bundled for wacli. |
 | Accepted send | `play_send_success_cue`: `cue-sent.wav`; independent sender, interruptible on press, unchanged setting and no delivery claim. |
 | Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
@@ -29,7 +29,7 @@ countdown, review, approval or deletion voices.
 | Three send failures | `sender_loop` counts by current message in both modes, queues a notice; idle `maybe_play_still_trying` checks job still pending, then still_trying + stuck voice once durably per job. |
 | Recipient unavailable | `block_unavailable_recipient`: oops + fail voice when no default/family is available; card-selection asks for a card, and unknown-card routing stays fail-closed. |
 | Setup finishes | Root `onboarding.completion` queues a sound request after successful handoff; idle `announce_all_set` plays all_set + all-set voice once per box. |
-| Cloud unreachable | `maybe_play_connectivity` reads existing current-boot snapshot verification age; offline once after 180 s, resets on freshness, durable outage receipt. No additional network probes. |
+| Cloud unreachable | `maybe_play_connectivity` reads existing current-boot snapshot verification age; offline once after 10 minutes without a good heartbeat, resets on freshness, durable outage receipt. No additional network probes. |
 
 ## Recording rules
 

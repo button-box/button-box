@@ -133,9 +133,12 @@ the connected cue finishes, Jessica's `voice-setup-online.wav` gives the setup
 card handoff once in the box's lifetime, using its own durable receipt (older
 `voice-online.wav` receipts do not suppress this new line). Setup always uses
 Jessica. Claimed runtime plays connected plus the current voice pack's
-`voice-online-ready.wav` on a fresh heartbeat after boot or recovery. A locked,
-atomic receipt suppresses repeats across service restarts and limits both cue
-and voice to once per ten minutes, including Wi-Fi flapping and reboots. Quiet
+`voice-online-ready.wav` on a fresh heartbeat after boot or after recovery from
+an outage. The box counts as offline only when its last good heartbeat is at
+least ten minutes old; the offline cue uses the same threshold, so shorter
+heartbeat gaps make no sound. A locked, atomic receipt suppresses repeats across
+service restarts and limits both cue and voice to once per hour, including
+Wi-Fi flapping and reboots. Quiet
 hours and zero master volume consume runtime transitions silently; they do not
 queue a delayed welcome. Reachability comes from existing heartbeats only.
 
