@@ -517,6 +517,30 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(sessions[0]["incoming_cue_path"], str(button_send.sound_pack.cue_path("msg_start")))
         self.assertEqual(sessions[0]["incoming_voice_path"], str(intro))
 
+    def test_message_age_line_reaches_guided_playback_after_the_intro(self):
+        self.add_family()
+        self.queue_incoming()
+        sessions = []
+
+        class FakeSession:
+            def run(self, **kwargs):
+                sessions.append(kwargs)
+                return "played"
+
+        button_send.led = FakeLed()
+        settings = {"max_recording_seconds": 60, "after_listening": "play_only"}
+        age = Path("/synthetic/voice-age-last-night.wav")
+        with mock.patch.object(button_send, "GuidedSession", return_value=FakeSession()), \
+             mock.patch.object(button_send, "play_pending_listened"), \
+             mock.patch.object(button_send, "mark_queue_known"), \
+             mock.patch.object(button_send, "refresh_led"), \
+             mock.patch.object(button_send, "quiet_hours", return_value=False), \
+             mock.patch.object(button_send, "message_age_voice", return_value=age) as offered:
+            button_send.run_guided_once(settings)
+        self.assertEqual(offered.call_args.args[1], settings)
+        self.assertIsInstance(offered.call_args.args[0], dict)
+        self.assertEqual(sessions[0]["incoming_age_path"], str(age))
+
     def test_wacli_guided_playback_keeps_cue_only_even_with_voice_intro_setting(self):
         self.add_family()
         self.queue_incoming()
@@ -539,6 +563,7 @@ class ButtonRoutingTests(unittest.TestCase):
             button_send.run_guided_once(settings)
         self.assertEqual(sessions[0]["flow_kind"], "reply")
         self.assertIsNone(sessions[0]["incoming_voice_path"])
+        self.assertIsNone(sessions[0]["incoming_age_path"])
 
     def test_cancelled_guided_card_intent_expires_and_preserves_queue(self):
         self.add_grandma()

@@ -62,7 +62,7 @@ from messagebox.settings import (
     in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
 )
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
-from messagebox import cloud_runtime, cloud_claim, cloud_quiet, sound_pack
+from messagebox import cloud_runtime, cloud_claim, cloud_quiet, message_age, sound_pack
 from messagebox.cloud_runtime import CloudRuntimeError
 
 
@@ -259,11 +259,29 @@ def message_intro_voice(settings=None):
     return sound_pack.voice_path("msg-start", settings.get("voice_pack"))
 
 
-def play_message_start():
+def message_age_voice(metadata, settings=None):
+    """Cloud: the pack's "This one's from last night!" line, or None.
+
+    Always on. It plays after the optional intro and before the message, and
+    only when the message is old enough by message_age.age_phrase. Silent
+    during quiet controls, when the send time is missing, or when the box
+    clock is not verified against Cloud. wacli boxes never play it.
+    """
+    if transport_mode() != "cloud" or not isinstance(metadata, dict):
+        return None
+    settings = settings or caregiver_settings()
+    if quiet_hours(settings):
+        return None
+    key = message_age.age_phrase(metadata.get("cloud_created_at"),
+                                 cloud_runtime.verified_now(), settings.get("timezone"))
+    return sound_pack.age_line_path(key, settings.get("voice_pack")) if key else None
+
+
+def play_message_start(metadata=None):
     play_moment("msg_start")
-    intro = message_intro_voice()
-    if intro is not None:
-        play_audio_ordinary(intro)
+    for line in (message_intro_voice(), message_age_voice(metadata)):
+        if line is not None:
+            play_audio_ordinary(line)
 
 
 def announce_first_online():
@@ -2118,7 +2136,7 @@ def play_next_legacy():
     path, meta = selected
     log(f"playing {path.name} ({len(names)} waiting)")
     try:
-        play_message_start()
+        play_message_start(meta)
         play_sound(path, timeout=600)
         if len(names) == 1:
             play_moment("msg_end")
@@ -2254,7 +2272,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             if not inbound_audio_authorized(metadata):
                 release_claim(claim)
                 return
-            play_message_start()
+            play_message_start(metadata)
             play_audio_ordinary(claim["path"])
             if not queued():
                 play_moment("msg_end")
@@ -2286,6 +2304,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             release_claim(claim)
             return
         intro = message_intro_voice(settings) if claim else None
+        age = message_age_voice(metadata, settings) if claim else None
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
@@ -2297,6 +2316,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             account_scope=scope,
             incoming_cue_path=str(sound_pack.cue_path("msg_start")),
             incoming_voice_path=str(intro) if intro else None,
+            incoming_age_path=str(age) if age else None,
             incoming_end_path=str(sound_pack.cue_path("msg_end")) if not queued() else None,
         )
         if claim:

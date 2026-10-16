@@ -1820,6 +1820,17 @@ def playable(metadata):
     return CloudRuntime().playable(metadata)
 
 
+def verified_now():
+    """Cloud time for the message age phrase, or None when the clock is not verified.
+
+    A recent heartbeat must confirm the local clock; otherwise the box says nothing.
+    """
+    try:
+        return CloudRuntime(client=object()).server_now()
+    except (OSError, ValueError, CloudRuntimeError):
+        return None
+
+
 def record_played(metadata):
     if metadata and metadata.get("cloud") is True and _valid_id(metadata.get("cloud_operation_id")):
         runtime = CloudRuntime()

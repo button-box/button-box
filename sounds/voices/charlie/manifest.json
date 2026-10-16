@@ -226,5 +226,91 @@
    "seed": 7,
    "sha256": "d9a01ac2f2a0266b280c5e63dc4088634b8332bed2008385394839b3e2745a6b"
   }
+ ],
+ "age_lines": [
+  {
+   "file": "voice-age-this-morning.wav",
+   "text": "Crikey, this one's from this morning!",
+   "seconds": 2.16,
+   "seed": 7,
+   "sha256": "e37941603758e58be2abef499638a10e221b1669a442876cc60e966a4b1dceb2"
+  },
+  {
+   "file": "voice-age-this-afternoon.wav",
+   "text": "Crikey, this one's from this afternoon!",
+   "seconds": 2.4,
+   "seed": 7,
+   "sha256": "5cb23915f7de02039f7b2930f23d926c5ec3e7d2f28cb28d1ad271c4e1a9390b"
+  },
+  {
+   "file": "voice-age-this-evening.wav",
+   "text": "Crikey, this one's from this evening!",
+   "seconds": 2.0,
+   "seed": 7,
+   "sha256": "665f79bd723ab03a88e3fa1deb43232082a1a425c691feaac8766d7b3a10370c"
+  },
+  {
+   "file": "voice-age-last-night.wav",
+   "text": "Crikey, this one's from last night!",
+   "seconds": 2.48,
+   "seed": 7,
+   "sha256": "a9693ba2b06dfcd2976b7ed9c07a668ae6889543222f60353d610338d9387668"
+  },
+  {
+   "file": "voice-age-yesterday.wav",
+   "text": "Crikey, this one's from yesterday!",
+   "seconds": 2.08,
+   "seed": 7,
+   "sha256": "5e85aac32395ad01b7dc7d76b8de337c276ad4cef76b5add655feafe4f0f4420"
+  },
+  {
+   "file": "voice-age-2-days-ago.wav",
+   "text": "Crikey, this one's from two days ago!",
+   "seconds": 2.32,
+   "seed": 7,
+   "sha256": "f402e9704f239605df6e3be98d7e2a1d62d6af3c1651abfb5a33fccc9b61b4f1"
+  },
+  {
+   "file": "voice-age-3-days-ago.wav",
+   "text": "Crikey, this one's from three days ago!",
+   "seconds": 2.4,
+   "seed": 7,
+   "sha256": "ccb0f79b96598adb45f1ddd994412e75e5078c9ab5890d06ec3b1978756af74c"
+  },
+  {
+   "file": "voice-age-4-days-ago.wav",
+   "text": "Crikey, this one's from four days ago!",
+   "seconds": 2.48,
+   "seed": 7,
+   "sha256": "51796221f145cf30e33bccdcbb665d06b26a1e452bb56eae55414354cc442037"
+  },
+  {
+   "file": "voice-age-5-days-ago.wav",
+   "text": "Crikey, this one's from five days ago!",
+   "seconds": 2.64,
+   "seed": 7,
+   "sha256": "9fd57bb818e5a06460f855cd0b6ac080a12b5cc38d46d45c906e4c0fd9e153bd"
+  },
+  {
+   "file": "voice-age-6-days-ago.wav",
+   "text": "Crikey, this one's from six days ago!",
+   "seconds": 2.32,
+   "seed": 7,
+   "sha256": "c617ece3cea19157af035adbfe2edef438622ee7d2b1fe85aa63683b166768bb"
+  },
+  {
+   "file": "voice-age-last-week.wav",
+   "text": "Crikey, this one's from last week!",
+   "seconds": 2.24,
+   "seed": 7,
+   "sha256": "19bdff3b411555c0045c30a7415794d36119e0fa0abeb9d80d9ce650b5249f8b"
+  },
+  {
+   "file": "voice-age-a-while-ago.wav",
+   "text": "Crikey, this one's from a while ago!",
+   "seconds": 2.4,
+   "seed": 7,
+   "sha256": "9b74c3dcb89da636788c8502e396c5ec79093f71190a941d534c9847ee16e229"
+  }
  ]
 }

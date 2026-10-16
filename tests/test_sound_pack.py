@@ -234,6 +234,55 @@ class SoundPackTests(unittest.TestCase):
                                  [mock.call(ROOT / "sounds/cues/cue-msg_start.wav")]
                                  + ([mock.call(expected)] if expected else []))
 
+    def test_message_age_line_follows_the_intro_only_on_cloud_and_never_quiet(self):
+        old = {"cloud_created_at": 1_760_000_000}
+        played_at = old["cloud_created_at"] + 86400
+        pirate = {"master_volume_percent": 50, "voice_pack": "pirate", "timezone": "Europe/Lisbon"}
+        line = ROOT / "sounds/voices/pirate/voice-age-yesterday.wav"
+        cases = (
+            ("cloud", old, played_at, False, line),
+            ("cloud", old, None, False, None),                          # Clock not verified.
+            ("cloud", old, played_at, True, None),                      # Mute, Quiet now or schedule.
+            ("cloud", {}, played_at, False, None),                      # No send time.
+            ("cloud", old, old["cloud_created_at"] + 3600, False, None),  # Too new.
+            ("cloud", None, played_at, False, None),
+            ("wacli", old, played_at, False, None),
+        )
+        for mode, metadata, now, quiet, expected in cases:
+            with self.subTest(mode=mode, metadata=metadata, now=now, quiet=quiet), \
+                 mock.patch.object(runtime, "transport_mode", return_value=mode), \
+                 mock.patch.object(runtime, "caregiver_settings", return_value=pirate), \
+                 mock.patch.object(runtime, "quiet_hours", return_value=quiet), \
+                 mock.patch.object(runtime.cloud_runtime, "verified_now", return_value=now), \
+                 mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"):
+                self.assertEqual(runtime.message_age_voice(metadata), expected)
+
+    def test_message_start_order_is_cue_intro_age_then_message(self):
+        settings = {"master_volume_percent": 50, "voice_pack": "jessica", "timezone": "Europe/Lisbon",
+                    "announce_messages_voice": True}
+        metadata = {"cloud_created_at": 1_760_000_000}
+        with mock.patch.object(runtime, "transport_mode", return_value="cloud"), \
+             mock.patch.object(runtime, "caregiver_settings", return_value=settings), \
+             mock.patch.object(runtime, "quiet_hours", return_value=False), \
+             mock.patch.object(runtime.cloud_runtime, "verified_now", return_value=1_760_000_000 + 2 * 86400), \
+             mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
+             mock.patch.object(runtime, "play_audio_ordinary") as play:
+            runtime.play_message_start(metadata)
+        self.assertEqual(play.call_args_list, [
+            mock.call(ROOT / "sounds/cues/cue-msg_start.wav"),
+            mock.call(ROOT / "sounds/voice/voice-msg-start.wav"),
+            mock.call(ROOT / "sounds/voice/voice-age-2-days-ago.wav"),
+        ])
+
+    def test_guided_playback_says_the_age_between_intro_and_message(self):
+        io = FakeIO(recordings=[RecordingResult(None, 0, False)])
+        with tempfile.TemporaryDirectory() as directory:
+            session = GuidedSession(io, OutboxStore(directory), lambda *a, **kw: None)
+            session.run(recipient="synthetic", flow_kind="reply", deleted_cue_path="deleted",
+                        incoming_path="message", incoming_cue_path="start", incoming_voice_path="intro",
+                        incoming_age_path="age", incoming_end_path="end", auto_record_after_incoming=False)
+        self.assertEqual([call[1] for call in io.calls[:5]], ["start", "intro", "age", "message", "end"])
+
     def test_all_set_waits_for_completion_and_runs_once_across_restart(self):
         request = self.root / "setup-complete.json"
         with mock.patch.object(sound_pack, "ALL_SET_REQUEST", request), mock.patch.object(runtime, "play_moment") as play:
@@ -468,6 +517,61 @@ class SoundPackTests(unittest.TestCase):
         self.assertFalse(result.timed_out)
         with wave.open(result.path, "rb") as source:
             self.assertEqual(source.readframes(source.getnframes()), pcm)
+
+
+class MessageAgeLineTests(unittest.TestCase):
+    """Every voice says every message age phrase offline, in English."""
+
+    WHEN = {
+        "this-morning": "this morning", "this-afternoon": "this afternoon", "this-evening": "this evening",
+        "last-night": "last night", "yesterday": "yesterday", "2-days-ago": "two days ago",
+        "3-days-ago": "three days ago", "4-days-ago": "four days ago", "5-days-ago": "five days ago",
+        "6-days-ago": "six days ago", "last-week": "last week", "a-while-ago": "a while ago",
+    }
+
+    def directories(self, root=ROOT / "sounds"):
+        from messagebox.settings import VOICE_PACKS
+        return [root / "voice", *(root / "voices" / pack for pack in VOICE_PACKS[1:])]
+
+    def test_every_voice_ships_every_age_line_with_its_manifest_transcript_and_checksum(self):
+        import hashlib
+        from messagebox.message_age import PHRASE_KEYS
+        for directory in self.directories():
+            with self.subTest(directory=directory.name):
+                rows = {row["file"]: row for row in
+                        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["age_lines"]}
+                self.assertEqual(set(rows), {f"voice-age-{key}.wav" for key in PHRASE_KEYS})
+                for key in PHRASE_KEYS:
+                    path = directory / f"voice-age-{key}.wav"
+                    self.assertIn(f"from {self.WHEN[key]}", rows[path.name]["text"].lower())
+                    self.assertEqual(rows[path.name]["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+                    self.assertTrue(sound_pack._playable_wav(path))
+
+    def test_missing_age_lines_fall_back_to_jessica_then_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "sounds/voice", root / "voice")
+            shutil.copytree(ROOT / "sounds/voices/robot", root / "voices/robot")
+            with mock.patch.object(sound_pack, "SOUND_DIR", root):
+                self.assertEqual(sound_pack.age_line_path("last-night", "robot"), root / "voices/robot/voice-age-last-night.wav")
+                self.assertEqual(sound_pack.age_line_path("last-night", "jessica"), root / "voice/voice-age-last-night.wav")
+                (root / "voices/robot/voice-age-last-night.wav").unlink()
+                self.assertEqual(sound_pack.age_line_path("last-night", "robot"), root / "voice/voice-age-last-night.wav")
+                (root / "voice/voice-age-last-night.wav").write_bytes(b"not a wav")
+                self.assertIsNone(sound_pack.age_line_path("last-night", "robot"))
+                self.assertIsNone(sound_pack.age_line_path("../voice-msg-start", "robot"))
+                self.assertIsNone(sound_pack.age_line_path(None, "robot"))
+
+    def test_age_lines_are_optional_for_installed_packs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "sounds"
+            shutil.copytree(ROOT / "sounds", root)
+            for path in [*root.glob("voices/*/voice-age-*.wav"), *root.glob("voice/voice-age-*.wav")]:
+                path.unlink()
+            sound_pack.validate_sounds(root)
+            from messagebox.settings import VOICE_PACKS
+            self.assertEqual(sound_pack.installed_voice_packs(root), list(VOICE_PACKS))
+            self.assertIsNone(sound_pack.age_line_path("last-night", "pirate"))
 
 
 class ReactionSentLineTests(unittest.TestCase):

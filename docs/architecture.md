@@ -263,3 +263,29 @@ When Cloud omits the new section, the Pi keeps the old heart-only contact and
 request body. Malformed optional card reports do not invalidate heartbeat.
 The self-hosted wacli path stays unchanged and never calls the Cloud reaction API.
 Real NFC, speaker, and WhatsApp checks are required before physical acceptance.
+
+## Message age phrase
+
+Cloud boxes report `message_age_phrase: true`. When a message plays long after
+it was sent, the box says when it was sent: arrival cue, then the optional
+"A message for you!" intro, then the age phrase, then the message. It is always
+on; there is no setting. `messagebox/message_age.py` holds the rule as one pure
+function. The phrase plays only when the message is at least three hours old
+AND was sent in an earlier day part or on an earlier day, in the box's
+configured timezone. Day parts are morning 05:00-12:00, afternoon 12:00-17:00,
+evening 17:00-21:00 and night 21:00-05:00. A night belongs to the day it
+started on: Tuesday 23:00 and Wednesday 02:00 are both "Tuesday night", and on
+Wednesday morning both are "from last night". Day counts compare those day
+anchors as calendar dates, so DST changes do not shift them; the three hours
+are real elapsed time. Keys: `this-morning`, `this-afternoon`, `this-evening`,
+`last-night`, `yesterday`, `2-days-ago` to `6-days-ago`, `last-week` (7-13
+days) and `a-while-ago` (14 days or more).
+
+The send time is the audio payload's `message_created_at`, stored in the queue
+sidecar as `cloud_created_at`. Cloud sets it when the message is sent, and a
+quiet-hours hold, a held queue or an offline box does not change it. The box
+says nothing when the send time is missing, invalid or in the future, when the
+clock is not verified by a recent heartbeat (`cloud_runtime.verified_now()`),
+and during Mute, Quiet now and quiet schedules. Lines are bundled
+(`voice-age-<key>.wav`, `age_lines` in each manifest) and fall back to Jessica,
+then to silence. wacli boxes never play the phrase.
