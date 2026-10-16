@@ -541,13 +541,15 @@ class GuidedSession:
         account_scope: str | None = None,
         incoming_cue_path: str | None = None,
         incoming_voice_path: str | None = None,
+        incoming_age_path: str | None = None,
         incoming_end_path: str | None = None,
     ) -> str:
         session_id = session_id or uuid.uuid4().hex
         self.event("guided_session_started", session_id=session_id, flow=flow_kind)
         if incoming_path:
             after_cue = None
-            for path in (incoming_cue_path, incoming_voice_path):
+            # Arrival cue, optional intro, age phrase, then the message.
+            for path in (incoming_cue_path, incoming_voice_path, incoming_age_path):
                 if path:
                     self.io.play_ordinary(path)
                     # The message stream opens right after the cue stream closes.

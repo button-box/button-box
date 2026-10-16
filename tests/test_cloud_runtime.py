@@ -748,6 +748,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertIs(send.call_args.args[0]["capabilities"]["listened_announcements"], True)
         self.assertIs(send.call_args.args[0]["capabilities"]["card_name_prompt"], True)
         self.assertIs(send.call_args.args[0]["capabilities"]["announce_messages_voice"], True)
+        self.assertIs(send.call_args.args[0]["capabilities"]["message_age_phrase"], True)
 
     def card_prompt_item(self, *, pack="jessica", operation_id="cardprompt:example", box=False):
         item = self.box_listened_item() if box else self.listened_item()

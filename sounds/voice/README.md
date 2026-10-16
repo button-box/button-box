@@ -19,3 +19,7 @@ uses only `cue-msg_start.wav`; `voice-msg-start.wav` is retained for voice previ
 `voice-sent-*.wav` are the 13 optional reaction-card lines ("You just sent a
 heart!"), made on 13 October 2026 with the same voice, model and loudness. They
 are listed under `reaction_lines` in `manifest.json`; see `../voices/README.md`.
+
+`voice-age-*.wav` are the 12 optional message age phrases ("This one's from
+last night!"), made on 16 October 2026 with the same voice, model and loudness.
+They are listed under `age_lines` in `manifest.json`; see `../voices/README.md`.

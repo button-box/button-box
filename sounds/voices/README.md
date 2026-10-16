@@ -46,3 +46,14 @@ included), `eleven_v3` with the same post chains. Most takes use seed 7; takes
 that said the wrong word use the seed in the manifest. These lines are optional:
 a pack without them still installs, and the box falls back to Jessica, then to
 "You just sent a reaction!", then to the card cue.
+
+## Message age phrases
+
+Every pack, and Jessica in `../voice/`, has 12 `voice-age-<key>.wav` lines that
+say when an old message was sent, such as "This one's from last night!". They
+are listed under `age_lines` in its manifest with transcript, seed and SHA-256.
+Each pack says them in its own character, in English (Tata included), with
+`eleven_v3` and the same post chains; the full script is in
+`docs/message-age-phrase-lines.md`. Most takes use seed 7; retakes use the seed
+in the manifest. These lines are optional: a pack without them still installs,
+the box falls back to Jessica, and without a Jessica line it says nothing.
