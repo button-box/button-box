@@ -169,6 +169,26 @@ class ReactionTests(unittest.TestCase):
             self.assertEqual(cloud_runtime.react_with_heart(), "sent")
             self.assertEqual(len(self.runtime.client.send_reaction.call_args.args), 2)
 
+    def test_reaction_operation_is_local_and_matches_the_sent_operation(self):
+        snapshot = {"account_scope": "synthetic-scope", "reactions": True,
+                    "reaction_cards": [{"id": "reaction_laugh", "emoji": "😂"}]}
+        self.runtime._snapshot = lambda: snapshot
+        self.runtime.server_now = lambda: NOW
+        self.runtime.flush_acks = mock.Mock()
+        self.runtime.client.send_reaction = mock.Mock(return_value={"state": "sent"})
+        with mock.patch.object(cloud_runtime, "CloudRuntime", return_value=self.runtime):
+            self.assertIsNone(cloud_runtime.reaction_operation("reaction_laugh"))  # nothing played yet
+            (self.runtime.state_path.parent / "last-played.json").write_text(json.dumps(
+                {"scope": "synthetic-scope", "message_id": MID, "played_at": NOW}))
+            operation = cloud_runtime.reaction_operation("reaction_laugh")
+            self.runtime.client.send_reaction.assert_not_called()
+            self.assertEqual(cloud_runtime.react_with_card("reaction_laugh"), "sent")
+            self.assertEqual(self.runtime.client.send_reaction.call_args.args[1], operation)
+            self.assertNotEqual(cloud_runtime.reaction_operation("reaction_heart"), operation)
+            self.assertIsNone(cloud_runtime.reaction_operation("reaction_removed"))
+            self.runtime.server_now = lambda: NOW + 601
+            self.assertIsNone(cloud_runtime.reaction_operation("reaction_laugh"))
+
 
 class WacliVoiceBoundaryTests(unittest.TestCase):
     setUp = wacli_tests.WacliContractTests.setUp
@@ -220,7 +240,89 @@ class WacliVoiceBoundaryTests(unittest.TestCase):
         # A failed or uncertain send keeps the failure sound and never claims it was sent.
         for result in ("nothing_to_react_to", "uncertain", "failed"):
             with self.subTest(result=result):
-                self.assertEqual(self.reaction_tap(result), ["cue-oops.wav"])
+                self.assertEqual(self.reaction_tap(result), ["cue-card.wav", "cue-oops.wav"])
+
+    def repeat_tap(self, operation, result="sent", *, clock=0.0):
+        """One heart tap with a fixed operation; returns (sounds, sends)."""
+        from messagebox import button_send
+        if "box:reaction_heart" not in self.contacts.load()["contacts"]:
+            self.contacts.add_contact("box:reaction_heart", "Heart card", receive_after=100)
+            self.contacts.assign_card("box:reaction_heart", wacli_tests.CARD)
+        settings = {**button_send.caregiver_settings(), "card_name_prompt": True, "voice_pack": "jessica"}
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(button_send, "caregiver_settings", return_value=settings), \
+             mock.patch.object(button_send.time, "monotonic", return_value=clock), \
+             mock.patch.object(cloud_runtime, "reaction_operation", return_value=operation), \
+             mock.patch.object(cloud_runtime, "react_with_heart", return_value=result) as send, \
+             mock.patch.object(cloud_runtime, "reaction_card_emoji", return_value="\u2764\ufe0f"), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", SOUNDS), \
+             mock.patch.object(button_send, "play_idle_sound", return_value=True) as sound:
+            self.assertTrue(button_send._play_nfc_prompt(wacli_tests.CARD, "selected", ""))
+            self.assertTrue(button_send.nfc_announcement_store.is_acknowledged(wacli_tests.CARD))
+        return [call.args[0].name for call in sound.call_args_list], send.call_count
+
+    def test_reaction_line_plays_once_when_the_card_is_read_again(self):
+        from messagebox import button_send
+        button_send._accepted_reactions.clear()
+        self.addCleanup(button_send._accepted_reactions.clear)
+        line = ["cue-card.wav", "voice-sent-heart.wav"]
+        self.assertEqual(self.repeat_tap("op-a", clock=100.0), (line, 1))
+        # A held or re-placed card is read again right away: no send, no sound.
+        self.assertEqual(self.repeat_tap("op-a", clock=101.3), ([], 0))
+        # A later, deliberate tap of the same card for the same message: only the read cue.
+        self.assertEqual(self.repeat_tap("op-a", clock=100.0 + button_send.REACTION_SETTLE_S + 1),
+                         (["cue-card.wav"], 0))
+        # The next played message is a new reaction and says the line again.
+        self.assertEqual(self.repeat_tap("op-b", clock=200.0), (line, 1))
+        # The Cloud window has closed: the old operation is forgotten.
+        self.assertEqual(self.repeat_tap("op-a", clock=100.0 + button_send.REACTION_WINDOW_S + 1), (line, 1))
+
+    def test_reaction_retry_after_a_failed_send_reaches_the_cloud(self):
+        from messagebox import button_send
+        button_send._accepted_reactions.clear()
+        self.addCleanup(button_send._accepted_reactions.clear)
+        self.assertEqual(self.repeat_tap("op-a", "uncertain", clock=10.0), (["cue-card.wav", "cue-oops.wav"], 1))
+        self.assertEqual(self.repeat_tap("op-a", "sent", clock=11.0), (["cue-card.wav", "voice-sent-heart.wav"], 1))
+        # Without a local operation (nothing played), every tap asks the Cloud.
+        self.assertEqual(self.repeat_tap(None, "nothing_to_react_to", clock=12.0), (["cue-card.wav", "cue-oops.wav"], 1))
+        self.assertEqual(self.repeat_tap(None, "nothing_to_react_to", clock=12.5), (["cue-card.wav", "cue-oops.wav"], 1))
+
+    def test_reaction_card_cue_plays_while_the_cloud_send_is_in_flight(self):
+        import threading
+        from messagebox import button_send
+        button_send._accepted_reactions.clear()
+        self.addCleanup(button_send._accepted_reactions.clear)
+        self.contacts.add_contact("box:reaction_heart", "Heart card", receive_after=100)
+        self.contacts.assign_card("box:reaction_heart", wacli_tests.CARD)
+        cue_started = threading.Event()
+        order = []
+
+        def send():
+            # The send waits for the cue: a send that blocked the cue would time out here.
+            self.assertTrue(cue_started.wait(5))
+            order.append("sent")
+            return "sent"
+
+        def play(path, timeout):
+            order.append(path.name)
+            if path.name == "cue-card.wav":
+                cue_started.set()
+            return True
+
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
+             mock.patch.object(cloud_runtime, "reaction_operation", return_value=None), \
+             mock.patch.object(cloud_runtime, "react_with_heart", side_effect=send), \
+             mock.patch.object(cloud_runtime, "reaction_card_emoji", return_value="\u2764\ufe0f"), \
+             mock.patch.object(button_send.sound_pack, "SOUND_DIR", SOUNDS), \
+             mock.patch.object(button_send, "play_idle_sound", side_effect=play):
+            self.assertTrue(button_send._play_nfc_prompt(wacli_tests.CARD, "selected", ""))
+        self.assertEqual(order[0], "cue-card.wav")
+        self.assertLess(order.index("sent"), order.index("voice-sent-heart.wav"))
+
+    def test_reaction_send_error_gives_the_failure_cue(self):
+        from messagebox import button_send
+        with mock.patch.object(cloud_runtime, "react_with_heart", side_effect=RuntimeError("boom")):
+            self.assertEqual(button_send._send_reaction_card("reaction_heart"), "failed")
 
     def test_reaction_card_emoji_is_read_from_the_local_snapshot(self):
         runtime = mock.Mock()

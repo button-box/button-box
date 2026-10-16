@@ -1876,18 +1876,36 @@ def react_with_heart():
     return react_with_card("reaction_heart")
 
 
+def _reaction_target(runtime, card_id):
+    """The last played message and the stable operation for this card, or None."""
+    last = json.loads((runtime.state_path.parent / "last-played.json").read_text())
+    snapshot = runtime._snapshot()
+    if last.get("scope") != snapshot["account_scope"] or not 0 <= runtime.server_now() - last["played_at"] <= 600:
+        return None
+    if card_id not in {card["id"] for card in runtime._reaction_cards(snapshot)}:
+        return None
+    # One stable operation per message and card survives repeated taps.
+    operation = hashlib.sha256((snapshot["account_scope"] + last["message_id"]
+                                + ("" if card_id == "reaction_heart" else card_id)).encode()).hexdigest()
+    return snapshot, last, operation
+
+
+def reaction_operation(card_id):
+    """The operation a tap of this card would send, read locally; never a network call."""
+    try:
+        target = _reaction_target(CloudRuntime(client=object()), card_id)
+    except (OSError, ValueError, KeyError, TypeError, CloudRuntimeError):
+        return None
+    return target[2] if target else None
+
+
 def react_with_card(card_id):
     runtime = CloudRuntime()
     try:
-        last = json.loads((runtime.state_path.parent / "last-played.json").read_text())
-        snapshot = runtime._snapshot()
-        if last.get("scope") != snapshot["account_scope"] or not 0 <= runtime.server_now() - last["played_at"] <= 600:
+        target = _reaction_target(runtime, card_id)
+        if target is None:
             return "nothing_to_react_to"
-        if card_id not in {card["id"] for card in runtime._reaction_cards(snapshot)}:
-            return "nothing_to_react_to"
-        # One stable operation per message and card survives repeated taps.
-        operation = hashlib.sha256((snapshot["account_scope"] + last["message_id"]
-                                    + ("" if card_id == "reaction_heart" else card_id)).encode()).hexdigest()
+        snapshot, last, operation = target
         runtime.flush_acks()  # Publish playback before the server checks the ten-minute window.
         if "reaction_cards" in snapshot:
             return runtime.client.send_reaction(last["message_id"], operation, card_id)["state"]

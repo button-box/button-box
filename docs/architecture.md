@@ -236,12 +236,20 @@ played within ten minutes. Repeated taps use a stable operation ID. A removed
 card is rejected by Cloud and its contact is removed on the next heartbeat.
 The setup screens require no change. Add and remove cards in dashboard People.
 
-Boxes also report `reaction_sent_voice: 1`. When Cloud accepts the reaction
-(`state: "sent"`), the box plays the card cue, as before, and then says what
-was sent in the current voice, for example "You just sent a heart!".
+Boxes also report `reaction_sent_voice: 1`. The box plays the card cue as soon
+as it reads the card, while the Cloud request runs; the cue confirms the read,
+not the send. When Cloud accepts the reaction (`state: "sent"`), the box then
+says what was sent in the current voice, for example "You just sent a heart!".
 The line follows "Say the name when a card is tapped" (`card_name_prompt`); with
-it off, the box plays only the card cue, as before. Any other result plays only
-`cue-oops.wav` and never claims a send. The lines are bundled, so a tap never
+it off, the box plays only the card cue. Any other result plays `cue-oops.wav`
+after the cue and never claims a send.
+
+The line plays once per accepted send. A card that is lifted and placed again,
+or that the reader loses for a moment, reads as a new tap. When that tap has the
+same operation ID as a send Cloud already accepted (same card, same message,
+within the ten-minute window), the box does not call Cloud again. Within
+`MSGBOX_REACTION_SETTLE_S` (default 5 s) of the first send it stays silent;
+later it plays only the card cue. A tap after a failed send asks Cloud again. The lines are bundled, so a tap never
 downloads or synthesizes audio: `voice-sent-<key>.wav` in `sounds/voice` and in
 every `sounds/voices/<pack>`, listed under `reaction_lines` in each manifest.
 Keys are `heart`, `big-laugh`, `applause`, `heart-eyes`, `thumbs-up`, `fire`,

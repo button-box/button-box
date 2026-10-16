@@ -579,6 +579,60 @@ def block_unavailable_recipient():
         play_moment("oops", "fail")
 
 
+# A reaction card that is lifted and placed again, or that the reader loses
+# for a moment, is read as a new tap. The Cloud send is idempotent per message
+# and card, so a repeat must not say "You just sent ..." a second time.
+REACTION_SETTLE_S = float(os.environ.get("MSGBOX_REACTION_SETTLE_S", "5"))
+REACTION_WINDOW_S = 600  # The Cloud accepts a reaction for ten minutes after playback.
+_accepted_reactions = {}
+
+
+def _send_reaction_card(card_id):
+    try:
+        return (cloud_runtime.react_with_heart() if card_id == "reaction_heart"
+                else cloud_runtime.react_with_card(card_id))
+    except Exception:  # noqa: BLE001 - a failed send must still give the oops cue.
+        return "failed"
+
+
+def _play_reaction_card(uid, card_id, settings):
+    """Confirm the read at once, then say what was sent once per accepted send."""
+    now = time.monotonic()
+    for operation, finished in list(_accepted_reactions.items()):
+        if now - finished > REACTION_WINDOW_S:
+            del _accepted_reactions[operation]
+    operation = cloud_runtime.reaction_operation(card_id)
+    cue = sound_pack.cue_path("card")
+    if operation is not None and operation in _accepted_reactions:
+        # Already sent for this message: no new send and no second line.
+        # A late, deliberate tap still hears that the card was read.
+        nfc_announcement_store.acknowledge(uid)
+        if now - _accepted_reactions[operation] > REACTION_SETTLE_S:
+            play_idle_sound(cue, 5)
+        log_event("reaction_repeat_ignored")
+        return
+    # The card cue confirms the read while the Cloud sends the reaction.
+    outcome = {}
+    sender = threading.Thread(target=lambda: outcome.update(result=_send_reaction_card(card_id)),
+                              name="reaction-send", daemon=True)
+    sender.start()
+    cue_played = play_idle_sound(cue, 5)
+    sender.join()
+    result = outcome.get("result", "failed")
+    nfc_announcement_store.acknowledge(uid)
+    if result != "sent":
+        play_idle_sound(sound_pack.cue_path("oops"), 5)
+        return
+    # "You just sent a heart!" follows only after Cloud accepted it, when names are spoken.
+    line = (sound_pack.reaction_sent_path(cloud_runtime.reaction_card_emoji(card_id), settings.get("voice_pack"))
+            if settings.get("card_name_prompt", True) else None)
+    if line is not None and cue_played:
+        play_idle_sound(line, cloud_runtime._ringtone_preview_timeout(line))
+    if operation is not None:
+        _accepted_reactions[operation] = time.monotonic()
+    log_event("reaction_sent", spoken=line is not None)
+
+
 def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
     if action == "unknown":
         play_moment("oops")
@@ -590,25 +644,7 @@ def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
     if transport_mode() == "cloud" and action in {"recognized", "selected"}:
         contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
         if contact and contact["jid"].startswith("box:reaction_"):
-            card_id = contact["jid"][4:]
-            result = (cloud_runtime.react_with_heart() if card_id == "reaction_heart"
-                      else cloud_runtime.react_with_card(card_id))
-            nfc_announcement_store.acknowledge(uid)
-            if result != "sent":
-                play_idle_sound(sound_pack.cue_path("oops"), 5)
-                return True
-            # The card cue still confirms the send; "You just sent a heart!"
-            # follows only after Cloud accepted it, when names are spoken.
-            paths = [sound_pack.cue_path("card")]
-            line = (sound_pack.reaction_sent_path(cloud_runtime.reaction_card_emoji(card_id), settings.get("voice_pack"))
-                    if settings.get("card_name_prompt", True) else None)
-            if line is not None:
-                paths.append(line)
-            for path in paths:
-                if not play_idle_sound(path, 5 if path == sound_pack.cue_path("card")
-                                       else cloud_runtime._ringtone_preview_timeout(path)):
-                    break
-            log_event("reaction_sent", spoken=line is not None)
+            _play_reaction_card(uid, contact["jid"][4:], settings)
             return True
     paths = []
     if action == "enrolled":
