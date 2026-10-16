@@ -177,6 +177,26 @@ def _ringtone_preview_timeout(path):
     return max(RINGTONE_PREVIEW_MIN_SECONDS, duration + RINGTONE_PREVIEW_GRACE_SECONDS)
 
 
+def _failure_reason(exc):
+    """Name a Cloud failure by type, HTTP status, or timeout; never URL, payload, or text."""
+    cause = exc.__cause__
+    if type(getattr(cause, "code", None)) is int:
+        return f"http {cause.code}"
+    if any(isinstance(item, TimeoutError) for item in (cause, getattr(cause, "reason", None))):
+        return "timeout"
+    return type(cause).__name__ if cause is not None else None
+
+
+def _log_failure(stage, exc, logged, now, suffix=""):
+    """Print one short line per stage and error kind per minute, so the journal stays small."""
+    reason = _failure_reason(exc)
+    kind = type(exc).__name__ + (f" ({reason})" if reason else "")
+    if now - logged.get((stage, kind), float("-inf")) < 60:
+        return
+    logged[(stage, kind)] = now
+    print(f"cloud {stage} failed: {kind}{suffix}", flush=True)
+
+
 class CloudRuntime:
     def __init__(self, client=None, *, state_path=STATE_FILE, contacts_path=CONTACTS_FILE,
                  queue_dir=QUEUE_DIR, outbox_dir=OUTBOX_DIR, settings_path=SETTINGS_FILE, clock=time.time,
@@ -1697,6 +1717,7 @@ class CloudRuntime:
         earliest_hint_poll = 0
         next_local_check = 0
         local_failures = 0
+        logged = {}
         if events is not None:
             events.start()
         try:
@@ -1710,14 +1731,15 @@ class CloudRuntime:
                         if now - last_heartbeat >= 30 or not self.state.get("snapshot"):
                             try:
                                 self.heartbeat()
-                            except CloudDeviceError:
-                                pass  # A revoked device may still receive deletion tombstones.
+                            except CloudDeviceError as exc:
+                                # A revoked device may still receive deletion tombstones.
+                                _log_failure("heartbeat", exc, logged, self.monotonic())
                             last_heartbeat = self.monotonic()
                         self.poll_once()
                         failures = 0
                         retry_after = 0
                     except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
-                        print("cloud poll failed; local work remains pending", flush=True)
+                        _log_failure("poll", exc, logged, self.monotonic(), "; local work remains pending")
                         failures += 1
                         retry_after = getattr(exc, "retry_after", None) or 0
                     now = self.monotonic()
@@ -1736,8 +1758,8 @@ class CloudRuntime:
                 if now - last_heartbeat >= 30:
                     try:
                         self.heartbeat()
-                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError):
-                        pass
+                    except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
+                        _log_failure("heartbeat", exc, logged, self.monotonic())
                     last_heartbeat = self.monotonic()
                 connected = events is not None and events.connected.is_set()
                 if connected and not failures and self.monotonic() >= next_local_check:

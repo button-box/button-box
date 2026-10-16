@@ -1,6 +1,7 @@
 import threading
 from types import SimpleNamespace
 import unittest
+import urllib.error
 from unittest import mock
 from urllib.parse import urlsplit
 
@@ -263,6 +264,27 @@ class RuntimeSchedulingTests(unittest.TestCase):
             runtime.run(stop=stop, events=events)
         self.assertEqual(polls, [0, 4, 12, 28, 60])
         self.assertEqual(beats, [0, 30, 60])
+
+    def test_heartbeat_failures_log_type_and_status_once_a_minute(self):
+        runtime, stop, events, _, beats = self.runtime(until=125)
+        def fail():
+            beats.append(runtime.monotonic())
+            if len(beats) < 5:
+                cause = urllib.error.HTTPError("https://example.invalid/device/heartbeat?token=secret",
+                                               503, "synthetic", {}, None)
+            else:
+                cause = urllib.error.URLError(TimeoutError("timed out"))
+            raise CloudDeviceError("cloud request failed") from cause
+        runtime.heartbeat = fail
+        with mock.patch("messagebox.cloud_runtime.random.random", return_value=0), \
+                mock.patch("builtins.print") as printed:
+            runtime.run(stop=stop, events=events)
+        self.assertEqual(beats, [0, 30, 60, 90, 120])
+        self.assertEqual([call.args[0] for call in printed.call_args_list], [
+            "cloud heartbeat failed: CloudDeviceError (http 503)",  # 30 s and 90 s are throttled.
+            "cloud heartbeat failed: CloudDeviceError (http 503)",
+            "cloud heartbeat failed: CloudDeviceError (timeout)",
+        ])
 
     def test_explicit_optout_retains_polling_and_stops(self):
         runtime, stop, events, polls, _ = self.runtime(connected=False, until=5)

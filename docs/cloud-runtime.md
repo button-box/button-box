@@ -218,7 +218,11 @@ thread checks local ACKs, preview/NFC/settings completion and outbound recovery 
 2–3 seconds, with fresh authorization and bounded failure backoff. An
 unavailable socket retains the existing 2–3-second successful polling cadence;
 HTTP failures retain bounded backoff. Heartbeats stay on a separate 30-second
-monotonic schedule. The listener sends text `ping` every 20 seconds and expects
+monotonic schedule. A failed heartbeat or poll prints one short journal line
+with the error type and the HTTP status or `timeout`, for example
+`cloud heartbeat failed: CloudDeviceError (http 503)`. Each stage and error kind
+logs at most once per minute. The line never includes URLs, payloads,
+credentials, or phone numbers. The listener sends text `ping` every 20 seconds and expects
 text `pong` within ten seconds, so silent loss returns to polling. Socket retry
 backoff grows from 2 to 60 seconds with jitter; unsupported endpoints, rejected
 credentials and missing dependencies wait five minutes before retrying. The
