@@ -76,11 +76,15 @@ and `color` read from `/etc/messagebox-box-color`. The exact color values and sa
 yellow default are documented in [dashboard identity](dashboard-identity.md#box-shell-color).
 Manufacturing sets it before registration; heartbeats do not include color.
 
-After home Wi-Fi setup, the handoff page asks the family to wait for the online
-beep and scan the QR code on their setup card. The printed URL opens the Cloud's
-WhatsApp connection flow without requiring phone support for `.local` names.
-The small `.local` fallback opens the home setup portal, which can still create
-a ten-minute WhatsApp connection link and QR code. A physical button press
+On a Cloud box, the hotspot Wi-Fi step is called "Choose your home Wi-Fi".
+The pages use the same words as the Button Box assistant: the box's setup Wi-Fi
+name and password are on the setup card. After home Wi-Fi setup, the handoff
+page asks the family to wait for the online beep, reconnect the phone to home
+Wi-Fi, and open the setup link in WhatsApp again or scan the QR code on their
+setup card. That link opens the Cloud's WhatsApp connection flow without
+requiring phone support for `.local` names. The setup pages never show a
+`.local` address as the claim link. The home setup portal can still create a
+ten-minute WhatsApp connection link and QR code. A physical button press
 confirms possession. The root
 completion gate rechecks the claimed state with the Cloud API before starting
 runtime services; it does not require legacy wacli pairing or recipients.
@@ -145,8 +149,9 @@ queue a delayed welcome. Reachability comes from existing heartbeats only.
 The Cloud hotspot form delivers a complete, inline, box-colored handoff before
 dispatching the radio switch. Its QR instructions remain visible when requests
 fail. If durable home-Wi-Fi proof can still reach the browser, the handoff shows
-"✓ Connected! You can close this page. Now scan the QR code on the card to
-finish in WhatsApp." Association alone, a timed-out request, or disconnection
+"✓ Connected! When the box beeps, reconnect your phone to your home Wi-Fi.
+Then open the setup link in WhatsApp again, or scan the QR code on your setup
+card." Association alone, a timed-out request, or disconnection
 never means success. With the current single-radio Comitup flow, the hotspot
 is lost before home-Wi-Fi proof is available; verified success before hotspot
 shutdown is not guaranteed. The setup voice provides the verified next step.

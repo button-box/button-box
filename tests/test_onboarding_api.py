@@ -537,8 +537,15 @@ class OnboardingAPITests(unittest.TestCase):
                 sleep=self.sleeps.append, handoff_delay=0.25, start_claim_watcher=False,
             )
             cloud = WSGIHarness(app).request("GET", "/")["body"]
-        self.assertIn(b"Choose Wi-Fi for your box", cloud)
+        self.assertIn(b"Choose your home Wi-Fi", cloud)
+        self.assertNotIn(b"Choose Wi-Fi for your box", cloud)
+        self.assertIn(b"When the box beeps, reconnect your phone to your home Wi-Fi.", cloud)
         self.assertIn(b"scan the QR code on your setup card", cloud)
+        self.assertNotIn(b".local", cloud)
+        # Self-hosted wacli keeps its Wi-Fi step and local-address copy.
+        self.assertIn(b"Choose Wi-Fi for your box", local)
+        self.assertNotIn(b"Choose your home Wi-Fi", local)
+        self.assertIn(b"Copy this address first", local)
         self.assertNotIn(b'id="copy-setup-url"', cloud)
         self.assertNotIn(b"Copy this address first", cloud)
         self.assertNotIn(b"SETUP-", cloud)
@@ -930,6 +937,8 @@ class OnboardingAPITests(unittest.TestCase):
         client = WSGIHarness(application)
         response = client.form("POST", "/wifi/change", {})
         self.assertEqual(response["status"], "202 Accepted")
+        self.assertIn(b"Join the printed Button Box hotspot when it appears.", response["body"])
+        self.assertNotIn(b"setup card", response["body"])
         self.assertEqual(adapter.calls, [("delete",)])
         self.assertEqual(home_store.load()["phase"], "WIFI_ASSOCIATED")
 

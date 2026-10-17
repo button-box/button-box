@@ -300,6 +300,9 @@ class CloudOnboardingTests(unittest.TestCase):
         self.adapter.delete_active_connection_once.assert_not_called()
         response = self.request("POST", "/wifi/change", f"http://{HOST}")
         self.assertEqual(response["status"], "202 Accepted")
+        self.assertIn(b"Use the Wi-Fi name and password on your setup card.", response["body"])
+        self.assertIn(b"Choose your home Wi-Fi on the box's setup page.", response["body"])
+        self.assertNotIn(b"hotspot", response["body"])
         self.adapter.delete_active_connection_once.assert_called_once_with()
         self.assertEqual(self.whatsapp.mock_calls, [])
 
@@ -319,7 +322,7 @@ class CloudOnboardingTests(unittest.TestCase):
         self.assertEqual(self.whatsapp.mock_calls, [])
         self.assertEqual(self.nfc.mock_calls, [])
 
-    def test_cloud_handoff_uses_setup_card_copy_small_fallback_and_box_color(self):
+    def test_cloud_handoff_uses_setup_card_copy_and_box_color(self):
         with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
             self.app = create_app(mode="HOTSPOT", config={"device_id": "A7K2"},
                                   state_store=self.state, adapter=self.adapter,
@@ -329,16 +332,18 @@ class CloudOnboardingTests(unittest.TestCase):
                                     b"ssid=Home&security=protected&password=synthetic-password")
         self.assertEqual(response["status"], "202 Accepted")
         self.assertIn("Connecting…".encode(), response["body"])
-        self.assertIn(b"When the box says it is connected, you can close this page.", response["body"])
+        self.assertIn(b"When the box beeps, reconnect your phone to your home Wi-Fi.", response["body"])
+        self.assertIn(b"open the setup link in WhatsApp again, or scan the QR code on your setup card.", response["body"])
+        self.assertIn(b"The Wi-Fi name and password are on your setup card.", response["body"])
         self.assertIn("✓ Connected!".encode(), response["body"])
-        self.assertIn(b"Now scan the QR code on the card to finish in WhatsApp.", response["body"])
         self.assertIn(b'background: var(--box-color)', response["body"])
         self.assertIn(b'fetch("/api/state"', response["body"])
         self.assertIn(b'<script nonce="messagebox-handoff">', response["body"])
         self.assertNotIn(b'src=', response["body"])  # No asset fetch after the radio switch.
-        self.assertIn(b"No card? Join the same Wi-Fi and open", response["body"])
         self.assertIn(b'class="field-help"', response["body"])
-        self.assertIn(f'href="http://{HOST}/cloud-connect"'.encode(), response["body"])
+        # The claim link is the setup link or card QR code, never a .local address.
+        self.assertNotIn(b".local", response["body"])
+        self.assertNotIn(b"hotspot", response["body"])
         self.assertIn(b'data-box-color="blue"', response["body"])
         self.assertNotIn(b"__HANDOFF_CONTENT__", response["body"])
         self.assertNotIn(b"__HANDOFF_SCRIPT__", response["body"])
