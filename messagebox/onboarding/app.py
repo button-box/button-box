@@ -113,17 +113,18 @@ _HANDOFF_HTML = b"""<!doctype html>
 
 _QR_WIFI_NEXT = b"""        <aside class="notice">
           <strong>Next</strong>
-          <span>Your phone leaves this page when Button Box joins your Wi-Fi. That is normal.</span>
-          <span>When Button Box beeps, scan the QR code on your setup card to finish in WhatsApp.</span>
+          <span>Your phone leaves this page when the box joins your home Wi-Fi. That is normal.</span>
+          <span>When the box beeps, reconnect your phone to your home Wi-Fi. Then open the setup link in WhatsApp again, or scan the QR code on your setup card.</span>
         </aside>
 """
+_CLOUD_WIFI_TITLE = (b'<h1 id="wifi-title" tabindex="-1">Choose Wi-Fi for your box</h1>',
+                     b'<h1 id="wifi-title" tabindex="-1">Choose your home Wi-Fi</h1>')
 _QR_HANDOFF_CONTENT = """<div class="wifi-handoff" role="status" aria-live="polite">
 <h1 id="handoff-title">Connecting…</h1>
-<p id="handoff-status" class="lede">Your box is joining your Wi-Fi. This page may lose its connection.</p>
-<p id="handoff-next" class="lede">When the box says it is connected, you can close this page. Now scan the QR code on the card to finish in WhatsApp.</p>
+<p id="handoff-status" class="lede">Your box is joining your home Wi-Fi. This page may lose its connection.</p>
+<p id="handoff-next" class="lede">When the box beeps, reconnect your phone to your home Wi-Fi. Then open the setup link in WhatsApp again, or scan the QR code on your setup card.</p>
 </div>
-<p class="field-help">If the connection fails, rejoin the setup hotspot and try again.</p>
-<p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>
+<p class="field-help">If the connection fails, connect your phone to the box's setup Wi-Fi again and choose your home Wi-Fi. The Wi-Fi name and password are on your setup card.</p>
 <script nonce="messagebox-handoff">__HANDOFF_SCRIPT__</script>""".encode("utf-8")
 
 _LOCAL_HANDOFF_CONTENT = b"""<h1 id="handoff-title">Join the same Wi-Fi</h1>
@@ -162,6 +163,19 @@ _CHANGE_HTML = b"""<!doctype html>
 </body>
 </html>
 """
+# Cloud boxes use the setup card and the assistant's words; wacli keeps the page above.
+_CLOUD_CHANGE_HTML = _CHANGE_HTML
+for _old, _new in (
+    (b"The Button Box setup hotspot may take up to five minutes to return.",
+     b"The box's setup Wi-Fi may take up to five minutes to return."),
+    (b"<li>Join the printed Button Box hotspot when it appears.</li>",
+     b"<li>Connect to the box's setup Wi-Fi when it appears. Use the Wi-Fi name and password on your setup card.</li>"),
+    (b"<li>Open the printed Button Box address to continue.</li>",
+     b"<li>Choose your home Wi-Fi on the box's setup page.</li>"),
+    (b"Return if the hotspot does not come back", b"Return if the setup Wi-Fi does not come back"),
+):
+    assert _old in _CLOUD_CHANGE_HTML
+    _CLOUD_CHANGE_HTML = _CLOUD_CHANGE_HTML.replace(_old, _new)
 
 
 class RequestError(ValueError):
@@ -776,7 +790,6 @@ def create_app(
             body = _HANDOFF_HTML
             body = body.replace(b"__HANDOFF_CONTENT__", _QR_HANDOFF_CONTENT if cloud_mode else _LOCAL_HANDOFF_CONTENT)
             if cloud_mode:
-                body = body.replace(b"__MESSAGEBOX_URL__", (canonical_url + "cloud-connect").encode("ascii"))
                 body = body.replace(b"__HANDOFF_SCRIPT__", static_files["wifi-handoff.js"][0])
         # Embed the shared styles before the hotspot can disappear.
         body = body.replace(b"__MESSAGEBOX_URL__", canonical_url.encode("ascii"))
@@ -923,6 +936,7 @@ def create_app(
                 # Cloud boxes finish from the setup card QR code; only wacli boxes need the local address.
                 if cloud_mode:
                     body = re.sub(rb"<!--SETUP-LOCAL-->.*?<!--/SETUP-LOCAL-->\n", _QR_WIFI_NEXT, body, count=1, flags=re.S)
+                    body = body.replace(*_CLOUD_WIFI_TITLE, 1)
                 body = body.replace(
                     b"__CLOUD_CONNECT_LINK__",
                     (b'<p><a class="button" href="/cloud-connect">Connect your box to WhatsApp</a></p>'
@@ -1084,7 +1098,10 @@ def create_app(
                     except ComitupError:
                         pass
 
-                return handoff(start_response, delete_after_response, _CHANGE_HTML)
+                return handoff(
+                    start_response, delete_after_response,
+                    _CLOUD_CHANGE_HTML if cloud_mode else _CHANGE_HTML,
+                )
 
             if method == "POST" and path == "/whatsapp/pair/start":
                 _require_same_origin(environ, expected_origin)
