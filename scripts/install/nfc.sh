@@ -6,7 +6,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_DIR")")
 SERVICE_USER=messagebox
-APP_DIR=${MSGBOX_APP_DIR:-/opt/messagebox}
+APP_DIR=/opt/messagebox
 VENV_DIR=$APP_DIR/venv-nfc
 UNIT_SOURCE="$REPO_DIR/systemd/messagebox-nfc.service"
 UNIT_DEST=/etc/systemd/system/messagebox-nfc.service
@@ -47,18 +47,8 @@ sudo raspi-config nonint do_i2c 0
 sudo usermod -a -G i2c,gpio "$SERVICE_USER"
 
 sudo install -d -o root -g root -m 0755 "$APP_DIR"
-# The venv is root-owned but read by the messagebox service user. Do not
-# inherit a strict administrator umask (for example 077) from the caller.
-(
-  umask 022
-  sudo python3 -m venv "$VENV_DIR"
-  sudo "$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/config/requirements-nfc.txt"
-)
-# Repair a venv left unreadable by an earlier install. The trailing slash
-# follows a venv-nfc symlink to the stable dependency directory; find does
-# not follow the Python symlinks inside the venv.
-sudo find "$VENV_DIR/" -type d -exec chmod 0755 {} +
-sudo find "$VENV_DIR/" ! -type d ! -type l -exec chmod a+rX,go-w {} +
+sudo python3 -m venv "$VENV_DIR"
+sudo "$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/config/requirements-nfc.txt"
 
 sudo install -o root -g root -m 0644 "$UNIT_SOURCE" "$UNIT_DEST"
 sudo systemctl daemon-reload
