@@ -28,11 +28,14 @@ This job fails on both. The harness is in `scripts/dev/pi-os-ci/`.
   D-Bus, `systemctl enable --now`, `systemd-analyze verify` and
   `systemd-tmpfiles` behave as on a box.
 - **Container changes** (`Dockerfile`): an empty `/etc/fstab`; masked
-  first-boot, swap, console and EEPROM units; an `admin` user with passwordless
-  sudo, like the user Raspberry Pi Imager creates.
+  first-boot, swap, console, EEPROM, root-grow and network-wait units; an
+  `admin` user with passwordless sudo, like the user Raspberry Pi Imager
+  creates.
 
-The image download (about 540 MB) is cached by `actions/cache`. A run takes
-about 15 minutes per mode (see the PR for current timings).
+The image download (about 540 MB) is cached by `actions/cache`. Each mode runs
+as its own job, in parallel, in about 6 to 8 minutes: 1 minute to build the
+image, about 1 minute to install, a few seconds for the checks, and about 2.5
+minutes for `make check`.
 
 ## What the job does
 
@@ -52,30 +55,37 @@ After the install, `assert_install.py` checks, as root inside the box:
   `/usr/share/messagebox`, `/etc/messagebox` and the data directories is
   readable (and executable where needed) by `messagebox`, using its real
   groups; the same for `messagebox-onboarding`, and for `messagebox-update` on
-  Cloud boxes
+  Cloud boxes (bytecode caches are skipped; Python can run without them)
 - `systemd-analyze verify` accepts every installed Button Box unit and the
   Comitup units
 - for every installed service, the module or script in `ExecStart` imports with
   the unit's interpreter, user, groups, working directory and environment files
-  (`gunicorn` included), and the NFC venv imports its libraries
+  (`gunicorn` included); the NFC venv imports `adafruit_pn532` and contains
+  `board`, `busio`, `digitalio` and `lgpio` (these touch hardware on import)
 - every file in the release mapping (`scripts/dev/release-manifest.py`) is in
   `scripts/release/payload.txt`, is installed, and matches its source; the
-  program tree and unit directory have no unmapped files
+  program tree and unit directory have no unmapped files. Known gaps are
+  listed with a reason in `assert_install.py`: the updater units exist only on
+  Cloud boxes, and `setup.sh` does not install `messagebox/make_ringtones.py`
 - `messagebox-audio-detect.service` writes its audio environment
 - mode checks: the self-hosted box keeps the `setup.sh` layout and has `wacli`;
   the Cloud box runs from `/opt/messagebox-releases/` with the updater units
   enabled
 - Tailscale is installed and held; no Button Box or Comitup unit failed
 
-Finally, `make check` runs on the Pi as the administrator, with
-`MSGBOX_TEST_TRANSPORT` set to the job's mode.
+Finally, `make check` runs on Raspberry Pi OS arm64 as the administrator, with
+`MSGBOX_TEST_TRANSPORT` set to the job's mode. It uses a second, uninstalled
+container from the same image: several unit tests read real runtime paths such
+as `/run/messagebox`, so they fail on a box that was just installed.
 
 ## What is stubbed
 
 Only what cannot exist in a container:
 
-- **Audio:** a fake `/sys/class/sound` with one USB speaker and one microphone,
-  so the real `audio_config.py` and `messagebox-audio-detect.service` run.
+- **Audio:** the runner kernel has no sound subsystem. `fake-sound.sh` lays a
+  tmpfs over `/sys/class` (every real class is bind-mounted back) and adds one
+  USB speaker and one microphone, so the real `audio_config.py` and
+  `messagebox-audio-detect.service` run.
 - **Pi model:** a container cannot have `/proc/device-tree`. `shim.sh` points
   the two readers (`comitup.sh`, `release_verify.py`) at
   `/run/ci-device-tree/model` ("Raspberry Pi 4 Model B") in the CI copy only.

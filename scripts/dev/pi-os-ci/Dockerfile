@@ -5,12 +5,14 @@ FROM ${ROOTFS}
 ARG ADMIN=admin
 ENV container=docker
 
-# No SD card partitions, swap file, first-boot wizard, or consoles.
+# No SD card partitions, swap file, first-boot wizard, or consoles. Docker
+# configures the network, so nothing waits two minutes for networkd.
 RUN : >/etc/fstab \
  && for unit in userconfig.service sshswitch.service regenerate_ssh_host_keys.service \
       rpi-eeprom-update.service dphys-swapfile.service systemd-remount-fs.service \
       getty@tty1.service serial-getty@ttyAMA0.service serial-getty@ttyS0.service \
-      systemd-firstboot.service; do \
+      systemd-firstboot.service systemd-growfs-root.service \
+      systemd-networkd-wait-online.service; do \
       ln -sf /dev/null "/etc/systemd/system/$unit"; \
     done
 
