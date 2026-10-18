@@ -129,7 +129,7 @@ install_cloud() {
 }
 
 pristine_checkout() {
-  as_admin "[ -d button-box-check ] || { git config --global --add safe.directory '*' && git clone -q /src button-box-check; }"
+  as_admin "[ -d button-box-check ] || { sudo apt-get install -y -q --no-install-recommends git >/dev/null && git config --global --add safe.directory '*' && git clone -q /src button-box-check; }"
 }
 
 case "${1:-}" in
