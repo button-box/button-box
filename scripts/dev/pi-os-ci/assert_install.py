@@ -177,6 +177,9 @@ for root in sys.argv[1:]:
     if not os.path.isdir(root):
         continue
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda error: bad.append(["unlistable", error.filename])):
+        # Bytecode caches are optional: Python compiles from source when it
+        # cannot read them.
+        dirnames[:] = [name for name in dirnames if name != "__pycache__"]
         for name in dirnames + filenames:
             visit(os.path.join(dirpath, name))
 print(json.dumps(bad))
