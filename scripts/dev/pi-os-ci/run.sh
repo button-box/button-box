@@ -78,8 +78,12 @@ fake_sound_tree() {
 
 boot() {
   fake_sound_tree
-  # The bind mount needs /sys/class/sound to exist in the runner kernel.
-  [ -d /sys/class/sound ] || sudo modprobe soundcore || true
+  # The bind mount needs /sys/class/sound in the runner kernel. Cloud runner
+  # kernels ship the sound core only in their extra modules package.
+  if [ ! -d /sys/class/sound ]; then
+    sudo modprobe soundcore 2>/dev/null ||
+      { sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null && sudo modprobe soundcore; } || true
+  fi
   [ -d /sys/class/sound ] || die "the runner kernel has no /sys/class/sound"
   docker rm -f "$PI_CONTAINER" >/dev/null 2>&1 || true
   # systemd is PID 1 so units, journald, D-Bus, NetworkManager and Avahi are

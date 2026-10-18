@@ -1,6 +1,6 @@
 # Boot the unmodified Raspberry Pi OS Lite rootfs under systemd in a container.
 # Changes here are limited to what a container needs; see docs/ci-pi-image.md.
-ARG ROOTFS
+ARG ROOTFS=button-box-ci/pi-os-rootfs:latest
 FROM ${ROOTFS}
 ARG ADMIN=admin
 ENV container=docker
