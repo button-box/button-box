@@ -20,8 +20,6 @@ jobs:
       fail-fast: false
       matrix:
         mode: [wacli, cloud]
-    env:
-      PI_OS_CACHE_DIR: ${{ runner.temp }}/pi-os-cache
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v10.0.1
@@ -33,7 +31,7 @@ jobs:
       - name: Cache the Raspberry Pi OS image
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/pi-os-cache
+          path: ${{ runner.temp }}/pi-os-ci/cache
           key: raspios-lite-arm64-2026-09-15-cdf4f3bf
       - name: Build the Pi OS container image
         run: scripts/dev/pi-os-ci/run.sh build-image
