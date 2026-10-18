@@ -148,14 +148,25 @@ case "${1:-}" in
       --mode "${2:?mode}" --source "/home/$ADMIN/button-box-check"
     ;;
   check)
-    pristine_checkout
-    as_admin 'sudo apt-get install -y -q --no-install-recommends make minisign'
-    # The runner's pinned uv and Bun builds are arm64 Linux binaries too.
-    for tool in uv uvx bun; do
-      docker cp -L "$(command -v "$tool")" "$PI_CONTAINER:/usr/local/bin/$tool"
-    done
-    docker exec "$PI_CONTAINER" ln -sf bun /usr/local/bin/bunx
-    as_admin "cd button-box-check && MSGBOX_TEST_TRANSPORT='${2:?mode}' make check"
+    # A second, uninstalled container from the same Pi OS image: unit tests
+    # must not see the installed box's /run, /opt and /etc state. The
+    # developer's shell keeps the default umask. The runner's pinned uv and
+    # Bun builds are arm64 Linux binaries too.
+    mode=${2:?mode}
+    docker run --rm -i \
+      -v "$REPO_DIR:/src:ro" \
+      -v "$(readlink -f "$(command -v uv)"):/usr/local/bin/uv:ro" \
+      -v "$(readlink -f "$(command -v uvx)"):/usr/local/bin/uvx:ro" \
+      -v "$(readlink -f "$(command -v bun)"):/usr/local/bin/bun:ro" \
+      -e "ADMIN=$ADMIN" -e "MODE=$mode" \
+      "$BOX_TAG" /bin/bash -s <<'EOF_CHECK'
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q >/dev/null
+apt-get install -y -q --no-install-recommends git make minisign >/dev/null
+ln -sf bun /usr/local/bin/bunx
+runuser -u "$ADMIN" -- /bin/bash -c "cd && git config --global --add safe.directory '*' && git clone -q /src button-box-check && cd button-box-check && MSGBOX_TEST_TRANSPORT='$MODE' make check"
+EOF_CHECK
     ;;
   logs)
     docker exec "$PI_CONTAINER" journalctl --no-pager -n 300 || true
