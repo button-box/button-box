@@ -2,6 +2,9 @@
 # Attended installation of fixed updater/recovery, separately from app updates.
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'Run the attended bootstrap as root.' >&2; exit 1; }
+# Release, dependency, and drop-in paths must stay readable by the service
+# users. Do not inherit a strict administrator umask from sudo.
+umask 022
 REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 MODE=${1:-auto}
 CHANNEL=${2:-stable}
