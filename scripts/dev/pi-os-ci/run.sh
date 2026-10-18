@@ -72,11 +72,22 @@ boot() {
     -v /lib/modules:/lib/modules:ro \
     -v "$REPO_DIR:/src:ro" \
     "$BOX_TAG" >/dev/null
-  state=$(docker exec "$PI_CONTAINER" timeout 180 systemctl is-system-running --wait || true)
+  state=
+  for _ in $(seq 90); do
+    state=$(docker exec "$PI_CONTAINER" systemctl is-system-running 2>/dev/null || true)
+    case "$state" in
+      running|degraded) break ;;
+    esac
+    sleep 2
+  done
   echo "Pi OS boot state: $state"
   case "$state" in
     running|degraded) ;;
-    *) docker exec "$PI_CONTAINER" systemctl --failed --no-pager || true; die "boot did not finish" ;;
+    *)
+      docker logs "$PI_CONTAINER" 2>&1 | tail -80
+      docker exec "$PI_CONTAINER" systemctl list-jobs --no-pager || true
+      die "boot did not finish"
+      ;;
   esac
   docker exec "$PI_CONTAINER" systemctl --failed --no-pager || true
   docker exec -i "$PI_CONTAINER" /bin/sh -s <"$HARNESS_DIR/fake-sound.sh"
