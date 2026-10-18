@@ -62,29 +62,7 @@ build_image() {
     -t "$BOX_TAG" -f "$HARNESS_DIR/Dockerfile" "$HARNESS_DIR"
 }
 
-fake_sound_tree() {
-  # One USB speaker (card 0, "Device") and one microphone (card 1, "mic"),
-  # laid out like /sys/class/sound so audio_config.py detects them unchanged.
-  sound=$WORK_DIR/sound
-  rm -rf "$sound"
-  mkdir -p "$sound/usb/1-1.2/1-1.2:1.0" "$sound/card0" "$sound/card1" \
-    "$sound/pcmC0D0p" "$sound/pcmC1D0c"
-  printf '0d8c\n' >"$sound/usb/1-1.2/idVendor"
-  printf '0014\n' >"$sound/usb/1-1.2/idProduct"
-  printf 'Device\n' >"$sound/card0/id"
-  printf 'mic\n' >"$sound/card1/id"
-  ln -s ../usb/1-1.2/1-1.2:1.0 "$sound/card0/device"
-}
-
 boot() {
-  fake_sound_tree
-  # The bind mount needs /sys/class/sound in the runner kernel. Cloud runner
-  # kernels ship the sound core only in their extra modules package.
-  if [ ! -d /sys/class/sound ]; then
-    sudo modprobe soundcore 2>/dev/null ||
-      { sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null && sudo modprobe soundcore; } || true
-  fi
-  [ -d /sys/class/sound ] || die "the runner kernel has no /sys/class/sound"
   docker rm -f "$PI_CONTAINER" >/dev/null 2>&1 || true
   # systemd is PID 1 so units, journald, D-Bus, NetworkManager and Avahi are
   # real. Host modules are visible so raspi-config can load i2c-dev.
@@ -92,7 +70,6 @@ boot() {
     --privileged --cgroupns=private \
     --tmpfs /run --tmpfs /run/lock \
     -v /lib/modules:/lib/modules:ro \
-    -v "$WORK_DIR/sound:/sys/class/sound:ro" \
     -v "$REPO_DIR:/src:ro" \
     "$BOX_TAG" >/dev/null
   state=$(docker exec "$PI_CONTAINER" timeout 180 systemctl is-system-running --wait || true)
@@ -102,6 +79,7 @@ boot() {
     *) docker exec "$PI_CONTAINER" systemctl --failed --no-pager || true; die "boot did not finish" ;;
   esac
   docker exec "$PI_CONTAINER" systemctl --failed --no-pager || true
+  docker exec -i "$PI_CONTAINER" /bin/sh -s <"$HARNESS_DIR/fake-sound.sh"
   docker exec "$PI_CONTAINER" sh -c \
     "mkdir -p /run/ci-device-tree && printf '%s\\000' '$FAKE_MODEL' >/run/ci-device-tree/model"
   docker exec "$PI_CONTAINER" sh -c '. /etc/os-release; echo "$PRETTY_NAME $(uname -m)"; cat /etc/rpi-issue | head -1'
