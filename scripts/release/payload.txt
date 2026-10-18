@@ -11,6 +11,7 @@ messagebox/button_send.py
 messagebox/cloud_claim.py
 messagebox/cloud_device.py
 messagebox/cloud_events.py
+messagebox/cloud_health.py
 messagebox/cloud_quiet.py
 messagebox/cloud_runtime.py
 messagebox/cloud_update.py
