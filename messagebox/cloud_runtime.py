@@ -34,7 +34,7 @@ from messagebox.settings import (
     in_quiet_hours, ignored_settings, RevisionConflict, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
-from messagebox import cloud_quiet, cloud_update
+from messagebox import cloud_health, cloud_quiet, cloud_update
 from messagebox.remote_access import remote_access
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
@@ -505,6 +505,7 @@ class CloudRuntime:
             "last_error": None,
             **cloud_update.heartbeat_fields(),
             **remote_access(),
+            **cloud_health.heartbeat_fields(),
             **({"nfc_inventory": inventory} if inventory is not None else {}),
         })
         people = response.get("people")
