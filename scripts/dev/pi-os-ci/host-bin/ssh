@@ -1,0 +1,10 @@
+#!/bin/sh
+# CI stub for provision.sh: run the remote command in the Pi OS container as
+# the administrator, with the strict umask of the installing shell.
+# Accepts the forms provision.sh uses: ssh [-t] TARGET COMMAND...
+set -eu
+if [ "${1:-}" = -t ]; then
+  shift
+fi
+shift # TARGET; there is only one Pi.
+exec docker exec -u "$ADMIN" -w "/home/$ADMIN" "$PI_CONTAINER" /bin/bash -c "umask 077; $*"

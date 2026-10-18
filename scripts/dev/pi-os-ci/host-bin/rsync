@@ -1,0 +1,26 @@
+#!/bin/sh
+# CI stub for provision.sh: copy the relative (-R) source list into the Pi OS
+# container. Like rsync -a, file modes come from the source checkout.
+# Accepts: rsync -OPTIONS SOURCE... TARGET:DIRECTORY/
+set -eu
+for last; do :; done
+case "$last" in
+  *:*) destination=${last#*:} ;;
+  *) echo "rsync stub: expected TARGET:DIRECTORY as the last argument" >&2; exit 2 ;;
+esac
+sources=
+for argument; do
+  [ "$argument" = "$last" ] && break
+  case "$argument" in
+    -*) continue ;;
+  esac
+  # provision.sh marks the relative root with "/./"; keep only what follows.
+  relative=$argument
+  while [ "${relative#./}" != "$relative" ]; do
+    relative=${relative#./}
+  done
+  sources="$sources ${relative%/}"
+done
+# shellcheck disable=SC2086 # Repository paths in provision.sh contain no spaces.
+tar -cf - $sources |
+  docker exec -i -u "$ADMIN" "$PI_CONTAINER" /bin/bash -c "umask 077; tar -xpf - -C '$destination'"

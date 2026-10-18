@@ -1,0 +1,50 @@
+name: Pi OS install
+
+# Fresh install inside a booted Raspberry Pi OS Lite (trixie, arm64) userspace.
+# See docs/ci-pi-image.md for what this covers and what still needs a real box.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Pi OS install (${{ matrix.mode }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [wacli, cloud]
+    env:
+      PI_OS_CACHE_DIR: ${{ runner.temp }}/pi-os-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.12.5"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Cache the Raspberry Pi OS image
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pi-os-cache
+          key: raspios-lite-arm64-2026-09-15-cdf4f3bf
+      - name: Build the Pi OS container image
+        run: scripts/dev/pi-os-ci/run.sh build-image
+      - name: Boot Pi OS
+        run: scripts/dev/pi-os-ci/run.sh boot
+      - name: Install from zero (umask 077)
+        run: scripts/dev/pi-os-ci/run.sh install ${{ matrix.mode }}
+      - name: Check the installed box
+        run: scripts/dev/pi-os-ci/run.sh assert ${{ matrix.mode }}
+      - name: make check on Pi OS arm64
+        run: scripts/dev/pi-os-ci/run.sh check ${{ matrix.mode }}
+      - name: Pi OS journal
+        if: failure()
+        run: scripts/dev/pi-os-ci/run.sh logs
