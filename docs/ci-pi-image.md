@@ -33,8 +33,8 @@ This job fails on both. The harness is in `scripts/dev/pi-os-ci/`.
   creates.
 
 The image download (about 540 MB) is cached by `actions/cache`. Each mode runs
-as its own job, in parallel, in about 6 to 8 minutes: 1 minute to build the
-image, about 1 minute to install, a few seconds for the checks, and about 2.5
+as its own job, in parallel, in about 6 minutes: 1 minute to build the image,
+1 to 1.5 minutes to install, a few seconds for the checks, and about 2.5
 minutes for `make check`.
 
 ## What the job does
