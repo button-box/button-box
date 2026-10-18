@@ -21,9 +21,17 @@ UPDATE_UNITS = ("messagebox-update-recovery.service", "messagebox-update-control
                 "messagebox-update-supervisor.timer", "messagebox-update-discovery.timer")
 SYSTEMD_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # Third-party modules the NFC services load from venv-nfc. board and busio
-# probe the hardware on import, so only their presence is checked.
-NFC_IMPORTS = ("adafruit_pn532", "adafruit_pn532.i2c", "lgpio")
-NFC_PRESENT = ("board", "busio", "digitalio")
+# probe the hardware on import, and lgpio opens a notification FIFO in the
+# working directory, so only their presence is checked.
+NFC_IMPORTS = ("adafruit_pn532", "adafruit_pn532.i2c")
+NFC_PRESENT = ("board", "busio", "digitalio", "lgpio")
+# Release-mapped files that setup.sh deliberately does not install. Each needs
+# a reason; anything else missing from a fresh install fails the job.
+NOT_INSTALLED_BY_SETUP = {
+    # Legacy ringtone generator: nothing imports it, setup.sh removes the old
+    # top-level copy, and only the bounded updater ships the package copy.
+    "messagebox/make_ringtones.py",
+}
 
 failures = []
 
@@ -70,7 +78,8 @@ def environment_file(path):
 
 
 def service_environment(settings):
-    env = {"PATH": SYSTEMD_PATH, "LANG": "C.UTF-8"}
+    # Probes must not leave bytecode in the program tree.
+    env = {"PATH": SYSTEMD_PATH, "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
     for value in settings.get("EnvironmentFile", []):
         optional = value.startswith("-")
         path = value.lstrip("-")
@@ -137,7 +146,8 @@ def check_service_imports(unit):
     else:
         result = as_unit_user(settings, ["test", "-x", program], cwd=cwd)
         check(result.returncode == 0, f"{unit.name}: {settings.get('User', ['root'])[-1]} can execute {program}")
-        result = run(["sh", "-n", program])
+        shell = Path(program).read_text().splitlines()[0].removeprefix("#!").split()[0]
+        result = run([shell, "-n", program])
         check(result.returncode == 0, f"{unit.name}: {program} parses")
         return
     for interpreter, code, target in probes:
@@ -164,6 +174,8 @@ for root in sys.argv[1:]:
     if not os.path.lexists(root):
         bad.append(["missing", root]); continue
     visit(root)
+    if not os.path.isdir(root):
+        continue
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda error: bad.append(["unlistable", error.filename])):
         for name in dirnames + filenames:
             visit(os.path.join(dirpath, name))
@@ -203,6 +215,8 @@ def check_payload(source, mode):
         if mode == "wacli" and src in bootstrap_only:
             check(not os.path.lexists(installed), f"self-hosted box has no {installed}")
             continue
+        if src in NOT_INSTALLED_BY_SETUP:
+            continue
         if not os.path.isfile(installed):
             missing.append(installed)
         elif sha256(installed) != sha256(source / src):
@@ -216,7 +230,9 @@ def check_payload(source, mode):
     generated = {str(app / name) for name in ("release.json", "VERSION", "release-manifest.json")}
     extra = []
     for path in sorted(app.rglob("*")):
-        if "venv-nfc" in path.relative_to(app).parts or path.is_dir():
+        # Root services may compile bytecode next to the sources at run time.
+        parts = path.relative_to(app).parts
+        if "venv-nfc" in parts or "__pycache__" in parts or path.is_dir():
             continue
         if str(path) not in expected and str(path) not in generated:
             extra.append(str(path))
