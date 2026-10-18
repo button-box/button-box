@@ -305,8 +305,11 @@ def main():
             failed = run(["systemctl", "is-failed", unit]).stdout.strip()
             check(enabled == "enabled" and failed != "failed", f"{unit} is enabled and not failed ({enabled}, {failed})")
 
-    held = run(["apt-mark", "showhold"]).stdout.split()
-    check("tailscale" in held, "tailscale is installed and held")
+    status = run(["dpkg-query", "-W", "-f=${Status}", "tailscale"])
+    held = run(["apt-mark", "showhold"])
+    check(status.stdout.strip() == "hold ok installed",
+          f"tailscale is installed and held (dpkg: {status.stdout.strip() or tail(status)!r}; "
+          f"apt-mark showhold: {held.stdout.split()!r})")
     result = run(["systemctl", "list-units", "--failed", "--plain", "--no-legend", "messagebox*", "comitup*"])
     check(not result.stdout.strip(), "no Button Box or Comitup unit failed" + (f"\n{result.stdout}" if result.stdout.strip() else ""))
 
