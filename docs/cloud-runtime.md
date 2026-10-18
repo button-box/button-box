@@ -452,6 +452,26 @@ checks alone. Recheck the merged main revision before creating the release tag.
 
 The regular heartbeat reports saved NFC card counts per authorized recipient, scoped to the last verified account and contact-store revision. It never sends card UIDs or local contact labels. Existing cards and subsequent unpairing appear in the authenticated Cloud dashboard after the next heartbeat.
 
+## Box health in the heartbeat
+
+Registration and heartbeat advertise `health_report: 1`. Each Cloud heartbeat
+then carries an optional `health` object (`messagebox/cloud_health.py`), at most
+2048 bytes of compact JSON. It holds codes and numbers only: no audio,
+transcripts, names, phone numbers, message or box IDs, hostnames, or full paths.
+A field that cannot be read is `null`; health never fails the heartbeat. wacli
+boxes send nothing.
+
+| Field | Source |
+| --- | --- |
+| `audio.ok`, `audio.failures_24h`, `audio.last_error` | Every Cloud player outcome (`cloud_quiet.start_player`), kept in `/var/lib/messagebox-cloud/audio-health.json`. Kinds: `message`, `voice_line`, `cue`, `ringtone`, `preview`. Codes: `play_failed`, `file_missing`, `play_timeout`, `player_unavailable`. A press, mute, or quiet stop is not a failure. |
+| `sounds.ok`, `sounds.bad`, `sounds.checked_at` | Bundled sound files hashed against `/opt/messagebox/release-manifest.json` on a low-priority background thread, 2 minutes after start and then every 6 hours. `bad` lists up to 10 `pack/file` names. No manifest (a dev tree): `ok` is `null`. |
+| `disk.free_mb`, `memory.free_mb`, `uptime_s` | `statvfs` of `/var/lib/messagebox`, `MemAvailable`, and `/proc/uptime`. |
+| `services.restarts_24h` | One `systemctl show` call for the `messagebox-*` services (cached 5 minutes); `NRestarts` deltas against hourly samples. Restarts before a reboot are not counted. |
+| `nfc.ok` | `null` when the reader service is not enabled; otherwise whether the reader refreshed `/run/messagebox/nfc-health` in the last 30 s. |
+| `clock.synced` | `timedatectl show -p NTPSynchronized --value`, cached 5 minutes. |
+
+Boxes on older software send no `health`; the Cloud shows it as unknown.
+
 ## Card prompt clip delivery
 
 A capable Pi reports `card_name_prompt: true` and accepts `card_prompt` commands

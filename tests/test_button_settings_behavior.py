@@ -1,4 +1,5 @@
 import math
+import os
 import tempfile
 import struct
 import unittest
@@ -227,6 +228,18 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
             side_effect=AssertionError("player started"),
         ):
             self.assertFalse(button_send.ring_alert(source="dashboard", settings={}))
+
+    def test_missing_ringtone_counts_in_cloud_health_only_in_cloud_mode(self):
+        for mode, expected in (("wacli", []), ("cloud", [("ringtone", "file_missing")])):
+            with tempfile.TemporaryDirectory() as directory, patch.dict(
+                os.environ, {"MSGBOX_TRANSPORT": mode}
+            ), patch.object(
+                button_send, "ringtone_path", return_value=Path(directory) / "missing.wav"
+            ), patch.object(button_send, "log"), patch.object(
+                button_send, "quiet_hours", return_value=False
+            ), patch.object(button_send.cloud_health, "record_audio") as record:
+                self.assertFalse(button_send.ring_alert(source="dashboard", settings={}))
+            self.assertEqual([call.args for call in record.call_args_list], expected)
 
     def test_lamp_schedules_use_each_assets_note_boundaries(self):
         import json

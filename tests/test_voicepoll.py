@@ -64,6 +64,26 @@ class PollingStoreTests(unittest.TestCase):
             process.assert_called_once()
             self.assertFalse(database.exists())
 
+    def test_sound_health_check_starts_only_in_cloud_mode(self):
+        from messagebox import cloud_health, cloud_runtime
+        with mock.patch.object(cloud_health.sound_check, "start") as start, \
+             mock.patch.object(cloud_runtime, "CloudRuntime") as runtime:
+            with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+                voicepoll.main()
+            start.assert_called_once_with()
+            runtime.return_value.run.assert_called_once_with()
+            start.reset_mock()
+            with (
+                mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "wacli"}),
+                mock.patch.object(voicepoll, "load_seen", return_value=set()),
+                mock.patch.object(voicepoll, "poll_once"),
+                mock.patch.object(voicepoll.time, "sleep", side_effect=KeyboardInterrupt),
+                self.assertRaises(KeyboardInterrupt),
+                redirect_stdout(io.StringIO()),
+            ):
+                voicepoll.main()
+            start.assert_not_called()
+
     def test_poll_preserves_authorization_deduplication_and_oldest_first_order(self):
         def message(message_id, timestamp, **changes):
             result = {

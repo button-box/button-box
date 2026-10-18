@@ -62,7 +62,7 @@ from messagebox.settings import (
     in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
 )
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
-from messagebox import cloud_runtime, cloud_claim, cloud_quiet, message_age, sound_pack
+from messagebox import cloud_runtime, cloud_claim, cloud_health, cloud_quiet, message_age, sound_pack
 from messagebox.cloud_runtime import CloudRuntimeError
 
 
@@ -1431,6 +1431,8 @@ def ring_alert(source="new_message", settings=None):
     flash_lamp = signal in {"ring_and_lamp", "lamp_only"}
     if play_ring and not os.path.exists(path):
         log(f"ring skipped ({source}): ringtone unavailable")
+        if transport_mode() == "cloud":
+            cloud_health.record_audio("ringtone", "file_missing")
         return False
     log(f"ringing: {source}")
     log_event("ring", source=source)
@@ -1804,34 +1806,36 @@ def maybe_play_cloud_sound():
             if request is None:
                 return False
             try:
-                if request["kind"] == "success":
-                    played = play_send_success_cue()
-                elif request["kind"] == "settings_saved":
-                    # Voice switches sample the new pack at the newly applied volume.
-                    played = False
-                    if not quiet_hours() and apply_master_volume():
-                        if request.get("voice_changed"):
-                            path = sound_pack.voice_path("msg-start", caregiver_settings().get("voice_pack"))
-                            led.off()
-                            played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
-                        elif request.get("volume_changed"):
-                            played = play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
-                        else:
-                            played = play_idle_sound(sound_pack.cue_path("card_saved"), 5)
-                    if not played and not quiet_hours():
-                        cloud_audio_requests.finish(request, "pending")
-                        return False
-                elif request["kind"] == "voice_preview":
-                    path = sound_pack.voice_path("msg-start", request["voice_pack"])
-                    led.off()
-                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
-                elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
-                    ringtone_id = normalize_ringtone_id(request["ringtone_id"])
-                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[ringtone_id]
-                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path),
-                                             lamp_ringtone=ringtone_id)
-                else:
-                    played = False
+                # Dashboard previews count as "preview" in box health, whatever file they play.
+                with cloud_health.audio_kind("cue" if request["kind"] == "success" else "preview"):
+                    if request["kind"] == "success":
+                        played = play_send_success_cue()
+                    elif request["kind"] == "settings_saved":
+                        # Voice switches sample the new pack at the newly applied volume.
+                        played = False
+                        if not quiet_hours() and apply_master_volume():
+                            if request.get("voice_changed"):
+                                path = sound_pack.voice_path("msg-start", caregiver_settings().get("voice_pack"))
+                                led.off()
+                                played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                            elif request.get("volume_changed"):
+                                played = play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
+                            else:
+                                played = play_idle_sound(sound_pack.cue_path("card_saved"), 5)
+                        if not played and not quiet_hours():
+                            cloud_audio_requests.finish(request, "pending")
+                            return False
+                    elif request["kind"] == "voice_preview":
+                        path = sound_pack.voice_path("msg-start", request["voice_pack"])
+                        led.off()
+                        played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                    elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
+                        ringtone_id = normalize_ringtone_id(request["ringtone_id"])
+                        path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[ringtone_id]
+                        played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path),
+                                                 lamp_ringtone=ringtone_id)
+                    else:
+                        played = False
                 cloud_audio_requests.finish(request, "played" if played else "rejected")
                 unavailable_events.available("cloud_playback")
                 return played

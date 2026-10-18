@@ -750,6 +750,27 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertIs(send.call_args.args[0]["capabilities"]["announce_messages_voice"], True)
         self.assertIs(send.call_args.args[0]["capabilities"]["message_age_phrase"], True)
 
+    def test_health_capability_and_worst_case_health_fit_the_heartbeat_limit(self):
+        from messagebox import cloud_health
+        from test_cloud_health import worst_case_health
+        health = cloud_health.fit(worst_case_health())
+        with mock.patch.object(cloud_health, "collect", return_value=health), \
+             mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        body = {**send.call_args.args[0], "software_version": "v" * 64, "software_commit": "f" * 40}
+        self.assertEqual(body["capabilities"]["health_report"], 1)
+        self.assertEqual(body["health"], health)
+        self.assertLessEqual(len(json.dumps(body["health"], separators=(",", ":")).encode()), 2048)
+        self.assertLessEqual(len(json.dumps(body, separators=(",", ":")).encode()), 24576)
+
+    def test_heartbeat_is_sent_without_health_when_collection_fails(self):
+        from messagebox import cloud_health
+        with mock.patch.object(cloud_health, "collect", side_effect=RuntimeError("broken")), \
+             mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:
+            self.runtime.heartbeat()
+        self.assertNotIn("health", send.call_args.args[0])
+        self.assertEqual(self.runtime.state["snapshot"]["box_id"], "box1234567890123456")
+
     def card_prompt_item(self, *, pack="jessica", operation_id="cardprompt:example", box=False):
         item = self.box_listened_item() if box else self.listened_item()
         item.update(kind="card_prompt", operation_id=operation_id)
@@ -1319,6 +1340,9 @@ class CloudRuntimeTests(unittest.TestCase):
              mock.patch.object(button_send, "led", mock.Mock(), create=True) as lamp, \
              mock.patch.object(button_send, "play_idle_sound", return_value=True) as play, \
              mock.patch.object(button_send, "play_ringtone_snippet") as ringtone:
+            # Box health counts a failed dashboard sample as "preview", not as a voice line.
+            kinds = []
+            play.side_effect = lambda path, *_args, **_kw: kinds.append(button_send.cloud_health.classify(path)) or True
             self.runtime._command(item, NOW)
             self.apply_settings_on_button()
             self.runtime._finish_settings()
@@ -1326,6 +1350,7 @@ class CloudRuntimeTests(unittest.TestCase):
             self.mono[0] += 3
             self.assertTrue(button_send.maybe_play_cloud_sound())
             self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(kinds, ["preview"])
         self.assertEqual(play.call_args.args[0], Path(__file__).resolve().parents[1] / "sounds/voices/dj/voice-msg-start.wav")
         ringtone.assert_not_called()
         lamp.off.assert_called_once()

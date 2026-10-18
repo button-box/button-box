@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+from messagebox import cloud_health
 from messagebox.cloud_device import CLOUD_DIR, atomic_json
 from messagebox.settings import _open_shared_lock
 
@@ -83,6 +84,20 @@ def muted():
     return silence_store.load()["muted"]
 
 
+def _track_stops(process, kind):
+    """Mark deliberate stops (a press, mute, a timeout) so health counts only real faults."""
+    process.health_kind = kind
+    for name in ("terminate", "kill"):
+        stop = getattr(process, name, None)
+        if stop is None:
+            continue
+
+        def stopped(stop=stop):
+            process.health_stopped = True
+            stop()
+        setattr(process, name, stopped)
+
+
 def start_player(args, *, allow_muted=False, **kwargs):
     """Watch only this process; never kill other services' audio players."""
     before = silence_store.load()
@@ -93,11 +108,15 @@ def start_player(args, *, allow_muted=False, **kwargs):
     if not reservation.__enter__():
         reservation.__exit__(None, None, None)
         raise AudioSilenced("software installation in progress")
+    kind = cloud_health.classify(args[-1])
     try:
         process = subprocess.Popen(args, **kwargs)
-    except BaseException:
+    except BaseException as exc:
         reservation.__exit__(None, None, None)
+        if isinstance(exc, OSError):
+            cloud_health.record_audio(kind, "player_unavailable")
         raise
+    _track_stops(process, kind)
 
     # Set once the shared maintenance reservation is released, so a caller can
     # wait for it before asking the updater for the exclusive one.
@@ -120,6 +139,7 @@ def start_player(args, *, allow_muted=False, **kwargs):
         finally:
             reservation.__exit__(None, None, None)
             released.set()
+            cloud_health.player_finished(process, args[-1])
 
     threading.Thread(target=watch, daemon=True).start()
     return process
@@ -134,5 +154,6 @@ def play(args, *, timeout, allow_muted=False):
         return subprocess.CompletedProcess(args, code)
     finally:
         if process.poll() is None:
+            process.health_code = "play_timeout"
             process.kill()
             process.wait()

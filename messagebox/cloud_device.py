@@ -452,6 +452,7 @@ def capabilities(*, nfc=False) -> dict:
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
         "voice_lines": 1,
+        "health_report": 1,
         "reactions": 1,
         "reaction_cards": 1,
         "reaction_sent_voice": 1,

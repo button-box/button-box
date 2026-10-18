@@ -349,6 +349,8 @@ def main():
     transport = os.environ.get("MSGBOX_TRANSPORT", "wacli")
     if transport == "cloud":
         from messagebox.cloud_runtime import CloudRuntime
+        from messagebox.cloud_health import sound_check
+        sound_check.start()  # Background, low priority; heartbeats only read its result.
         return CloudRuntime().run()
     if transport != "wacli":
         raise ValueError("unsupported message transport")
