@@ -111,7 +111,7 @@ reboot_check() {
   docker restart "$PI_CONTAINER" >/dev/null
   wait_booted
   cycles=$(docker exec "$PI_CONTAINER" journalctl --since "@$since" --no-pager -o cat |
-    grep -iE 'ordering cycle|to break ordering' || true)
+    grep -iE 'ordering cycle|found dependency on|to break ordering' || true)
   if [ -n "$cycles" ]; then
     printf '%s\n' "$cycles"
     die "boot has a systemd ordering cycle"

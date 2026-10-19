@@ -43,6 +43,19 @@ queue the first signed B72 application with `update_controller.py attended-insta
 owns health and rollback for this first application transaction too. No legacy
 in-place application update is needed between recovery bootstrap and B72.
 
+Bootstrap drop-ins order Button Box services after
+`messagebox-update-recovery.service`. Path and timer activators get only the
+install-inhibit condition: they are ordered before `paths.target` and
+`timers.target`, which recovery follows, so ordering them after recovery is a
+boot ordering cycle (systemd then deletes a random start job, such as the setup
+button's activators). The services they start keep the recovery dependency. On a
+box bootstrapped before this fix, run once as root, then reboot and check that
+`journalctl -b | grep -i "ordering cycle"` prints nothing:
+
+```sh
+sudo sh scripts/install/update-bootstrap.sh --repair-drop-ins
+```
+
 Run `scripts/install/update-bootstrap.sh auto stable` as root on an already
 reviewed Cloud application installation. The first argument may be `ask`, and
 the second may be `canary`. Provision the box timezone before bootstrap; bootstrap reads it through timedatectl.
