@@ -163,6 +163,9 @@ class ClaimLinkTests(unittest.TestCase):
             status = self_install.claim_link(io.StringIO(), run=run, env_path=self.env)
         self.assertEqual(status, 0)
         self.assertIn(["/usr/bin/python3", "-m", "messagebox.onboarding.mode", "--enter-cloud-claim"], run.commands)
+        # The completion watchers start now, not at the next boot.
+        self.assertIn(["systemctl", "start", "messagebox-onboarding-complete.path",
+                       "messagebox-onboarding-voice.path"], run.commands)
 
     def test_failed_wifi_adoption_does_not_enter_setup(self):
         configured = self.tmp / "configured"

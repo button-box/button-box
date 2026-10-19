@@ -274,6 +274,11 @@ def check_installer():
     check(release.get("manifest_sha256") is not None, f"installed identity comes from the signed release ({release.get('version')})")
     policy = json.loads(Path("/var/lib/button-box-update/policy.json").read_text())
     check(policy.get("mode") == "auto" and policy.get("channel") == "stable", "updates are auto on the stable channel")
+    floor = json.loads(Path("/var/lib/button-box-update/sequence.json").read_text())
+    check(floor == 1, f"the update floor is the installed release's sequence (1, found {floor})")
+    check(Path("/opt/messagebox/VERSION").read_text().strip() == release.get("version"), "VERSION matches release.json")
+    for unit in ("messagebox-onboarding-complete.path", "messagebox-onboarding-voice.path"):
+        check(run(["systemctl", "is-enabled", unit]).stdout.strip() == "enabled", f"{unit} is enabled")
     result = run(["messageboxctl", "doctor"])
     print("      doctor:\n" + "\n".join("        " + line for line in result.stdout.splitlines()))
     check(result.returncode == 0, "messageboxctl doctor reports no failures")

@@ -52,6 +52,7 @@ RUNTIME_SERVICES = {
     "nfc": "messagebox-nfc.service",
 }
 SETUP_UNITS = ("comitup.service", "messagebox-onboarding-home.service")
+SETUP_WATCHERS = ("messagebox-onboarding-complete.path", "messagebox-onboarding-voice.path")
 # Paths the messagebox service user must be able to read (and enter).
 READABLE_ROOTS = ("/opt/messagebox/", "/usr/lib/messagebox", "/etc/messagebox",
                   "/var/lib/messagebox", "/var/lib/messagebox-cloud")
@@ -133,7 +134,7 @@ def check_services(report, mode, run=subprocess.run, enabled_marker=ONBOARDING_E
         report.line(FAIL, "services", "failed: " + ", ".join(failed),
                     f"sudo journalctl -u {failed[0]} -n 50, then sudo systemctl restart {failed[0]}")
     if enabled_marker.exists():
-        down = [unit for unit in SETUP_UNITS if _unit_state(unit, run)[0] != "active"]
+        down = [unit for unit in SETUP_UNITS + SETUP_WATCHERS if _unit_state(unit, run)[0] != "active"]
         if down:
             report.line(FAIL, "services", "setup mode, but not running: " + ", ".join(down),
                         "sudo messageboxctl logs onboarding")
@@ -456,6 +457,11 @@ def arm_claim_setup(out, run=subprocess.run, tty_opener=_open_tty):
         print("This Pi is not on Wi-Fi, so it opens its setup Wi-Fi. Join it from your phone.", file=out)
     result = _run(["/usr/bin/python3", "-m", "messagebox.onboarding.mode", "--enter-cloud-claim"],
                   run=run, cwd=str(APP_DIR), timeout=120)
+    if result.returncode != 0:
+        return False, "setup_failed"
+    # setup.sh only enables these watchers; without them a claim made before
+    # the next reboot never completes setup.
+    result = _run(["systemctl", "start", *SETUP_WATCHERS], run=run, timeout=60)
     if result.returncode != 0:
         return False, "setup_failed"
     return True, "armed"

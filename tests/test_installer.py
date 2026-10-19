@@ -320,6 +320,16 @@ class InstallerTest(unittest.TestCase):
         self.assertGreater(len(required), 60)
         self.assertEqual(sorted(required - payload), [])
 
+    def test_bootstrap_checks_the_installed_identity_before_changing_anything(self):
+        text = (ROOT / "scripts/install/update-bootstrap.sh").read_text()
+        self.assertLess(text.index("/opt/messagebox/release.json is missing or invalid"), text.index("install -d"))
+
+    def test_installer_writes_identity_before_bootstrap_and_sets_the_floor_after(self):
+        main = INSTALLER.read_text().split("\nmain() {", 1)[1]
+        order = [main.index(name) for name in ("write_identity", "release.json is missing", "bootstrap_updater",
+                                               "record_sequence_floor")]
+        self.assertEqual(order, sorted(order))
+
     def test_installer_is_posix_sh_and_reads_nothing_from_stdin(self):
         text = INSTALLER.read_text()
         self.assertTrue(text.startswith("#!/bin/sh\n"))

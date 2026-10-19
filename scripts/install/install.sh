@@ -404,11 +404,11 @@ PY
     >"$WORK/verifier/release_verify.py" ||
     die 4 "Release $VERSION has no verifier." "Use a newer release."
   stage=$WORK/stage
-  if ! python3 -I - "$WORK/verifier" "$download" "$keys" "$VERSION" "$CHANNEL" "$stage" <<'PY'
+  if ! python3 -I - "$WORK/verifier" "$download" "$keys" "$VERSION" "$CHANNEL" "$stage" "$WORK/sequence" <<'PY'
 import json, sys
 sys.path.insert(0, sys.argv[1])
 from release_verify import ReleaseError, extract_bundle, local_platform, verify_bundle
-directory, keys, version, channel, stage = sys.argv[2:7]
+directory, keys, version, channel, stage, sequence = sys.argv[2:8]
 try:
     manifest = verify_bundle(directory, keys, version=version, channel=channel, floor=0,
                              platform=local_platform())
@@ -419,6 +419,7 @@ try:
 except ReleaseError as exc:
     print("release check failed: " + str(exc))
     raise SystemExit(1)
+open(sequence, "w").write(str(manifest["release_sequence"]) + "\n")
 print("Verified " + version + " (commit " + manifest["commit"][:12] + ")")
 PY
   then
@@ -491,6 +492,31 @@ bootstrap_updater() {
   sh "$WORK/stage/scripts/install/update-bootstrap.sh" "$UPDATES" "$CHANNEL" </dev/null ||
     die 5 "The signed updater could not be installed." \
       "Read $LOG_FILE, then run the installer again. It continues from where it stopped."
+}
+
+# The signed updater refuses releases at or below this floor. Bootstrap does
+# not set it, so set it to the release just installed (never lower it).
+record_sequence_floor() {
+  python3 -I - "$(cat "$WORK/sequence")" <<'PY' || die 5 "Could not record the update sequence floor." "Run the installer again."
+import sys
+sys.path.insert(0, "/usr/lib/messagebox-update")
+from pathlib import Path
+from bounded_update import read_state, save_state, transaction_locks
+sequence = int(sys.argv[1])
+import time
+from bounded_update import UpdateError
+for attempt in range(30):
+    try:
+        with transaction_locks(Path("/")):
+            if read_state(Path("/"), "sequence.json", 0) < sequence:
+                save_state(Path("/"), "sequence.json", sequence)
+        break
+    except UpdateError as exc:
+        if str(exc) != "not_idle" or attempt == 29:
+            raise
+        time.sleep(2)
+print(f"Update floor: release sequence {max(sequence, read_state(Path('/'), 'sequence.json', 0))}")
+PY
 }
 
 install_tailscale() {
@@ -592,7 +618,10 @@ main() {
     write_identity
   fi
   if [ "$need_bootstrap" -eq 1 ]; then
+    [ -f /opt/messagebox/release.json ] || [ -L /opt/messagebox ] ||
+      die 5 "/opt/messagebox/release.json is missing, so updates cannot be turned on." "Run the installer again."
     bootstrap_updater
+    record_sequence_floor
   elif [ "$MODE" = cloud ]; then
     repair_updater
   fi
