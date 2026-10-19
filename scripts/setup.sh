@@ -221,8 +221,8 @@ fi
 
 echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
 
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
+sudo apt-get -o DPkg::Lock::Timeout=600 update
+sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
   alsa-utils ca-certificates curl ffmpeg gunicorn=23.0.0-1 i2c-tools nftables \
   liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv python3-websocket swig
 

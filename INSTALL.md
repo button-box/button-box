@@ -167,6 +167,7 @@ The output is in `/var/log/button-box-install.log` and
 | `Raspberry Pi OS trixie is required` / `The 64-bit OS is required` | Flash Raspberry Pi OS Lite (64-bit), Debian 13. |
 | `No internet connection` | Check Wi-Fi: `ping -c 3 github.com`. Run the installer again. |
 | `Not enough free space` | Use a larger card, or remove files. |
+| `Waiting for the automatic system update (apt-daily) to finish...` | Normal on first boot. The installer waits up to 15 minutes for it, then continues. |
 | `The clock is not synchronised.` | Wait a minute after the Pi joins the network: `timedatectl status`. |
 | `User admin needs passwordless sudo.` | Use the user Imager created, or pass `--admin USER`. |
 | `The release signature is not valid.` | Stop. Do not install these files. Report it in an issue. |
@@ -262,6 +263,10 @@ On macOS with Homebrew rsync:
 ```sh
 PATH="/opt/homebrew/bin:$PATH" ./scripts/provision.sh admin@button-box-001.local
 ```
+
+To use a specific SSH key, pass `-i ~/.ssh/button_box_ed25519` before the
+target, or set `SSH_IDENTITY=~/.ssh/button_box_ed25519`. Both `ssh` and `rsync`
+use it.
 
 The script transfers an explicit set of installation files, installs Button Box
 in fixed system paths, and leaves runtime and onboarding services stopped.

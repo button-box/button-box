@@ -144,7 +144,7 @@ if [ "$(dpkg-query -W -f='${Version}' comitup 2>/dev/null || true)" != "$COMITUP
     "$NETWORKMANAGER_SHA256" "$TMP_DIR/python3-networkmanager.deb" |
     sha256sum --check --strict
 
-  sudo apt-get install -y --no-install-recommends \
+  sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
     "$TMP_DIR/python3-networkmanager.deb" "$TMP_DIR/comitup.deb"
 fi
 sudo busctl call org.freedesktop.DBus /org/freedesktop/DBus \

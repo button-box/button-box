@@ -27,7 +27,8 @@ class ProvisionTests(unittest.TestCase):
   for arg in "$@"; do printf '\\t%s' "$arg"; done
   printf '\\n'
 } >>"$SSH_LOG"
-case "${2:-}" in
+for last; do :; done
+case "$last" in
   'mktemp -d /tmp/messagebox-provision.XXXXXX')
     printf '%s\\n' /tmp/messagebox-provision.test
     ;;
@@ -50,8 +51,10 @@ esac
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run(self, target, *, prompt_dir=None):
+    def _run(self, target, *, prompt_dir=None, options=(), extra_env=None):
         env = os.environ.copy()
+        env.pop("SSH_IDENTITY", None)
+        env.update(extra_env or {})
         env.update(
             {
                 "PATH": f"{self.bin_dir}:{env['PATH']}",
@@ -59,7 +62,7 @@ esac
                 "RSYNC_LOG": str(self.rsync_log),
             }
         )
-        arguments = [str(prompt_dir or PROVISION), target]
+        arguments = [str(prompt_dir or PROVISION), *options, target]
         return subprocess.run(
             arguments,
             cwd=self.root,
@@ -120,6 +123,39 @@ esac
             ssh_calls[2],
             "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
         )
+
+    def assert_identity_used(self, key):
+        ssh_calls = [line.split("\t")[1:] for line in self.ssh_log.read_text().splitlines()]
+        self.assertEqual(len(ssh_calls), 3)
+        for call in ssh_calls:
+            self.assertEqual(call[:4], ["-i", str(key), "-o", "IdentitiesOnly=yes"])
+        self.assertEqual(ssh_calls[1][4], "-t")
+        rsync_args = self.rsync_log.read_text().splitlines()[0].split("\t")[1:]
+        self.assertEqual(rsync_args[:2], ["-azR", f"--rsh=ssh -i '{key}' -o IdentitiesOnly=yes"])
+
+    def test_identity_option_is_used_for_ssh_and_rsync(self):
+        key = self.root / "keys dir" / "box_ed25519"
+        key.parent.mkdir()
+        key.write_text("not a real key\n")
+        result = self._run("admin@message-box.local", options=("-i", str(key)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_identity_used(key)
+
+    def test_identity_environment_variable_and_relative_path(self):
+        (self.root / "box_ed25519").write_text("not a real key\n")
+        result = self._run("admin@message-box.local", extra_env={"SSH_IDENTITY": "box_ed25519"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_identity_used(self.root.resolve() / "box_ed25519")
+
+    def test_missing_or_unsafe_identity_fails_before_connecting(self):
+        for identity, message in ((str(self.root / "missing"), "not a readable file"),
+                                  ("-oProxyCommand=bad", "Invalid SSH identity file")):
+            with self.subTest(identity=identity):
+                result = self._run("admin@message-box.local", options=("-i", identity))
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(message, result.stderr)
+        self.assertFalse(self.ssh_log.exists())
+        self.assertFalse(self.rsync_log.exists())
 
     def test_missing_sound_pack_fails_before_connecting(self):
         repo = self.root / "repo"

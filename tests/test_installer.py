@@ -26,7 +26,17 @@ case "$(basename "$0")" in
   curl) [ "${STUB_CURL:-ok}" = ok ] || exit 7 ;;
   df) printf 'Filesystem 1M-blocks Used Available Capacity Mounted\\n/dev/root 30000 1000 %s 4%% /\\n' "${STUB_FREE_MB:-20000}" ;;
   timedatectl) printf '%s\\n' "${STUB_NTP:-yes}" ;;
-  systemctl) exit 3 ;;
+  systemctl)
+    # STUB_APT_BUSY names a file with how many more is-active checks succeed.
+    if [ "$1" = is-active ] && [ -n "${STUB_APT_BUSY:-}" ]; then
+      left=$(cat "$STUB_APT_BUSY")
+      if [ "$left" -gt 0 ]; then
+        printf '%s\n' $((left - 1)) >"$STUB_APT_BUSY"
+        exit 0
+      fi
+    fi
+    exit 3 ;;
+  sleep) exit 0 ;;
   getent)
     case "$1" in
       passwd) printf 'admin:x:1000:1000::/home/admin:/bin/bash\\n' ;;
@@ -37,7 +47,7 @@ case "$(basename "$0")" in
 esac
 """
 STUBBED = ("id", "uname", "dpkg", "dpkg-query", "curl", "df", "timedatectl", "systemctl", "getent",
-           "runuser", "sudo", "apt-get", "qrencode", "espeak-ng", "messageboxctl", "minisign")
+           "runuser", "sudo", "apt-get", "qrencode", "espeak-ng", "messageboxctl", "minisign", "sleep")
 
 
 class InstallerTest(unittest.TestCase):
@@ -252,6 +262,40 @@ class InstallerTest(unittest.TestCase):
         result = self.install("--release-dir", str(directory), "--public-key", str(keys / "other.pub"))
         self.assert_nothing_installed(result)
         self.assertIn("The release signature is not valid.", self.output(result))
+
+    # ------------------------------------------------------------ apt lock
+
+    def test_waits_for_the_first_boot_apt_update_before_installing(self):
+        busy = self.tmp / "apt-busy"
+        busy.write_text("3\n")
+        directory = self.release_dir()
+        result = self.install("--release-dir", str(directory), "--public-key", str(directory / "test.pub"),
+                              STUB_APT_BUSY=str(busy))
+        # It waited, then went on to verification (which the stub signature fails).
+        self.assertEqual(result.returncode, 4, self.output(result))
+        self.assertIn("Waiting for the automatic system update (apt-daily) to finish", self.output(result))
+        self.assertIn("sleep 10", self.calls.read_text())
+        self.assertEqual(busy.read_text().strip(), "0")
+
+    def test_apt_update_that_never_ends_stops_before_installing(self):
+        busy = self.tmp / "apt-busy"
+        busy.write_text("1000\n")
+        directory = self.release_dir()
+        result = self.install("--release-dir", str(directory), STUB_APT_BUSY=str(busy), BUTTON_BOX_APT_WAIT="30")
+        self.assertEqual(result.returncode, 5, self.output(result))
+        self.assertIn("Automatic system updates are still running", self.output(result))
+        self.assertNotIn("minisign", self.calls.read_text())
+
+    def test_every_apt_call_waits_for_the_dpkg_lock(self):
+        for script in ("scripts/setup.sh", "scripts/install/comitup.sh", "scripts/install/nfc.sh",
+                       "scripts/install/tailscale.sh", "scripts/install/install.sh"):
+            text = (ROOT / script).read_text()
+            # Lines that run apt-get (not messages that mention it).
+            calls = re.findall(r"^\s*(?:sudo\s+|DEBIAN_FRONTEND=\S+\s+)*apt-get\s+(.*)$", text, re.M)
+            with self.subTest(script=script):
+                self.assertTrue(calls)
+                for call in calls:
+                    self.assertTrue(call.startswith("-o DPkg::Lock::Timeout="), call)
 
     # ------------------------------------------------------- consistency
 

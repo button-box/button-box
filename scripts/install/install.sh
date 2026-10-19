@@ -29,6 +29,9 @@ ENV_FILE=${BUTTON_BOX_ENV_FILE:-/etc/messagebox/env}
 MIN_FREE_MB=${BUTTON_BOX_MIN_FREE_MB:-2048}
 NETWORK_WAIT=${BUTTON_BOX_NETWORK_WAIT:-120}
 CLOCK_WAIT=${BUTTON_BOX_CLOCK_WAIT:-60}
+APT_WAIT=${BUTTON_BOX_APT_WAIT:-900}
+# On first boot apt-daily-upgrade.service can hold the dpkg lock for minutes.
+APT_LOCK_TIMEOUT=600
 MAX_ARCHIVE_BYTES=134217728
 SYSTEM_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -451,6 +454,7 @@ run_setup() {
     # shellcheck disable=SC2086
     systemctl stop $runtime_units 2>/dev/null || true
   fi
+  wait_for_apt
   admin_home=$(getent passwd "$ADMIN" | cut -d: -f6)
   (
     cd /
@@ -509,7 +513,26 @@ repair_updater() {
     die 5 "The updater services could not start." "Read: sudo journalctl -u messagebox-update-controller -n 50"
 }
 
+apt_busy() {
+  systemctl is-active --quiet apt-daily.service 2>/dev/null ||
+    systemctl is-active --quiet apt-daily-upgrade.service 2>/dev/null
+}
+
+# The automatic first-boot update holds the dpkg lock; setup.sh's apt calls
+# would fail with "Could not get lock /var/lib/dpkg/lock-frontend".
+wait_for_apt() {
+  waited=0
+  while apt_busy; do
+    [ "$waited" -lt "$APT_WAIT" ] || die 5 "Automatic system updates are still running after $((APT_WAIT / 60)) minutes." \
+      "Wait for them to finish (systemctl status apt-daily-upgrade.service), then run the installer again."
+    [ "$waited" -gt 0 ] || say "Waiting for the automatic system update (apt-daily) to finish..."
+    sleep 10
+    waited=$((waited + 10))
+  done
+}
+
 prerequisites() {
+  wait_for_apt
   missing=
   for tool in curl minisign python3 qrencode; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
@@ -519,10 +542,11 @@ prerequisites() {
   fi
   [ -n "$missing" ] || return 0
   step "Installing tools:$missing"
-  DEBIAN_FRONTEND=noninteractive apt-get update -q ||
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=$APT_LOCK_TIMEOUT update -q ||
     die 5 "apt-get update failed." "Check the internet connection, then run the installer again."
   # shellcheck disable=SC2086
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ca-certificates $missing ||
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=$APT_LOCK_TIMEOUT install -y -q \
+    --no-install-recommends ca-certificates $missing ||
     die 5 "Could not install:$missing" "Run: sudo apt-get install$missing, then run the installer again."
 }
 

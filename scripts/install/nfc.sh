@@ -39,9 +39,9 @@ if [ ! -r "$UNIT_SOURCE" ]; then
 fi
 
 if [ "${MSGBOX_SKIP_APT:-0}" != "1" ]; then
-  sudo apt-get update
+  sudo apt-get -o DPkg::Lock::Timeout=600 update
   # Blinka may build lgpio locally on Debian 13 / Python 3.13.
-  sudo apt-get install -y python3-dev python3-venv swig liblgpio-dev i2c-tools
+  sudo apt-get -o DPkg::Lock::Timeout=600 install -y python3-dev python3-venv swig liblgpio-dev i2c-tools
 fi
 sudo raspi-config nonint do_i2c 0
 sudo usermod -a -G i2c,gpio "$SERVICE_USER"

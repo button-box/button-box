@@ -2,16 +2,52 @@
 # Run this on your computer to install or update a Pi over SSH.
 # It sends only installation inputs to a temporary directory on the Pi, then
 # runs setup.sh there. The installed runtime uses fixed system paths.
-# Usage: ./scripts/provision.sh user@host
+# Usage: ./scripts/provision.sh [-i IDENTITY_FILE] user@host
+# The SSH identity can also come from SSH_IDENTITY=/path/to/key. It is used for
+# ssh and for rsync's ssh.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(dirname "$SCRIPT_DIR")
+SSH_IDENTITY=${SSH_IDENTITY:-}
+if [ "${1:-}" = -i ] && [ "$#" -ge 2 ]; then
+  SSH_IDENTITY=$2
+  shift 2
+fi
 if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 user@host" >&2
+  echo "Usage: $0 [-i IDENTITY_FILE] user@host" >&2
   exit 2
 fi
 TARGET=$1
+if [ -n "$SSH_IDENTITY" ]; then
+  case "$SSH_IDENTITY" in
+    -*|*[\'\"]*)
+      echo "Invalid SSH identity file: $SSH_IDENTITY" >&2
+      exit 2
+      ;;
+  esac
+  if [ ! -f "$SSH_IDENTITY" ] || [ ! -r "$SSH_IDENTITY" ]; then
+    echo "SSH identity file is not a readable file: $SSH_IDENTITY" >&2
+    exit 2
+  fi
+  # rsync runs from the repository root; keep a relative path valid there.
+  SSH_IDENTITY=$(CDPATH= cd -- "$(dirname -- "$SSH_IDENTITY")" && pwd)/$(basename -- "$SSH_IDENTITY")
+fi
+
+# ssh with the selected identity only, when one is given.
+remote() {
+  if [ -n "$SSH_IDENTITY" ]; then
+    ssh -i "$SSH_IDENTITY" -o IdentitiesOnly=yes "$@"
+  else
+    ssh "$@"
+  fi
+}
+RSYNC_RSH=
+if [ -n "$SSH_IDENTITY" ]; then
+  # The single quotes are for rsync, which splits --rsh itself.
+  # shellcheck disable=SC2089
+  RSYNC_RSH="ssh -i '$SSH_IDENTITY' -o IdentitiesOnly=yes"
+fi
 
 case "$TARGET" in
   -*|*[!A-Za-z0-9._@-]*)
@@ -25,7 +61,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 -m messagebox.sound_pac
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 \
   "$SCRIPT_DIR/install/ringtones.py" "$REPO_DIR/sounds/ringtones"
 
-REMOTE_SOURCE=$(ssh "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
+REMOTE_SOURCE=$(remote "$TARGET" 'mktemp -d /tmp/messagebox-provision.XXXXXX')
 case "$REMOTE_SOURCE" in
   /tmp/messagebox-provision.*) ;;
   *) echo "Unexpected remote staging path: $REMOTE_SOURCE" >&2; exit 1 ;;
@@ -34,7 +70,7 @@ esac
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
-  ssh "$TARGET" "rm -rf -- '$REMOTE_SOURCE'" 2>/dev/null || true
+  remote "$TARGET" "rm -rf -- '$REMOTE_SOURCE'" 2>/dev/null || true
   exit "$status"
 }
 trap cleanup EXIT
@@ -44,7 +80,8 @@ echo "Copying installation files to $TARGET:$REMOTE_SOURCE"
 (
 cd "$REPO_DIR"
 REPO_DIR=.
-rsync -azR \
+# shellcheck disable=SC2090
+rsync -azR ${RSYNC_RSH:+"--rsh=$RSYNC_RSH"} \
   "$REPO_DIR/./config/env.example" \
   "$REPO_DIR/./config/onboarding/" \
   "$REPO_DIR/./config/journald.conf.d/" \
@@ -123,5 +160,5 @@ rsync -azR \
 )
 
 echo "Running setup on $TARGET"
-ssh -t "$TARGET" \
+remote -t "$TARGET" \
   "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
