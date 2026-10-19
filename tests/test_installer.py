@@ -327,7 +327,7 @@ class InstallerTest(unittest.TestCase):
     def test_installer_writes_identity_before_bootstrap_and_sets_the_floor_after(self):
         main = INSTALLER.read_text().split("\nmain() {", 1)[1]
         order = [main.index(name) for name in ("write_identity", "release.json is missing", "bootstrap_updater",
-                                               "record_sequence_floor")]
+                                               "record_sequence_floor", "settle_discovery", "messageboxctl doctor")]
         self.assertEqual(order, sorted(order))
 
     def test_installer_is_posix_sh_and_reads_nothing_from_stdin(self):

@@ -519,6 +519,17 @@ print(f"Update floor: release sequence {max(sequence, read_state(Path('/'), 'seq
 PY
 }
 
+# Discovery can run while bootstrap holds the update lock and end "deferred
+# or rejected". That is not a fault; clear it and run it once more.
+settle_discovery() {
+  if systemctl is-failed --quiet messagebox-update-discovery.service 2>/dev/null; then
+    say "Note: update discovery ran during the install and was deferred; running it again."
+    systemctl reset-failed messagebox-update-discovery.service || true
+    systemctl start messagebox-update-discovery.service ||
+      say "Note: update discovery is still deferred; the doctor below shows its state."
+  fi
+}
+
 install_tailscale() {
   if dpkg-query -W -f='${Status}' tailscale 2>/dev/null | grep -q 'install ok'; then
     return 0
@@ -625,6 +636,7 @@ main() {
   elif [ "$MODE" = cloud ]; then
     repair_updater
   fi
+  [ "$MODE" != cloud ] || settle_discovery
   install_tailscale
 
   step "Checking the box (sudo messageboxctl doctor)"

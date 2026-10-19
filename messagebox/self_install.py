@@ -126,7 +126,15 @@ def _unit_state(unit, run):
     return active, enabled
 
 
-def check_services(report, mode, run=subprocess.run, enabled_marker=ONBOARDING_ENABLED):
+def _setup_phase(state_path):
+    try:
+        return json.loads(Path(state_path).read_text())["phase"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def check_services(report, mode, run=subprocess.run, enabled_marker=ONBOARDING_ENABLED,
+                   state_path=ONBOARDING_STATE):
     failed = _run(["systemctl", "list-units", "--failed", "--plain", "--no-legend",
                    "messagebox*", "comitup*"], run=run).stdout.split()
     failed = sorted({name for name in failed if name.startswith(("messagebox", "comitup"))})
@@ -140,6 +148,11 @@ def check_services(report, mode, run=subprocess.run, enabled_marker=ONBOARDING_E
                         "sudo messageboxctl logs onboarding")
         else:
             report.line(PASS, "services", "setup mode is running (" + ", ".join(SETUP_UNITS) + ")")
+        # A Pi that joined Wi-Fi before setup (cloud-init, Imager) stays in
+        # WIFI_SELECT, and setup never checks in with Cloud.
+        if mode == "cloud" and _setup_phase(state_path) == "WIFI_SELECT" and _wifi_ssid(run):
+            report.line(FAIL, "setup", "the box is on Wi-Fi, but setup still waits for a Wi-Fi choice, "
+                        "so Cloud never sees it", "sudo messageboxctl claim-link")
         return
     selected = {name: unit for name, unit in RUNTIME_SERVICES.items()
                 if _unit_state(unit, run)[1] == "enabled"}

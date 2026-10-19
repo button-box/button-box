@@ -167,6 +167,17 @@ class ClaimLinkTests(unittest.TestCase):
         self.assertIn(["systemctl", "start", "messagebox-onboarding-complete.path",
                        "messagebox-onboarding-voice.path"], run.commands)
 
+    def test_preconfigured_box_without_a_terminal_still_leaves_wifi_select(self):
+        configured = self.tmp / "configured"
+        configured.write_text("configured\n")
+        run = FakeRun()
+        adopt = mock.Mock(return_value=True)
+        with mock.patch.object(self_install, "ONBOARDING_CONFIGURED", configured), \
+                mock.patch.object(self_install, "adopt_home_wifi", adopt):
+            armed = self_install.arm_claim_setup(io.StringIO(), run=run, tty_opener=lambda: None)
+        self.assertEqual(armed, (True, "armed"))
+        adopt.assert_called_once()
+
     def test_failed_wifi_adoption_does_not_enter_setup(self):
         configured = self.tmp / "configured"
         configured.write_text("configured\n")
@@ -249,8 +260,25 @@ class DoctorTests(unittest.TestCase):
         marker.write_text("")
         report, out = self.report()
         self_install.check_services(report, "cloud", run=FakeRun({"systemctl is-active": completed("active")}),
-                                    enabled_marker=marker)
+                                    enabled_marker=marker, state_path=self.tmp / "missing.json")
         self.assertIn("PASS  services: setup mode is running", out.getvalue())
+
+    def test_setup_mode_on_wifi_but_waiting_for_a_wifi_choice_fails(self):
+        marker = self.tmp / "enabled"
+        marker.write_text("")
+        state = self.tmp / "state.json"
+        state.write_text(json.dumps({"phase": "WIFI_SELECT"}))
+        run = FakeRun({"systemctl is-active": completed("active"),
+                       "nmcli -g GENERAL.STATE": completed("100 (connected)\nhome\n"),
+                       "nmcli -g 802-11-wireless.ssid": completed("Home\n")})
+        report, out = self.report()
+        self_install.check_services(report, "cloud", run=run, enabled_marker=marker, state_path=state)
+        self.assertIn("FAIL  setup: the box is on Wi-Fi, but setup still waits", out.getvalue())
+        self.assertIn("claim-link", out.getvalue())
+        state.write_text(json.dumps({"phase": "WHATSAPP_PENDING"}))
+        report, out = self.report()
+        self_install.check_services(report, "cloud", run=run, enabled_marker=marker, state_path=state)
+        self.assertEqual(report.counts[self_install.FAIL], 0, out.getvalue())
 
     def test_permissions(self):
         report, out = self.report()
