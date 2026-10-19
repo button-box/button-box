@@ -2,6 +2,9 @@
 # Attended installation of fixed updater/recovery, separately from app updates.
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'Run the attended bootstrap as root.' >&2; exit 1; }
+# Release, dependency, and drop-in paths must stay readable by the service
+# users. Do not inherit a strict administrator umask from sudo.
+umask 022
 REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 MODE=${1:-auto}
 CHANNEL=${2:-stable}
@@ -25,6 +28,18 @@ if platform['os'] != 'raspios-trixie' or platform['architecture'] != 'aarch64' o
 lines = Path('/etc/messagebox/env').read_text().splitlines()
 if not any(line.strip() in {'MSGBOX_TRANSPORT=cloud', 'MSGBOX_TRANSPORT="cloud"'} for line in lines):
     raise SystemExit('Updater bootstrap requires a Cloud box.')
+# The layout conversion needs the installed identity. Check it here, before
+# any drop-in or unit is installed, not halfway through.
+import json, re
+try:
+    identity = json.loads(Path('/opt/messagebox/release.json').read_bytes())
+    valid = bool(re.fullmatch(r'[A-Za-z0-9._-]{1,64}', identity['version'])
+                 and re.fullmatch(r'[0-9a-f]{40}', identity['commit']))
+except (OSError, ValueError, KeyError, TypeError):
+    valid = False
+if not valid:
+    raise SystemExit('/opt/messagebox/release.json is missing or invalid. Install a signed release first '
+                     '(scripts/install/install.sh writes it).')
 PY
 BOX_TIMEZONE=$(timedatectl show --property=Timezone --value)
 [ -n "$BOX_TIMEZONE" ] || { echo "Configure the box timezone before bootstrap." >&2; exit 1; }

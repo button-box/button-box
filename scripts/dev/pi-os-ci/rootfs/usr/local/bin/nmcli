@@ -1,0 +1,8 @@
+#!/bin/sh
+# CI stub: the container has no Wi-Fi radio. Report wlan0 as managed by
+# NetworkManager for comitup.sh; pass every other call to the real nmcli.
+if [ "$*" = "-g GENERAL.NM-MANAGED device show wlan0" ]; then
+  echo yes
+  exit 0
+fi
+exec /usr/bin/nmcli "$@"

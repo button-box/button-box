@@ -28,8 +28,8 @@ for path in "$KEYRING" "$REPOSITORY"; do
 done
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y ca-certificates curl
+apt-get -o DPkg::Lock::Timeout=600 update
+apt-get -o DPkg::Lock::Timeout=600 install -y ca-certificates curl
 
 STAGING=$(mktemp -d /tmp/messagebox-tailscale.XXXXXX)
 cleanup() {
@@ -53,10 +53,10 @@ install -o root -g root -m 0644 \
   "$STAGING/tailscale-archive-keyring.gpg" "$KEYRING"
 install -o root -g root -m 0644 "$STAGING/tailscale.list" "$REPOSITORY"
 
-apt-get update
+apt-get -o DPkg::Lock::Timeout=600 update
 if ! dpkg-query -W -f='${Status}\n' tailscale 2>/dev/null |
   grep -qx 'install ok installed'; then
-  apt-get install -y tailscale
+  apt-get -o DPkg::Lock::Timeout=600 install -y tailscale
 fi
 systemctl enable --now tailscaled
 

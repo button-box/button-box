@@ -6,7 +6,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_DIR")")
 SERVICE_USER=messagebox
-APP_DIR=/opt/messagebox
+APP_DIR=${MSGBOX_APP_DIR:-/opt/messagebox}
 VENV_DIR=$APP_DIR/venv-nfc
 UNIT_SOURCE="$REPO_DIR/systemd/messagebox-nfc.service"
 UNIT_DEST=/etc/systemd/system/messagebox-nfc.service
@@ -39,16 +39,26 @@ if [ ! -r "$UNIT_SOURCE" ]; then
 fi
 
 if [ "${MSGBOX_SKIP_APT:-0}" != "1" ]; then
-  sudo apt-get update
+  sudo apt-get -o DPkg::Lock::Timeout=600 update
   # Blinka may build lgpio locally on Debian 13 / Python 3.13.
-  sudo apt-get install -y python3-dev python3-venv swig liblgpio-dev i2c-tools
+  sudo apt-get -o DPkg::Lock::Timeout=600 install -y python3-dev python3-venv swig liblgpio-dev i2c-tools
 fi
 sudo raspi-config nonint do_i2c 0
 sudo usermod -a -G i2c,gpio "$SERVICE_USER"
 
 sudo install -d -o root -g root -m 0755 "$APP_DIR"
-sudo python3 -m venv "$VENV_DIR"
-sudo "$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/config/requirements-nfc.txt"
+# The venv is root-owned but read by the messagebox service user. Do not
+# inherit a strict administrator umask (for example 077) from the caller.
+(
+  umask 022
+  sudo python3 -m venv "$VENV_DIR"
+  sudo "$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/config/requirements-nfc.txt"
+)
+# Repair a venv left unreadable by an earlier install. The trailing slash
+# follows a venv-nfc symlink to the stable dependency directory; find does
+# not follow the Python symlinks inside the venv.
+sudo find "$VENV_DIR/" -type d -exec chmod 0755 {} +
+sudo find "$VENV_DIR/" ! -type d ! -type l -exec chmod a+rX,go-w {} +
 
 sudo install -o root -g root -m 0644 "$UNIT_SOURCE" "$UNIT_DEST"
 sudo systemctl daemon-reload
