@@ -2,7 +2,49 @@
 # Attended installation of fixed updater/recovery, separately from app updates.
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'Run the attended bootstrap as root.' >&2; exit 1; }
+# Release, dependency, and drop-in paths must stay readable by the service
+# users. Do not inherit a strict administrator umask from sudo.
+umask 022
 REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+# Units that wait for boot recovery. Dependencies live in bootstrap drop-ins
+# so ordinary wacli setup does not need recovery.
+GUARDED_UNITS="messagebox.target messagebox-audio-detect.service messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-change.service messagebox-wifi-change.path messagebox-wifi-watchdog.service messagebox-wifi-watchdog.timer messagebox-mode-reconcile.service messagebox-mode-reconcile.path comitup.service comitup-web.service messagebox-onboarding-home.service messagebox-onboarding-nfc.service messagebox-onboarding-complete.service messagebox-onboarding-complete.path messagebox-onboarding-button.service messagebox-onboarding-voice-gate.service messagebox-onboarding-voice.path messagebox-onboarding-voice.target messagebox-whatsapp-pairing.service messagebox-wifi-reset.service"
+
+write_drop_ins() {
+  for unit in $GUARDED_UNITS; do
+    install -d -o root -g root -m 0755 "/etc/systemd/system/$unit.d"
+    case "$unit" in
+      *.path|*.timer)
+        # Path and timer units are ordered before paths.target/timers.target,
+        # which basic.target (and so recovery) comes after. Ordering them after
+        # recovery is a boot ordering cycle; systemd then deletes a random job,
+        # for example the setup button's activators. The services they start
+        # carry the recovery dependency themselves.
+        cat > "/etc/systemd/system/$unit.d/software-update.conf" <<'EOF'
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+EOF
+        ;;
+      *)
+        cat > "/etc/systemd/system/$unit.d/software-update.conf" <<'EOF'
+[Unit]
+Requires=messagebox-update-recovery.service
+After=messagebox-update-recovery.service
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+EOF
+        ;;
+    esac
+  done
+}
+
+# Attended maintenance for boxes bootstrapped before the ordering fix.
+if [ "${1:-}" = --repair-drop-ins ]; then
+  [ -f /etc/button-box-update/installed ] || { echo "Not bootstrapped; nothing to repair." >&2; exit 1; }
+  write_drop_ins
+  systemctl daemon-reload
+  printf '%s\n' 'Updater drop-ins rewritten. Reboot, then check: journalctl -b | grep -i "ordering cycle"'
+  exit 0
+fi
 MODE=${1:-auto}
 CHANNEL=${2:-stable}
 [ ! -e /etc/button-box-update/installed ] || { echo "Already bootstrapped; use an attended controller maintenance release." >&2; exit 1; }
@@ -53,17 +95,8 @@ for unit in "$REPO_DIR"/systemd/messagebox-update-*; do
   install -o root -g root -m 0644 "$unit" /etc/systemd/system/
 done
 install -o root -g root -m 0644 /dev/null /run/messagebox-update/maintenance.lock
-# Add ordering to existing units, including activators and ComItUp. Dependencies
-# live in bootstrap drop-ins so ordinary wacli setup does not need recovery.
-for unit in messagebox.target messagebox-audio-detect.service messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-change.service messagebox-wifi-change.path messagebox-wifi-watchdog.service messagebox-wifi-watchdog.timer messagebox-mode-reconcile.service messagebox-mode-reconcile.path comitup.service comitup-web.service messagebox-onboarding-home.service messagebox-onboarding-nfc.service messagebox-onboarding-complete.service messagebox-onboarding-complete.path messagebox-onboarding-button.service messagebox-onboarding-voice-gate.service messagebox-onboarding-voice.path messagebox-onboarding-voice.target messagebox-whatsapp-pairing.service messagebox-wifi-reset.service; do
-  install -d -o root -g root -m 0755 "/etc/systemd/system/$unit.d"
-  cat > "/etc/systemd/system/$unit.d/software-update.conf" <<'EOF'
-[Unit]
-Requires=messagebox-update-recovery.service
-After=messagebox-update-recovery.service
-ConditionPathExists=!/var/lib/button-box-update/install-inhibit
-EOF
-done
+# Add ordering to existing units, including activators and ComItUp.
+write_drop_ins
 # Arm boot recovery before the first layout mutation. A power cut during
 # conversion must be recoverable without SSH or the candidate application.
 systemctl daemon-reload
