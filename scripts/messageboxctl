@@ -16,6 +16,8 @@ Commands:
   set-color COLOR          Set shell color: yellow|pink-red|green|blue|white|black|beige
   reset-wifi               Delete saved Wi-Fi and restart onboarding
   enter-cloud-claim        Reopen cloud claim setup on a cloud box without changing Wi-Fi
+  claim-link               Print a Cloud box's setup link and QR code, and open claim setup
+  doctor                   Check services, permissions, audio, card reader, Cloud and updates
   start|stop|restart        Operate the Button Box target
   enable SERVICE...         Select services; start them if the target is active
   disable SERVICE...        Stop and deselect services
@@ -161,6 +163,11 @@ case "$command" in
     fi
     cd /opt/messagebox
     exec /usr/bin/python3 -m messagebox.onboarding.mode --enter-cloud-claim
+    ;;
+  doctor|claim-link)
+    require_root
+    cd /opt/messagebox
+    PYTHONDONTWRITEBYTECODE=1 exec /usr/bin/python3 -m messagebox.self_install "$command" "$@"
     ;;
   start|stop|restart)
     require_root

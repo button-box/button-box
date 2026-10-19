@@ -39,12 +39,13 @@ minutes for `make check`.
 
 ## What the job does
 
-Both modes run with `umask 077` in the installing shell.
+All three modes run with `umask 077` in the installing shell.
 
 | Mode | Install path |
 | --- | --- |
 | `wacli` (self-hosted) | `scripts/provision.sh admin@ci-pi` from the runner, as an owner does from a laptop. `ssh` and `rsync` are stubs on `PATH` that reach the container. Then `scripts/install/tailscale.sh` through `sudo sh -s`, as `provision-tailscale.sh` runs it. |
 | `cloud` | `git clone` on the Pi and `./scripts/setup.sh`, then `MSGBOX_TRANSPORT=cloud`, `minisign` and `espeak-ng`, and `scripts/install/update-bootstrap.sh auto stable`. Then `tailscale.sh`. |
+| `installer` | The one-command installer, `scripts/install/install.sh --mode cloud --updates auto`, piped into `sudo bash` from a checkout on the Pi, exactly as `INSTALL.md` shows. The runner first builds the four release assets from the checkout with `scripts/release/build.py` and signs them with a throwaway minisign key (`make-test-release.py`); the installer gets them with `--release-dir` and `--public-key`. A stub of the Cloud device API (`fake-cloud.py`) answers for `button.box` through `/etc/hosts` and a throwaway CA, so CI never registers a box with the real Cloud. Then the installer runs a second time and must repair or do nothing. |
 
 `setup.sh` itself runs `comitup.sh`, `wacli.sh` (real download and checksum)
 and `nfc.sh` (real `raspi-config`, venv and pip install).
@@ -72,6 +73,11 @@ After the install, `assert_install.py` checks, as root inside the box:
   the Cloud box runs from `/opt/messagebox-releases/` with the updater units
   enabled
 - Tailscale is installed and held; no Button Box or Comitup unit failed
+- `installer` leg only: the install log is root-only and has the setup link
+  but no device credential or claim token; the device identity belongs to
+  `messagebox:messagebox-settings`; the installed identity comes from the signed
+  release; updates are `auto` on `stable`; the second run repaired instead of
+  reinstalling; and `messageboxctl doctor` reports no `FAIL`
 
 Finally, `make check` runs on Raspberry Pi OS arm64 as the administrator, with
 `MSGBOX_TEST_TRANSPORT` set to the job's mode. It uses a second, uninstalled

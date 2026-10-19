@@ -91,7 +91,7 @@ those pins instead. Do not combine one wiring layout with the other settings.
 
 Before applying power, independently check header orientation, every
 connection, LED current limiting, and the module's I²C mode. Then follow the
-[hardware test](../README.md#step-8--test-the-hardware). The image and the
+[hardware test](../README.md#step-4--test-the-hardware). The image and the
 configuration comparison have been reviewed against the repository; physical
 GPIO, LED, and NFC operation with this exact layout has not been verified as
 part of this contribution.

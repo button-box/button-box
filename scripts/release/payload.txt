@@ -1,8 +1,14 @@
 # Exact tracked files permitted in the release archive. No globs or directories.
 LICENSE
 config/emergency-keys/README.md
+config/emergency-keys/button-box-emergency-2026.pub
+config/env.example
 config/journald.conf.d/messagebox.conf
+config/onboarding/comitup-dbus.conf
+config/onboarding/comitup.conf.template
+config/onboarding/firewall.nft
 config/release-keys/README.md
+config/release-keys/button-box-release-2026.pub
 config/requirements-nfc.txt
 messagebox/QR-PROVENANCE.md
 messagebox/__init__.py
@@ -57,6 +63,7 @@ messagebox/played_history.py
 messagebox/qrcodegen.py
 messagebox/remote_access.py
 messagebox/runtime_paths.py
+messagebox/self_install.py
 messagebox/settings.py
 messagebox/software.py
 messagebox/sound_pack.py
@@ -73,15 +80,22 @@ scripts/dev/onboard.sh
 scripts/dev/release-manifest.py
 scripts/install/audio_config.py
 scripts/install/bounded_update.py
+scripts/install/comitup.sh
 scripts/install/health-probe.py
+scripts/install/install.sh
 scripts/install/messagebox-mode-migrate.py
+scripts/install/nfc.sh
 scripts/install/release_verify.py
+scripts/install/ringtones.py
+scripts/install/tailscale.sh
 scripts/install/trust_update.py
 scripts/install/update-bootstrap.sh
 scripts/install/update_controller.py
 scripts/install/update_discovery.py
+scripts/install/wacli.sh
 scripts/messageboxctl
 scripts/release/trust-update.py
+scripts/setup.sh
 sounds/cloud/manifest.json
 sounds/cloud/more-1.wav
 sounds/cloud/more-10.wav

@@ -6,10 +6,12 @@ as the service users themselves, so file modes, groups and the installed Python
 environments are tested the way systemd will use them.
 """
 import argparse
+import grp
 import hashlib
 import importlib.util
 import json
 import os
+import pwd
 import shlex
 import subprocess
 import sys
@@ -246,10 +248,42 @@ def check_payload(source, mode):
     check(not unmapped, "every installed messagebox unit is in the release mapping" + (f": {unmapped}" if unmapped else ""))
 
 
+INSTALL_LOG = Path("/var/log/button-box-install.log")
+FAKE_SETUP_LINK = "https://button.box/s/CI2345"  # fake-cloud.py
+
+
+def check_installer():
+    """Extra checks for the one-command installer (scripts/install/install.sh)."""
+    info = INSTALL_LOG.stat() if INSTALL_LOG.exists() else None
+    check(info is not None and info.st_uid == 0 and info.st_mode & 0o777 == 0o600,
+          f"{INSTALL_LOG} exists and only root can read it")
+    log = INSTALL_LOG.read_text(errors="replace") if info else ""
+    check(log.count("Button Box is installed.") == 2, "both installer runs finished")
+    check("Signed updater is installed; checking its services" in log, "the second run repaired instead of reinstalling")
+    check(FAKE_SETUP_LINK in log, "the installer printed the Cloud setup link")
+    identity = Path("/var/lib/messagebox-cloud/device.json")
+    if check(identity.is_file(), "the box registered and has a device identity"):
+        meta = identity.stat()
+        check(meta.st_uid == pwd.getpwnam("messagebox").pw_uid
+              and meta.st_gid == grp.getgrnam("messagebox-settings").gr_gid and meta.st_mode & 0o777 == 0o660,
+              "the device identity belongs to messagebox:messagebox-settings with mode 0660")
+        credential = json.loads(identity.read_text())["credential"]
+        check(credential not in log, "the install log has no device credential")
+    check("ci-claim-token" not in log, "the install log has no claim token")
+    release = json.loads(Path("/opt/messagebox/release.json").read_text())
+    check(release.get("manifest_sha256") is not None, f"installed identity comes from the signed release ({release.get('version')})")
+    policy = json.loads(Path("/var/lib/button-box-update/policy.json").read_text())
+    check(policy.get("mode") == "auto" and policy.get("channel") == "stable", "updates are auto on the stable channel")
+    result = run(["messageboxctl", "doctor"])
+    print("      doctor:\n" + "\n".join("        " + line for line in result.stdout.splitlines()))
+    check(result.returncode == 0, "messageboxctl doctor reports no failures")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("wacli", "cloud"), required=True)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--installer", action="store_true", help="also check the one-command installer")
     args = parser.parse_args()
 
     env = environment_file("/etc/messagebox/env")
@@ -304,6 +338,9 @@ def main():
             enabled = run(["systemctl", "is-enabled", unit]).stdout.strip()
             failed = run(["systemctl", "is-failed", unit]).stdout.strip()
             check(enabled == "enabled" and failed != "failed", f"{unit} is enabled and not failed ({enabled}, {failed})")
+
+    if args.installer:
+        check_installer()
 
     # dpkg is the source of truth; `apt-mark showhold` sometimes lists nothing
     # right after the Tailscale repository is added.

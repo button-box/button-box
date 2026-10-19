@@ -35,13 +35,10 @@ The complete journey is:
 
 1. Buy the parts.
 2. Assemble the hardware.
-3. Prepare a Raspberry Pi OS microSD card.
-4. Download this repository.
-5. Connect to and inspect the Pi.
-6. Provision Button Box.
-7. Link WhatsApp, choose approved recipients, and optionally pair NFC tags.
-8. Test the physical hardware.
-9. Send, receive, play, and repeat after a reboot.
+3. Flash the card, run one install command on the Pi, and scan the QR code
+   ([INSTALL.md](INSTALL.md)).
+4. Test the physical hardware.
+5. Send, receive, play, and repeat after a reboot.
 
 Each detailed step below ends with a **Done when** checkpoint. If the observed
 result differs, stop there and troubleshoot instead of pushing ahead.
@@ -137,9 +134,9 @@ Point a capable coding agent at this repository and give it this prompt:
 Help me build a Button Box from this repository:
 https://github.com/button-box/button-box
 
-Read README.md and AGENTS.md before giving instructions. First ask whether I
-have a Raspberry Pi Zero 2 W or Raspberry Pi 4B. Work one numbered step at a
-time and wait for me to confirm each physical result.
+Read README.md, INSTALL.md and INSTALL-WITH-AN-AGENT.md before giving
+instructions. First ask which Raspberry Pi model I have. Work one numbered step
+at a time and wait for me to confirm each physical result.
 
 The goal is to have a working box that sends and receives voice messages.
 Do not ask me to paste credentials, phone numbers, WhatsApp identifiers, Wi-Fi
@@ -188,191 +185,26 @@ and [bottom](hardware/enclosure/button-box-enclosure-bottom.stl) enclosure files
 **Done when:** the unpowered assembly is mechanically secure, every connection
 has been independently checked, and there are no loose conductors or shorts.
 
-## Step 3 — Prepare the microSD card
+## Step 3 — Install Button Box
 
-Install the current [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
-on your computer.
+Follow [INSTALL.md](INSTALL.md). The short path:
 
-In Imager:
+1. Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager.
+2. Boot the Pi and open a terminal on it (`ssh`).
+3. Run one command. It installs the latest signed release and checks the box.
+4. Scan the QR code it prints, and finish in WhatsApp.
 
-1. Select your exact Raspberry Pi model.
-2. Select **Raspberry Pi OS Lite (64-bit)** based on Debian 13.
-3. Choose the correct microSD card.
-4. Set a hostname such as `button-box-001`. Existing `message-box-*` hostnames remain supported.
-5. Create a non-root administrator such as `admin`.
-6. Enable SSH, preferably with a dedicated public key.
-7. Give the Pi temporary internet access through Imager Wi-Fi settings,
-   Ethernet, USB Ethernet, or Internet Sharing.
-8. Leave Raspberry Pi Connect disabled unless you deliberately need it.
-9. Confirm the exact removable card before writing.
+Building with an AI coding agent? Give it
+[INSTALL-WITH-AN-AGENT.md](INSTALL-WITH-AN-AGENT.md).
 
-> [!CAUTION]
-> Writing an operating-system image erases the selected card. Confirm its
-> physical identity, capacity, and partitions before continuing.
+The one-command installer supports Raspberry Pi 4 Model B and Pi 3 Model A+.
+For a Pi Zero 2 W, or to install a self-hosted box from your computer, use the
+[manual install](INSTALL.md#manual-install-from-your-computer).
 
-> [!IMPORTANT]
-> Imager remembers customisation from previous runs, including the Wi-Fi network
-> name and password, and pre-fills them. When re-flashing after a Pi that failed
-> to appear, retype the Wi-Fi name rather than accepting the remembered value: a
-> typo carries forward silently, and the retained setting is most likely to bite
-> exactly when you are trying to correct it.
+**Done when:** the installer ends with `Button Box is installed.` and
+`sudo messageboxctl doctor` shows no `FAIL` line.
 
-Insert the verified card into the powered-off Pi, connect temporary networking,
-and power it on.
-
-**Done when:** the Pi boots and responds at its `.local` hostname.
-
-## Step 4 — Download Button Box on your computer
-
-On the computer that will provision the Pi:
-
-```sh
-git clone https://github.com/button-box/button-box.git
-cd button-box
-```
-
-Confirm the checkout and required host commands:
-
-```sh
-git status --short --branch
-ssh -V
-rsync --version
-```
-
-On macOS, use a modern GNU rsync rather than the built-in `openrsync`:
-
-```sh
-brew install rsync
-PATH="/opt/homebrew/bin:$PATH" rsync --version
-```
-
-**Done when:** the repository is on your computer and SSH plus modern rsync are
-available.
-
-## Step 5 — Connect to and inspect the Pi
-
-Replace `admin` and the hostname below if you chose different values:
-
-```sh
-ssh admin@button-box-001.local
-```
-
-On the Pi, verify the model, architecture, and operating-system release:
-
-```sh
-tr -d '\0' </proc/device-tree/model
-uname -m
-grep -E '^(PRETTY_NAME|VERSION_CODENAME)=' /etc/os-release
-```
-
-Expected architecture: `aarch64`
-
-Expected Debian codename: `trixie`
-
-Exit the Pi:
-
-```sh
-exit
-```
-
-**Done when:** the detected model matches your chosen board and the supported
-64-bit OS is running.
-
-## Step 6 — Install Button Box
-
-> [!IMPORTANT]
-> Continue with the automated public installer on Raspberry Pi 4B. The
-> installer (`scripts/install/comitup.sh`) also accepts Raspberry Pi 3
-> (A+/B/B+) and Pi Zero 2 W, but those fresh-card installations are not yet
-> physically validated. The signed software updater supports Raspberry Pi 4
-> Model B and Pi 3 Model A+ only; it does not support Pi Zero 2 W yet.
-
-From the repository root on your computer:
-
-```sh
-./scripts/provision.sh admin@button-box-001.local
-```
-
-On macOS with Homebrew rsync:
-
-```sh
-PATH="/opt/homebrew/bin:$PATH" ./scripts/provision.sh admin@button-box-001.local
-```
-
-The script transfers an explicit set of installation files, installs Button Box
-in fixed system paths, and leaves runtime and onboarding services stopped.
-
-**Done when:** setup prints `BUTTON BOX SETUP COMPLETE` without an error.
-
-## Step 7 — Choose an onboarding path
-
-### Path A: terminal-assisted DIY build
-
-This is currently the shortest path to a working experimental box. It uses the
-Pi's temporary network connection and does not use the consumer Wi-Fi portal.
-
-Run from your computer:
-
-```sh
-ssh -t admin@button-box-001.local messagebox-dev-onboard
-```
-
-The guided workflow will:
-
-1. Link or verify WhatsApp.
-2. Display recent chats with their exact WhatsApp identifiers.
-3. Configure the first approved recipient.
-4. Optionally configure the private dashboard.
-5. Offer to test the physical hardware.
-6. Enable and start the selected runtime services.
-
-Enter phone numbers and other private values directly into the terminal when
-prompted. Do not paste them into an agent conversation or GitHub issue.
-
-**Done when:** the workflow reports WhatsApp ready, the exact intended recipient
-is configured, the selected hardware tests pass, and the selected services are
-enabled and started.
-
-### Path B: browser Wi-Fi and WhatsApp onboarding
-
-This path is the intended household experience from Wi-Fi through normal
-runtime activation.
-
-Initialize the protected onboarding identity:
-
-```sh
-ssh -t admin@button-box-001.local sudo messagebox-init-wifi-onboarding
-```
-
-Record the displayed hotspot name, hotspot password, and setup URL privately.
-Then arm onboarding:
-
-```sh
-ssh -t admin@button-box-001.local sudo messageboxctl reset-wifi
-```
-
-On a phone:
-
-1. Join the Button Box setup hotspot.
-2. Open the supplied setup URL.
-3. Select home Wi-Fi and enter its password.
-4. Rejoin home Wi-Fi when the setup hotspot disappears.
-5. Open the same `http://button-box-001.local/` address.
-6. Link WhatsApp with the displayed phone code.
-7. Choose a default recipient and complete the guided two-way voice test.
-8. Allow any additional recipients and optionally pair NFC tags.
-9. Skip NFC setup or choose Done to activate messaging.
-
-NFC is optional. A zero-tag setup routes new standalone messages to the default
-recipient without depending on the reader. Once any tag is mapped, unsafe NFC
-health or unknown tag state blocks rather than silently choosing the default.
-Path A remains the terminal-assisted developer workflow; the two paths are not
-continuations of one another.
-
-**Done when:** the browser reports that Button Box is ready and the intended
-default and optional tag mappings pass the physical scenarios below.
-
-## Step 8 — Test the hardware
+## Step 4 — Test the hardware
 
 The terminal-assisted onboarding offers this test automatically. To run it
 separately, connect to the Pi and run it as the `messagebox` service user:
@@ -397,7 +229,7 @@ It does not send a WhatsApp message or reveal NFC identifiers.
 **Done when:** every installed component passes, or any deliberately omitted
 component is documented.
 
-## Step 9 — Start the box and complete the first message loop
+## Step 5 — Start the box and complete the first message loop
 
 Check the selected services:
 
@@ -534,8 +366,10 @@ through the community and ask for a private disclosure channel first.
 ## Updating and recovery
 
 Button Box uses fixed installed paths rather than running directly from the
-repository checkout. Re-run the provisioning script to install a reviewed
-update.
+repository checkout. A Cloud box installed with the one-command installer
+updates itself with signed releases ([on-box updates](docs/on-box-updates.md)).
+On a box installed from a checkout, re-run the provisioning script to install a
+reviewed update.
 
 Before updating a working physical box:
 

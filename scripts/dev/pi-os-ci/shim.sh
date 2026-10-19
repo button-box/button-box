@@ -1,5 +1,5 @@
 #!/bin/sh
-# CI only: point the two Raspberry Pi model probes at /run/ci-device-tree/model.
+# CI only: point the Raspberry Pi model probes at /run/ci-device-tree/model.
 # A container cannot create /proc/device-tree, and these are the only readers.
 # The count check makes this fail loudly when the install scripts change.
 # Usage: shim.sh CHECKOUT_DIR
@@ -20,3 +20,4 @@ redirect() {
 
 redirect scripts/install/comitup.sh 2
 redirect scripts/install/release_verify.py 1
+redirect scripts/install/install.sh 1

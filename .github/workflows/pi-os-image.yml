@@ -19,7 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [wacli, cloud]
+        # installer: the one-command installer (scripts/install/install.sh), Cloud mode.
+        mode: [wacli, cloud, installer]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v10.0.1
@@ -42,6 +43,8 @@ jobs:
       - name: Check the installed box
         run: scripts/dev/pi-os-ci/run.sh assert ${{ matrix.mode }}
       - name: make check on Pi OS arm64
+        # The installer leg installs the same code as the cloud leg.
+        if: matrix.mode != 'installer'
         run: scripts/dev/pi-os-ci/run.sh check ${{ matrix.mode }}
       - name: Pi OS journal
         if: failure()

@@ -2,8 +2,9 @@
 # Install Button Box from zero inside a booted Raspberry Pi OS arm64 userspace.
 # CI runs each step on an arm64 Linux runner with Docker; see docs/ci-pi-image.md.
 # Usage: run.sh build-image | boot | install MODE | assert MODE | check MODE | logs
-# MODE is wacli (self-hosted, installed with provision.sh) or cloud (setup.sh on
-# the Pi, then the Cloud updater bootstrap).
+# MODE is wacli (self-hosted, installed with provision.sh), cloud (setup.sh on
+# the Pi, then the Cloud updater bootstrap) or installer (the one-command
+# installer, scripts/install/install.sh, in Cloud mode).
 set -eu
 
 HARNESS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -128,6 +129,63 @@ install_cloud() {
   install_tailscale
 }
 
+start_fake_cloud() {
+  # Network stub: button.box resolves to a local fake of the Cloud device API
+  # with a throwaway CA, so CI never registers a box with the real Cloud.
+  docker cp "$HARNESS_DIR/fake-cloud.py" "$PI_CONTAINER:/usr/local/lib/ci-fake-cloud.py"
+  docker exec -i "$PI_CONTAINER" /bin/sh -s <<'EOF_CLOUD'
+set -eu
+dir=/run/ci-fake-cloud
+mkdir -p "$dir"
+cd "$dir"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=CI fake Cloud CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -keyout ca.key -out ca.crt 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -subj '/CN=button.box' -keyout server.key -out server.csr 2>/dev/null
+printf '%s\n' 'subjectAltName=DNS:button.box' 'basicConstraints=critical,CA:FALSE' \
+  'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' \
+  'subjectKeyIdentifier=hash' 'authorityKeyIdentifier=keyid,issuer' >server.ext
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 \
+  -extfile server.ext -out server.crt 2>/dev/null
+cp ca.crt /usr/local/share/ca-certificates/ci-fake-cloud.crt
+update-ca-certificates >/dev/null
+grep -q ' button.box$' /etc/hosts || printf '127.0.0.1 button.box\n' >>/etc/hosts
+systemd-run --unit=ci-fake-cloud --collect /usr/bin/python3 /usr/local/lib/ci-fake-cloud.py \
+  "$dir/server.crt" "$dir/server.key"
+for _ in $(seq 20); do
+  python3 -c 'import urllib.request, urllib.error
+try:
+    urllib.request.urlopen("https://button.box/", timeout=3)
+except urllib.error.HTTPError:
+    pass' 2>/dev/null && exit 0
+  sleep 1
+done
+echo "fake Cloud did not start" >&2
+exit 1
+EOF_CLOUD
+}
+
+install_installer() {
+  # The one-command installer, run on the Pi from a checkout as a user would:
+  # piped into sudo bash from a strict-umask shell. It installs a signed
+  # release, so sign one from this checkout with a throwaway key first.
+  command -v minisign >/dev/null || sudo apt-get install -y -q --no-install-recommends minisign
+  source_copy=$WORK_DIR/installer-source
+  release=$WORK_DIR/installer-release
+  rm -rf "$source_copy" "$release"
+  cp -a "$REPO_DIR/." "$source_copy"
+  sh "$HARNESS_DIR/shim.sh" "$source_copy"
+  python3 "$HARNESS_DIR/make-test-release.py" "$source_copy" "$release"
+  docker cp "$source_copy" "$PI_CONTAINER:/home/$ADMIN/button-box"
+  docker cp "$release" "$PI_CONTAINER:/home/$ADMIN/test-release"
+  docker exec "$PI_CONTAINER" chown -R "$ADMIN:$ADMIN" "/home/$ADMIN/button-box" "/home/$ADMIN/test-release"
+  start_fake_cloud
+  options="--mode cloud --updates auto --release-dir /home/$ADMIN/test-release --public-key /home/$ADMIN/test-release/test-release.pub"
+  as_admin "cat button-box/scripts/install/install.sh | sudo bash -s -- $options"
+  # Running it again must repair or do nothing.
+  as_admin "cd button-box && sudo sh scripts/install/install.sh $options"
+}
+
 pristine_checkout() {
   as_admin "[ -d button-box-check ] || { sudo apt-get install -y -q --no-install-recommends git >/dev/null && git config --global --add safe.directory '*' && git clone -q /src button-box-check; }"
 }
@@ -139,13 +197,20 @@ case "${1:-}" in
     case "${2:-}" in
       wacli) install_wacli ;;
       cloud) install_cloud ;;
-      *) die "usage: $0 install wacli|cloud" ;;
+      installer) install_installer ;;
+      *) die "usage: $0 install wacli|cloud|installer" ;;
     esac
     ;;
   assert)
     pristine_checkout
+    mode=${2:?mode}
+    extra=
+    if [ "$mode" = installer ]; then
+      mode=cloud
+      extra=--installer
+    fi
     docker exec "$PI_CONTAINER" python3 "/home/$ADMIN/button-box-check/scripts/dev/pi-os-ci/assert_install.py" \
-      --mode "${2:?mode}" --source "/home/$ADMIN/button-box-check"
+      --mode "$mode" --source "/home/$ADMIN/button-box-check" ${extra:+"$extra"}
     ;;
   check)
     # A second, uninstalled container from the same Pi OS image: unit tests

@@ -43,6 +43,8 @@ queue the first signed B72 application with `update_controller.py attended-insta
 owns health and rollback for this first application transaction too. No legacy
 in-place application update is needed between recovery bootstrap and B72.
 
+The one-command installer (`scripts/install/install.sh`, see `INSTALL.md`)
+runs this bootstrap for new Cloud boxes, from the verified release tree.
 Run `scripts/install/update-bootstrap.sh auto stable` as root on an already
 reviewed Cloud application installation. The first argument may be `ask`, and
 the second may be `canary`. Provision the box timezone before bootstrap; bootstrap reads it through timedatectl.
