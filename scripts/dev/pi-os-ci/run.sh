@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Button Box from zero inside a booted Raspberry Pi OS arm64 userspace.
 # CI runs each step on an arm64 Linux runner with Docker; see docs/ci-pi-image.md.
-# Usage: run.sh build-image | boot | install MODE | assert MODE | check MODE | logs
+# Usage: run.sh build-image | boot | install MODE | assert MODE | reboot | check MODE | logs
 # MODE is wacli (self-hosted, installed with provision.sh) or cloud (setup.sh on
 # the Pi, then the Cloud updater bootstrap).
 set -eu
@@ -72,6 +72,11 @@ boot() {
     -v /lib/modules:/lib/modules:ro \
     -v "$REPO_DIR:/src:ro" \
     "$BOX_TAG" >/dev/null
+  wait_booted
+  docker exec "$PI_CONTAINER" sh -c '. /etc/os-release; echo "$PRETTY_NAME $(uname -m)"; cat /etc/rpi-issue | head -1'
+}
+
+wait_booted() {
   state=
   for _ in $(seq 90); do
     state=$(docker exec "$PI_CONTAINER" systemctl is-system-running 2>/dev/null || true)
@@ -93,7 +98,32 @@ boot() {
   docker exec -i "$PI_CONTAINER" /bin/sh -s <"$HARNESS_DIR/fake-sound.sh"
   docker exec "$PI_CONTAINER" sh -c \
     "mkdir -p /run/ci-device-tree && printf '%s\\000' '$FAKE_MODEL' >/run/ci-device-tree/model"
-  docker exec "$PI_CONTAINER" sh -c '. /etc/os-release; echo "$PRETTY_NAME $(uname -m)"; cat /etc/rpi-issue | head -1'
+}
+
+reboot_check() {
+  # Boot the installed box again, as after a power cut. systemd breaks an
+  # ordering cycle by deleting a random start job (for example the setup
+  # button's activators), so the boot log must have none, and every enabled
+  # Button Box path unit must be running.
+  # A container keeps the host's boot ID, so select this boot by time.
+  since=$(docker exec "$PI_CONTAINER" date +%s)
+  sleep 1
+  docker restart "$PI_CONTAINER" >/dev/null
+  wait_booted
+  cycles=$(docker exec "$PI_CONTAINER" journalctl --since "@$since" --no-pager -o cat |
+    grep -iE 'ordering cycle|to break ordering' || true)
+  if [ -n "$cycles" ]; then
+    printf '%s\n' "$cycles"
+    die "boot has a systemd ordering cycle"
+  fi
+  echo "ok    no ordering cycle in the boot log"
+  for unit in $(docker exec "$PI_CONTAINER" sh -c 'cd /etc/systemd/system && ls messagebox*.path'); do
+    enabled=$(docker exec "$PI_CONTAINER" systemctl is-enabled "$unit" || true)
+    [ "$enabled" = enabled ] || continue
+    active=$(docker exec "$PI_CONTAINER" systemctl is-active "$unit" || true)
+    [ "$active" = active ] || die "$unit is enabled but $active after boot"
+    echo "ok    $unit is active after boot"
+  done
 }
 
 install_tailscale() {
@@ -168,8 +198,9 @@ ln -sf bun /usr/local/bin/bunx
 runuser -u "$ADMIN" -- /bin/bash -c "cd && git config --global --add safe.directory '*' && git clone -q /src button-box-check && cd button-box-check && MSGBOX_TEST_TRANSPORT='$MODE' make check"
 EOF_CHECK
     ;;
+  reboot) reboot_check ;;
   logs)
     docker exec "$PI_CONTAINER" journalctl --no-pager -n 300 || true
     ;;
-  *) die "usage: $0 build-image|boot|install MODE|assert MODE|check MODE|logs" ;;
+  *) die "usage: $0 build-image|boot|install MODE|assert MODE|reboot|check MODE|logs" ;;
 esac

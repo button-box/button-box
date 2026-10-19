@@ -41,6 +41,8 @@ jobs:
         run: scripts/dev/pi-os-ci/run.sh install ${{ matrix.mode }}
       - name: Check the installed box
         run: scripts/dev/pi-os-ci/run.sh assert ${{ matrix.mode }}
+      - name: Boot again (no ordering cycle, path units active)
+        run: scripts/dev/pi-os-ci/run.sh reboot
       - name: make check on Pi OS arm64
         run: scripts/dev/pi-os-ci/run.sh check ${{ matrix.mode }}
       - name: Pi OS journal
