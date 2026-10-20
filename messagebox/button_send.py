@@ -66,7 +66,9 @@ from messagebox import cloud_runtime, cloud_claim, cloud_quiet, message_age, sou
 from messagebox.cloud_runtime import CloudRuntimeError
 
 
-MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
+# An I2S box records from a processed ALSA PCM (left channel, fixed gain);
+# MSGBOX_MIC_DEV then names the raw card for health checks.
+MIC_DEV = os.environ.get("MSGBOX_MIC_PCM") or os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
 SPK_DEV = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device_1,DEV=0")
 SPEAKER_CARD = os.environ.get("MSGBOX_SPEAKER_CARD", "Device")
 SPEAKER_CONTROL = os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM")

@@ -3,6 +3,7 @@
 # It sends only installation inputs to a temporary directory on the Pi, then
 # runs setup.sh there. The installed runtime uses fixed system paths.
 # Usage: ./scripts/provision.sh user@host
+#        MSGBOX_MIC_TYPE=i2s ./scripts/provision.sh user@host  (INMP441 microphone)
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -12,6 +13,11 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 TARGET=$1
+MIC_TYPE=${MSGBOX_MIC_TYPE:-usb}
+case "$MIC_TYPE" in
+  usb|i2s) ;;
+  *) echo "MSGBOX_MIC_TYPE must be usb or i2s" >&2; exit 2 ;;
+esac
 
 case "$TARGET" in
   -*|*[!A-Za-z0-9._@-]*)
@@ -122,4 +128,4 @@ rsync -azR \
 
 echo "Running setup on $TARGET"
 ssh -t "$TARGET" \
-  "MESSAGEBOX_SSH_TARGET='$TARGET' '$REMOTE_SOURCE/scripts/setup.sh'"
+  "MESSAGEBOX_SSH_TARGET='$TARGET' MSGBOX_MIC_TYPE='$MIC_TYPE' '$REMOTE_SOURCE/scripts/setup.sh'"

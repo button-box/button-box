@@ -23,6 +23,14 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
+# MSGBOX_MIC_TYPE=i2s ./scripts/setup.sh prepares an INMP441 I2S microphone
+# (see docs/i2s-microphone.md). Unset keeps the USB microphone.
+MIC_TYPE=${MSGBOX_MIC_TYPE:-usb}
+case "$MIC_TYPE" in
+  usb|i2s) ;;
+  *) echo "MSGBOX_MIC_TYPE must be usb or i2s" >&2; exit 1 ;;
+esac
+I2S_REBOOT=0
 PACKAGE_PYTHON="__init__.py device_http.py software.py cloud_update.py maintenance.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py message_age.py played_history.py
 nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
@@ -181,7 +189,7 @@ if sudo test -L "$CONFIG_DIR/env" || {
 fi
 if ! sudo test -e "$CONFIG_DIR/env"; then
   GENERATED_ENV=$(mktemp)
-  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" \
+  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" --mic-type "$MIC_TYPE" \
     "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
 fi
 
@@ -375,6 +383,14 @@ MODE_GENERATOR_STAGE=
 sudo install -d -o root -g root -m 0755 /usr/lib/messagebox
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/scripts/install/audio_config.py" /usr/lib/messagebox/audio_config.py
+if [ "$MIC_TYPE" = i2s ]; then
+  # Fails before any change when a box pin uses an I2S GPIO.
+  i2s_output=$(sudo /usr/bin/python3 /usr/lib/messagebox/audio_config.py --set-mic-type i2s)
+  printf '%s\n' "$i2s_output"
+  case "$i2s_output" in
+    *reboot*) I2S_REBOOT=1 ;;
+  esac
+fi
 for name in messagebox-button messagebox-sync messagebox-poller messagebox-dash messagebox-audio-detect; do
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/$name.service" "/etc/systemd/system/$name.service"
@@ -516,3 +532,10 @@ printf '%s\n' \
   '  Do not complete the browser flow. The recipient does that' \
   '  after powering on the box.' \
   '============================================================'
+if [ "$I2S_REBOOT" = 1 ]; then
+  printf '%s\n' \
+    'I2S MICROPHONE' \
+    '  /boot/firmware/config.txt changed. Reboot before any audio test:' \
+    '    sudo reboot' \
+    '============================================================'
+fi
