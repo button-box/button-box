@@ -113,7 +113,7 @@ esac
         self.assertEqual(
             ssh_calls[1],
             "CALL\t-t\tadmin@message-box.local\t"
-            "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
+            "MESSAGEBOX_SSH_TARGET='admin@message-box.local' MSGBOX_MIC_TYPE='usb' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
         self.assertEqual(

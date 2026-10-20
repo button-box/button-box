@@ -53,6 +53,10 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
    hot-plug recovery and choosing among multiple microphones/speakers are not
    guaranteed; power down before moving devices and repeat the physical check.
 
+   A box with an INMP441 I2S microphone on the GPIO header uses
+   `MSGBOX_MIC_TYPE=i2s`; see [I2S microphone](i2s-microphone.md). The USB
+   detection above ignores the I2S card.
+
    The Pi needs internet access during setup. See
    [Internet access for a fresh card](developer-onboarding.md#internet-access-for-a-fresh-card).
    For an optionally shipped box that needs private, consented remote

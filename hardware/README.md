@@ -34,6 +34,10 @@ jumper positions. A HiLetgo build needs soldering and its own pin mapping.
 
 The parts above are the reference build. Other USB speakers and microphones, and other GPIO-connected buttons, may work electrically and with the software, but each substitution is unvalidated. The printable enclosure was designed for the parts in this list. If you change the speaker, microphone, or another part, the 3D-print designs may need a revision; do not assume the substitute will fit the same case.
 
+For an INMP441 I2S microphone on the GPIO header instead of a USB
+microphone, see [I2S microphone](../docs/i2s-microphone.md). It needs NFC
+reset/request pins other than `D20`/`D16`.
+
 ## Community wiring diagram
 
 This community-contributed diagram shows a Raspberry Pi 40-pin header, an
