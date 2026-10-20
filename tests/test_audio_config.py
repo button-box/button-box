@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,6 +77,7 @@ class AudioConfigTests(unittest.TestCase):
                 # Give each order its own fake /sys/class/sound tree.
                 self.sound_root = self.root / str(mic) / 'class/sound'
                 self.sound_root.mkdir(parents=True)
+                self.add_capture(0, 0, audio_config.I2S_CARD)
                 self.add_capture(speaker, 0, 'UACDemoV10', usb=True)
                 self.add_playback(speaker, 1, 'UACDemoV10', usb=True)
                 self.add_capture(mic, 0, 'UACDemoV10_1', usb=True)
@@ -175,6 +177,166 @@ class AudioConfigTests(unittest.TestCase):
                 audio_config.write_atomic(path, "new\n")
         self.assertEqual(path.read_text(), "previous\n")
         self.assertEqual(list(self.root.glob(".audio.env.*")), [])
+
+    def test_usb_box_never_selects_the_i2s_card(self):
+        self.add_capture(0, 0, audio_config.I2S_CARD)
+        self.add_capture(2, 0, "mic")
+        self.assertEqual(audio_config.detect_microphone(self.sound_root),
+                         ("mic", "plughw:CARD=mic,DEV=0"))
+
+        (self.sound_root / "pcmC2D0c").unlink()
+        with self.assertRaisesRegex(audio_config.AudioConfigError, "connect a microphone"):
+            audio_config.detect_microphone(self.sound_root)
+
+    def test_i2s_box_uses_only_the_i2s_card(self):
+        self.add_capture(0, 0, "mic")
+        with self.assertRaisesRegex(audio_config.AudioConfigError, "I2S microphone not detected"):
+            audio_config.detect_microphone(self.sound_root, kind="i2s")
+
+        self.add_capture(3, 0, audio_config.I2S_CARD)
+        self.assertEqual(
+            audio_config.detect_microphone(self.sound_root, kind="i2s"),
+            ("sndrpigooglevoi", "plughw:CARD=sndrpigooglevoi,DEV=0"),
+        )
+
+    def test_mic_type_defaults_to_usb_and_rejects_unknown_values(self):
+        self.assertEqual(audio_config.mic_type({}), "usb")
+        self.assertEqual(audio_config.mic_type({"MSGBOX_MIC_TYPE": ""}), "usb")
+        self.assertEqual(audio_config.mic_type({"MSGBOX_MIC_TYPE": "i2s"}), "i2s")
+        with self.assertRaisesRegex(audio_config.AudioConfigError, "usb, i2s"):
+            audio_config.mic_type({"MSGBOX_MIC_TYPE": "gpio"})
+
+    def test_existing_env_without_mic_type_stays_usb(self):
+        env = self.root / "env"
+        env.write_text("MSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\n# MSGBOX_MIC_TYPE=i2s\n")
+        self.assertEqual(audio_config.configured_mic_type(env, self.root / "absent.conf"), "usb")
+        self.assertEqual(audio_config.configured_mic_type(self.root / "missing-env"), "usb")
+
+    def test_i2s_type_requires_installed_alsa_config(self):
+        env = self.root / "env"
+        env.write_text("MSGBOX_MIC_TYPE=i2s\n")
+        alsa = self.root / "mic.conf"
+        with self.assertRaisesRegex(audio_config.AudioConfigError, "--set-mic-type i2s"):
+            audio_config.configured_mic_type(env, alsa)
+        alsa.write_text(audio_config.render_i2s_alsa_config())
+        self.assertEqual(audio_config.configured_mic_type(env, alsa), "i2s")
+
+    def test_i2s_runtime_output_adds_processed_pcm_and_keeps_raw_device(self):
+        rendered = audio_config.render_runtime_environment(
+            audio_config.I2S_CARD, audio_config.I2S_DEVICE, "Speaker",
+            "plughw:CARD=Speaker,DEV=0", "i2s",
+        )
+        self.assertEqual(rendered.splitlines(), [
+            # The fixed updater health check accepts only plughw:CARD=...,DEV=...
+            "MSGBOX_MIC_DEV=plughw:CARD=sndrpigooglevoi,DEV=0",
+            "MSGBOX_SPK_DEV=plughw:CARD=Speaker,DEV=0",
+            "MSGBOX_MIC_CARD=sndrpigooglevoi",
+            "MSGBOX_SPEAKER_CARD=Speaker",
+            "MSGBOX_MIC_PCM=buttonbox_mic",
+        ])
+
+    def test_boot_detection_writes_i2s_pcm_and_removes_it_when_switched_to_usb(self):
+        output = self.root / "audio.env"
+        for kind, card in (("i2s", audio_config.I2S_CARD), ("usb", "mic")):
+            with self.subTest(kind=kind), \
+                 mock.patch.object(audio_config, "configured_mic_type", return_value=kind), \
+                 mock.patch.object(audio_config, "detect_microphone",
+                                   return_value=(card, f"plughw:CARD={card},DEV=0")) as detect, \
+                 mock.patch.object(audio_config, "detect_speaker",
+                                   return_value=("Speaker", "plughw:CARD=Speaker,DEV=0")):
+                self.assertEqual(audio_config.main(["--runtime-output", str(output)]), 0)
+                detect.assert_called_once_with(kind=kind)
+                self.assertIn(f"MSGBOX_MIC_DEV=plughw:CARD={card},DEV=0\n", output.read_text())
+                self.assertEqual("MSGBOX_MIC_PCM=buttonbox_mic\n" in output.read_text(), kind == "i2s")
+
+    def test_i2s_alsa_config_takes_left_channel_with_bounded_gain(self):
+        config = audio_config.render_i2s_alsa_config()
+        self.assertIn("pcm.buttonbox_mic {", config)
+        self.assertIn("card sndrpigooglevoi", config)
+        self.assertIn("format S32_LE", config)
+        self.assertIn("slave.rate 48000", config)
+        self.assertIn("ttable.0.0 31.6228", config)
+        self.assertNotIn("ttable.1", config)
+        self.assertIn("ttable.0.0 10.0000", audio_config.render_i2s_alsa_config(20))
+        for gain in (-1, 41):
+            with self.subTest(gain=gain), self.assertRaisesRegex(audio_config.AudioConfigError, "0 to 40 dB"):
+                audio_config.render_i2s_alsa_config(gain)
+
+    def make_i2s_box(self, pins="MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D27\n"):
+        env = self.root / "env"
+        env.write_text("MSGBOX_MIC_TYPE=usb\nMSGBOX_BUTTON_PIN=17\n" + pins)
+        env.chmod(0o640)
+        boot = self.root / "config.txt"
+        boot.write_text("dtparam=audio=on\n[cm4]\notg_mode=1")
+        alsa = self.root / "alsa" / "60-button-box-i2s-mic.conf"
+        return {"env_path": env, "boot_config": boot, "alsa_config": alsa}
+
+    def test_set_mic_type_i2s_is_idempotent_and_keeps_env_lines_and_mode(self):
+        paths = self.make_i2s_box()
+        self.assertTrue(audio_config.set_mic_type("i2s", 33, **paths))
+        boot = paths["boot_config"].read_text()
+        self.assertTrue(boot.startswith("dtparam=audio=on\n[cm4]\notg_mode=1\n"))
+        # [all] keeps the overlay out of the preceding model-specific section.
+        self.assertIn("\n[all]\ndtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n", boot)
+        self.assertIn("ttable.0.0 44.6684", paths["alsa_config"].read_text())
+        env = paths["env_path"]
+        self.assertEqual(env.read_text(), "MSGBOX_MIC_TYPE=i2s\nMSGBOX_BUTTON_PIN=17\n"
+                         "MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D27\n")
+        self.assertEqual(env.stat().st_mode & 0o777, 0o640)
+
+        self.assertFalse(audio_config.set_mic_type("i2s", **paths))
+        self.assertEqual(paths["boot_config"].read_text(), boot)
+        self.assertIn("ttable.0.0 31.6228", paths["alsa_config"].read_text())
+
+    def test_set_mic_type_i2s_keeps_an_overlay_enabled_by_hand(self):
+        paths = self.make_i2s_box()
+        manual = "dtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n"
+        paths["boot_config"].write_text(manual)
+        self.assertFalse(audio_config.set_mic_type("i2s", **paths))
+        self.assertEqual(paths["boot_config"].read_text(), manual)
+
+    def test_set_mic_type_i2s_refuses_conflicting_pins_without_changes(self):
+        # Missing NFC pins mean the code defaults D20/D16, which I2S uses.
+        paths = self.make_i2s_box(pins="")
+        env, boot = paths["env_path"].read_text(), paths["boot_config"].read_text()
+        with self.assertRaisesRegex(audio_config.AudioConfigError,
+                                    "MSGBOX_NFC_RESET_PIN=D20, MSGBOX_NFC_REQUEST_PIN=D16"):
+            audio_config.set_mic_type("i2s", **paths)
+        self.assertEqual(paths["env_path"].read_text(), env)
+        self.assertEqual(paths["boot_config"].read_text(), boot)
+        self.assertFalse(paths["alsa_config"].exists())
+
+    def test_each_reserved_gpio_is_refused_for_every_box_pin(self):
+        for key in audio_config.PIN_SETTINGS:
+            for pin in (16, 18, 19, 20, 21):
+                for prefix in ("", "D", "GPIO"):
+                    with self.subTest(key=key, pin=pin, prefix=prefix):
+                        settings = {"MSGBOX_NFC_RESET_PIN": "D4",
+                                    "MSGBOX_NFC_REQUEST_PIN": "D27", key: f"{prefix}{pin}"}
+                        self.assertEqual(audio_config.i2s_pin_conflicts(settings),
+                                         [f"{key}={prefix}{pin}"])
+
+    def test_set_mic_type_usb_reverses_the_i2s_switch(self):
+        paths = self.make_i2s_box()
+        original_boot = paths["boot_config"].read_text()
+        audio_config.set_mic_type("i2s", **paths)
+        self.assertTrue(audio_config.set_mic_type("usb", **paths))
+        self.assertEqual(paths["boot_config"].read_text(), original_boot + "\n")
+        self.assertFalse(paths["alsa_config"].exists())
+        self.assertIn("MSGBOX_MIC_TYPE=usb\n", paths["env_path"].read_text())
+        self.assertFalse(audio_config.set_mic_type("usb", **paths))
+
+    def test_setup_template_for_i2s_does_not_need_the_card_before_reboot(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(audio_config, "detect_microphone", side_effect=AssertionError),
+            mock.patch.object(audio_config, "detect_speaker", return_value=("Speaker", "plughw:CARD=Speaker,DEV=0")),
+            mock.patch("sys.stdout", output),
+        ):
+            self.assertEqual(audio_config.main(
+                ["--mic-type", "i2s", str(ROOT / "config" / "env.example")]), 0)
+        self.assertIn("MSGBOX_MIC_TYPE=i2s\n", output.getvalue())
+        self.assertIn("MSGBOX_MIC_DEV=plughw:CARD=sndrpigooglevoi,DEV=0\n", output.getvalue())
 
     def test_poller_loads_optional_detected_audio_after_canonical_environment(self):
         unit = (ROOT / "systemd" / "messagebox-poller.service").read_text(encoding="utf-8")

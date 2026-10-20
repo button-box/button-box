@@ -6,6 +6,7 @@ import ast
 import contextlib
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import threading
@@ -114,6 +115,50 @@ class MicAccessTests(unittest.TestCase):
             process.kill.assert_called_once()
             led.off.assert_called_once()
             self.assertFalse(runtime._recording)
+
+    def test_guided_hold_tap_and_setup_reply_use_configured_pcm_in_both_transports(self):
+        import os
+        import tempfile
+
+        def configured_device(environment):
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.dict(sys.modules, {"gpiozero": types.SimpleNamespace(Button=object, LED=object)}):
+                return runpy.run_path(str(ROOT / "messagebox/button_send.py"))["MIC_DEV"]
+
+        for mode in ("cloud", "wacli"):
+            for pcm in (None, "", "buttonbox_mic"):
+                raw_device = ("plughw:CARD=sndrpigooglevoi,DEV=0" if pcm
+                              else "plughw:CARD=mic,DEV=0")
+                environment = {"MSGBOX_TRANSPORT": mode, "MSGBOX_MIC_DEV": raw_device}
+                if pcm is not None:
+                    environment["MSGBOX_MIC_PCM"] = pcm
+                device = configured_device(environment)
+                self.assertEqual(device, pcm or raw_device)
+                for talk_mode, setup in (("hold", False), ("tap", False), ("tap", True)):
+                    with self.subTest(mode=mode, pcm=pcm, talk=talk_mode, setup=setup), \
+                         tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                        permit = stack.enter_context(runtime.capture_session(types.SimpleNamespace(is_pressed=True)))
+                        for name, value in (("MIC_DEV", device), ("TEMP_DIR", directory),
+                                            ("button", types.SimpleNamespace(is_pressed=True)),
+                                            ("led", mock.Mock()), ("_capture_permit", permit)):
+                            stack.enter_context(mock.patch.object(runtime, name, value, create=True))
+                        stack.enter_context(mock.patch.object(runtime, "transport_mode", return_value=mode))
+                        stack.enter_context(mock.patch.object(runtime, "recording_start", return_value=contextlib.nullcontext()))
+                        stack.enter_context(mock.patch.object(runtime, "presence", side_effect=OSError("capture boundary")))
+                        process = mock.Mock()
+                        process.poll.return_value = None
+                        spawn = stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", return_value=process))
+                        io = runtime.PiGuidedIO("person@example.invalid", "session", 60, talk_mode=talk_mode)
+                        io.setup_reply = setup
+                        with self.assertRaisesRegex(OSError, "capture boundary"):
+                            io.record()
+                        self.assertEqual(spawn.call_args.args[0],
+                                         ["arecord", "-q", "-D", device, "-t", "raw", "-f", "S16_LE",
+                                          "-r", "16000", "-c", "1"])
+                        process.terminate.assert_called_once()
+                        self.assertFalse(runtime._recording)
+
+        self.assertEqual(configured_device({}), "plughw:CARD=Device,DEV=0")
 
     def test_only_reviewed_sources_can_open_capture(self):
         # Fail on new capture tools/backends throughout shipped code and helpers.

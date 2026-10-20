@@ -47,6 +47,7 @@ class HealthProbeTests(unittest.TestCase):
         audio = self.root / 'run/messagebox-audio/audio.env'
         audio.parent.mkdir(parents=True)
         audio.write_text('MSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\nMSGBOX_SPK_DEV=plughw:CARD=speaker,DEV=0\n')
+        self.microphone_card = 'mic'
         update.save_state(self.root, 'journal.json', self.journal)
         self.commands = []
         self.timer = mock.patch.object(update.time, 'monotonic', return_value=30)
@@ -64,8 +65,8 @@ class HealthProbeTests(unittest.TestCase):
         assert command[:4] == ['runuser', '-u', 'messagebox', '--'], command
         if command[4] in {'arecord', 'aplay'}:
             assert command[5:] == ['-l'], command
-            card = 'mic' if command[4] == 'arecord' else 'speaker'
-            return subprocess.CompletedProcess(command, 0, f'card 1: {card} [USB], device 0: USB\n')
+            card = self.microphone_card if command[4] == 'arecord' else 'speaker'
+            return subprocess.CompletedProcess(command, 0, f'card 1: {card} [Synthetic audio], device 0: synthetic\n')
         assert command[4] == 'test' and command[5] in {'-r', '-w'}, command
         return subprocess.CompletedProcess(command, 0, '')
 
@@ -86,6 +87,36 @@ class HealthProbeTests(unittest.TestCase):
                 self.assertIn('PASS hash:sample.py', output.getvalue())
         self.assertEqual(snapshot(), before)
         self.assertTrue(self.commands)
+
+    def test_i2s_raw_card_passes_current_and_frozen_updater_probes_without_capture(self):
+        self.microphone_card = 'sndrpigooglevoi'
+        audio = self.root / 'run/messagebox-audio/audio.env'
+        audio.write_text('MSGBOX_MIC_DEV=plughw:CARD=sndrpigooglevoi,DEV=0\n'
+                         'MSGBOX_MIC_PCM=buttonbox_mic\n'
+                         'MSGBOX_SPK_DEV=plughw:CARD=speaker,DEV=0\n')
+        source_root = Path(__file__).resolve().parents[1]
+        for version, directory in (
+                ('1.3.0', source_root / 'scripts/install'),
+                ('1.1.0', source_root / 'tests/fixtures/field-updater/shared/scripts/install')):
+            with self.subTest(controller=version):
+                spec = importlib.util.spec_from_file_location('i2s_worker', directory / 'bounded_update.py')
+                worker = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(worker)
+                spec = importlib.util.spec_from_file_location('i2s_probe', directory / 'health-probe.py')
+                health = importlib.util.module_from_spec(spec)
+                with mock.patch.dict(sys.modules, {'bounded_update': worker}):
+                    spec.loader.exec_module(health)
+                for arguments in ([], ['--current']):
+                    self.commands.clear()
+                    with mock.patch.object(worker, '_boot', return_value='test-boot'), \
+                         contextlib.redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(health.main(arguments, root=self.root, run=self.system_read), 0)
+                    for name in ('configured', 'enumerated', 'readable', 'writable'):
+                        self.assertIn('PASS audio:MSGBOX_MIC_DEV:' + name, output.getvalue())
+                    self.assertIn(['runuser', '-u', 'messagebox', '--', 'test', '-r', '/dev/snd/pcmC1D0c'],
+                                  self.commands)
+                    self.assertEqual([command for command in self.commands if 'arecord' in command],
+                                     [['runuser', '-u', 'messagebox', '--', 'arecord', '-l']])
 
     def test_failed_fields_are_bounded_codes_without_evidence_values(self):
         self.write_evidence('heartbeat', {**self.evidence, 'boot': 'private-value', 'monotonic': -1})

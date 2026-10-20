@@ -99,5 +99,18 @@ class HardwareTestConfigTests(unittest.TestCase):
         )
 
 
+    def test_i2s_microphone_records_through_processed_pcm(self):
+        self.runtime_audio_config_file.write_text(
+            "MSGBOX_MIC_DEV=plughw:CARD=sndrpigooglevoi,DEV=0\n"
+            "MSGBOX_SPK_DEV=plughw:CARD=detected_speaker,DEV=2\n"
+            "MSGBOX_MIC_PCM=buttonbox_mic\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            self.resolve_config(),
+            ["buttonbox_mic", "plughw:CARD=detected_speaker,DEV=2"],
+        )
+
 if __name__ == "__main__":
     unittest.main()

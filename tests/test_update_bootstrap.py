@@ -177,9 +177,11 @@ elif name=='bench-os-helper':
 elif name=='python3':
     if args[0].endswith('audio_config.py'):
         sys.path.insert(0,str(repo/'scripts/install'))
-        from audio_config import render_environment
-        print(render_environment(Path(args[1]).read_text(),'mic','plughw:CARD=mic,DEV=0',
-                                 'Device','plughw:CARD=Device,DEV=0'),end='')
+        from audio_config import main
+        from unittest.mock import patch
+        with patch('audio_config.detect_microphone',return_value=('mic','plughw:CARD=mic,DEV=0')), \
+             patch('audio_config.detect_speaker',return_value=('Device','plughw:CARD=Device,DEV=0')):
+            raise SystemExit(main(args[1:]))
     elif args[0].endswith('messagebox-mode-migrate.py') or args[:2]==['-m','messagebox.wifi_watchdog']:
         pass
     else: os.execv(sys.executable,[sys.executable,*args])

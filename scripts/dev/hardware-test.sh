@@ -30,6 +30,9 @@ audio_config_value() {
 
 MIC_DEV=${MSGBOX_MIC_DEV:-$(audio_config_value MSGBOX_MIC_DEV)}
 MIC_DEV=${MIC_DEV:-plughw:CARD=mic,DEV=0}
+# An I2S microphone records through its processed ALSA PCM, as the button does.
+MIC_PCM=${MSGBOX_MIC_PCM:-$(audio_config_value MSGBOX_MIC_PCM)}
+MIC_DEV=${MIC_PCM:-$MIC_DEV}
 SPK_DEV=${MSGBOX_SPK_DEV:-$(audio_config_value MSGBOX_SPK_DEV)}
 SPK_DEV=${SPK_DEV:-plughw:CARD=Device,DEV=0}
 BUTTON_PIN=${MSGBOX_BUTTON_PIN:-$(config_value "$CONFIG_FILE" MSGBOX_BUTTON_PIN)}

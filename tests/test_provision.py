@@ -50,11 +50,12 @@ esac
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run(self, target, *, prompt_dir=None):
+    def _run(self, target, *, prompt_dir=None, mic_type="usb"):
         env = os.environ.copy()
         env.update(
             {
                 "PATH": f"{self.bin_dir}:{env['PATH']}",
+                "MSGBOX_MIC_TYPE": mic_type,
                 "SSH_LOG": str(self.ssh_log),
                 "RSYNC_LOG": str(self.rsync_log),
             }
@@ -70,7 +71,7 @@ esac
         )
 
     def test_stages_only_pi_installation_inputs_and_cleans_up(self):
-        result = self._run("admin@message-box.local")
+        result = self._run("user@host")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         rsync_calls = [line.split("\t") for line in self.rsync_log.read_text().splitlines()]
@@ -79,7 +80,7 @@ esac
         self.assertEqual(rsync_args[0], "-azR")
         self.assertEqual(
             rsync_args[-1],
-            "admin@message-box.local:/tmp/messagebox-provision.test/",
+            "user@host:/tmp/messagebox-provision.test/",
         )
         self.assertTrue(
             all(not os.path.isabs(path) for path in rsync_args[1:-1]),
@@ -111,17 +112,17 @@ esac
         self.assertEqual(len(ssh_calls), 3)
         self.assertEqual(
             ssh_calls[0],
-            "CALL\tadmin@message-box.local\tmktemp -d /tmp/messagebox-provision.XXXXXX",
+            "CALL\tuser@host\tmktemp -d /tmp/messagebox-provision.XXXXXX",
         )
         self.assertEqual(
             ssh_calls[1],
-            "CALL\t-t\tadmin@message-box.local\t"
-            "MESSAGEBOX_SSH_TARGET='admin@message-box.local' "
+            "CALL\t-t\tuser@host\t"
+            "MESSAGEBOX_SSH_TARGET='user@host' MSGBOX_MIC_TYPE='usb' "
             "'/tmp/messagebox-provision.test/scripts/setup.sh'",
         )
         self.assertEqual(
             ssh_calls[2],
-            "CALL\tadmin@message-box.local\trm -rf -- '/tmp/messagebox-provision.test'",
+            "CALL\tuser@host\trm -rf -- '/tmp/messagebox-provision.test'",
         )
 
     def test_missing_sound_pack_fails_before_connecting(self):
@@ -129,7 +130,7 @@ esac
         for area in ("scripts", "messagebox", "sounds"):
             shutil.copytree(ROOT / area, repo / area)
         (repo / "sounds/cues/cue-press.wav").unlink()
-        result = self._run("admin@message-box.local", prompt_dir=repo / "scripts/provision.sh")
+        result = self._run("user@host", prompt_dir=repo / "scripts/provision.sh")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing or invalid cues sound pack", result.stderr)
         self.assertFalse(self.ssh_log.exists())
@@ -140,6 +141,18 @@ esac
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("Invalid SSH target", result.stderr)
+        self.assertFalse(self.ssh_log.exists())
+        self.assertFalse(self.rsync_log.exists())
+
+    def test_i2s_type_is_forwarded_to_setup(self):
+        result = self._run("user@host", mic_type="i2s")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MSGBOX_MIC_TYPE='i2s'", self.ssh_log.read_text())
+
+    def test_invalid_mic_type_fails_before_external_commands(self):
+        result = self._run("user@host", mic_type="unsupported")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("MSGBOX_MIC_TYPE must be usb or i2s", result.stderr)
         self.assertFalse(self.ssh_log.exists())
         self.assertFalse(self.rsync_log.exists())
 
