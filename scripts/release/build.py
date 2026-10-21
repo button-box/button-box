@@ -101,7 +101,7 @@ def controller_descriptor(root, sequence, minimum):
         changes = [{'path': path, 'size': len(raw), 'mode': 0o644, 'sha256': hashlib.sha256(raw).hexdigest()}
                    for path, raw in sorted(RECOVERY_DROPINS.items())]
         value.update(schema=2, unit_changes=changes,
-                     recovery={'protocol': 1, 'helper_version': '1.0.0', 'files': files})
+                     recovery={'protocol': 1, 'helper_version': '1.1.0', 'files': files})
     raw = (pprint.pformat(value, sort_dicts=True, width=100) + '\n').encode('ascii')
     parse_controller_descriptor(raw)
     return raw

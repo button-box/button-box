@@ -246,3 +246,34 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
         step('effective_units', 'systemd')
         recovery.save(root, recovery.STATE + '/journal.json', {'schema': 1, 'kind': 'bootstrap', 'phase': 'armed'}, step=step)
     return state
+
+
+def promote(root=Path('/'), *, platform=None, run=subprocess.run, **boundaries):
+    """Explicit internal entry point; no OTA trigger or network admission here.
+
+    Authenticate captured candidate helper bytes before execution. The helper
+    rechecks proof under the transaction locks and installs its own two slots.
+    """
+    root = Path(root)
+    # Recover any prior transaction before candidate admission. This is the
+    # same immutable launcher entry point used by the boot/supervisor hooks.
+    recovery.launch(root)
+    with recovery.locks(root):
+        relative, identity = application(root)
+        verify, trust = recovery.anchors(root)
+        trust.recover_trust(root / recovery.TRUST, root / 'var/lib/button-box-update')
+        proof = verify.verify_retained_controller(
+            root / relative, root / recovery.TRUST / 'release-keys', application_version=identity['version'],
+            platform=platform or verify.local_platform())
+        state = recovery.validate_state(recovery.document(root, recovery.STATE + '/state.json'))
+        admission(proof, state['accepted'])
+        entry = next(item for item in proof['descriptor']['recovery']['files']
+                     if item['path'] == 'messagebox/recovery_helper.py')
+        raw = recovery.read(root, relative + '/' + entry['path'], mode=entry['mode'])
+        if recovery.sha(raw) != entry['sha256'] or len(raw) != entry['size']:
+            raise recovery.RecoveryError('candidate_helper_changed')
+        namespace = {'__name__': 'verified_promotion_helper'}
+        exec(compile(raw, '<verified-promotion-helper>', 'exec'), namespace)
+    return namespace['promote']({'root': root, 'release': relative, 'platform': platform or verify.local_platform(),
+                                 'helper_sha256': entry['sha256'], 'descriptor_sha256': proof['descriptor_sha256']},
+                                run=run, **boundaries)

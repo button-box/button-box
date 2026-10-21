@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BuiltFieldPayload(unittest.TestCase):
     def test_actual_checkout_package_installs_with_all_four_frozen_workers(self):
+        self.exercise_built_payload()
+
+    def exercise_built_payload(self, *, after_install=None, versions=None):
         # Frozen bounded_update.py:1804-1844,1882-1923;
         # update_controller.py:579-590,611-619. Nothing in the archive is replaced
         # by FieldBox's synthetic mapper, validator, modules or unit set.
@@ -59,7 +62,7 @@ class BuiltFieldPayload(unittest.TestCase):
             # created. A production build instead enforces a clean stationary tag.
             for name, mode in payload.items():
                 write(checkout / name, (ROOT / name).read_bytes(), mode)
-            raw = build.controller_descriptor(checkout, 1, 'v0.3.13')
+            raw = build.controller_descriptor(checkout, 7, 'v0.3.13')
             write(checkout / build.CONTROLLER_DESCRIPTOR, raw)
             public, secret = root / 'test.pub', root / 'test.key'
             subprocess.run(['minisign', '-G', '-W', '-p', str(public), '-s', str(secret)],
@@ -77,7 +80,7 @@ class BuiltFieldPayload(unittest.TestCase):
             assets = root / 'assets'
             build.package(checkout, assets, manifest, payload, 0)
             original = {p.name: digest(p) for p in assets.iterdir()}
-            for version in PROVENANCE['releases']:
+            for version in versions or PROVENANCE['releases']:
                 with self.subTest(version=version):
                     box = FieldBox(root / version, version)
                     previous = os.umask(0o002)
@@ -110,6 +113,16 @@ class BuiltFieldPayload(unittest.TestCase):
                     recovery_bootstrap.bootstrap(box.root, platform={
                         'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'}, run=systemd)
                     self.assertEqual(recovery_launcher.launch(box.root), 'current')
+                    if after_install is not None:
+                        after_install(box)
+                    else:
+                        from test_controller_promotion import UpdaterHost, host_exchange
+                        host = UpdaterHost(box.root)
+                        result = recovery_bootstrap.promote(box.root, platform={
+                            'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'},
+                            run=host, exchange=host_exchange, handshake=host.handshake)
+                        self.assertEqual(result['state'], 'committed')
+                        self.assertEqual(host.identity()['version'], '1.3.0')
             # The helper must pass through the builder's SHA256SUMS; it must
             # not silently repackage or repair damaged build output.
             rejected = FieldBox(root / 'damaged')

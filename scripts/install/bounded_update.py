@@ -1790,8 +1790,11 @@ def sustain_health(root, journal, run=subprocess.run, *, sample=health_sample,
 def install_transaction(source_root, manifest_path, *, operation_id=None, root=Path('/'),
                         run=subprocess.run, health=sustain_health, sequence=None, allow_setup=False):
     import uuid
+    from release_verify import promotion_inhibited
     root = Path(root).resolve()
     with transaction_locks(root) as locks:
+        if promotion_inhibited(root):
+            raise UpdateError('promotion_inhibited')
         pending = read_state(root, 'journal.json')
         if pending and pending['phase'] not in {'committed', 'rolled_back'}:
             raise UpdateError('recovery_required')

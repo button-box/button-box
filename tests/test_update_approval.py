@@ -63,6 +63,7 @@ class PolicyTests(unittest.TestCase):
         self.clock = Clock()
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(controller, 'ROOT', self.root))
         self.stack.enter_context(mock.patch.object(controller, 'read', side_effect=lambda name, default=None: controller.update.read_state(self.root, name, default)))
         self.stack.enter_context(mock.patch.object(controller, 'save', side_effect=lambda name, value, mode=0o600: controller.update.save_state(self.root, name, value, mode)))
         self.stack.enter_context(mock.patch.object(controller.time, 'monotonic', side_effect=self.clock.monotonic))

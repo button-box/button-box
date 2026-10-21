@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from release_verify import MAX_ARCHIVE, TAG, ReleaseError, local_platform, verify_bundle
+from release_verify import MAX_ARCHIVE, TAG, ReleaseError, local_platform, verify_bundle, promotion_inhibited
 from trust_update import MAX_TRUST, TRUST_TAG, verify_trust
 
 API = 'https://api.github.com/repos/button-box/button-box/releases'
@@ -303,7 +303,27 @@ class Discovery:
                 child.unlink()
 
 
+def self_test():
+    import io
+    import tempfile
+    class Response(io.BytesIO):
+        headers = {}
+    def offline(request, *, timeout):
+        if request.full_url != API or timeout != 30:
+            raise DownloadError('dry_run_contract')
+        return Response(b'[]')
+    with tempfile.TemporaryDirectory(prefix='messagebox-discovery-test-') as directory:
+        if Discovery(directory, opener=offline, clock=lambda: 0).json(API) != []:
+            raise DownloadError('dry_run_contract')
+    return {'protocol': 1, 'dry_run': True}
+
+
 def main():
+    if sys.argv[1:] == ['--self-test']:
+        print(json.dumps(self_test(), sort_keys=True))
+        return 0
+    if promotion_inhibited(journal=False):
+        return 0
     # Import the pinned bootstrap client, not the candidate application.
     import socket
 

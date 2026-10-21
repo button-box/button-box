@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
-UPDATER_VERSION = (1, 1, 0)
+UPDATER_VERSION = (1, 3, 0)
 TAG = re.compile(r"(?=.{1,64}\Z)v[0-9]+\.[0-9]+\.[0-9]+(?:-canary\.[0-9]+)?\Z")
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024
@@ -403,3 +403,48 @@ def check_controller_compatibility(value, application_version, platform, *, floo
             or any(platform.get(field) not in value[key] for field, key in
                    (('os', 'supported_os'), ('architecture', 'supported_arch'), ('model', 'supported_models')))):
         raise ReleaseError('incompatible_controller')
+
+
+def promotion_inhibited(root=Path('/'), *, journal=True, owner=None):
+    """Read root-owned admission evidence; discovery needs only the public flag."""
+    root = Path(root)
+    if owner is None:
+        owner = 0 if root == Path('/') else os.geteuid()
+    paths = ['run/messagebox-update/promotion-inhibit.json']
+    if journal:
+        paths.append('var/lib/button-box-controller/journal.json')
+    for relative in paths:
+        descriptors = []
+        try:
+            descriptors.append(os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+            for part in (*PurePosixPath(relative).parts[:-1], None):
+                info = os.fstat(descriptors[-1])
+                if info.st_uid != owner or info.st_mode & 0o022:
+                    return True
+                if part is not None:
+                    descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                               dir_fd=descriptors[-1]))
+            fd = os.open(PurePosixPath(relative).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=descriptors[-1])
+            descriptors.append(fd)
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_nlink != 1
+                    or info.st_mode & 0o022 or info.st_size > 16384):
+                return True
+            raw = os.read(fd, 16385)
+            if len(raw) != info.st_size:
+                return True
+            value = json.loads(raw)
+            if relative.endswith('promotion-inhibit.json'):
+                return True
+            if value.get('kind') == 'controller' and value.get('phase') not in {
+                    'committed', 'restored', 'unsupported', 'aborted'}:
+                return True
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, TypeError, AttributeError):
+            return True
+        finally:
+            for fd in reversed(descriptors):
+                os.close(fd)
+    return False

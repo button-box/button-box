@@ -222,10 +222,10 @@ class RecoverySupport(unittest.TestCase):
         write(self.root / 'etc/button-box-update/release-keys/test.pub', self.public.read_bytes())
         # The permanent launcher dispatches this future journal to the signed
         # helper. Protocol 1's current helper then refuses it; there is no bypass.
-        with self.assertRaisesRegex(ValueError, 'unsupported_recovery_state'):
+        with self.assertRaisesRegex(ValueError, 'invalid_promotion_journal'):
             launcher.launch(self.root)
         self.assertEqual(self.box.fixed_bytes(), self.old)
-        self.assertEqual(state['accepted']['helper_version'], '1.0.0')
+        self.assertEqual(state['accepted']['helper_version'], '1.1.0')
 
     def test_busy_lock_and_changed_anchor_do_not_enter_helper(self):
         self.prepare()

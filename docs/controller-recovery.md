@@ -1,202 +1,157 @@
-# Independent controller recovery: first bootstrap
+# Independent controller recovery and promotion
 
-This step installs recovery support. It does not exchange, promote, or restore a
-controller directory. The six fixed field modules remain unchanged. The active
-updater still reports version 1.1.0. The signed candidate describes controller
-protocol 1.3.0 and keeps `self_upgrade=False`.
+The permanent root launcher stays outside the active controller directory. It
+selects a signed helper and recovers the controller journal before the normal
+application recovery or supervisor command runs. The launcher bytes from the
+first bootstrap remain unchanged.
 
-## Files
+This step adds an internal promotion API. It adds no OTA trigger, Cloud permit,
+or new main unit. The later bridge must call this API after it commits the
+application. No manual action on a shipped box is part of this design.
 
-| Area | Files |
-|---|---|
-| New runtime support | `messagebox/recovery_launcher.py`, `messagebox/recovery_helper.py`, `messagebox/recovery_bootstrap.py` |
-| Verification and release | `scripts/install/release_verify.py`, `scripts/release/build.py`, `scripts/release/release.py`, `scripts/release/payload.txt` |
-| Installation allowlists | `scripts/setup.sh`, `scripts/provision.sh` |
-| Tests | `tests/test_recovery_support.py` (new), `tests/test_field_release_payload.py`, `tests/test_release_tooling.py`, `tests/test_release_manifest.py` |
-| Documentation | `docs/controller-recovery.md` (new), `docs/controller-descriptor.md`, `docs/on-box-updates.md`, `docs/releases.md` |
+## Trust and fixed paths
 
-## Payload and trust
-
-The release contains these ordinary application paths:
-
-- `messagebox/recovery_bootstrap.py`: first bootstrap from a committed release.
-- `messagebox/recovery_launcher.py`: source of the permanent root entry point.
-- `messagebox/recovery_helper.py`: versioned, self-contained helper, version 1.0.0.
-
-The frozen workers accept these `.py` paths. The release builder includes them
-in its explicit payload. Descriptor schema 2 signs their exact paths, sizes,
-modes and SHA-256 values in `recovery.files`. It also signs the six controller
-modules. `unit_changes` explicitly signs the two generated service drop-ins.
-Bootstrap compares their paths, sizes, modes and hashes before it installs
-support. `recovery.protocol` is 1. Schema 1 remains readable for old retained
-proof; it cannot initialize recovery support. The builder refuses a missing
-recovery file. Release checks reject missing or changed recovery bytes before
-publication.
-
-The old worker's authenticated application installation is the initial root
-trust boundary. Bootstrap requires its application journal to be committed,
-the journal identity to match the application pointer and release metadata,
-and the known-good pointer to name that release. It recovers pending trust
-replacement under the trust lock before it verifies the controller proof.
-
-The permanent verifier and trust code are copies from that authenticated
-release. Bootstrap checks their descriptor hashes before it installs them.
-Their hashes are retained in a root-owned anchor record. Later applications
-cannot replace these permanent files through this bootstrap API.
-
-Every helper selection checks the retained descriptor signature against current
-release pins. Emergency pins cannot sign helper code. The launcher reads and
-hashes all signed recovery files through no-follow descriptors. It executes the
-captured helper bytes that passed verification. It never imports helper code
-before verification or imports the active controller to perform verification.
-The helper has no application or neighboring-module imports.
-
-Separate controller key roles, emergency-pin rotation, approval thresholds and
-persistent emergency stop remain later work. This step does not complete
-promotion authorization.
-
-## Fixed paths and permissions
-
-All paths below are owned by root. Directories use mode 0755. Executable Python
-source and retained proof use mode 0644. State, journal and lock files use mode
-0600. No executable bit is needed: systemd invokes Python directly.
+All support directories are root-owned, mode 0755. Python source, controller
+metadata and retained proof use mode 0644. Persistent state and locks use mode
+0600. Reads and writes use no-follow directory descriptors. Unsafe owners,
+writable parents, hardlinks and special files are rejected.
 
 | Path | Purpose |
 |---|---|
-| `/usr/lib/messagebox-recovery/launcher.py` | Permanent recovery entry point; independent of the application pointer and controller. |
-| `/usr/lib/messagebox-recovery/release_verify.py` | Permanent descriptor-verification anchor. |
-| `/usr/lib/messagebox-recovery/trust_update.py` | Permanent trust-recovery anchor. |
-| `/usr/lib/messagebox-recovery/anchors.json` | Anchor hashes, mode 0600. |
-| `/var/lib/button-box-controller/state.json` | Atomic helper selection and persistent descriptor acceptance record. |
-| `/var/lib/button-box-controller/journal.json` | Separate recovery journal; schema 1, kind `bootstrap`, phase `prepared` or `armed`. |
-| `/var/lib/button-box-controller/promotion.lock` | Separate promotion guard. |
-| `/var/lib/button-box-controller/controllers/legacy/` | Complete known-good copy of the original six field modules. |
-| `/var/lib/button-box-controller/helpers/<descriptor-sha256>/current/` | Complete signed bundle and proof for the current helper. |
-| `/var/lib/button-box-controller/helpers/<descriptor-sha256>/fallback/` | Independent complete copy for the fallback helper. |
+| `/usr/lib/messagebox-recovery/launcher.py` | Permanent boot entry point. |
+| `/usr/lib/messagebox-recovery/{release_verify,trust_update}.py` | Permanent trust anchors. |
+| `/usr/lib/messagebox-recovery/anchors.json` | Hashes of the anchors, mode 0600. |
+| `/usr/lib/messagebox-update/` | One complete active six-module controller set. |
+| `/usr/lib/messagebox-update-stage-<transaction>/` | Staging before exchange; the previous complete set after exchange. |
+| `/var/lib/button-box-controller/state.json` | Atomic helper selection and descriptor sequence, digest, controller-version and helper-version floors. |
+| `/var/lib/button-box-controller/journal.json` | Separate bounded controller journal, mode 0600. |
+| `/var/lib/button-box-controller/promotion.lock` | Exclusive promotion lock. |
+| `/var/lib/button-box-controller/controllers/legacy/` | Frozen original controller snapshot. |
+| `/var/lib/button-box-controller/helpers/<digest>/{current,fallback}/` | Signed helper bundles and offline proof. |
+| `/run/messagebox-update/promotion-inhibit.json` | Root-owned public admission flag, mode 0644; discovery can read it. |
 
-Bootstrap accepts only the exact six-module hash set shared by frozen
-v0.3.9–v0.3.12. It rejects an unknown fixed controller. It does not infer the
-controller identity from the application version.
-
-The lock order is trust, application update, then promotion:
-
-1. `/var/lib/button-box-update/trust.lock`.
-2. `/run/lock/messagebox-bounded-update.lock`.
-3. `/var/lib/button-box-controller/promotion.lock`.
-
-The existing mode and interaction locks are not needed for this step because it
-does not mutate the active controller. Later promotion must take them after
-these locks. Lock acquisition does not wait. Boot recovery fails on contention;
-the existing recovery unit's restart policy retries it. A supervisor failure
-waits for the next timer tick. Neither path bypasses independent recovery.
-Root-owned sticky `/run/lock` is supported. Other writable parents, links,
-hardlinks, special files and unsafe ownership are rejected.
-
-## Bootstrap and boot ordering
-
-The bootstrap API is intended for the later OTA bridge trigger. This PR does
-not install that trigger or require a manual field action. The old attended
-bootstrap must not be run again on converted boxes.
-
-Bootstrap performs these steps while it holds the locks:
-
-1. Check the committed application and recover current trust.
-2. Verify and capture the complete signed candidate.
-3. Copy and flush the unchanged, recognized old controller into `controllers/legacy`.
-4. Write and flush independent current and fallback helper bundles and proof.
-5. Install the permanent launcher, verifier, trust code and anchor record.
-6. Atomically publish `state.json`, including both helper identities and the
-   accepted descriptor sequence, digest, controller-version floor and helper-version floor.
-7. Write the `prepared` bootstrap journal and verify both helper copies again.
-8. Install the recovery and supervisor `messagebox.conf` drop-ins atomically.
-9. Reload systemd. Verify effective commands, failure handling and recovery order.
-10. Write the `armed` journal durably.
-
-Each file write flushes file data, replaces the destination atomically, then
-flushes its directory. New directory entries and directories are flushed too.
-No service hook is published before the support files and selection are durable.
-An incomplete bootstrap leaves the old controller unchanged. The same accepted
-descriptor can resume it. Existing conflicting drop-ins are rejected.
-
-The generated drop-ins add this command as `ExecStartPre` to the existing
-recovery and supervisor services:
+The first bootstrap still accepts only the exact v0.3.9–v0.3.12 fixed module
+hash set. It installs and flushes support before it publishes the existing
+recovery and supervisor drop-ins. These hooks invoke:
 
 ```text
 /usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py
 ```
 
-The original service commands and enabled recovery service remain in place.
-Effective-unit checks require the exact Python executable and argument list,
-`ignore_errors=no`, the original recovery/supervisor commands, and recovery
-before the application target, ComItUp and controller. A mismatch leaves the
-journal `prepared`. This is a host-command contract; native systemd acceptance
-remains unverified.
+Descriptor schema 2 signs the six controller modules, all three recovery source
+files, and the two generated drop-ins. Literal descriptor data is parsed, never
+imported. Each helper selection verifies retained proof with current release
+pins. Emergency keys cannot sign executable helper code. The selected helper
+executes captured verified bytes. It imports no application or controller code
+to recover. It checks the permanent launcher's pinned hash before it uses its
+file and lock functions.
 
-The permanent launcher selects a valid current helper, then a valid fallback.
-A missing or corrupt current helper cannot run. When neither helper is valid,
-a safe no-op is allowed only for a bootstrap journal and only if both the active
-initial controller and its known-good copy still match every recorded hash.
-Unknown transaction phases, missing selection with installed hooks, unsafe
-state, and changed initial controller files fail closed.
+Helper 1.1.0 implements this controller journal. Before the first exchange it
+replaces both PR3-only helper slots, since helper 1.0.0 cannot recover this
+journal. Later upgrades retain the previous compatible helper as fallback.
+Missing or corrupt current helper bytes select that verified fallback. A
+fallback does not lower the admission floor. Both missing helpers permit a safe
+no-op only for an unchanged legacy controller and a bootstrap journal.
 
-The launcher passes bounded state to the verified helper through protocol 1.
-A later signed helper can interpret promotion journals without replacement of
-the permanent launcher. The helper in this PR only accepts bootstrap journals.
-It does not implement PR 4's exchange or automatic restore.
+## Transaction and journal
 
-## Persistent acceptance rules
+The internal entry point is `messagebox.recovery_bootstrap.promote()`. It first
+calls the immutable recovery launcher to finish any prior transaction. It then
+checks the committed application, current trust and captured signed candidate helper
+before it calls the helper. The helper checks proof again under the locks.
 
-The sequence floor and helper identities use one atomic `state.json` record.
-A crash cannot publish a newer floor without its corresponding helper slots.
-An older descriptor sequence is rejected. An equal sequence is accepted only
-for the exact accepted descriptor digest. A higher sequence cannot lower the
-controller or helper version floor. These records are outside application
-rollback state and are never restored from an application snapshot.
+Lock order is trust, application update, promotion, mode transition, then
+interaction. Missing volatile mode and interaction locks are created with their
+fixed safe permissions. Locks do not wait. Promotion rejects a running install or
+supervisor. It stops discovery and supervisor timers first, then controller
+consumers, and checks pending jobs and main PIDs. During supervisor recovery,
+the launcher's exact pre-start PID can remain; no supervisor main process may
+remain. Recovery must not stop the service that owns this pre-start process.
 
-The first-bootstrap API only resumes the same accepted descriptor. A higher,
-otherwise valid descriptor needs the later helper-upgrade transaction. A pinned
-fallback is authorized only for recovery; it does not bypass new admission.
+The controller journal is JSON, schema 1, kind `controller`, at most 16 KiB.
+It records:
 
-## Verification and limits
+- A transaction ID, phase, staging path and required helper protocol.
+- Old and new versions, descriptor identities, all six file hashes and sizes,
+  and the hash of each set's `controller.json` metadata where present.
+- The committed application path, version, commit, transaction and journal hash.
+- Descriptor hash, signing-key ID and sequence.
+- Prior and new integration bytes, modes, service active and enablement states.
+- Attempt count, monotonic activation deadline and rollout-policy revision
+  (`null` until permit support is added).
 
-`tests/test_recovery_support.py` covers real minisign proof, corrupt/missing
-helpers, safe legacy no-op, captured-byte execution, signed replay attempts,
-controller and helper version floors, pending trust recovery, unsafe paths,
-conflicting units, lock contention, and Cloud/wacli execution with socket access
-blocked. The existing runtime mode checks still apply.
-
-The crash model records every bootstrap write, file flush, rename, directory
-creation and directory flush, plus reload and effective-unit boundaries. It
-reconstructs independent boot roots with unflushed changes discarded. It also
-checks each prefix with writes retained. Boot roots omit `/opt`, so recovery
-cannot use the application pointer. An actual interrupted invocation is retried.
-This models flush ordering; it is not a Pi power-cut or filesystem test.
-
-`tests/test_field_release_payload.py` packages the actual checkout with release
-builder primitives. Every frozen worker installs the unchanged archive,
-retains proof, and then accepts recovery bootstrap. No commit or tag is created
-for that test; a temporary index describes new, uncommitted payload files.
-The top-level clean-tag, production-signing and reproducible-build gates remain
-separate release checks.
-
-Checks on 21 October 2026:
-
-| Check | Result |
+| Durable phase | Recovery outcome |
 |---|---|
-| `MSGBOX_TEST_TRANSPORT=cloud make check` | PASS: syntax, lint, 1,166 Python tests and 54 JavaScript tests. |
-| `MSGBOX_TEST_TRANSPORT=wacli make check` | PASS: syntax, lint, 1,166 Python tests and 54 JavaScript tests. |
-| Recovery suite from a shell with umask `002` | PASS: 17 tests, including real signatures. |
-| Bootstrap crash model | PASS: 401 boundaries; 53 distinct durable boot images. |
-| Release-tool suite | PASS: 19 tests, including missing/changed recovery payload checks. |
-| Manifest suite | PASS: 5 tests; 619 installed mappings and 633 payload sources. |
-| Independent adversarial source review | No remaining blocker within PR 3 scope. |
+| Prior bootstrap or prior terminal journal | Keep that complete active set; ignore incomplete new staging. |
+| `intent`, `staged`, `exchange_intent` | Compare complete identities. Keep old if active; otherwise exchange back from known-good. |
+| `exchanged`, `activated` | Stop candidate consumers, restore the old set and integration, record `restored`. |
+| `restore_intent` | Inspect both complete identities; finish restore without a second swap if old is already active. |
+| `committed` | Verify the new active set and retained old set; restore service selection. |
+| `restored`, `unsupported`, `aborted` | Verify and keep the old active set; restore service selection. |
 
-Native systemd boot, storage flush behavior, real power cuts, live OTA delivery,
-controller exchange, two successive upgrades, automatic controller restore,
-audio, GPIO, NFC, Wi-Fi and physical WhatsApp acceptance remain unverified.
-New-box shipment acceptance is not complete. No device is contacted by these
-tests. No Cloud call is added to the wacli path.
+Each file write flushes file data, replaces its name, and flushes the directory.
+New directories and their parent entries are flushed. Every journal transition
+uses the same ordering. The staged controller is complete and flushed before
+exchange. The helper calls Linux `renameat2(RENAME_EXCHANGE)` through `ctypes`
+on two real directories under one parent FD, then flushes that parent.
 
-Before any later push or publication, inspect every outgoing surface and its
-actual audience under the standing public-output privacy rules. Keep private
-coordination and review receipts out of public artifacts.
+If exchange is unsupported (`ENOSYS`, `EINVAL`, `EOPNOTSUPP` or `EXDEV`), the
+helper refuses promotion, keeps the old active set, restores services, and
+records `unsupported`. It never uses two ordinary renames as a fallback.
+
+The helper compares full identities because an exchange can finish before its
+next journal write. An uncommitted transaction always restores old. A durable
+commit keeps new. The old complete set remains in the transaction's staging
+path as known-good. This step does not remove retained sets.
+
+## Activation and admission
+
+Activation releases the file locks that the new broker needs. The durable
+journal and public inhibit flag reserve the transaction. New broker commands,
+workers and discovery respect that reservation. Root-only version/hash
+handshake and runtime heartbeat/status requests remain available. Completion
+reacquires all locks in order and rechecks the transaction, application, current
+trust, persistent floor, exact proof digest and active hashes before commit.
+
+Activation has a 90-second deadline. It requires controller imports and a
+self-test, exact version and six-hash results, a live broker handshake,
+restricted-user offline discovery, effective unit executables, recovery order
+and enablement, frozen service time limits, and current application health.
+The health probe uses `--current` so a committed application's old boot ID does
+not invalidate fresh runtime evidence. Existing local health evidence applies
+in wacli mode. No Cloud request is part of this helper.
+
+Any failed check restores the old controller and integration. Previous service
+enablement and active selection are restored, including an initially inactive
+broker. Boot recovery queues start jobs without waiting while launcher locks
+are held. Repeated boot recovery is idempotent. A restored descriptor digest
+is quarantined; it cannot retry through the promotion API. A new signed
+sequence is needed. The persistent floor survives controller rollback.
+
+Controller updates do not change the application journal format or application
+state. The helper binds both controller sets to the same committed application
+identity. Actual application/controller compatibility on hardware is still an
+acceptance requirement.
+
+## Verification limits
+
+The contract tests use real minisign proof, frozen field sources and actual
+release-builder packages. All four frozen workers install the real package
+before promotion. The crash model tests every instrumented write, file flush,
+replace, directory creation and flush, exchange, activation and commit boundary.
+It reconstructs separate boot roots with unflushed changes lost and with writes
+retained. Boot roots omit `/opt`; recovery cannot depend on the application.
+The same matrix includes failure and interrupted automatic restore.
+
+Native Linux tests exercise real `renameat2`; macOS tests use a test-only atomic
+swap adapter. Systemd, application health and the broker handshake are controlled
+boundaries in the transaction suite. Controller imports and offline discovery
+execute real candidate code. A Linux restricted-UID test checks public admission
+with the private journal unreadable. These tests do not prove native systemd
+boot, actual broker startup, Pi ext4/SD-card flush behavior, physical power-cut
+recovery, live OTA, GPIO, NFC, audio, Wi-Fi or WhatsApp acceptance. Shipment
+acceptance is not complete.
+
+Before any later push or publication, inspect outgoing surfaces and audiences
+under the standing privacy rules. Keep private review receipts out of public
+artifacts.

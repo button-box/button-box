@@ -177,9 +177,9 @@ worker path, then verifies the retained proof offline. The fixed controller byte
 remain unchanged. Systemd, health and the enclosing application signature process
 use the PR 1 host substitutes. The descriptor signature uses real minisign.
 
-Recovery support is now implemented as described below. Controller promotion,
-exchange, new-box recovery installation, rollout permits and shipment acceptance
-remain later work. Live OTA, boot,
+Recovery support and journaled controller promotion are implemented. See
+[controller recovery](controller-recovery.md). New-box recovery installation,
+rollout permits and shipment acceptance remain later work. Live OTA, boot,
 power-loss recovery, storage behavior and physical Cloud/wacli acceptance remain
 unverified. This PR adds no Cloud dependency to wacli.
 
@@ -187,7 +187,7 @@ unverified. This PR adds no Cloud dependency to wacli.
 ## Schema 2: recovery support
 
 Schema 1 remains readable. New complete payloads use schema 2. It adds a strict
-`recovery` object with `protocol=1`, `helper_version=1.0.0`, and the exact three
+`recovery` object with `protocol=1`, `helper_version=1.1.0`, and the exact three
 `messagebox/recovery_*.py` files, each with size, mode 0644 and SHA-256. The six
 controller modules remain separate. All recovery files must also be in the
 installed manifest. `unit_changes` gives the two generated drop-in paths, sizes,
