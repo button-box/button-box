@@ -1,3 +1,4 @@
+import fcntl
 import json
 from contextlib import ExitStack, contextmanager
 import sys
@@ -1226,6 +1227,139 @@ class CardSelectionLifecycleTests(unittest.TestCase):
                         self.assertEqual(context["contact"]["jid"], GRANDMA)
                         s.run()
                         self.assert_card_job(s, mode)
+
+    def test_held_claimed_card_mapping_change_blocks_until_new_presentation(self):
+        changed_recipient = "15551234569@s.whatsapp.net"
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                for marker in ("expired", "sent"):
+                    for change in ("reassigned", "unpaired"):
+                        for refresh_first in (False, True):
+                            with self.subTest(mode=mode, talk=talk, marker=marker, change=change, refresh_first=refresh_first), self.session(mode, talk) as s:
+                                s.contacts.add_contact(changed_recipient, "Changed card person")
+                                s.contacts.choose_default_recipient(FAMILY)
+                                announcements = AnnouncementStore(s.selection.path.parent / "announcements.json")
+                                router = NfcRouter(s.contacts, s.selection, EnrollmentStore(s.selection.path.parent / "enrollment.json"), announcements)
+                                reader = NfcRuntime(router, Announcer(announcements))
+                                reader.observe(CARD, 0)
+                                if marker == "expired":
+                                    s.now[0] = 1031
+                                    self.assertEqual(button_send.current_recipient_context()["contact"]["jid"], FAMILY)
+                                else:
+                                    s.run()
+                                    self.assert_card_job(s, mode)
+                                    s.store.complete(s.store.jobs()[0])
+                                    s.io.record.reset_mock()
+                                self.assertTrue(s.selection.claimed_path.exists())
+                                if change == "reassigned":
+                                    s.contacts.assign_card(changed_recipient, CARD)
+                                else:
+                                    s.contacts.clear_cards(GRANDMA)
+                                if refresh_first:
+                                    reader.observe(CARD, 1)
+                                    self.assertTrue(s.selection.unknown_present())
+                                with mock.patch.object(button_send, "block_unavailable_recipient") as blocked:
+                                    s.run()
+                                    self.assertIsNone(button_send.current_recipient_context())
+                                    self.assertIsNone(button_send.recording_recipient_context())
+                                    s.contacts.assign_card(GRANDMA, CARD)
+                                    reader.observe(CARD, 2)
+                                    s.run()
+                                    reader.observe(None, 3)
+                                    s.run()
+                                self.assertEqual(blocked.call_count, 3)
+                                s.io.record.assert_not_called()
+                                self.assertEqual(s.store.jobs(), [])
+                                reader.observe(CARD, 4)
+                                s.run()
+                                self.assert_card_job(s, mode)
+
+    def test_removed_claimed_card_mapping_change_keeps_normal_routing(self):
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                with self.subTest(mode=mode, talk=talk), self.session(mode, talk) as s:
+                    announcements = AnnouncementStore(s.selection.path.parent / "announcements.json")
+                    router = NfcRouter(s.contacts, s.selection, EnrollmentStore(s.selection.path.parent / "enrollment.json"), announcements)
+                    reader = NfcRuntime(router, Announcer(announcements))
+                    reader.observe(CARD, 0)
+                    s.now[0] = 1031
+                    self.assertIsNotNone(button_send.current_recipient_context())
+                    self.assertTrue(s.selection.claimed_path.exists())
+                    reader.observe(None, 1)
+                    s.contacts.assign_card(FAMILY, CARD)
+                    s.run()
+                    self.assertEqual([job.recipient for job in s.store.jobs()], [FAMILY])
+                    self.assertFalse(s.selection.unknown_present())
+
+    def test_contacts_write_cannot_split_snapshot_from_selection_processing(self):
+        changed_recipient = "15551234569@s.whatsapp.net"
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                for boundary in ("expiry", "claimed_resolve", "claimed_refresh"):
+                    with self.subTest(mode=mode, talk=talk, boundary=boundary), self.session(mode, talk) as s:
+                        s.contacts.add_contact(changed_recipient, "Changed card person")
+                        announcements = AnnouncementStore(s.selection.path.parent / "announcements.json")
+                        router = NfcRouter(s.contacts, s.selection, EnrollmentStore(s.selection.path.parent / "enrollment.json"), announcements)
+                        reader = NfcRuntime(router, Announcer(announcements))
+                        reader.observe(CARD, 0)
+                        s.now[0] = 1031
+                        if boundary != "expiry":
+                            self.assertIsNotNone(button_send.current_recipient_context())
+                            self.assertTrue(s.selection.claimed_path.exists())
+                        at_selection, writer_attempted, committed = threading.Event(), threading.Event(), threading.Event()
+                        errors = []
+                        selection_type = type(s.selection)
+                        real_locked = selection_type.locked
+                        paused = False
+
+                        @contextmanager
+                        def pause_after_contacts_read(store):
+                            nonlocal paused
+                            with real_locked(store):
+                                if not paused:
+                                    paused = True
+                                    at_selection.set()
+                                    self.assertTrue(writer_attempted.wait(3))
+                                    # A separate descriptor must not acquire the
+                                    # contacts writer lock during this decision.
+                                    with open(s.contacts.lock_path, "a+b") as probe:
+                                        try:
+                                            with self.assertRaises(BlockingIOError):
+                                                fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                        finally:
+                                            fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                                    self.assertFalse(committed.is_set())
+                                yield
+
+                        def writer():
+                            try:
+                                if not at_selection.wait(3):
+                                    raise RuntimeError("selection processing did not start")
+                                writer_attempted.set()
+                                s.contacts.assign_card(changed_recipient, CARD)
+                                committed.set()
+                            except BaseException as exc:
+                                errors.append(exc)
+
+                        thread = threading.Thread(target=writer)
+                        with mock.patch.object(selection_type, "locked", new=pause_after_contacts_read):
+                            thread.start()
+                            try:
+                                if boundary == "claimed_refresh":
+                                    reader.observe(CARD, 1)
+                                else:
+                                    context = button_send.recording_recipient_context()
+                                    self.assertEqual(context["contact"]["jid"], FAMILY)
+                            finally:
+                                thread.join(3)
+                        self.assertFalse(thread.is_alive())
+                        self.assertEqual(errors, [])
+                        self.assertTrue(committed.is_set())
+                        with mock.patch.object(button_send, "block_unavailable_recipient") as blocked:
+                            s.run()
+                        blocked.assert_called_once_with()
+                        s.io.record.assert_not_called()
+                        self.assertEqual(s.store.jobs(), [])
 
 
 if __name__ == "__main__":

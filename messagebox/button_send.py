@@ -450,17 +450,17 @@ def card_recipient_context(document, *, check_idle_reader=True):
 def current_recipient_context():
     """Resolve a card or the configured default without guessing on a block."""
     try:
-        document = ContactStore(CONTACTS_FILE).load()
-        state, context = card_recipient_context(document)
-        if state == "selected":
-            return context
-        if state == "blocked":
-            return None
-        default = document["default_recipient"]
-        contact = document["contacts"].get(default)
-        if contact is None:
-            return None
-        return {"contact": {"jid": default, **contact}, "via_card": False}
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document)
+            if state == "selected":
+                return context
+            if state == "blocked":
+                return None
+            default = document["default_recipient"]
+            contact = document["contacts"].get(default)
+            if contact is None:
+                return None
+            return {"contact": {"jid": default, **contact}, "via_card": False}
     except (ContactError, NfcError, OSError):
         return None
 
@@ -468,7 +468,8 @@ def current_recipient_context():
 def claim_fresh_card_intent():
     """Read a card choice without consuming it before a recording is queued."""
     try:
-        state, context = card_recipient_context(ContactStore(CONTACTS_FILE).load(), check_idle_reader=False)
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document, check_idle_reader=False)
     except (ContactError, OSError):
         return "expired", None
     return {"none": "none", "blocked": "expired", "selected": "claimed"}[state], context
@@ -490,22 +491,22 @@ def recording_session_event(context, kind, **data):
 def recording_recipient_context():
     """Prefer the card, then the exact recent sender, then the default."""
     try:
-        document = ContactStore(CONTACTS_FILE).load()
-        state, context = card_recipient_context(document)
-        if state != "none":
-            return context
-        route_state, recipient = recent_reply_recipient(QUEUE_DIR, document["contacts"])
-        # A presentation during history lookup must still own the interaction.
-        state, context = card_recipient_context(document)
-        if state != "none":
-            return context
-        if route_state == "route":
-            return {
-                "contact": {"jid": recipient, **document["contacts"][recipient]},
-                "via_card": False, "via_recent_reply": True,
-            }
-        if route_state == "blocked":
-            return None
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document)
+            if state != "none":
+                return context
+            route_state, recipient = recent_reply_recipient(QUEUE_DIR, document["contacts"])
+            # A presentation during history lookup must still own the interaction.
+            state, context = card_recipient_context(document)
+            if state != "none":
+                return context
+            if route_state == "route":
+                return {
+                    "contact": {"jid": recipient, **document["contacts"][recipient]},
+                    "via_card": False, "via_recent_reply": True,
+                }
+            if route_state == "blocked":
+                return None
         return current_recipient_context()
     except (ContactError, NfcError, OSError):
         return None

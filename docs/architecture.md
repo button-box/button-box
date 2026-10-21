@@ -90,6 +90,9 @@ original timestamps. A held card is resumed as the same presentation until the
 reader confirms removal for the normal grace interval. An unrelated contacts
 revision refreshes the same person's mapping without renewing the choice. A
 changed mapping blocks that presentation until removal and a new scan.
+This check also applies to a held card after expiry or a successful send has
+consumed the choice. Routing and reader refresh hold the contacts lock through
+selection processing; the lock order is contacts, then NFC selection.
 
 In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14

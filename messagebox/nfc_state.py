@@ -212,7 +212,8 @@ class SelectionStore:
         with self.locked():
             block = _load_json(self.unknown_path) if not new_presentation else None
             invalidated = not new_presentation and (
-                self.path.exists() or (block is not None and block.get("state") == "invalid")
+                self.path.exists() or self._held_claim_locked() is not None
+                or (block is not None and block.get("state") == "invalid")
             )
             self._block_locked(uid, state="invalid" if invalidated else "unknown")
 
@@ -269,6 +270,20 @@ class SelectionStore:
         with _locked_path(self.path):
             yield
 
+    def _held_claim_locked(self):
+        payload = _load_json(self.claimed_path)
+        if payload is None:
+            return None
+        present = payload.get("present", True)
+        if not isinstance(present, bool):
+            raise NfcError("claimed card presence is invalid")
+        if not present:
+            return None
+        jid = payload.get("jid")
+        if payload.get("version") != SELECTION_VERSION or not isinstance(jid, str) or not jid:
+            raise NfcError("claimed card mapping is invalid")
+        return normalize_uid(payload.get("uid")), jid
+
     def select(self, uid, jid, contacts_revision, *, new_presentation=True):
         uid = normalize_uid(uid)
         if not isinstance(jid, str) or not jid:
@@ -282,7 +297,12 @@ class SelectionStore:
                     self.claimed_path.unlink()
                 except FileNotFoundError:
                     pass
-            elif self.claimed_path.exists() or self.unknown_present():
+            elif self.unknown_present():
+                return False
+            elif self.claimed_path.exists():
+                held = self._held_claim_locked()
+                if held is not None and held != (uid, jid):
+                    self._block_locked(uid, state="invalid")
                 return False
             previous = self._load(max_age=None)
             if not new_presentation and (
@@ -339,14 +359,22 @@ class SelectionStore:
             return True
 
     def resolve(self, document, *, max_age=DEFAULT_SELECTION_TTL_S):
-        """Read the block and choice atomically; invalid state is never absence."""
+        """Resolve under the caller's locked contact snapshot, then this lock."""
         with self.locked():
             if self.unknown_present():
                 return "blocked", None
             exists = self.path.exists()
             snapshot = self._load(max_age=None)
             if snapshot is None:
-                return ("blocked" if exists else "none"), None
+                if exists:
+                    return "blocked", None
+                held = self._held_claim_locked()
+                if held is not None:
+                    jid, contact = _contact_for_uid(document, held[0])
+                    if jid != held[1] or contact is None:
+                        self._block_locked(held[0], state="invalid")
+                        return "blocked", None
+                return "none", None
             jid, contact = _contact_for_uid(document, snapshot["uid"])
             if jid != snapshot["jid"] or contact is None:
                 # Invalidation must survive expiry and later mapping repairs.
@@ -758,24 +786,24 @@ class NfcRouter:
                 request["request_id"], new_presentation=new_presentation
             )
 
-        document = self.contacts.load()
-        jid, contact = _contact_for_uid(document, uid)
-        if contact is None:
-            self.selection.block_unknown(uid, new_presentation=new_presentation)
-            return ScanResult("unknown", uid, None, new_presentation)
-        public_contact = _public_contact(jid, contact)
-        if len(document["contacts"]) < 2:
-            if new_presentation:
-                self.selection.clear()
-            elif self.selection.path.exists() or self.selection.claimed_path.exists():
-                self.selection.select(uid, jid, document["revision"], new_presentation=False)
-            return ScanResult("recognized", uid, public_contact, new_presentation)
-        changed = self.selection.select(
-            uid,
-            jid,
-            document["revision"],
-            new_presentation=new_presentation,
-        )
+        with self.contacts.locked_snapshot() as document:
+            jid, contact = _contact_for_uid(document, uid)
+            if contact is None:
+                self.selection.block_unknown(uid, new_presentation=new_presentation)
+                return ScanResult("unknown", uid, None, new_presentation)
+            public_contact = _public_contact(jid, contact)
+            if len(document["contacts"]) < 2:
+                if new_presentation:
+                    self.selection.clear()
+                elif self.selection.path.exists() or self.selection.claimed_path.exists():
+                    self.selection.select(uid, jid, document["revision"], new_presentation=False)
+                return ScanResult("recognized", uid, public_contact, new_presentation)
+            changed = self.selection.select(
+                uid,
+                jid,
+                document["revision"],
+                new_presentation=new_presentation,
+            )
         return ScanResult(
             "selected" if changed else "refreshed",
             uid,
