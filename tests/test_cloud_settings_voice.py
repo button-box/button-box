@@ -4,6 +4,7 @@ import json
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from messagebox import cloud_runtime
 from messagebox.cloud_device import atomic_json
@@ -103,6 +104,69 @@ class CloudSettingsVoiceTests(unittest.TestCase):
         document, _ = self.runtime.settings.load()
         self.assertEqual((document['voice_pack'], document['revision']), ('jessica', 2))
         self.assertEqual(json.loads(cloud_runtime.APPLIED_FILE.read_text())['settings']['voice_pack'], 'jessica')
+
+    def test_omitted_r2_replay_keeps_jessica_after_crash_and_late_pirate_r1_apply(self):
+        self.assert_late_apply_replay()
+
+    def test_pre_fix_intent_replay_uses_voice_already_saved_at_desired_revision(self):
+        self.assert_late_apply_replay(legacy_intent=True)
+
+    def assert_late_apply_replay(self, *, legacy_intent=False):
+        self.applied_jessica()  # Physical r0 is Jessica.
+        first = runtime_tests.CloudRuntimeTests.settings_command(self, voice_pack='pirate')
+        self.runtime._command(first, NOW)
+        pirate_r1, _ = self.runtime.settings.load()  # The button owner has this snapshot in flight.
+        second = self.command()  # r2 omits voice; its first resolution must be Jessica.
+        operation_id = second['operation_id']
+        class PowerLoss(BaseException):
+            pass
+        with mock.patch.object(self.runtime, '_save', side_effect=PowerLoss):
+            with self.assertRaises(PowerLoss):
+                self.runtime._command(second, NOW)
+        jessica_r2, _ = self.runtime.settings.load()
+        self.assertEqual((jessica_r2['voice_pack'], jessica_r2['revision']), ('jessica', 2))
+        saved_state = json.loads(self.runtime.state_path.read_text())
+        self.assertIn(first['operation_id'], saved_state['pending_settings'])
+        self.assertNotIn(operation_id, saved_state['pending_settings'])
+        intent_path = self.runtime._intent_path(operation_id)
+        intent = json.loads(intent_path.read_text())
+        self.assertEqual(intent['resolved_voice_pack'], 'jessica')
+        if legacy_intent:
+            # The deployed pre-fix writer did not include the resolved voice in its intent.
+            intent.pop('resolved_voice_pack')
+            atomic_json(intent_path, intent)
+        atomic_json(cloud_runtime.APPLIED_FILE, {'revision': 1, 'settings': pirate_r1})
+        restarted = cloud_runtime.CloudRuntime(self.client, state_path=self.runtime.state_path,
+            contacts_path=self.root / 'cloud-contacts.json', queue_dir=self.root / 'queue',
+            outbox_dir=self.root / 'outbox', settings_path=self.root / 'settings.json',
+            clock=lambda: NOW, monotonic=lambda: self.mono[0], boot_id='restart-test')
+        restarted._command(second, NOW)
+        self.assertEqual(restarted.settings.load()[0], jessica_r2)
+        self.assertEqual(restarted.state['pending_settings'][operation_id], jessica_r2)
+        restarted._finish_settings()
+        restarted.flush_acks()
+        self.assertEqual([ack['state'] for ack in self.client.acks if ack['operation_id'] == operation_id],
+                         ['received'])  # Pirate r1 does not prove that Jessica r2 was applied.
+        atomic_json(cloud_runtime.APPLIED_FILE, {'revision': 2, 'settings': jessica_r2})
+        restarted._finish_settings()
+        restarted.flush_acks()
+        outcomes = [ack for ack in self.client.acks if ack['operation_id'] == operation_id]
+        self.assertEqual(outcomes[-1]['state'], 'applied')
+        self.assertEqual(outcomes[-1]['applied_revision'], 2)
+        self.assertNotIn(operation_id, restarted.state['pending_settings'])
+        self.runtime = restarted
+        self.old_reader(jessica_r2)
+
+    def test_invalid_resolved_voice_intent_does_not_guess_again(self):
+        original = self.applied_jessica()
+        for index, intent in enumerate((None, {'resolved_voice_pack': []}, {'resolved_voice_pack': 'unknown'})):
+            with self.subTest(intent=intent):
+                item = {**self.command(), 'operation_id': f'invalid-voice-intent-{index}'}
+                atomic_json(self.runtime._intent_path(item['operation_id']), intent)
+                with self.assertRaises(cloud_runtime.CloudSettingsRejected) as caught:
+                    self.runtime._command(item, NOW)
+                self.assertEqual(caught.exception.error_code, 'settings_revision_invalid')
+                self.assertEqual(self.runtime.settings.load()[0], original)
 
     def test_missing_or_damaged_applied_snapshot_cannot_select_a_default_voice(self):
         original = self.applied_jessica()

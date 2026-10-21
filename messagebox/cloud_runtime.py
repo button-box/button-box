@@ -1481,9 +1481,22 @@ class CloudRuntime:
                 raise CloudSettingsRejected("settings_revision_invalid")
             # Normalize pre-update commands before replay comparison and ACKs.
             ignored = ignored_settings(document)
+            intent_path = self._intent_path(item["operation_id"])
+            has_intent = True
+            try:
+                intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                intent, has_intent = {}, False
+            if not isinstance(intent, dict):
+                raise CloudSettingsRejected("settings_revision_invalid")
             try:
                 retained_voice = current["voice_pack"]
-                if "voice_pack" not in document:
+                if "voice_pack" not in document and "resolved_voice_pack" in intent:
+                    retained_voice = intent["resolved_voice_pack"]
+                    if not isinstance(retained_voice, str) or retained_voice not in VOICE_PACKS:
+                        raise CloudSettingsRejected("settings_revision_invalid")
+                # A pre-fix intent can use the voice already saved at this desired revision.
+                elif "voice_pack" not in document and not (has_intent and current["revision"] == desired):
                     try:
                         marker = json.loads(APPLIED_FILE.read_text(encoding="utf-8"))
                     except (OSError, ValueError) as exc:
@@ -1501,7 +1514,6 @@ class CloudRuntime:
                 raise CloudSettingsRejected("settings_unsupported") from exc
             candidate = {key: value for key, value in document.items()
                          if key not in {"version", "revision"}}
-            intent_path = self._intent_path(item["operation_id"])
             if current["revision"] == desired:
                 if current != {"version": 1, "revision": desired, **candidate}:
                     raise CloudSettingsRejected("settings_revision_conflict")
@@ -1515,9 +1527,9 @@ class CloudRuntime:
                 if (expected < current["revision"] < desired
                         and current["revision"] == self.state.get("cloud_settings_revision")):
                     expected = current["revision"]
-                # Persist before mutation so a command replay retains its origin
-                # and whether values changed, rather than just its revision.
-                if not intent_path.exists():
+                # Persist the resolved voice before mutation: an older revision
+                # can finish applying before this command is replayed.
+                if not has_intent:
                     atomic_json(intent_path, {"settings_changed": any(current[key] != value
                         for key, value in candidate.items()),
                         # Volume and ringtone changes preview the ringtone instead of the saved cue.
@@ -1526,9 +1538,12 @@ class CloudRuntime:
                         "ringtone_changed": ("ringtone_id" in candidate
                                              and current.get("ringtone_id") != candidate["ringtone_id"]),
                         "voice_changed": current.get("voice_pack") != candidate["voice_pack"],
+                        "resolved_voice_pack": candidate["voice_pack"],
                         "ignored_settings": ignored,
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
+                elif "resolved_voice_pack" not in intent:
+                    atomic_json(intent_path, {**intent, "resolved_voice_pack": candidate["voice_pack"]})
                 try:
                     updated = self.settings.update(candidate, expected, desired_revision=desired)
                 except RevisionConflict as exc:

@@ -11,6 +11,27 @@ and setup-page corrections. This follow-up adds the mandatory per-poll feature
 declaration and restricts greeting wire ACKs to the four agreed names. No push,
 deployment, device, or hardware test was done. Review source files stay untracked.
 
+**Late-apply replay fix**
+
+The follow-up to `37c507b` stores `resolved_voice_pack` in the existing atomic
+settings intent before the local settings write. A replay uses this saved voice.
+For a pre-fix intent without that field, settings already saved at the desired
+revision supply the retained voice. No shared or wacli runtime file changes.
+
+The regression test first reproduced `settings_revision_conflict` on the
+reviewed source. It starts with applied Jessica r0, leaves Pirate r1 in flight,
+accepts omitted-voice r2 as Jessica, crashes at runtime-state save, applies Pirate
+r1, and restarts. Replayed r2 stays Jessica at revision 2. Its ACK stays
+`received` until the applied-settings marker names Jessica r2, then becomes
+`applied`.
+The test also runs the frozen v0.3.12 readers. A second case removes the new
+intent field to test the existing pre-fix format; another rejects invalid saved
+voice decisions without changing settings.
+
+The 137 focused Cloud runtime, voice replay, and wacli tests passed.
+Current late-apply `make check`: passed. Syntax and lint passed; 1155 Python tests
+passed in 390.825 s, and 54 JavaScript tests passed.
+
 **Paired Cloud voice omission rule**
 
 The follow-up to `fbad216` retains the current applied voice when a Cloud

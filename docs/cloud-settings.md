@@ -105,10 +105,15 @@ the current applied-settings snapshot. It cannot select buttonbox by omission.
 An explicit `voice_pack: "buttonbox"` can select it. Cloud must send the field
 explicitly to boxes that advertise `voice_packs`.
 
-The box resolves an omitted voice before revision comparison and persists the
-resolved value in pending settings. Restart and revision replay use that same
-value. Old pending documents with no voice use the applied snapshot during
-receipt comparison. An unavailable or invalid snapshot rejects the new command
+The box resolves an omitted voice before revision comparison. It atomically
+stores `resolved_voice_pack` in the existing per-operation intent before writing
+local settings. Pending settings then store the complete normalized document.
+Restart and replay use the saved resolution, even if an older in-flight revision
+finishes applying after the write. An older intent without this field uses the
+voice already saved locally when that revision matches the command's desired
+revision. This fallback requires an existing intent; ordinary revision and value
+comparisons still apply. Old pending documents with no voice use the applied
+snapshot during receipt comparison. An unavailable or invalid snapshot rejects the new command
 with `settings_revision_invalid`; it does not guess a new default.
 
 An existing legacy Cloud settings file with no voice field uses Jessica, as
