@@ -1,5 +1,6 @@
 import base64
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -39,12 +40,19 @@ class ReleaseToolingTests(unittest.TestCase):
         (self.repo / "scripts/dev/release-manifest.py").write_text(
             "import hashlib, json\nfrom pathlib import Path\n"
             "print(json.dumps({'version': 'development', 'commit': '" + COMMIT + "', "
-            "'files': [{'source': 'messagebox/example.py', "
-            "'installed': '/opt/messagebox/messagebox/example.py', "
-            "'sha256': hashlib.sha256(Path('messagebox/example.py').read_bytes()).hexdigest()}]}))\n"
+            "'files': [{'source': str(p), 'installed': '/opt/messagebox/' + str(p), "
+            "'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} "
+            "for p in sorted(Path('messagebox').glob('*.py'))]}))\n"
         )
-        (self.repo / "scripts/release/payload.txt").write_text(
-            "messagebox/example.py\nscripts/dev/release-manifest.py\n")
+        (self.repo / 'scripts/install').mkdir()
+        self.tracked = ['messagebox/example.py', 'scripts/dev/release-manifest.py']
+        for name in build.CONTROLLER_MODULES:
+            relative = 'scripts/install/' + name
+            (self.repo / relative).write_text('# synthetic controller\n')
+            self.tracked.append(relative)
+        (self.repo / "scripts/release/payload.txt").write_text('\n'.join(sorted(self.tracked)) + '\n')
+        (self.root / 'pin.pub').write_text('untrusted comment: synthetic public key\n' +
+                                         base64.b64encode(b'Ed' + b'k' * 40).decode() + '\n')
         (self.repo / "VERSION").write_text("development\n")
         (self.repo / ".env").write_text("private ignored file\n")
         self.dirty = False
@@ -58,8 +66,8 @@ class ReleaseToolingTests(unittest.TestCase):
         if args[0] == "rev-parse":
             return "b" * 40 if self.moved else COMMIT
         if args[0] == "ls-tree":
-            return ("100644 blob " + COMMIT + "\tmessagebox/example.py\n"
-                    "100755 blob " + COMMIT + "\tscripts/dev/release-manifest.py")
+            return '\n'.join(('100755' if name == 'scripts/dev/release-manifest.py' else '100644') +
+                             ' blob ' + COMMIT + '\t' + name for name in self.tracked)
         if args[0] == "show":
             return "1700000000"
         raise AssertionError(args)
@@ -79,8 +87,12 @@ class ReleaseToolingTests(unittest.TestCase):
     def make_build(self, output=None):
         output = output or self.root / "output"
         with mock.patch.object(build, "git", side_effect=self.git), \
+                mock.patch.object(build, 'controller_signature', return_value=b"'synthetic signature'\n"), \
+                mock.patch.object(build, 'inspect_package', side_effect=lambda path, key: release.inspect_archive(path, release.checksums(path))), \
                 mock.patch.object(build.subprocess, "run", side_effect=self.command_run):
-            build.build(self.repo, TAG, output, 7, "1.0.0")
+            build.build(self.repo, TAG, output, 7, "1.0.0", controller_sequence=1,
+                        min_application_version=TAG, controller_secret=self.root / 'offline.key',
+                        controller_key=self.root / 'pin.pub')
         return output
 
     def test_manifest_deterministic_archive_checksums_and_allowlist(self):
@@ -103,7 +115,7 @@ class ReleaseToolingTests(unittest.TestCase):
         self.assertEqual(manifest["supported_models"],
                          ["Raspberry Pi 3 Model A Plus", "Raspberry Pi 4 Model B"])
         self.assertEqual(manifest["min_updater_version"], "1.0.0")
-        self.assertEqual(manifest["files"][0]["sha256"],
+        self.assertEqual(next(item['sha256'] for item in manifest['files'] if item['source'] == 'messagebox/example.py'),
                          build.digest(self.repo / "messagebox/example.py"))
         archive = release.checksums(first)
         release.inspect_archive(first, archive)
@@ -176,9 +188,7 @@ class ReleaseToolingTests(unittest.TestCase):
     def test_two_different_builds_refused(self):
         original = build.package
         def different(root, output, manifest, payload, timestamp):
-            original(root, output, manifest, payload, timestamp)
-            if output.name == "build-2":
-                (output / "release-manifest.json").write_text("changed\n")
+            original(root, output, manifest, payload, timestamp + (output.name == 'build-2'))
         with mock.patch.object(build, "package", side_effect=different):
             with self.assertRaisesRegex(build.ReleaseError, "differ"):
                 self.make_build()
@@ -243,12 +253,12 @@ class ReleaseToolingTests(unittest.TestCase):
             raise AssertionError(command)
         with mock.patch.object(release, "public_key", return_value=self.root / "pin.pub"), \
                 mock.patch.object(release.subprocess, "check_output", side_effect=capture), \
-                mock.patch.object(release.subprocess, "run") as run, \
+                mock.patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
                 mock.patch.object(release.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", return_value="CREATE DRAFT " + TAG):
             release.publish(output, self.root / "pin.pub", notes, receipt)
-        self.assertEqual(run.call_count, 3)  # original and snapshot verification, then one draft creation
-        verify_command, _, create_command = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(run.call_count, 5)  # app/controller proof in original and snapshot, then draft creation
+        verify_command, _, _, _, create_command = [call.args[0] for call in run.call_args_list]
         self.assertEqual(verify_command[:3], ["minisign", "-V", "-H"])
         self.assertEqual(create_command[:4], ["gh", "release", "create", TAG])
         self.assertIn("--draft", create_command)
@@ -270,17 +280,18 @@ class ReleaseToolingTests(unittest.TestCase):
             calls.append(command)
             if "-S" in command:
                 (output / "SHA256SUMS.minisig").write_text("mock signature\n")
+            return subprocess.CompletedProcess(command, 0)
         with mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(release, "public_key", return_value=self.root / "pin.pub"), \
                 mock.patch.object(release.subprocess, "run", side_effect=minisign):
             release.sign(output, secret, self.root / "pin.pub")
             with self.assertRaisesRegex(build.ReleaseError, "overwrite"):
                 release.sign(output, secret, self.root / "pin.pub")
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][:2], ["minisign", "-S"])
-        self.assertEqual(calls[0][calls[0].index("-s") + 1], str(secret))
-        self.assertNotIn("-W", calls[0])
-        self.assertEqual(calls[1][:3], ["minisign", "-V", "-H"])
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[1][:2], ["minisign", "-S"])
+        self.assertEqual(calls[1][calls[1].index("-s") + 1], str(secret))
+        self.assertNotIn("-W", calls[1])
+        self.assertEqual(calls[2][:3], ["minisign", "-V", "-H"])
 
     def test_ci_and_unencrypted_key_refused_without_signing(self):
         secret = self.root / "secret.key"
@@ -315,6 +326,69 @@ class ReleaseToolingTests(unittest.TestCase):
         for name in names:
             self.assertTrue((ROOT / name).is_file(), name)
         self.assertFalse(any(name.startswith((".git/", "tests/", "hardware/")) for name in names))
+
+    def test_generated_controller_proof_matches_packaged_modules_and_is_retained(self):
+        output = self.make_build()
+        archive = release.checksums(output)
+        with tarfile.open(output / archive) as tar:
+            raw = tar.extractfile(build.CONTROLLER_DESCRIPTOR).read()
+            value = build.parse_controller_descriptor(raw)
+            self.assertEqual(value['controller_version'], '1.3.0')
+            self.assertEqual(value['min_application_version'], TAG)
+            for entry in value['modules']:
+                source = 'scripts/install/' + Path(entry['path']).name
+                self.assertEqual(build.digest_stream(tar.extractfile(source)), entry['sha256'])
+                self.assertEqual(tar.getmember(source).size, entry['size'])
+            self.assertEqual(tar.getmember(build.CONTROLLER_DESCRIPTOR).mode, 0o644)
+            self.assertEqual(tar.getmember(build.CONTROLLER_SIGNATURE).mode, 0o644)
+        data = json.loads((output / 'release-manifest.json').read_bytes())
+        mapping = {item['source']: item['installed'] for item in data['files']}
+        for path in (build.CONTROLLER_DESCRIPTOR, build.CONTROLLER_SIGNATURE):
+            self.assertEqual(mapping[path], '/opt/messagebox/' + path)
+            self.assertFalse((self.repo / path).exists())
+
+    def test_builder_requires_the_complete_controller_payload(self):
+        listing = self.repo / 'scripts/release/payload.txt'
+        listing.write_text(listing.read_text().replace('scripts/install/update_controller.py\n', ''))
+        with self.assertRaisesRegex(ValueError, 'controller module missing'):
+            self.make_build()
+        self.assertFalse((self.root / 'output').exists())
+
+    def test_controller_mismatch_or_missing_proof_blocks_publish_before_any_github_call(self):
+        output = self.make_build()
+        archive = release.checksums(output)
+        original = (output / archive).read_bytes()
+        notes = self.root / 'notes.md'
+        notes.write_text('Synthetic release notes.\n')
+        (output / 'SHA256SUMS.minisig').write_text('synthetic app signature\n')
+        for case in ('module', 'missing_signature', 'malformed_descriptor', 'oversized_descriptor'):
+            with self.subTest(case=case):
+                (output / archive).write_bytes(original)
+                with tarfile.open(output / archive) as tar:
+                    members = [(member, tar.extractfile(member).read()) for member in tar.getmembers()]
+                with tarfile.open(output / archive, 'w:gz') as tar:
+                    for member, data in members:
+                        if case == 'missing_signature' and member.name == build.CONTROLLER_SIGNATURE:
+                            continue
+                        if case == 'module' and member.name == 'scripts/install/bounded_update.py':
+                            data += b'# tampered\n'
+                        if member.name == build.CONTROLLER_DESCRIPTOR:
+                            if case == 'malformed_descriptor':
+                                data = b"__import__('os').abort()\n"
+                            elif case == 'oversized_descriptor':
+                                data = b' ' * 20000
+                        member.size = len(data)
+                        tar.addfile(member, io.BytesIO(data))
+                (output / 'SHA256SUMS').write_text(''.join(
+                    f'{build.digest(output / name)}  {name}\n' for name in sorted((archive, 'release-manifest.json'))))
+                receipt = self.root / (case + '-receipt.json')
+                with mock.patch.object(release, 'public_key', return_value=self.root / 'pin.pub'), \
+                        mock.patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                        mock.patch.object(release.subprocess, 'check_output') as network:
+                    with self.assertRaises(ValueError):
+                        release.publish(output, self.root / 'pin.pub', notes, receipt)
+                    network.assert_not_called()
+                self.assertFalse(receipt.exists())
 
 
 if __name__ == "__main__":

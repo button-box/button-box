@@ -14,6 +14,13 @@ from pathlib import Path, PurePosixPath
 
 from build import PRODUCT, ROOT, SCHEMA, SUPPORTED, ReleaseError, channel, digest, digest_stream, json_bytes
 
+sys.path.insert(0, str(ROOT / 'scripts/install'))
+from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE, MAX_DESCRIPTOR,
+                            MAX_CONTROLLER_SIGNATURE, check_controller_compatibility,
+                            controller_signature_bytes, parse_controller_descriptor,
+                            verify_controller_proof)
+sys.path.pop(0)
+
 REPOSITORY = "button-box/button-box"
 PUBLIC_PATTERNS = re.compile(
     rb"notion\.(?:so|site)|app\.notion\.com|collection://|view://|"
@@ -63,7 +70,38 @@ def checksums(directory):
     return archives[0]
 
 
-def inspect_archive(directory, archive):
+def inspect_controller_archive(tar, manifest, keys=None):
+    values = []
+    for path, limit in ((CONTROLLER_DESCRIPTOR, MAX_DESCRIPTOR), (CONTROLLER_SIGNATURE, MAX_CONTROLLER_SIGNATURE)):
+        try:
+            member = tar.getmember(path)
+        except KeyError as exc:
+            raise ReleaseError('controller proof missing from archive') from exc
+        if not member.isfile() or member.mode != 0o644 or not 0 < member.size <= limit:
+            raise ReleaseError('invalid controller proof file')
+        values.append(tar.extractfile(member).read(limit + 1))
+    raw, signature = values
+    value = parse_controller_descriptor(raw)
+    controller_signature_bytes(signature)
+    check_controller_compatibility(value, manifest['tag'], {
+        'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})
+    installed = {item['source']: item['installed'] for item in manifest['files']}
+    if any(installed.get(path) != '/opt/messagebox/' + path for path in (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE)):
+        raise ReleaseError('controller proof missing from installed mapping')
+    for entry in value['modules']:
+        source = 'scripts/install/' + Path(entry['path']).name
+        try:
+            member = tar.getmember(source)
+        except KeyError as exc:
+            raise ReleaseError('controller module missing from archive') from exc
+        # The old worker copies these sources with mode 0644 into updater/.
+        if member.size != entry['size'] or digest_stream(tar.extractfile(member)) != entry['sha256']:
+            raise ReleaseError('controller module differs from signed descriptor')
+    if keys is not None:
+        verify_controller_proof(raw, signature, keys, run=subprocess.run)
+
+
+def inspect_archive(directory, archive, *, controller_keys=None):
     manifest_data = (directory / "release-manifest.json").read_bytes()
     manifest = json.loads(manifest_data)
     tag = manifest.get("tag")
@@ -109,6 +147,7 @@ def inspect_archive(directory, archive):
             installed.add(target)
             if digest_stream(tar.extractfile(source)) != item["sha256"]:
                 raise ReleaseError("archive installed-file hash mismatch")
+        inspect_controller_archive(tar, manifest, controller_keys)
     return manifest, members
 
 
@@ -119,7 +158,7 @@ def verify(directory, key):
     subprocess.run(["minisign", "-V", "-H", "-m", str(regular_file(directory / "SHA256SUMS")),
                     "-x", str(regular_file(directory / "SHA256SUMS.minisig")), "-p", str(key)], check=True)
     archive = checksums(directory)
-    manifest, members = inspect_archive(directory, archive)
+    manifest, members = inspect_archive(directory, archive, controller_keys=key.parent)
     return archive, manifest, members
 
 
@@ -139,15 +178,36 @@ def signing_secret(directory, secret):
     return secret
 
 
+def sign_controller(raw, secret, key):
+    """Offline signature for exact descriptor bytes, independent of Git identity."""
+    value = parse_controller_descriptor(raw)
+    key = public_key(key)
+    with tempfile.TemporaryDirectory(prefix='button-box-controller-sign-') as directory:
+        root = Path(directory)
+        secret = signing_secret(root, secret)
+        document, signature = root / 'descriptor', root / 'descriptor.minisig'
+        document.write_bytes(raw)
+        subprocess.run(['minisign', '-S', '-m', str(document), '-s', str(secret), '-x', str(signature),
+                        '-c', 'Button Box controller signature',
+                        '-t', f"button-box-controller {value['controller_version']} sequence {value['controller_sequence']}"],
+                       check=True)
+        # Confirm the selected secret/public pair even during a pin overlap.
+        subprocess.run(['minisign', '-V', '-H', '-m', str(document), '-x', str(signature), '-p', str(key)],
+                       check=True, capture_output=True)
+        encoded = (repr(signature.read_text(encoding='ascii')) + '\n').encode('ascii')
+        verify_controller_proof(raw, encoded, key.parent, run=subprocess.run)
+        return encoded
+
+
 def sign(directory, secret, key):
     secret = signing_secret(directory, secret)
     key = public_key(key)
     directory = Path(directory).resolve()
-    archive = checksums(directory)
-    manifest, _ = inspect_archive(directory, archive)
     signature = directory / "SHA256SUMS.minisig"
     if signature.exists():
         raise ReleaseError("signature already exists; refusing to overwrite it")
+    archive = checksums(directory)
+    manifest, _ = inspect_archive(directory, archive, controller_keys=key.parent)
     subprocess.run(["minisign", "-S", "-m", str(directory / "SHA256SUMS"), "-s", str(secret),
                     "-x", str(signature), "-c", "Button Box release signature",
                     "-t", f"{PRODUCT} {manifest['tag']} sequence {manifest['release_sequence']}"], check=True)

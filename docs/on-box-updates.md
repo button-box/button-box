@@ -18,6 +18,14 @@ keys offline; never transfer private keys to a box.
 
 ## Layout and bootstrap
 
+Release tooling now retains [signed controller proof](controller-descriptor.md)
+with the application. Each descriptor binds the exact six staged modules. Its
+separate signature is checked against current release trust, excluding emergency
+pins. The proof uses literal `.py` data files that the frozen field workers can
+install. No controller is promoted by this change. No fixed unit, active updater
+version or heartbeat capability changes. Later promotion must recheck the proof
+offline under the trust lock; build-time verification cannot override revocation.
+
 - `/opt/messagebox-releases/<tag>-<full-commit>/`: root-owned application trees.
 - `/opt/messagebox`: the only permitted application symlink, replaced atomically.
 - `/opt/messagebox-deps/venv-nfc`: stable dependency environment, linked from

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import pprint
 import re
 import shutil
 import subprocess
@@ -13,6 +14,11 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/install'))
+from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_MODULES, CONTROLLER_SIGNATURE,
+                            MAX_CONTROLLER_MODULE, check_controller_compatibility,
+                            controller_file, parse_controller_descriptor)
+sys.path.pop(0)
 ROOT = Path(__file__).resolve().parents[2]
 TAG_PATTERN = r"v0\.3\.(0|[1-9][0-9]*)(-canary\.[1-9][0-9]*)?"
 PRODUCT = "button-box"
@@ -22,6 +28,7 @@ SUPPORTED = {
     "supported_arch": ["aarch64"],
     "supported_models": ["Raspberry Pi 3 Model A Plus", "Raspberry Pi 4 Model B"],
 }
+CONTROLLER_VERSION = '1.3.0'
 
 
 class ReleaseError(ValueError):
@@ -69,6 +76,34 @@ def digest(path):
 
 def json_bytes(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+
+
+def controller_descriptor(root, sequence, minimum):
+    modules = []
+    for name in CONTROLLER_MODULES:
+        raw, _mode = controller_file(root, 'scripts/install/' + name, MAX_CONTROLLER_MODULE)
+        modules.append({'path': 'updater/' + name, 'size': len(raw), 'mode': 0o644,
+                        'sha256': hashlib.sha256(raw).hexdigest()})
+    value = {'schema': 1, 'product': 'button-box-controller',
+             'controller_version': CONTROLLER_VERSION, 'controller_sequence': sequence,
+             'min_application_version': minimum, 'min_launcher_protocol': 1, 'min_helper_protocol': 1,
+             'capabilities': {'signed_descriptor': True, 'self_upgrade': False},
+             'modules': modules, 'unit_changes': [], **SUPPORTED}
+    raw = (pprint.pformat(value, sort_dicts=True, width=100) + '\n').encode('ascii')
+    parse_controller_descriptor(raw)
+    return raw
+
+
+def controller_signature(raw, secret, key):
+    # Import at call time: the offline signer reuses the existing key policy;
+    # release.py also imports build's reproducible packaging primitives.
+    from release import sign_controller
+    return sign_controller(raw, secret, key)
+
+
+def inspect_package(directory, key):
+    from release import checksums, inspect_archive, public_key
+    inspect_archive(directory, checksums(directory), controller_keys=public_key(key).parent)
 
 
 def payload_paths(root):
@@ -154,7 +189,8 @@ def run_checks(root):
                        env={**os.environ, "MSGBOX_TEST_TRANSPORT": transport}, check=True)
 
 
-def build(repo, tag, output, sequence, minimum):
+def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
+          min_application_version=None, controller_secret=None, controller_key=None):
     if type(sequence) is not int or sequence < 1:
         raise ReleaseError("release_sequence must be a positive integer")
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", minimum):
@@ -166,6 +202,13 @@ def build(repo, tag, output, sequence, minimum):
         raise ReleaseError("output already exists; use a new directory")
     if output.is_relative_to(repo):
         raise ReleaseError("output must be outside the source checkout")
+    if (controller_secret is None or controller_key is None
+            or type(controller_sequence) is not int or controller_sequence < 1
+            or min_application_version is None):
+        raise ReleaseError('controller signing key, public pin, sequence and minimum application are required')
+    if Path(controller_secret).resolve().is_relative_to(repo):
+        raise ReleaseError('controller signing key must remain outside the source checkout')
+    proof_raw = proof_signature = None
     with tempfile.TemporaryDirectory(prefix="button-box-release-") as directory:
         temporary = Path(directory).resolve()
         for index in (1, 2):
@@ -180,9 +223,32 @@ def build(repo, tag, output, sequence, minimum):
             require_clean(checkout)
             require_tag(repo, tag, expected)
             payload = payload_paths(checkout)
+            if any('scripts/install/' + name not in payload for name in CONTROLLER_MODULES):
+                raise ReleaseError('controller module missing from the explicit payload allowlist')
+            raw = controller_descriptor(checkout, controller_sequence, min_application_version)
+            check_controller_compatibility(parse_controller_descriptor(raw), tag, {
+                'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})
+            if proof_raw is None:
+                proof_raw = raw
+                proof_signature = controller_signature(raw, controller_secret, controller_key)
+            elif raw != proof_raw:
+                raise ReleaseError('controller payloads differ between builds')
+            # The legacy mapper retains both .py data files as installed files.
+            # Generate only after the clean-check and tracked payload check.
+            for name, data in ((CONTROLLER_DESCRIPTOR, raw), (CONTROLLER_SIGNATURE, proof_signature)):
+                if name in payload or (checkout / name).exists():
+                    raise ReleaseError('controller proof paths are reserved generated files')
+                (checkout / name).write_bytes(data)
+                (checkout / name).chmod(0o644)
+                payload[name] = 0o644
             manifest = release_manifest(checkout, tag, expected[1], sequence, minimum, payload)
+            installed = {item['source']: item['installed'] for item in manifest['files']}
+            if any(installed.get(name) != '/opt/messagebox/' + name
+                   for name in (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE)):
+                raise ReleaseError('controller proof missing from the installed manifest')
             timestamp = int(git(checkout, "show", "-s", "--format=%ct", "HEAD"))
             package(checkout, temporary / f"build-{index}", manifest, payload, timestamp)
+            inspect_package(temporary / f'build-{index}', controller_key)
         first, second = temporary / "build-1", temporary / "build-2"
         for asset in first.iterdir():
             if digest(asset) != digest(second / asset.name):
@@ -200,10 +266,16 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--release-sequence", type=int, required=True)
     parser.add_argument("--min-updater-version", required=True)
+    parser.add_argument('--controller-sequence', type=int, required=True)
+    parser.add_argument('--min-application-version', required=True)
+    parser.add_argument('--controller-secret-key', type=Path, required=True)
+    parser.add_argument('--controller-public-key', type=Path, required=True)
     args = parser.parse_args()
     try:
-        build(args.repo, args.tag, args.output, args.release_sequence, args.min_updater_version)
-    except (ReleaseError, OSError, subprocess.CalledProcessError) as exc:
+        build(args.repo, args.tag, args.output, args.release_sequence, args.min_updater_version,
+              controller_sequence=args.controller_sequence, min_application_version=args.min_application_version,
+              controller_secret=args.controller_secret_key, controller_key=args.controller_public_key)
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Release build failed: {exc}\n")
 
 

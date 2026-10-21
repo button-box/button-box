@@ -42,13 +42,18 @@ change heartbeat protocol `version` or install VERSION on existing boxes.
 
 Use a reviewed, clean checkout containing these tools and an existing release
 tag containing `scripts/release/payload.txt`. Python 3.9+, Git, gzip, make, uv,
-and Bun are needed; use the repository's pinned check tools. Create a tag only
+Bun and minisign are needed; use the repository's pinned check tools. This build
+now signs the [retained controller descriptor](controller-descriptor.md) on the
+offline signing computer. Create a tag only
 through the separately authorized release process. The builder creates no tags,
 commits, pushes, or releases. For example, with an already existing tag:
 
 ```sh
 python3 scripts/release/build.py v0.3.0-canary.1 \
   --release-sequence 1 --min-updater-version 1.0.0 \
+  --controller-sequence 1 --min-application-version v0.3.0-canary.1 \
+  --controller-secret-key /media/offline-signing/release.key \
+  --controller-public-key config/release-keys/button-box-release-2026.pub \
   --output /tmp/button-box-v0.3.0-canary.1
 ```
 
@@ -60,6 +65,13 @@ builds. Each build uses a separate clean detached clone, runs both
 `MSGBOX_TEST_TRANSPORT=cloud make check` and
 `MSGBOX_TEST_TRANSPORT=wacli make check`, and rejects changes made by checks.
 Ignored tool caches are never included.
+
+Controller signing arguments are mandatory. Reserve the independent controller
+sequence as well as the application sequence. The builder creates two literal
+data files under `messagebox/` after its clean-source checks. They contain the
+descriptor and its separate signature. Both enter the installed manifest and
+remain with the release after staging cleanup. The second clone must produce the
+same descriptor. The builder also checks each completed archive against it.
 
 `scripts/release/payload.txt` lists each permitted tracked regular file explicitly,
 without directory wildcards. It includes the installed-file mapping, the bounded
@@ -99,7 +111,8 @@ The tar archive has sorted file entries, uid/gid zero, empty owner/group names,
 all entries. It uses USTAR and `gzip -n -9` without filename or wall-clock gzip
 metadata. Generated identity files have mode 0644. Two independent builds must
 match every artifact hash before any output is copied. Repeat builds with the
-same tag, sequence, minimum version, Python and gzip toolchain produce identical
+same reviewed tools, tag, both sequences, minimum versions, signing key, Python
+and gzip toolchain produce identical
 bytes; compression across different gzip implementations is not promised.
 
 The output contains exactly:
@@ -115,8 +128,8 @@ A deterministic archive is not proof that its content is safe to share.
 ## Offline human signing
 
 Use a dedicated **password-encrypted minisign key on an offline signing
-computer**. The human signer generates it outside the repository, with encrypted
-copies on two removable drives and the passphrase stored separately. Never put a
+computer**. The human signer generates it outside the repository. Storage,
+recovery copies and passphrase custody still need a defined policy. Never put a
 secret key or passphrase in this repository, release assets, shell environment,
 CI, GitHub secrets, an agent environment, or a Pi. A USB key attached to an online
 computer does not provide offline custody. This tooling generates no keys and
@@ -124,9 +137,11 @@ cannot prove the computer is offline.
 
 Commit only the independently verified public key under
 `config/release-keys/<name>.pub` through the authorized source-review process.
-Copy the reviewed tools, public pin, and three unsigned assets to the offline
-computer. Independently rebuild there with the same inputs where possible, or
-inspect all artifact bytes, hashes, installed mapping and release metadata.
+Build with the reviewed tools and public pin on the offline computer. Its three
+output assets already contain a signed controller descriptor. The application
+checksum file still needs its own signature. Independently rebuild with the same
+inputs where possible, or inspect all artifact bytes, hashes, installed mapping
+and release metadata.
 Confirm the sequence history and compatibility before signing.
 
 ```sh
