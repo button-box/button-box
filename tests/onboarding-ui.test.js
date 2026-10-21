@@ -339,9 +339,11 @@ test("Cloud Setup routes account, people, NFC and settings to the service while 
   const required = h.node("required-tasks").children.map(row => row.children[0].href);
   const optional = h.node("optional-tasks").children.map(row => row.children[0].href);
   expect(required).toEqual(["#advanced", "https://button.box/dashboard", "https://button.box/dashboard", "#activity"]);
+  expect(h.node("required-tasks").children[1].children[0].textContent).toBe("Press the button and name your box");
   expect(optional).toEqual(["https://button.box/dashboard", "https://button.box/dashboard"]);
   vm.runInContext('currentState.transport = "wacli"; renderSetup(currentState)', h.context);
   expect(h.node("required-tasks").children.map(row => row.children[0].href)).toEqual(["#advanced", "#whatsapp", "#advanced", "#activity"]);
+  expect(h.node("required-tasks").children[1].children[0].textContent).toBe("Link WhatsApp");
   expect(h.node("optional-tasks").children.map(row => row.children[0].href)).toEqual(["#advanced", "#settings"]);
 });
 

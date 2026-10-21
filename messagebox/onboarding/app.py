@@ -115,13 +115,13 @@ _HANDOFF_HTML = b"""<!doctype html>
 _QR_WIFI_NEXT = b"""        <aside class="notice">
           <strong>Next</strong>
           <span>Your phone leaves this page when Button Box joins your Wi-Fi. That is normal.</span>
-          <span>When Button Box beeps, scan the QR code on your setup card to finish in WhatsApp.</span>
+          <span>Wait for the beep or the Connected! message. Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card.</span>
         </aside>
 """
 _QR_HANDOFF_CONTENT = """<div class="wifi-handoff" role="status" aria-live="polite">
 <h1 id="handoff-title">Connecting…</h1>
 <p id="handoff-status" class="lede">Your box is joining your Wi-Fi. This page may lose its connection.</p>
-<p id="handoff-next" class="lede">When the box says it is connected, you can close this page. Now scan the QR code on the card to finish in WhatsApp.</p>
+<p id="handoff-next" class="lede">Wait for the beep or the Connected! message. Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card.</p>
 </div>
 <p class="field-help">If the connection fails, rejoin the setup hotspot and try again.</p>
 <p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>
@@ -450,7 +450,7 @@ def create_app(
         if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
             raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
         if claim_client().status().get("status") != "claimed":
-            raise RequestError("409 Conflict", "Cloud claim is incomplete")
+            raise RequestError("409 Conflict", "Cloud connection is incomplete")
         completion_request(transport="cloud")
 
     nfc = nfc_client or NfcOnboardingClient()
