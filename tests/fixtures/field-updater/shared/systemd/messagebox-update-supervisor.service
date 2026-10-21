@@ -1,0 +1,12 @@
+[Unit]
+Description=Enforce independent Button Box software recovery deadline
+After=messagebox-update-recovery.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/messagebox-update/bounded_update.py supervise
+TimeoutStartSec=180
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX

@@ -1,0 +1,28 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Button Box physical Wi-Fi setup reset check
+After=local-fs.target NetworkManager.service
+Before=comitup.service messagebox.target messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+RuntimeDirectory=messagebox-wifi-reset
+RuntimeDirectoryMode=0700
+WorkingDirectory=/run/messagebox-wifi-reset
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.reset
+EnvironmentFile=-/etc/messagebox/env
+Environment=PYTHONPATH=/opt/messagebox
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+Environment=HOME=/var/lib/messagebox-onboarding
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/messagebox-onboarding /etc/systemd/system /var/lib/NetworkManager /var/lib/comitup /var/lib/messagebox-onboarding /run
+
+[Install]
+WantedBy=multi-user.target

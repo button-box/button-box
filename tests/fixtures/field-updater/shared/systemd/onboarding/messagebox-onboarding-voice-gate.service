@@ -1,0 +1,23 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Validate and activate Button Box setup voice flow
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+After=messagebox-whatsapp-pairing.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/messagebox
+EnvironmentFile=/etc/messagebox/env
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.voice_gate
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/messagebox-onboarding /var/lib/messagebox /var/lib/messagebox-cloud
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0

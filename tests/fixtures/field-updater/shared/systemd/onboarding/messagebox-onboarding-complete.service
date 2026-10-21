@@ -1,0 +1,23 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Validate and complete Button Box setup
+ConditionPathExists=/etc/messagebox-onboarding/enabled
+After=messagebox-onboarding-home.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/messagebox
+EnvironmentFile=/etc/messagebox/env
+ExecStart=/usr/bin/python3 -m messagebox.onboarding.completion
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/messagebox
+ReadWritePaths=/etc/messagebox-onboarding /etc/systemd/system /var/lib/messagebox-onboarding /var/lib/messagebox-cloud /run
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+RestrictRealtime=yes
+LimitCORE=0
