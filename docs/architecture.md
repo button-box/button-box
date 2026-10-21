@@ -63,10 +63,17 @@ and download support, and must not be claimed from poller tests alone.
 
 A fresh valid NFC selection reserves the next button interaction for a new
 outbound message before any unread incoming message is claimed. The incoming
-queue stays intact for the following ordinary press. The selection is one-shot
-and expires when that recording interaction completes or is abandoned. In
-hold-to-record mode, releasing before the hold threshold cancels the selected
-recording intent without playing the queue or saving a silent recording.
+queue stays intact until an ordinary press after the card message is queued.
+The selection is consumed only when the approved recording enters the durable
+outbox. Short presses, empty audio, cancelled or deleted recordings, recording
+timeouts, and audio errors keep the choice with its original selection time.
+The choice expires after `MSGBOX_NFC_SELECTION_TTL_S` (30 seconds by default),
+even while the card remains on the reader. A new presentation replaces it.
+A recording that starts within the window keeps its exact recipient.
+In hold-to-record mode, a short release keeps the choice without playing the
+queue or saving silent audio. A button-service crash before approval leaves
+the choice available until expiry; there is no claim to recover. Invalid card
+state blocks outbound routing rather than selecting a recent sender or default.
 
 In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14

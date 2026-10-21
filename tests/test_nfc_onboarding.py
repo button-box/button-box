@@ -277,7 +277,7 @@ class NfcTests(unittest.TestCase):
         self.contacts.clear_cards(GRANDMA)
         self.selection.unknown_path.write_text("unknown reader block")
         self.assertIsNone(self.router.active_contact())
-        self.assertFalse(self.selection.path.exists())
+        self.assertTrue(self.selection.path.exists())
         self.assertTrue(self.selection.unknown_present())
 
     def test_sole_contact_recognition_clears_unknown_latch_without_selection(self):

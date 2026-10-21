@@ -123,10 +123,10 @@ class WacliContractTests(unittest.TestCase):
         button_send.NFC_HEALTH_FILE.touch()
         reader = nfc.NfcRuntime(nfc.router(self.announcements), nfc.Announcer(self.announcements))
         self.assertEqual(reader.observe(bytes.fromhex("04a100ff"), 0).action, "selected")
-        context = button_send.current_recipient_context(claim=True)
+        context = button_send.current_recipient_context()
         self.assertTrue(context["via_card"])
         self.assertEqual(context["contact"]["jid"], PERSON)
-        self.assertIsNone(SelectionStore(button_send.NFC_SELECTION_FILE).load())
+        self.assertIsNotNone(SelectionStore(button_send.NFC_SELECTION_FILE).load())
         self.send_to(context["contact"]["jid"])
 
     def test_receive_authorized_person_play_and_preserve_reply_route(self):

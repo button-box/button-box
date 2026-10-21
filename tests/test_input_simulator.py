@@ -617,7 +617,7 @@ class InputSimulatorTests(unittest.TestCase):
                 self.assertFalse(removed["reader_present"])
                 self.assertTrue(removed["selection_present"])
                 document = json.loads(selection.path.read_text())
-                document["last_seen_at"] = time.time() - 31
+                document["selected_at"] = time.time() - 31
                 selection.path.write_text(json.dumps(document))
                 clock[0] = 5
                 inputs.tick()
@@ -645,8 +645,10 @@ class InputSimulatorTests(unittest.TestCase):
                 self.assertEqual(allowed["guard_outcome"], "allowed")
                 self.assertTrue(allowed["authorized_recipient"])
                 self.assertTrue(allowed["via_card"])
+                self.assertEqual(button_send.recording_recipient_context()["contact"]["jid"], JID)
+                selection.consume(context["selection"])
                 with self.assertRaises(simulator.SimulationError):
-                    button_send.recording_recipient_context()  # Real household default after consumption.
+                    button_send.recording_recipient_context()  # Default only after the selection is consumed.
                 rejected = records[-1]
                 self.assertEqual(rejected["guard_outcome"], "rejected")
                 self.assertFalse(rejected["authorized_recipient"])

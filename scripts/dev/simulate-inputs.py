@@ -258,7 +258,7 @@ class InputTrace:
         announced_claimed, claimed_announcement = trace_file(router.announcements.claimed_path)
         announcement = announcement or claimed_announcement or {}
         selection = selection or {}
-        age = router.selection.clock() - selection["last_seen_at"] if type(selection.get("last_seen_at")) in (int, float) else None
+        age = router.selection.clock() - selection["selected_at"] if type(selection.get("selected_at")) in (int, float) else None
         within_ttl = (age is not None and math.isfinite(age)
                       and -5 <= age <= self.runtime.NFC_SELECTION_TTL_S)
         selected_jid = selection.get("jid")

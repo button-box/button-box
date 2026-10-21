@@ -46,7 +46,7 @@ from messagebox.audio_requests import AudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import _BOX_JID, ContactError, ContactStore
-from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, active_selection, claim_selection
+from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, active_selection
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
@@ -428,13 +428,13 @@ def transport_mode():
     return mode
 
 
-def current_recipient_context(*, claim=False):
+def current_recipient_context():
     """Resolve standalone routing from an authoritative contacts snapshot."""
     try:
         document = ContactStore(CONTACTS_FILE).load()
         contacts = document["contacts"]
         has_cards = any(contact["card_uids"] for contact in contacts.values())
-        if has_cards:
+        if has_cards or Path(NFC_SELECTION_FILE).exists():
             try:
                 if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
                     log("recipient unavailable: NFC reader health is stale")
@@ -445,9 +445,9 @@ def current_recipient_context(*, claim=False):
             if SelectionStore(NFC_SELECTION_FILE).unknown_present():
                 log("recipient unavailable: unrecognized card presentation")
                 return None
-            resolver = claim_selection if claim else active_selection
+            SelectionStore(NFC_SELECTION_FILE).expire(max_age=NFC_SELECTION_TTL_S)
             selection_existed = Path(NFC_SELECTION_FILE).exists()
-            context = resolver(
+            context = active_selection(
                 CONTACTS_FILE,
                 NFC_SELECTION_FILE,
                 max_age=NFC_SELECTION_TTL_S,
@@ -456,6 +456,7 @@ def current_recipient_context(*, claim=False):
                 return {
                     "contact": context["contact"],
                     "uid": context["uid"],
+                    "selection": context["selection"],
                     "via_card": True,
                 }
             if selection_existed:
@@ -482,25 +483,29 @@ def current_recipient_context(*, claim=False):
 
 
 def claim_fresh_card_intent():
-    """Claim a fresh card selection before choosing inbound playback.
-
-    The state distinguishes no scan, an already-stale scan, a claimed valid
-    scan, and a valid scan that became invalid during the claim. Callers use
-    that distinction to preserve normal playback while failing closed for
-    outbound routing and claim races.
-    """
+    """Read a card choice without consuming it before a recording is queued."""
+    try:
+        SelectionStore(NFC_SELECTION_FILE).expire(max_age=NFC_SELECTION_TTL_S)
+    except (NfcError, OSError):
+        return "expired", None
     if not Path(NFC_SELECTION_FILE).exists():
         return "none", None
-    pending = current_recipient_context(claim=False)
+    pending = current_recipient_context()
     if pending is None or not pending["via_card"]:
-        # Consume stale state so it cannot keep blocking later interactions.
-        current_recipient_context(claim=True)
-        return "stale", None
-    claimed = current_recipient_context(claim=True)
-    if claimed is None or not claimed["via_card"]:
+        return "expired", None
+    context = current_recipient_context()
+    if context is None or not context["via_card"]:
         log_event("nfc_selection_expired")
         return "expired", None
-    return "claimed", claimed
+    return "claimed", context
+
+
+def recording_session_event(context, kind, **data):
+    # GuidedSession emits approval only after the outbox job is durable, before
+    # review-audio cleanup. Unsent attempts and crashes leave the choice intact.
+    if kind == "guided_approved" and context and context["via_card"]:
+        SelectionStore(NFC_SELECTION_FILE).consume(context["selection"])
+    log_event(kind, **data)
 
 
 def nfc_idle_routing_is_safe(contacts):
@@ -530,17 +535,21 @@ def recording_recipient_context():
     except (ContactError, OSError):
         return None
     contacts = document["contacts"]
+    try:
+        SelectionStore(NFC_SELECTION_FILE).expire(max_age=NFC_SELECTION_TTL_S)
+    except (NfcError, OSError):
+        return None
     # A presentation that arrives after the initial press check still owns the
     # interaction. Invalid or unsafe card state must never fall through to a
     # recent sender.
     if Path(NFC_SELECTION_FILE).exists():
-        return current_recipient_context(claim=True)
+        return current_recipient_context()
     if not nfc_idle_routing_is_safe(contacts):
         return None
 
     route_state, recipient = recent_reply_recipient(QUEUE_DIR, contacts)
     if Path(NFC_SELECTION_FILE).exists():
-        return current_recipient_context(claim=True)
+        return current_recipient_context()
     if not nfc_idle_routing_is_safe(contacts):
         return None
     if route_state == "route":
@@ -552,7 +561,7 @@ def recording_recipient_context():
     if route_state == "blocked":
         log("recipient unavailable: recent reply route is no longer valid")
         return None
-    return current_recipient_context(claim=True)
+    return current_recipient_context()
 
 
 def routing_mode():
@@ -2170,18 +2179,17 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
     if intent == "play":
         wait_for_stable_open()
         if card_state in {"claimed", "expired"}:
-            # Hold-to-record still needs a hold. A quick release consumes the
-            # one-shot choice without playing an unrelated queued message or
-            # creating a near-silent recording.
+            # A quick release keeps the card choice for a later hold, without
+            # playing an unrelated queued message or saving silent audio.
             log_event("nfc_recording_cancelled", reason="short_press")
             return
         play_next_legacy()
         return
-    if card_state in {"stale", "expired"}:
+    if card_state == "expired":
         block_unavailable_recipient()
         return
     if card_state == "none":
-        context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
+        context = current_recipient_context() if card_prompt_uid else recording_recipient_context()
     if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
         block_unavailable_recipient()
         return
@@ -2201,7 +2209,9 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
     _guided_active = True
     outcome = None
     try:
-        outcome = GuidedSession(io, outbox_store, log_event).run(
+        outcome = GuidedSession(
+            io, outbox_store, lambda kind, **data: recording_session_event(context, kind, **data)
+        ).run(
             recipient=recipient, flow_kind="standalone", session_id=session_id,
             deleted_cue_path=str(sound_pack.cue_path("deleted")),
             review_before_send=settings.get("review_before_send", False), account_scope=scope,
@@ -2221,7 +2231,7 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
 def _context_matches_card(context, uid):
     """A press during the card prompt must use the card that was announced.
 
-    Claimed card selections carry the card uid but not the contact's full
+    Selected card contexts carry the card uid but not the contact's full
     card list, so compare the uid first and fall back to the list.
     """
     if context is None:
@@ -2240,13 +2250,10 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
         block_unavailable_recipient()
         return
     claim = None if card_state == "claimed" or card_prompt_uid else claim_oldest()
-    if card_state == "stale" and not claim:
-        block_unavailable_recipient()
-        return
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
-        context = current_recipient_context(claim=True) if card_prompt_uid else recording_recipient_context()
+        context = current_recipient_context() if card_prompt_uid else recording_recipient_context()
     if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
         block_unavailable_recipient()
         return
@@ -2291,7 +2298,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
             data["source_file"] = claim["path"].name
-        log_event(kind, **data)
+        recording_session_event(context, kind, **data)
         if kind == "guided_inbound_played":
             claim["played_at"] = time.time()
             react_played(metadata)

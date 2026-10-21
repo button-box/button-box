@@ -255,6 +255,7 @@ class SelectionStore:
                     "uid": uid,
                     "jid": jid,
                     "contacts_revision": contacts_revision,
+                    "selection_id": uuid.uuid4().hex if changed else previous.get("selection_id"),
                     "selected_at": now if changed else previous["selected_at"],
                     "last_seen_at": now,
                 },
@@ -273,6 +274,23 @@ class SelectionStore:
                 return None
             os.replace(self.path, self.claimed_path)
             return selection
+
+    def consume(self, snapshot):
+        """Consume only the presentation whose recording was queued."""
+        with self.locked():
+            current = self._load(max_age=None)
+            keys = ("uid", "jid", "contacts_revision", "selected_at", "selection_id")
+            if current is None or any(current.get(key) != snapshot.get(key) for key in keys):
+                return False
+            os.replace(self.path, self.claimed_path)
+            return True
+
+    def expire(self, *, max_age=DEFAULT_SELECTION_TTL_S):
+        with self.locked():
+            current = self._load(max_age=None)
+            if current is not None and self.clock() - current["selected_at"] > max_age:
+                # Keep the marker so a held card cannot renew an expired choice.
+                os.replace(self.path, self.claimed_path)
 
     def clear(self, *, preserve_unknown=False):
         with self.locked():
@@ -309,14 +327,15 @@ class SelectionStore:
         except (NfcError, TypeError, ValueError):
             return None
         now = self.clock()
-        if last_seen_at > now + 5:
+        if selected_at > now + 5 or last_seen_at > now + 5:
             return None
-        if max_age is not None and now - last_seen_at > max_age:
+        if max_age is not None and now - selected_at > max_age:
             return None
         return {
             "uid": uid,
             "jid": jid,
             "contacts_revision": revision,
+            "selection_id": payload.get("selection_id"),
             "selected_at": selected_at,
             "last_seen_at": last_seen_at,
         }
@@ -767,13 +786,15 @@ def _load_valid_selection(contacts, selection, *, max_age, consume):
         or jid != snapshot["jid"]
         or contact is None
     ):
-        selection.clear(preserve_unknown=True)
+        if consume:
+            selection.clear(preserve_unknown=True)
         return None
     return {
         "uid": snapshot["uid"],
         "jid": jid,
         "contacts_revision": snapshot["contacts_revision"],
         "contact": _public_contact(jid, contact),
+        "selection": snapshot,
     }
 
 
