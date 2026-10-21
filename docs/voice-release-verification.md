@@ -6,39 +6,69 @@ already contains that commit. Its reviewed step-2 source is
 `9a3ae40259a21db53a625903004dca06546e1af2`, including the setup-page wording.
 The earlier rebase is complete. No rebase command remains to be run.
 
-Round-2 corrections follow these commits in the local checkout. They have not
-been committed, pushed, or deployed in this run. Both review source files stay
-untracked. No device or hardware test was done.
+Astra's confirmation source is `f09d2bc`, which contains the round-2 corrections
+and the shared setup-page sentence. This follow-up makes the Cloud greeting
+contract mandatory and updates the release order. No push, deployment, device,
+or hardware test was done in this run. Both review source files remain untracked.
+
+**Current release order**
+
+Release A is the self-upgrade bridge being built on `feat/updater-self-upgrade`.
+It MUST ship before this Voice Release. The Voice Release MUST require the
+self-upgrade controller delivered by Release A. Verify the bridge's final
+controller version and set the Voice Release minimum updater requirement to
+that version before building. Its exact version and field acceptance are
+**unverified** here; the historical `1.2.0` minimum alone does not prove this gate.
+Use **BOX-10 or BOX-11** as the canary, then use the normal release batches.
+
+The earlier voice step-1 plan is **replaced by Release A**, not a separate
+release to ship first. Its source and verification history remain below.
 
 **Round-2 findings and proof**
 
 | Finding | Change | File | Test |
 | --- | --- | --- | --- |
-| 1. Current-heartbeat gate | Require boolean true at creation and every delivery. Test successful-heartbeat cancellation with the historical reader. The failed-heartbeat redelivery boundary remains open; see the verified failure probe below. | [docs/voice-onboarding.md:68](../docs/voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:54](../tests/test_voice_review_round2.py#L54); [tests/test_voice_review_round2.py:123](../tests/test_voice_review_round2.py#L123) |
-| 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:131](../tests/test_voice_review_round2.py#L131); [tests/test_voice_review_round2.py:155](../tests/test_voice_review_round2.py#L155); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
-| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:192](../tests/test_voice_review_round2.py#L192); [tests/test_voice_review_round2.py:182](../tests/test_voice_review_round2.py#L182) |
+| 1. Mandatory greeting contract | Require a fresh latest heartbeat and an atomic pending-to-offered change before the response. Never redeliver. Cover failed rollback heartbeat, concurrent polls, expiry, ACK mapping, and retention. | [docs/voice-onboarding.md:68](voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:191](../tests/test_voice_review_round2.py#L191); [tests/test_voice_review_round2.py:194](../tests/test_voice_review_round2.py#L194); [tests/test_voice_review_round2.py:197](../tests/test_voice_review_round2.py#L197); [tests/test_voice_review_round2.py:205](../tests/test_voice_review_round2.py#L205) |
+| 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:298](../tests/test_voice_review_round2.py#L298); [tests/test_voice_review_round2.py:322](../tests/test_voice_review_round2.py#L322); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
+| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:359](../tests/test_voice_review_round2.py#L359); [tests/test_voice_review_round2.py:349](../tests/test_voice_review_round2.py#L349) |
 | 4. Exact fleet fixtures | Replace the mislabelled export with separate exports from clean detached checkouts of 04d53cd and 9a3ae40. Step 1 has no guided setup capability or greeting command. | [docs/fixtures/README.md:3](../docs/fixtures/README.md#L3) | [tests/test_settings_contract.py:52](../tests/test_settings_contract.py#L52) |
 | 5. Release evidence | Record the committed step identities and completed rebase. Replace the old embedded fixture with links to the two exact exports. Label prior test/size results as historical; keep physical and Cloud acceptance open. | [docs/voice-release-verification.md:3](voice-release-verification.md#L3) | Exact-commit export checks above; documentation review and git diff --check. |
 
-The Cloud test uses the actual historical startup loop and strict inbox reader
-with a contract server model. It proves the documented flow after a successful
-current heartbeat, when Cloud enforces the gate and cancellation. It does not verify the deployed
-Cloud service. Cloud implementation and integration acceptance remain open.
-No Pi-side retirement mechanism was added.
+The Cloud contract now requires one atomic `pending` → `offered` change before
+the response, and no redelivery. The tests use SQLite and the actual historical
+startup loop and strict inbox reader. After interruption before the ACK, both
+a successful and a failed rollback heartbeat let the following ordinary command
+run without a greeting redelivery. Concurrent requests return one greeting in
+total. Restart, lost response, expiry, stale or removed capability, ACK mapping,
+and 30-day retention are tested.
 
-**Remaining HIGH boundary:** a rollback heartbeat can fail before Cloud records
-it. The historical loop then polls with cached authorization, while Cloud can
-still hold the preceding `guided_setup_v1: true` snapshot. A read-only failure
-probe reproduced the unsupported greeting, the old reader's `cloud inbox item
-is invalid` error, and zero ordinary-command calls. Thus option (a) alone does
-not guarantee that this redelivery never reaches the old reader. See the
-[failed-heartbeat boundary and proposed Cloud extension](voice-onboarding.md).
-Cloud must resolve and test this boundary before release acceptance. The Pi
-cannot filter a response using code that is no longer running after rollback.
+The negative old-runtime crash test remains as the reason for the rule. It
+reproduces the invalid inbox error if Cloud breaks the no-redelivery contract.
+These are tests of the required contract model, not the deployed Cloud service.
+Cloud implementation and integration acceptance remain **unverified**. No
+Pi-side retirement mechanism was added. Cloud MUST map the existing Pi ACKs
+`applied` → `played` and `rejected` → `failed`; the requested Cloud row state
+names and the Pi wire API are unchanged.
+
+**Remaining HIGH: first offer after rollback.** A separate local probe used
+this exact contract with a `pending` row, a failed rollback heartbeat, and the
+still-fresh preceding capability. Cloud offered it once; the historical reader
+raised `cloud inbox item is invalid` and processed zero following commands.
+At-most-once delivery closes the redelivery case, not this first-offer case.
+Cloud must resolve request/runtime compatibility before release acceptance.
+The five rules and state names have not been changed to hide this limit. See
+[the documented first-offer limit](voice-onboarding.md).
+
+Current follow-up `make check`: **PASS** on the follow-up changes to `f09d2bc`.
+Syntax and all lint checks passed. All 1,142 Python tests passed in 422.388
+seconds; all 54 JavaScript tests passed. `git diff --check` passed. This is
+contract-model evidence, not production Cloud or physical-box acceptance.
+
+**Historical round-2 checks**
 
 Round-2 focused checks passed: six delivery/speaker/voice regression tests,
 six speaker tests, 21 settings tests, 11 setup tests, and four fleet-contract
-tests. Final `make check`: **PASS**. Syntax and all lint checks passed;
+tests. That `make check`: **PASS**. Syntax and all lint checks passed;
 1,136 Python tests passed in 715.115 seconds, and 54 JavaScript tests passed.
 `git diff --check` also passed. These results apply to the local round-2
 corrections on HEAD `9a3ae40`. No physical acceptance is implied.
@@ -62,28 +92,27 @@ module. A pending greeting and a buttonbox voice preview do not stop a legacy
 ringtone request. The frozen fixtures name their source commit. They do not
 need network access or Git history in CI.
 
-**Two-release plan**
+**Historical voice step-1 plan — replaced by Release A**
 
-1. Use committed step 1 (`04d53cd`). Build it with minimum updater 1.1.0.
-   Use the next available version and release sequence. Test box 4 first. The
-   v0.3.12 controller installs its complete payload in the test simulation.
-   Its application and sound files remain those from v0.3.12.
-2. In an attended maintenance window, promote all six reviewed fixed controller
-   modules and install the discovery timeout drop-in. Use the locking, atomic
-   directory exchange, read-back, and fallback procedure in `on-box-updates.md`.
-   Do not rerun bootstrap on an installed box. An ordinary application update
-   only stages these modules; it does not activate them. This maintenance step
-   is necessary before the voice release can install.
-3. The voice branch is already based on committed step 1. Review and commit
-   the round-2 corrections, then regenerate the final-build fixture. Build the
-   voice release with minimum updater 1.2.0 and a higher sequence. The signed-bundle test proves that the v0.3.12 verifier rejects this
-   minimum. All six controller modules are byte-identical in the prepared
-   worktrees. Test box 4 first, then use the normal release batches.
+The earlier plan used committed step 1 (`04d53cd`) from
+`feat/updater-voice-ready`, with minimum updater `1.1.0`. The actual v0.3.12
+controller installed its complete payload in the test simulation. Its application
+and sound files stayed at v0.3.12. Step 1 staged all six controller modules and
+the discovery timeout drop-in; it did not activate the fixed controller.
 
-No single-step update was implemented. Fixed unit files stay unchanged. The
-new drop-in is a signed payload file for attended maintenance. Fresh Cloud
-bootstrap installs the same drop-in. Application rollback does not restore the
-fixed controller or this drop-in; attended controller fallback must restore both.
+That plan required attended promotion with the locking, atomic directory
+exchange, read-back, and fallback procedure in `on-box-updates.md`. The voice
+branch already contains step 1. The old step-2 tests used minimum updater
+`1.2.0`; the v0.3.12 verifier rejected that minimum, and the step-1 controller
+accepted the voice payload. These are historical results, not proof that the
+self-upgrade bridge is installed or accepted.
+
+**Release A replaces that attended step-1 release path.** Keep its evidence for
+compatibility review. Do not ship the old plan as an additional prerequisite.
+The current Voice Release must follow the bridge and require its self-upgrade
+controller. Regenerate the final release fixture and measure the signed release
+artifacts after the bridge and Voice Release identities are fixed. Test BOX-10
+or BOX-11 first. Bridge promotion and recovery acceptance belong to Release A.
 
 **Measured size and calculated transfer time**
 
@@ -93,7 +122,8 @@ function produced them with `gzip -n -9`, the explicit payload list, and a
 manifest from `scripts/dev/release-manifest.py`. It included generated identity
 files. It did not use the production tag-only build, sign, or publish. Temporary
 measurement tags were `v0.3.13-canary.1` and `v0.3.14-canary.1`; they are not
-reserved release versions. Rebuild and measure the committed release artifacts.
+reserved release versions. Release A has not been measured here. Rebuild and
+measure the committed release artifacts.
 
 | Review payload | Compressed bytes | MiB | At 1 Mbit/s | At 5 Mbit/s | Required free space after extraction |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -113,7 +143,7 @@ all installed packs. Raise the transfer budget to 1,500 seconds, checked between
 timeout, 128 MiB compressed archive cap, 256 MiB expanded cap, per-file/count
 limits, signature checks, and partial-file cleanup. A slow or failed transfer
 can occupy discovery longer. There is no download resume support. A slower
-link can still fail safely. Verify the effective timeout before step 2.
+link can still fail safely. Verify the effective timeout before the Voice Release.
 
 The installer free-space check is twice the installed bytes plus 64 MiB. It runs
 after extraction. Add the stored download and staging tree: the estimates are
@@ -170,8 +200,9 @@ the button for ten seconds during boot. This risk remains.
 
 **Physical tests still required — unverified**
 
-- Box 4: exact field-controller update, fixed promotion, effective timeout,
-  slow link, low space, and controller fallback.
+- BOX-10 or BOX-11: Release A self-upgrade bridge, controller requirement,
+  effective timeout, slow link, low space, and controller recovery before the
+  Voice Release.
 - Audio quality, button press/release/bounce, speaker contention under actual
   systemd users, NFC setup sounds, missing speaker, and muted playback.
 - Real note before or during a greeting. Absent, repeated, late, malformed, and
@@ -247,6 +278,6 @@ The two exact-commit exports are separate files:
 See [fixture provenance and regeneration](fixtures/README.md). The incorrectly
 labelled `voice-onboarding-fleet.json` is removed. The field build `3fb1c2a`
 must never be assigned the step-2 capabilities. These exports describe the two
-named commits, not the local round-2 corrections. Generate a new fixture from
+named historical commits, not the final Voice Release identity. Generate a new fixture from
 the final committed release before Cloud handoff. Greeting delivery still
 requires the current heartbeat; a fleet fixture cannot authorize redelivery.

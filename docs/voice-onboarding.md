@@ -65,50 +65,94 @@ silent. It does not prevent claim completion through WhatsApp.
 
 ## Cloud greeting contract
 
-Cloud **MUST** gate `setup_greeting` on the box's **current heartbeat**:
+Cloud **MUST** implement all of these rules for `setup_greeting`. They are a
+release requirement, not an optional improvement.
 
-- Require `capabilities.guided_setup_v1` to be the boolean `true` when creating
-  a greeting and again when delivering an inbox response or redelivery.
-- Replace the stored capabilities on each heartbeat. Do not merge a removed
-  capability back from registration, an earlier heartbeat, or a fleet fixture.
-  A missing, false, or invalid value does not permit a greeting.
-- When a heartbeat stops reporting the capability, durably cancel every pending
-  greeting before acknowledging that heartbeat. Do not deliver it later if the
-  box upgrades again. Keep ordinary inbox commands available.
+1. Store each greeting as one row. Use the states `pending` → `offered` →
+   `received` | `played` | `failed` | `expired` | `cancelled`. Store `offered_at`
+   and `expires_at`. Set `expires_at` no later than ten minutes after creation.
+2. Offer a greeting only when its state is `pending` and the box's **latest**
+   heartbeat was received within `BOX_ONLINE_SECONDS` and reports boolean
+   `capabilities.guided_setup_v1: true`. Replace the capability snapshot on each
+   heartbeat. Do not merge an older capability from registration, a previous
+   heartbeat, or a fleet fixture. Change `pending` to `offered` with one atomic
+   `UPDATE … WHERE state='pending' RETURNING` operation. Commit this change and
+   `offered_at` **before** sending the inbox response. The heartbeat check and
+   offer must not race a heartbeat that removes the capability.
+3. **Never redeliver an offered row.** Concurrent polls, repeated cursors,
+   server restarts, a lost HTTP response, and a lost ACK must not offer it again.
+   A lost ACK leaves the row `offered` until `expires_at`, then `expired`, unless
+   rule 4 cancels it first. Known box ACKs record `received`, `played`, or
+   `failed`; an expiry ACK records `expired`. Ignore unknown ACK states and
+   unknown operation IDs. A late ACK must not reverse a final result or revive
+   a cancelled or expired row. A `received` receipt can later record the final
+   playback result, but it can never be offered again.
+4. If the latest heartbeat stops reporting `guided_setup_v1`, or there is no
+   fresh heartbeat, change all `pending` and `offered` rows to `cancelled` and
+   offer nothing. A missing, false, or invalid capability does not permit an
+   offer. Persist cancellation before acknowledging a capability-removing
+   heartbeat. Refreshing the heartbeat or upgrading again must not revive a
+   cancelled row. Keep ordinary inbox commands available.
+5. Delete terminal receipt rows after 30 days. Store only the clip reference
+   and delivery metadata. Do not store greeting text or names in these rows.
 
-This is required for rollback safety. A power cut can occur after the Pi saves
-its optional-audio request but before the `received` ACK is durable. The server
-command can then remain pending for longer than the local 30-second audio
-lifetime. The old runtime cannot parse `setup_greeting`. Its startup flow attempts
-a heartbeat before polling the inbox; after acceptance, Cloud must use that capability
-snapshot and cancel the greeting before returning the next inbox response.
-Queue separation alone does not close this server redelivery case.
+`BOX_ONLINE_SECONDS` is the Cloud online window. This document does not set a
+new Pi timeout or guess the Cloud configuration value. The executable test
+model uses its own explicit test window.
 
-`test_current_heartbeat_contract_cancels_redelivery_after_pre_ack_rollback`
-executes the historical startup and inbox reader against an executable Cloud
-contract model. It covers a never-capable box and rollback before the ACK.
-The test is not verification of the deployed Cloud implementation. The Cloud
-repository must test and implement the same ordering and cancellation. No
-Pi-side greeting retirement mechanism is added. Unknown command kinds remain
-rejected.
+**Existing Pi ACK names**
 
-**Failed heartbeat boundary — not closed by option (a)**
+Cloud MUST map the existing greeting wire ACKs to the requested row states:
 
-The historical startup loop catches a heartbeat error and can still poll with
-its valid cached authorization. If the rollback heartbeat fails before Cloud
-records it, the stored current capability can still be `true`. A read-only
-probe with the frozen historical startup and inbox methods reproduced delivery
-of the pending greeting, `cloud inbox item is invalid`, and zero calls to the
-following ordinary command. The normal successful-heartbeat test above does
-not prove safety for this failure case.
+| Pi wire ACK | Cloud row state |
+| --- | --- |
+| `received` | `received` |
+| `applied` | `played` |
+| `rejected` | `failed` |
+| `expired` | `expired` |
 
-Cloud must address this remaining redelivery boundary before release acceptance.
-One possible extension is to durably record a greeting's delivery attempt before
-returning it, and never redeliver it after a lost ACK. A lost response would then
-skip this optional line, as the guide already permits. This extension is proposed,
-not implemented or verified here. A Pi-side audio expiry or retirement record
-cannot prevent an old runtime from receiving and rejecting an unsupported
-command in its downloaded inbox response. No Pi-side retirement was added.
+The row state names above do not change the Pi command API. The Pi already
+sends these ACKs. No Pi runtime or wacli change is required. `played` means
+local playback finished; it does not prove that a person heard the greeting.
+
+**Why at-most-once delivery is mandatory**
+
+The old runtime cannot parse `setup_greeting`. Its startup loop catches a
+heartbeat error and can still poll with valid cached authorization. If that
+heartbeat fails before Cloud records the rollback, Cloud can still hold the
+previous `guided_setup_v1: true` value. A power cut after the new Pi saves its
+optional audio request but before the `received` ACK can then cause redelivery.
+Local audio expiry and queue separation cannot protect that old inbox reader.
+
+`test_old_runtime_crashes_if_cloud_breaks_the_no_redelivery_rule` keeps this
+failure reproducible with the frozen historical startup loop and inbox reader.
+It verifies `cloud inbox item is invalid` and no following ordinary command.
+The positive tests offer the greeting once, interrupt before the ACK, and then
+run the historical code with either a successful or a failed rollback heartbeat.
+Both flows reach the following ordinary command without another greeting offer.
+A separate concurrent-poll test checks the atomic state change, a lost response,
+restart, and expiry. Other tests cover cancellation, ACK mapping, and retention.
+
+These tests simulate the mandatory Cloud contract with SQLite. They do not
+verify the production Cloud implementation. Cloud must implement and test the
+same transaction and retention rules before release. A lost response can skip
+this optional line. That is permitted. No Pi-side retirement mechanism is added.
+Unknown command kinds remain rejected.
+
+**Separate first-offer limit — still open**
+
+The five rules above prevent redelivery after a prior offer. They do not prove
+that the runtime making a first inbox request still matches the latest stored
+heartbeat. A local probe left a row `pending`, rolled back, failed the rollback
+heartbeat, then polled while the preceding capability was still fresh. The
+contract server correctly changed the row to `offered`, but the old reader
+raised `cloud inbox item is invalid` and reached no following command.
+
+Cloud needs a separate compatibility guard for this first-offer case before
+release acceptance. The latest stored heartbeat alone cannot identify the
+runtime of that request. No extra rule, state name, Pi runtime change, or
+retirement mechanism is implemented here. The mandatory five-rule contract
+remains as specified; this limit needs an explicit follow-up decision.
 
 The command uses the normal operation ID, sequence, timestamps, and payload.
 The payload uses the existing voice-line cache contract:
