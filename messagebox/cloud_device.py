@@ -335,6 +335,8 @@ class CloudDeviceClient:
 
     def media(self, media_url: str, *, limit=10 * 1024 * 1024) -> bytes:
         """Fetch only an authenticated media path on this exact API origin."""
+        if not isinstance(media_url, str) or not media_url or len(media_url) > 2048:
+            raise CloudDeviceError("media URL is invalid")
         parsed = urlsplit(media_url)
         if (
             parsed.scheme != "https"

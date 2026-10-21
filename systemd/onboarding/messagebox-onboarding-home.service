@@ -33,5 +33,6 @@ PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/etc/messagebox-onboarding
+ReadWritePaths=/run/messagebox-speaker
 ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings /var/lib/messagebox-cloud
 LimitCORE=0

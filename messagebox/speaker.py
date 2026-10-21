@@ -6,14 +6,14 @@ import threading
 import time
 from contextlib import contextmanager
 
-from messagebox.runtime_paths import SETTINGS_DIR
+from pathlib import Path
 from messagebox.settings import _open_shared_lock
 
 class SpeakerBusy(subprocess.SubprocessError):
     """The speaker stayed busy after a short retry."""
 
 
-LOCK_FILE = SETTINGS_DIR / "speaker.lock"
+LOCK_FILE = Path("/run/messagebox-speaker/speaker.lock")
 _capture = threading.local()
 
 

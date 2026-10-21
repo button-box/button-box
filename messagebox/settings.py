@@ -407,7 +407,7 @@ class SettingsStore:
     def _read(self, path):
         with open(path, encoding="utf-8") as handle:
             document = validate(json.load(handle))
-        if document["voice_pack"] == "jessica":
+        if document["voice_pack"] == "jessica" and self.environ.get("MSGBOX_TRANSPORT", "wacli") == "wacli":
             try:
                 selected = json.loads(self.path.with_suffix(".voice-selection.json").read_text())
             except (OSError, ValueError):

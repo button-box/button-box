@@ -18,6 +18,7 @@ import wave
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from contextlib import nullcontext
 from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
@@ -44,7 +45,7 @@ from messagebox.guided_reply import (
     voice_send_command,
     valid_account_scope,
 )
-from messagebox.audio_requests import AudioRequests, success_key
+from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import _BOX_JID, ContactError, ContactStore
@@ -90,6 +91,7 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 SEND_SUCCESS_WAV = str(sound_pack.cue_path("sent"))
 send_success_notices = queue.SimpleQueue()
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
+cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
                  else LOCAL_CONTACTS_FILE)
 
@@ -1819,17 +1821,45 @@ def play_send_success_cue():
 unavailable_events = UnavailableEvents()
 
 
+def play_optional_greeting(path):
+    """A real note or press always preempts this optional setup line."""
+    if queued() or button.is_pressed or quiet_hours():
+        return False
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    deadline = time.monotonic() + 60
+    try:
+        while process.poll() is None:
+            if queued() or button.is_pressed or quiet_hours() or time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_S)
+        return process.returncode == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
 def maybe_play_cloud_sound():
     """Only this main-loop owner starts cloud sounds, never the poller."""
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
         return False
     try:
         scope = cloud_runtime.account_scope(fresh=True)
-        with cloud_audio_requests.owner() as acquired:
-            if not acquired:
+        optional_owner = (cloud_optional_audio_requests.owner()
+                          if cloud_optional_audio_requests.directory.exists() else nullcontext(True))
+        with cloud_audio_requests.owner() as acquired, optional_owner as optional_acquired:
+            if not acquired or not optional_acquired:
                 unavailable_events.available("cloud_scope")
                 return False
-            request = cloud_audio_requests.claim_next(scope)
+            requests = cloud_audio_requests
+            request = requests.claim_next(scope)
+            if request is None and cloud_optional_audio_requests.directory.exists():
+                requests = cloud_optional_audio_requests
+                request = requests.claim_next(scope)
             unavailable_events.available("cloud_scope")
             if request is None:
                 return False
@@ -1848,19 +1878,18 @@ def maybe_play_cloud_sound():
                         play_audio_ordinary(path)
                         played = True
                     if not played and not quiet_hours():
-                        cloud_audio_requests.finish(request, "pending")
+                        requests.finish(request, "pending")
                         return False
                 elif request["kind"] == "setup_greeting":
                     path = Path(request["clip"])
                     guide = cloud_setup.SetupGuide()
                     state = guide.load()
                     played = False
-                    if (state and state["stage"] in {"names", "waiting_note"}
+                    if (not queued() and state and state["stage"] in {"names", "waiting_note"}
                             and not state.get("greeting_spoken") and not quiet_hours() and path.parent == cloud_runtime.STATE_FILE.parent / "voice-lines"
                             and sound_pack._playable_wav(path)):
                         guide.change("fields", greeting_spoken=True)
-                        play_audio_ordinary(path)
-                        played = True
+                        played = play_optional_greeting(path)
                 elif request["kind"] == "voice_preview":
                     path = sound_pack.voice_path("msg-start", request["voice_pack"])
                     led.off()
@@ -1872,11 +1901,11 @@ def maybe_play_cloud_sound():
                                              lamp_ringtone=ringtone_id)
                 else:
                     played = False
-                cloud_audio_requests.finish(request, "played" if played else "rejected")
+                requests.finish(request, "played" if played else "rejected")
                 unavailable_events.available("cloud_playback")
                 return played
             except (OSError, subprocess.SubprocessError, CloudRuntimeError):
-                cloud_audio_requests.finish(request, "rejected")
+                requests.finish(request, "rejected")
                 if unavailable_events.unavailable("cloud_playback"):
                     log_event("cloud_sound_unavailable")
     except (OSError, ValueError, CloudRuntimeError):

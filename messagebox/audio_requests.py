@@ -25,6 +25,8 @@ def _boot_id():
 SETTINGS_SOUND_DELAY_S = 1
 
 class AudioRequests:
+    KINDS = {"success", "preview", "voice_preview", "settings_saved"}
+
     def __init__(self, directory, *, clock=time.time, monotonic=time.monotonic, boot_id=None):
         self.directory = Path(directory)
         self.clock = clock
@@ -38,7 +40,7 @@ class AudioRequests:
         request = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(request, dict) or not isinstance(request.get("key"), str)
                 or self._path(request["key"]).name != path.name
-                or request.get("kind") not in {"success", "preview", "voice_preview", "settings_saved", "setup_greeting"}
+                or request.get("kind") not in self.KINDS
                 or (request.get("kind") == "preview" and normalize_ringtone_id(request.get("ringtone_id")) not in RINGTONES)
                 or (request.get("kind") == "voice_preview" and request.get("voice_pack") not in VOICE_PACKS)
                 or not isinstance(request.get("account_scope"), str)
@@ -201,3 +203,8 @@ def success_key(scope, message_id):
 
 def preview_key(operation_id):
     return "preview:" + operation_id
+
+
+class OptionalAudioRequests(AudioRequests):
+    """New optional sounds live outside the strict legacy queue."""
+    KINDS = {"setup_greeting", "voice_preview"}

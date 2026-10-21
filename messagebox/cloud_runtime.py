@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from messagebox import cloud_setup
 from messagebox.cloud_device import (CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudRateLimited,
                                      CloudVoiceNotFound, RATE_LIMIT_DEFAULT_SECONDS, atomic_json, capabilities)
-from messagebox.audio_requests import AudioRequests, preview_key, success_key
+from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
@@ -215,7 +215,10 @@ class CloudRuntime:
         self.boot_id = _current_boot_id() if boot_id is None else boot_id
         self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
+        self.optional_audio_requests = OptionalAudioRequests(self.state_path.parent / "optional-audio-requests",
+            clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
+        self.state.setdefault("pending_optional_audio", {})
         self._status_schedule = {}
         self._status_backoff_until = float("-inf")
 
@@ -245,6 +248,8 @@ class CloudRuntime:
                 or state.get("outbox_status_cursor", 0) < 0
                 or type(state.get("queue_hold_sequence", -1)) is not int
                 or state.get("queue_hold_sequence", -1) < -1):
+            raise CloudRuntimeError("cloud state is invalid")
+        if not isinstance(state.setdefault("pending_optional_audio", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
         if not isinstance(state.setdefault("pending_previews", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
@@ -1394,6 +1399,7 @@ class CloudRuntime:
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]
                 or item["operation_id"] in self.state["pending_previews"]
+                or item["operation_id"] in self.state["pending_optional_audio"]
                 or item["operation_id"] in self.state["pending_listened"]):
             return
         kind, payload = item["kind"], item["payload"]
@@ -1434,12 +1440,20 @@ class CloudRuntime:
             settings, warning = self.settings.load()
             if warning or payload.get("voice_pack") != settings["voice_pack"]:
                 raise CloudRuntimeError("setup greeting voice is invalid")
-            clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload)
+            if (not isinstance(payload.get("media_url"), str) or not payload["media_url"]
+                    or len(payload["media_url"]) > 2048
+                    or any(not isinstance(payload.get(key), str) or not _SHA.fullmatch(payload[key])
+                           for key in ("clip_id", "sha256", "text_hash"))
+                    or payload.get("content_type") != "audio/wav"):
+                self._ack(item["operation_id"], "rejected", error_code="setup_greeting_invalid")
+                return
+            clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload,
+                voice_pack=settings["voice_pack"], text_hash=payload["text_hash"])
             if clip:
                 key = "setup_greeting:" + item["operation_id"]
-                self.audio_requests.enqueue_for(key, "setup_greeting", snapshot["account_scope"],
+                self.optional_audio_requests.enqueue_for(key, "setup_greeting", snapshot["account_scope"],
                     item["expires_at"] - self.server_now(), clip=clip)
-                self.state["pending_previews"][item["operation_id"]] = key
+                self.state["pending_optional_audio"][item["operation_id"]] = key
                 self._save()
                 self._ack(item["operation_id"], "received")
             else:
@@ -1547,9 +1561,9 @@ class CloudRuntime:
                 raise CloudRuntimeError("voice pack is invalid")
             scope = self._snapshot()["account_scope"]
             key = preview_key(item["operation_id"])
-            self.audio_requests.enqueue_for(key, "voice_preview", scope,
+            self.optional_audio_requests.enqueue_for(key, "voice_preview", scope,
                 min(item["expires_at"], server_time + 30) - self.server_now(), voice_pack=pack)
-            self.state["pending_previews"][item["operation_id"]] = key
+            self.state["pending_optional_audio"][item["operation_id"]] = key
             self._save()
             self._ack(item["operation_id"], "received")
         elif kind == "preview_ringtone":
@@ -1572,19 +1586,21 @@ class CloudRuntime:
             raise CloudRuntimeError("cloud command is unsupported")
 
     def _finish_previews(self):
-        for operation_id, key in list(self.state["pending_previews"].items()):
-            outcome = self.audio_requests.outcome(key)
-            if outcome in {None, "pending", "claimed"}:
-                continue
-            if outcome == "played":
-                self._ack(operation_id, "applied")
-            elif outcome == "expired":
-                self._ack(operation_id, "expired")
-            else:
-                self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
-                          if outcome == "unknown" else "preview_failed")
-            del self.state["pending_previews"][operation_id]
-            self._save()
+        for pending, requests in ((self.state["pending_previews"], self.audio_requests),
+                                  (self.state["pending_optional_audio"], self.optional_audio_requests)):
+            for operation_id, key in list(pending.items()):
+                outcome = requests.outcome(key)
+                if outcome in {None, "pending", "claimed"}:
+                    continue
+                if outcome == "played":
+                    self._ack(operation_id, "applied")
+                elif outcome == "expired":
+                    self._ack(operation_id, "expired")
+                else:
+                    self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
+                              if outcome == "unknown" else "preview_failed")
+                del pending[operation_id]
+                self._save()
 
     def _finish_settings(self):
         try:

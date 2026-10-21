@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import logging
 import subprocess
 import uuid
 from pathlib import Path
@@ -21,12 +22,19 @@ class SetupGuide:
     def load(self):
         try:
             state = json.loads(self.path.read_text())
-            if state.get("stage") not in STAGES or not isinstance(state.get("spoken"), list):
-                return {"stage": "done", "spoken": []}
+            if (not isinstance(state, dict) or not isinstance(state.get("stage"), str)
+                    or state["stage"] not in STAGES or not isinstance(state.get("spoken"), list)
+                    or any(not isinstance(value, str) for value in state["spoken"])
+                    or any(key in state and not isinstance(state[key], str)
+                           for key in ("scope", "local_id", "message_id", "recipient"))
+                    or any(key in state and type(state[key]) is not bool
+                           for key in ("greeting_spoken", "listened_started", "sent_ready"))):
+                raise ValueError("invalid guide state")
             return state
         except FileNotFoundError:
             return None
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, TypeError, AttributeError):
+            logging.getLogger(__name__).warning("Invalid setup guide state; guide disabled")
             return {"stage": "done", "spoken": []}
 
     def change(self, action, **fields):

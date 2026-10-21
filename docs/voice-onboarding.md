@@ -3,7 +3,8 @@
 Cloud boxes use the Button Box voice for first setup and the first reply.
 The WhatsApp assistant can complete setup if the speaker fails. wacli boxes
 keep their normal setup and message flow. Both modes use `buttonbox` as the
-local default voice and share the speaker lock.
+local default voice and share the speaker lock. An explicit Cloud voice selection
+keeps its value, including `jessica`. Only the old local wacli default migrates.
 
 ## Speech order
 
@@ -72,6 +73,7 @@ The payload uses the existing voice-line cache contract:
   "voice_pack": "buttonbox",
   "clip_id": "<64 lowercase hex characters>",
   "sha256": "<SHA-256 of the WAV bytes>",
+  "text_hash": "<SHA-256 of the greeting text>",
   "content_type": "audio/wav",
   "media_url": "<authorized device media URL>"
 }
@@ -81,7 +83,11 @@ The text is: “Hi, {names}! I'm your Button Box. Now ask your grown-up to send
 me a voice message on WhatsApp!” Cloud generates it in the selected box voice.
 The box accepts only the current pack. It uses the existing authenticated media
 download and WAV validation: 48 kHz, mono, 16-bit PCM, bounded size, and exact
-hash. It queues the local clip through `audio-requests`; the poller never plays it.
+hash. Cache names include the selected pack, text hash, and clip ID. The poller
+queues the local clip through `optional-audio-requests`; it never plays it.
+Voice previews also use this separate queue. v0.3.12 ignores this directory and
+the `pending_optional_audio` state key, so rollback keeps its strict legacy
+`audio-requests` reader safe.
 
 The box acknowledges `received` after the cache and queue writes. Its normal
 pending-audio receipts report `applied`, `expired`, or `rejected` after playback
@@ -89,14 +95,19 @@ or expiry. `applied` means local playback finished, not that a person heard it.
 The greeting is optional. Its queue lifetime is at most 30 seconds. A missing,
 late, expired, or invalid greeting is skipped. It cannot delay the first note.
 The guide stores a receipt before the greeting, so another operation cannot
-repeat it during the same setup.
+repeat it during the same setup. A queued real note skips the greeting. A new
+note or button press stops an active greeting. The greeting does not consume
+that press; the normal button owner handles it.
 
 ## Speaker access
 
-`/var/lib/messagebox-settings/speaker.lock` is shared by the button service,
+`/run/messagebox-speaker/speaker.lock` is shared by the button service,
 Cloud playback, local dashboard previews, and onboarding card/preview playback.
-The existing settings group and mode 0660 permit all these service users to
-share it. Playback waits for the lock. Synchronous playback retries a busy ALSA
+The audio-detect prerequisite creates the lock with tmpfiles before audio
+services start. Its directory is root-owned, group `messagebox-settings`, mode
+2770. Its file is mode 0660. Both strict onboarding services can write this
+directory. The NFC service also has the settings group. Its settings directory
+can remain read-only. Playback waits for the lock. Synchronous playback retries a busy ALSA
 open once after 150 ms. A second busy error stops that action without a button
 flow error. Incoming audio remains recoverable through its normal queue rules.
 The lock stays held until an asynchronous player is reaped. Recording reserves

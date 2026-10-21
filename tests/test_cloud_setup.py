@@ -50,13 +50,13 @@ class SetupTests(unittest.TestCase):
         path = self.root / "settings.json"
         old = {**defaults({}), "voice_pack": "jessica"}
         path.write_text(json.dumps(old))
-        store = SettingsStore(path)
+        store = SettingsStore(path, environ={"MSGBOX_TRANSPORT": "wacli"})
         current, warning = store.load()
         self.assertFalse(warning)
         self.assertEqual(current["voice_pack"], "buttonbox")
         candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
         saved = store.update({**candidate, "voice_pack": "jessica"}, 0)
-        self.assertEqual(SettingsStore(path).load(), (saved, False))
+        self.assertEqual(SettingsStore(path, environ={"MSGBOX_TRANSPORT": "wacli"}).load(), (saved, False))
 
     def test_first_note_invites_separate_press_and_reply_keeps_exact_recipient(self):
         self.guide.change("start")

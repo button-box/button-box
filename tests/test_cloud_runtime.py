@@ -1282,7 +1282,7 @@ class CloudRuntimeTests(unittest.TestCase):
         self.client.audio = data.getvalue()
         digest = hashlib.sha256(self.client.audio).hexdigest()
         item = {"operation_id": OP, "kind": "setup_greeting", "expires_at": NOW + 60,
-                "payload": {"voice_pack": "buttonbox", "clip_id": digest, "sha256": digest,
+                "payload": {"voice_pack": "buttonbox", "clip_id": digest, "sha256": digest, "text_hash": "b" * 64,
                             "content_type": "audio/wav", "media_url": "https://button.box/cloud-api/v1/device/media/greeting"}}
         with mock.patch.object(cloud_runtime, "capabilities", return_value={}):
             with self.assertRaises(CloudRuntimeError):
@@ -1290,20 +1290,21 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime._command(item, NOW)
         self.runtime.flush_acks()
         self.assertEqual(self.client.acks[-1]["state"], "received")
-        with self.runtime.audio_requests.owner():
-            request = self.runtime.audio_requests.claim_next("a" * 64)
+        with self.runtime.optional_audio_requests.owner():
+            request = self.runtime.optional_audio_requests.claim_next("a" * 64)
             self.assertEqual(request["kind"], "setup_greeting")
             self.assertTrue(Path(request["clip"]).is_file())
-            self.runtime.audio_requests.finish(request, "played")
+            self.runtime.optional_audio_requests.finish(request, "played")
         self.runtime._finish_previews()
         self.runtime.flush_acks()
         self.assertEqual(self.client.acks[-1]["state"], "applied")
         self.runtime._command(item, NOW)
-        self.assertFalse(list(self.runtime.audio_requests.directory.glob("*.json")))
+        self.assertFalse(list(self.runtime.optional_audio_requests.directory.glob("*.json")))
 
     def settings_audio_owner(self, revision=0):
         return mock.patch.multiple(button_send,
             cloud_audio_requests=self.runtime.audio_requests,
+            cloud_optional_audio_requests=self.runtime.optional_audio_requests,
             caregiver_settings=lambda: self.runtime.settings.load()[0],
             _applied_volume_revision=revision, _recording=False, _guided_active=False,
             button=types.SimpleNamespace(is_pressed=False), led=mock.Mock(), create=True)
@@ -2118,6 +2119,7 @@ class CloudRuntimeTests(unittest.TestCase):
 
     def audio_owner(self):
         return mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
+            cloud_optional_audio_requests=self.runtime.optional_audio_requests,
             _recording=False, _guided_active=False,
             button=types.SimpleNamespace(is_pressed=False), led=mock.Mock(), create=True)
 
