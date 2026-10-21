@@ -6,10 +6,10 @@ already contains that commit. Its reviewed step-2 source is
 `9a3ae40259a21db53a625903004dca06546e1af2`, including the setup-page wording.
 The earlier rebase is complete. No rebase command remains to be run.
 
-Astra's confirmation source is `f09d2bc`, which contains the round-2 corrections
-and the shared setup-page sentence. This follow-up makes the Cloud greeting
-contract mandatory and updates the release order. No push, deployment, device,
-or hardware test was done in this run. Both review source files remain untracked.
+Astra's confirmation source is `2a8608d`, which contains the prior contract
+and setup-page corrections. This follow-up adds the mandatory per-poll feature
+declaration and restricts greeting wire ACKs to the four agreed names. No push,
+deployment, device, or hardware test was done. Review source files stay untracked.
 
 **Current release order**
 
@@ -24,17 +24,26 @@ Use **BOX-10 or BOX-11** as the canary, then use the normal release batches.
 The earlier voice step-1 plan is **replaced by Release A**, not a separate
 release to ship first. Its source and verification history remain below.
 
+**Rule 2b follow-up proof**
+
+| Change | Request or contract code | Test |
+| --- | --- | --- |
+| Declare the feature on every Cloud inbox poll | [messagebox/cloud_device.py:285](../messagebox/cloud_device.py#L285) | [tests/test_cloud_device.py:85](../tests/test_cloud_device.py#L85) |
+| Require the current poll feature and protect the first offer after rollback | Mandatory rule 2b in [voice-onboarding.md](voice-onboarding.md) | [tests/test_voice_review_round2.py:210](../tests/test_voice_review_round2.py#L210); [tests/test_voice_review_round2.py:224](../tests/test_voice_review_round2.py#L224) |
+| Accept exactly the four wire ACK names | GreetingContractServer.ack | [tests/test_voice_review_round2.py:295](../tests/test_voice_review_round2.py#L295); [tests/test_voice_review_round2.py:298](../tests/test_voice_review_round2.py#L298); [tests/test_voice_review_round2.py:301](../tests/test_voice_review_round2.py#L301) |
+| Keep wacli on its local poll path | No shared runtime file changed | [tests/test_wacli_contract.py:89](../tests/test_wacli_contract.py#L89) |
+
 **Round-2 findings and proof**
 
 | Finding | Change | File | Test |
 | --- | --- | --- | --- |
-| 1. Mandatory greeting contract | Require a fresh latest heartbeat and an atomic pending-to-offered change before the response. Never redeliver. Cover failed rollback heartbeat, concurrent polls, expiry, ACK mapping, and retention. | [docs/voice-onboarding.md:68](voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:191](../tests/test_voice_review_round2.py#L191); [tests/test_voice_review_round2.py:194](../tests/test_voice_review_round2.py#L194); [tests/test_voice_review_round2.py:197](../tests/test_voice_review_round2.py#L197); [tests/test_voice_review_round2.py:205](../tests/test_voice_review_round2.py#L205) |
-| 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:298](../tests/test_voice_review_round2.py#L298); [tests/test_voice_review_round2.py:322](../tests/test_voice_review_round2.py#L322); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
-| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:359](../tests/test_voice_review_round2.py#L359); [tests/test_voice_review_round2.py:349](../tests/test_voice_review_round2.py#L349) |
+| 1. Mandatory greeting contract | Require the current poll feature, a fresh latest heartbeat, and an atomic pending-to-offered change before the response. Never redeliver. Cover failed rollback heartbeat, concurrent polls, expiry, ACK mapping, and retention. | [docs/voice-onboarding.md:68](voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:210](../tests/test_voice_review_round2.py#L210); [tests/test_voice_review_round2.py:224](../tests/test_voice_review_round2.py#L224); [tests/test_voice_review_round2.py:199](../tests/test_voice_review_round2.py#L199); [tests/test_voice_review_round2.py:202](../tests/test_voice_review_round2.py#L202) |
+| 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:345](../tests/test_voice_review_round2.py#L345); [tests/test_voice_review_round2.py:369](../tests/test_voice_review_round2.py#L369); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
+| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:406](../tests/test_voice_review_round2.py#L406); [tests/test_voice_review_round2.py:396](../tests/test_voice_review_round2.py#L396) |
 | 4. Exact fleet fixtures | Replace the mislabelled export with separate exports from clean detached checkouts of 04d53cd and 9a3ae40. Step 1 has no guided setup capability or greeting command. | [docs/fixtures/README.md:3](../docs/fixtures/README.md#L3) | [tests/test_settings_contract.py:52](../tests/test_settings_contract.py#L52) |
 | 5. Release evidence | Record the committed step identities and completed rebase. Replace the old embedded fixture with links to the two exact exports. Label prior test/size results as historical; keep physical and Cloud acceptance open. | [docs/voice-release-verification.md:3](voice-release-verification.md#L3) | Exact-commit export checks above; documentation review and git diff --check. |
 
-The Cloud contract now requires one atomic `pending` → `offered` change before
+The Cloud contract requires the current poll feature, plus one atomic `pending` → `offered` change before
 the response, and no redelivery. The tests use SQLite and the actual historical
 startup loop and strict inbox reader. After interruption before the ACK, both
 a successful and a failed rollback heartbeat let the following ordinary command
@@ -50,19 +59,33 @@ Pi-side retirement mechanism was added. Cloud MUST map the existing Pi ACKs
 `applied` → `played` and `rejected` → `failed`; the requested Cloud row state
 names and the Pi wire API are unchanged.
 
-**Remaining HIGH: first offer after rollback.** A separate local probe used
-this exact contract with a `pending` row, a failed rollback heartbeat, and the
-still-fresh preceding capability. Cloud offered it once; the historical reader
-raised `cloud inbox item is invalid` and processed zero following commands.
-At-most-once delivery closes the redelivery case, not this first-offer case.
-Cloud must resolve request/runtime compatibility before release acceptance.
-The five rules and state names have not been changed to hide this limit. See
-[the documented first-offer limit](voice-onboarding.md).
+**First-offer protection:** rule 2b requires `features=guided_setup_v1` in
+every current inbox poll, in addition to a fresh capable heartbeat. The test
+runs the old startup and strict inbox reader after a failed rollback heartbeat:
+it receives only the ordinary command. The same test then uses the real current
+request code and receives the greeting once. Absent, empty, other, and
+comma-separated feature lists are tested. The wacli main loop uses its local
+poll command and does not start the Cloud runtime or call the Cloud inbox.
 
-Current follow-up `make check`: **PASS** on the follow-up changes to `f09d2bc`.
-Syntax and all lint checks passed. All 1,142 Python tests passed in 422.388
-seconds; all 54 JavaScript tests passed. `git diff --check` passed. This is
-contract-model evidence, not production Cloud or physical-box acceptance.
+The simulated Cloud accepts exactly `received`, `applied`, `rejected`, and
+`expired` on the wire. Tests confirm that `played` and `failed` do not change
+an offered or received row. No greeting state names changed. The previous
+first-offer failure is retained as the reason for rule 2b, not an open design
+proposal. Production Cloud implementation and physical acceptance remain
+**unverified**.
+
+Current rule-2b follow-up `make check`: **PASS** on the changes to `2a8608d`.
+Syntax and all lint checks passed. All 1,146 Python tests passed in 231.277
+seconds; all 54 JavaScript tests passed. The 37 focused Cloud request, greeting,
+and wacli tests also passed. `git diff --check` passed. These results are local
+code and contract-model evidence; production Cloud and physical acceptance are
+unverified.
+
+**Historical mandatory-contract check**
+
+The follow-up to `f09d2bc` passed 1,142 Python tests in 422.388 seconds and
+54 JavaScript tests. Syntax, lint, and diff checks passed. It preceded rule 2b
+and does not prove the current poll gate.
 
 **Historical round-2 checks**
 

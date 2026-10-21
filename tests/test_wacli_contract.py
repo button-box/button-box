@@ -86,6 +86,22 @@ class WacliContractTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_wacli_poller_uses_wacli_and_never_polls_cloud(self):
+        from messagebox.cloud_device import CloudDeviceClient
+        class StopPoll(BaseException):
+            pass
+        with mock.patch.object(voicepoll, 'load_contact_authorizations', return_value={}), \
+             mock.patch.object(voicepoll, 'wacli', return_value=SimpleNamespace(stdout='{"data":{"messages":[]}}')) as local, \
+             mock.patch.object(voicepoll.time, 'sleep', side_effect=StopPoll), \
+             mock.patch.object(button_send.cloud_runtime, 'CloudRuntime', side_effect=AssertionError('Cloud runtime used')) as cloud, \
+             mock.patch.object(CloudDeviceClient, 'inbox', side_effect=AssertionError('Cloud inbox used')) as inbox, \
+             mock.patch('builtins.print'):
+            with self.assertRaises(StopPoll):
+                voicepoll.main()
+        local.assert_called_once_with('--read-only', 'messages', 'list', '--limit', '10', '--json', '--full')
+        cloud.assert_not_called()
+        inbox.assert_not_called()
+
     def set_quiet(self, enabled):
         current, _ = self.settings.load()
         candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}

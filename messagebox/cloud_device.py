@@ -281,7 +281,8 @@ class CloudDeviceClient:
     def inbox(self, cursor: int) -> dict:
         if type(cursor) is not int or cursor < 0:
             raise CloudDeviceError("inbox cursor is invalid")
-        return self.json(f"/device/inbox?cursor={cursor}")
+        # A saved heartbeat may belong to a runtime that was rolled back.
+        return self.json(f"/device/inbox?cursor={cursor}&features=guided_setup_v1")
 
     def ack(self, ack: dict) -> dict:
         try:

@@ -79,6 +79,17 @@ release requirement, not an optional improvement.
    `UPDATE … WHERE state='pending' RETURNING` operation. Commit this change and
    `offered_at` **before** sending the inbox response. The heartbeat check and
    offer must not race a heartbeat that removes the capability.
+
+   **Rule 2b — current poll (mandatory).** The new runtime MUST send
+   `features=guided_setup_v1` in **every** inbox poll query. The parameter name
+   is exactly `features`; its value is a comma-separated list of feature names.
+   Later releases can add names to that list. Cloud MUST offer a greeting only
+   if the **current poll** contains the exact `guided_setup_v1` token AND the
+   heartbeat rule above holds. An absent parameter, an empty list, or another
+   feature does not permit a greeting. Do not reuse a feature from an earlier
+   poll or use the heartbeat as a substitute. Keep ordinary commands available.
+   The old runtime never sends this parameter, so it cannot receive a greeting.
+
 3. **Never redeliver an offered row.** Concurrent polls, repeated cursors,
    server restarts, a lost HTTP response, and a lost ACK must not offer it again.
    A lost ACK leaves the row `offered` until `expires_at`, then `expired`, unless
@@ -102,7 +113,9 @@ model uses its own explicit test window.
 
 **Existing Pi ACK names**
 
-Cloud MUST map the existing greeting wire ACKs to the requested row states:
+Cloud MUST accept exactly these greeting wire ACK names and map them to the
+requested row states. Wire ACK names `played` and `failed` are unknown and MUST
+be ignored:
 
 | Pi wire ACK | Cloud row state |
 | --- | --- |
@@ -112,7 +125,7 @@ Cloud MUST map the existing greeting wire ACKs to the requested row states:
 | `expired` | `expired` |
 
 The row state names above do not change the Pi command API. The Pi already
-sends these ACKs. No Pi runtime or wacli change is required. `played` means
+sends these ACKs. The ACK wire names and the wacli path are unchanged. `played` means
 local playback finished; it does not prove that a person heard the greeting.
 
 **Why at-most-once delivery is mandatory**
@@ -139,20 +152,26 @@ same transaction and retention rules before release. A lost response can skip
 this optional line. That is permitted. No Pi-side retirement mechanism is added.
 Unknown command kinds remain rejected.
 
-**Separate first-offer limit — still open**
+**First offer after rollback — protected by rule 2b**
 
-The five rules above prevent redelivery after a prior offer. They do not prove
-that the runtime making a first inbox request still matches the latest stored
-heartbeat. A local probe left a row `pending`, rolled back, failed the rollback
-heartbeat, then polled while the preceding capability was still fresh. The
-contract server correctly changed the row to `offered`, but the old reader
-raised `cloud inbox item is invalid` and reached no following command.
+A fresh heartbeat alone cannot prove which runtime made the current poll.
+Without rule 2b, a row can remain `pending` through a rollback and a failed
+heartbeat, then be offered to the old runtime. Its strict reader rejects
+`setup_greeting` before it can process a following ordinary command.
 
-Cloud needs a separate compatibility guard for this first-offer case before
-release acceptance. The latest stored heartbeat alone cannot identify the
-runtime of that request. No extra rule, state name, Pi runtime change, or
-retirement mechanism is implemented here. The mandatory five-rule contract
-remains as specified; this limit needs an explicit follow-up decision.
+`test_first_offer_cannot_reach_old_runtime_after_failed_rollback_heartbeat`
+starts with that pending row and a fresh new-runtime heartbeat, then runs the
+frozen historical startup and inbox reader with a failed rollback heartbeat.
+The poll has no `features` parameter. The greeting stays pending and the old
+reader processes the ordinary command. The test then uses the real current
+`CloudDeviceClient.inbox` request code: its feature declaration permits one
+first offer, and a repeat poll gets no greeting. Separate tests cover absent,
+empty, unknown, and comma-separated feature lists, and prove that the wacli
+poller never starts the Cloud runtime or calls the Cloud inbox.
+
+This closes the first-offer case in the required contract model. Production
+Cloud implementation and real-box acceptance remain unverified. No Pi-side
+retirement mechanism or new greeting state is required.
 
 The command uses the normal operation ID, sequence, timestamps, and payload.
 The payload uses the existing voice-line cache contract:

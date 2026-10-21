@@ -2,6 +2,7 @@
 import copy
 import fcntl
 import importlib.util
+import io
 import json
 import hashlib
 import sqlite3
@@ -11,8 +12,10 @@ import types
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 from messagebox import cloud_runtime, speaker
+from messagebox.cloud_device import CloudDeviceClient
 from messagebox.settings import SettingsStore, VOICE_PACKS, defaults
 import test_cloud_runtime as runtime_tests
 from test_cloud_runtime import NOW, OP, button_send
@@ -72,13 +75,15 @@ class GreetingContractServer(runtime_tests.FakeClient):
             self._maintain(db)
         return True
 
-    def inbox(self, cursor):
+    def inbox(self, cursor, *, features=None):
         with sqlite3.connect(self.database) as db:
             db.execute('BEGIN IMMEDIATE')
             self._maintain(db)
             # Compare and change in one statement. Commit before returning any offer.
-            offered = db.execute("UPDATE greetings SET state='offered', offered_at=? "
-                                 "WHERE state='pending' RETURNING command", (self.server_time,)).fetchall()
+            offered = []
+            if isinstance(features, str) and 'guided_setup_v1' in features.split(','):
+                offered = db.execute("UPDATE greetings SET state='offered', offered_at=? "
+                                     "WHERE state='pending' RETURNING command", (self.server_time,)).fetchall()
         result = super().inbox(cursor)
         result['items'] = list(result['items']) + [json.loads(row[0]) for row in offered]
         self.delivered.append(copy.deepcopy(result['items']))
@@ -86,8 +91,8 @@ class GreetingContractServer(runtime_tests.FakeClient):
 
     def ack(self, ack):
         # Pi wire names are unchanged. Unknown operations/states have no effect.
-        state = {'received': 'received', 'applied': 'played', 'played': 'played',
-                 'rejected': 'failed', 'failed': 'failed', 'expired': 'expired'}.get(ack['state'])
+        state = {'received': 'received', 'applied': 'played',
+                 'rejected': 'failed', 'expired': 'expired'}.get(ack['state'])
         with sqlite3.connect(self.database) as db:
             db.execute('BEGIN IMMEDIATE')
             self._maintain(db)
@@ -162,12 +167,12 @@ class VoiceRoundTwoTests(unittest.TestCase):
         item = self.greeting()
         never_capable = {**item, 'operation_id': 'nevercapable12345678901234'}
         self.assertTrue(server.greeting(never_capable))
-        self.assertEqual(server.inbox(0)['items'], [])
+        self.assertEqual(server.inbox(0, features='guided_setup_v1')['items'], [])
         self.assertEqual(server.row(never_capable['operation_id'])[0], 'cancelled')
         self.runtime.heartbeat()
         server.audio = wav()
         self.assertTrue(server.greeting(item))
-        offered = server.inbox(0)['items']
+        offered = server.inbox(0, features='guided_setup_v1')['items']
         self.assertEqual(offered, [item])
         self.assertEqual(server.row(), ('offered', NOW, NOW + 600))
         class PowerLoss(BaseException):
@@ -178,13 +183,13 @@ class VoiceRoundTwoTests(unittest.TestCase):
         self.assertIn(OP, json.loads(self.runtime.state_path.read_text())['pending_optional_audio'])
         self.assertEqual(server.acks, [])
         # A still-fresh old capability cannot cause a second offer, even after restart.
-        self.assertEqual(self.server().inbox(0)['items'], [])
+        self.assertEqual(self.server().inbox(0, features='guided_setup_v1')['items'], [])
         received, errors = self.legacy_once(server, heartbeat_fails=heartbeat_fails)
         self.assertEqual(received, ['settings'])
         self.assertEqual(errors, [('heartbeat', 'synthetic unavailable heartbeat')] if heartbeat_fails else [])
         self.assertEqual(server.row()[0], 'offered' if heartbeat_fails else 'cancelled')
         self.runtime.heartbeat()  # Upgrading again cannot revive the row.
-        self.assertTrue(all(i['kind'] != 'setup_greeting' for i in server.inbox(0)['items']))
+        self.assertTrue(all(i['kind'] != 'setup_greeting' for i in server.inbox(0, features='guided_setup_v1')['items']))
         delivered = [i for response in server.delivered for i in response if i['kind'] == 'setup_greeting']
         self.assertEqual(delivered, [item])
 
@@ -202,6 +207,43 @@ class VoiceRoundTwoTests(unittest.TestCase):
         self.assertEqual(received, [])
         self.assertIn(('poll', 'cloud inbox item is invalid'), errors)
 
+    def test_current_poll_feature_is_required_even_with_fresh_guided_heartbeat(self):
+        for index, features in enumerate(('guided_setup_v1', 'future_v2,guided_setup_v1')):
+            with self.subTest(features=features):
+                server = self.server(f'poll-features-{index}.sqlite')
+                self.runtime.client = server
+                self.runtime.heartbeat()
+                server.greeting(self.greeting())
+                for unsupported in (None, '', 'future_v2', 'not_guided_setup_v1'):
+                    self.assertEqual(server.inbox(0, features=unsupported)['items'], [])
+                    self.assertEqual(server.row(), ('pending', None, NOW + 600))
+                self.assertEqual(server.inbox(0, features=features)['items'], [self.greeting()])
+                self.assertEqual(server.row()[0], 'offered')
+                self.assertEqual(server.inbox(0, features=features)['items'], [])
+
+    def test_first_offer_cannot_reach_old_runtime_after_failed_rollback_heartbeat(self):
+        server = self.server()
+        self.runtime.client = server
+        self.runtime.heartbeat()  # Cloud still has the new runtime's fresh capability.
+        server.greeting(self.greeting())
+        received, errors = self.legacy_once(server, heartbeat_fails=True)
+        self.assertEqual(received, ['settings'])
+        self.assertEqual(errors, [('heartbeat', 'synthetic unavailable heartbeat')])
+        self.assertEqual(server.row(), ('pending', None, NOW + 600))
+        self.assertTrue(all(item['kind'] != 'setup_greeting' for item in server.delivered[-1]))
+        # Use the real request code for the later compatible poll, without networking.
+        def opener(request, *, timeout):
+            query = parse_qs(urlsplit(request.full_url).query)
+            response = server.inbox(int(query['cursor'][0]), features=query.get('features', [None])[0])
+            stream = io.BytesIO(json.dumps(response).encode())
+            stream.status = 200
+            return stream
+        current = CloudDeviceClient('https://example.invalid/cloud-api/v1',
+            {'device_id': 'synthetic-device-001', 'credential': 'x' * 43}, opener=opener)
+        self.assertEqual([item['kind'] for item in current.inbox(0)['items']],
+                         ['settings', 'setup_greeting'])
+        self.assertEqual([item['kind'] for item in current.inbox(0)['items']], ['settings'])
+
     def test_atomic_offer_is_at_most_once_with_concurrent_polls_and_lost_response(self):
         server = self.server()
         self.runtime.client = server
@@ -210,7 +252,7 @@ class VoiceRoundTwoTests(unittest.TestCase):
         barrier = threading.Barrier(8)
         def poll(_):
             barrier.wait(timeout=5)
-            return server.inbox(0)['items']
+            return server.inbox(0, features='guided_setup_v1')['items']
         with ThreadPoolExecutor(max_workers=8) as pool:
             responses = list(pool.map(poll, range(8)))
         self.assertEqual([item for response in responses for item in response], [self.greeting()])
@@ -218,15 +260,15 @@ class VoiceRoundTwoTests(unittest.TestCase):
         # Discard the response and all clients. Persistent offered state still blocks retry.
         restarted = self.server()
         restarted.greeting(self.greeting())  # A repeated enqueue cannot reset the single row.
-        self.assertEqual(restarted.inbox(0)['items'], [])
+        self.assertEqual(restarted.inbox(0, features='guided_setup_v1')['items'], [])
         restarted.server_time = NOW + 599
         restarted.heartbeat({'capabilities': {'guided_setup_v1': True}, 'settings': {}, 'applied_revision': 0})
         self.assertEqual(restarted.row()[0], 'offered')
-        self.assertEqual(restarted.inbox(0)['items'], [])
+        self.assertEqual(restarted.inbox(0, features='guided_setup_v1')['items'], [])
         restarted.server_time = NOW + 600
         restarted.heartbeat({'capabilities': {'guided_setup_v1': True}, 'settings': {}, 'applied_revision': 0})
         self.assertEqual(restarted.row()[0], 'expired')
-        self.assertEqual(restarted.inbox(0)['items'], [])
+        self.assertEqual(restarted.inbox(0, features='guided_setup_v1')['items'], [])
 
     def test_greeting_checks_current_capability_and_freshness_and_cancels_pending_or_offered(self):
         for offered in (False, True):
@@ -237,7 +279,7 @@ class VoiceRoundTwoTests(unittest.TestCase):
                     self.runtime.heartbeat()
                     server.greeting(self.greeting())
                     if offered:
-                        self.assertEqual(server.inbox(0)['items'], [self.greeting()])
+                        self.assertEqual(server.inbox(0, features='guided_setup_v1')['items'], [self.greeting()])
                     if unsupported == 'stale':
                         server.server_time += server.online_seconds + 1
                     elif unsupported == 'missing':
@@ -245,15 +287,15 @@ class VoiceRoundTwoTests(unittest.TestCase):
                             db.execute('DELETE FROM heartbeat')
                     else:
                         server.heartbeat({'capabilities': unsupported, 'settings': {}, 'applied_revision': 0})
-                    self.assertEqual(server.inbox(0)['items'], [])
+                    self.assertEqual(server.inbox(0, features='guided_setup_v1')['items'], [])
                     self.assertEqual(server.row()[0], 'cancelled')
                     self.runtime.heartbeat()
-                    self.assertEqual(server.inbox(0)['items'], [])
+                    self.assertEqual(server.inbox(0, features='guided_setup_v1')['items'], [])
 
-    def test_played_ack_mapping_unknown_acks_and_terminal_retention(self):
+    def test_applied_wire_ack_maps_to_played_and_rejects_extra_names(self):
         self.assert_ack_mapping('played', 'played')
 
-    def test_failed_ack_mapping_and_terminal_retention(self):
+    def test_rejected_wire_ack_maps_to_failed_and_terminal_retention(self):
         self.assert_ack_mapping('rejected', 'failed')
 
     def test_expired_ack_mapping_and_terminal_retention(self):
@@ -268,14 +310,19 @@ class VoiceRoundTwoTests(unittest.TestCase):
         item['expires_at'] = NOW + 3600
         item['payload']['text'] = 'synthetic greeting text must not be stored'
         self.assertTrue(server.greeting(item))
-        offered = server.inbox(0)['items'][0]
+        offered = server.inbox(0, features='guided_setup_v1')['items'][0]
         self.assertEqual(offered['expires_at'], NOW + 600)
-        server.ack({'operation_id': OP, 'state': 'unknown'})
+        for unknown in ('unknown', 'played', 'failed'):
+            server.ack({'operation_id': OP, 'state': unknown})
+            self.assertEqual(server.row()[0], 'offered')
         server.ack({'operation_id': 'unknown-operation', 'state': 'played'})
         self.assertEqual(server.row()[0], 'offered')
         self.runtime._command(offered, NOW)
         self.runtime.flush_acks()
         self.assertEqual(server.row()[0], 'received')
+        for unknown in ('played', 'failed'):
+            server.ack({'operation_id': OP, 'state': unknown})
+            self.assertEqual(server.row()[0], 'received')
         with self.runtime.optional_audio_requests.owner():
             request = self.runtime.optional_audio_requests.claim_next('a' * 64)
             self.runtime.optional_audio_requests.finish(request, outcome)
@@ -289,10 +336,10 @@ class VoiceRoundTwoTests(unittest.TestCase):
             self.assertNotIn('text', command['payload'])
             self.assertIn('clip_id', command['payload'])
         server.server_time = NOW + 30 * 86400 - 1
-        server.inbox(0)
+        server.inbox(0, features='guided_setup_v1')
         self.assertIsNotNone(server.row())
         server.server_time += 1
-        server.inbox(0)
+        server.inbox(0, features='guided_setup_v1')
         self.assertIsNone(server.row())
 
     def test_busy_speaker_skips_greeting_before_a_press_or_note_can_be_trapped(self):
