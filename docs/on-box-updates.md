@@ -583,3 +583,14 @@ rollback/reboot recovery, then physical send/play/reply, NFC, quiet hours and
 listened notices. Fixed-controller promotion, atomic exchange/power-loss
 behavior and physical canary acceptance require device verification; local
 checks establish none of those outcomes.
+
+
+### Independent recovery preparation
+
+The first recovery bootstrap now has permanent launcher and verifier anchors,
+independent current/fallback helper copies, and persistent descriptor acceptance
+state. It runs in both runtime modes. It leaves the active fixed controller
+unchanged. The later bridge will schedule this bootstrap after application
+commit; this step does not add a manual field action or a promotion trigger.
+See [controller recovery](controller-recovery.md) for the fixed paths, locks,
+bootstrap crash checks and unverified device acceptance.

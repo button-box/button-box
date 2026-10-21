@@ -2,6 +2,7 @@
 """Offline signing, signature-first verification and attended draft uploads."""
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -15,7 +16,7 @@ from pathlib import Path, PurePosixPath
 from build import PRODUCT, ROOT, SCHEMA, SUPPORTED, ReleaseError, channel, digest, digest_stream, json_bytes
 
 sys.path.insert(0, str(ROOT / 'scripts/install'))
-from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE, MAX_DESCRIPTOR,
+from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE, MAX_DESCRIPTOR, RECOVERY_DROPINS,
                             MAX_CONTROLLER_SIGNATURE, check_controller_compatibility,
                             controller_signature_bytes, parse_controller_descriptor,
                             verify_controller_proof)
@@ -97,6 +98,20 @@ def inspect_controller_archive(tar, manifest, keys=None):
         # The old worker copies these sources with mode 0644 into updater/.
         if member.size != entry['size'] or digest_stream(tar.extractfile(member)) != entry['sha256']:
             raise ReleaseError('controller module differs from signed descriptor')
+    if value['schema'] == 2:
+        expected = [{'path': path, 'size': len(raw), 'mode': 0o644, 'sha256': hashlib.sha256(raw).hexdigest()}
+                    for path, raw in sorted(RECOVERY_DROPINS.items())]
+        if value['unit_changes'] != expected:
+            raise ReleaseError('recovery unit changes differ from the bootstrap contract')
+    for entry in value.get('recovery', {}).get('files', []):
+        try:
+            member = tar.getmember(entry['path'])
+        except KeyError as exc:
+            raise ReleaseError('recovery file missing from archive') from exc
+        if (not member.isfile() or member.mode != entry['mode'] or member.size != entry['size']
+                or digest_stream(tar.extractfile(member)) != entry['sha256']
+                or installed.get(entry['path']) != '/opt/messagebox/' + entry['path']):
+            raise ReleaseError('recovery file differs from signed descriptor')
     if keys is not None:
         verify_controller_proof(raw, signature, keys, run=subprocess.run)
 

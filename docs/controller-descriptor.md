@@ -1,7 +1,8 @@
 # Retained controller proof
 
-This change prepares signed controller proof. It does not promote a controller.
-The fixed units do not change. Neither transport calls Cloud for this proof.
+Signed controller proof now also covers independent recovery support. It does
+not promote a controller. Fixed main units remain unchanged. Recovery bootstrap
+adds two service drop-ins. Neither transport calls Cloud for this proof.
 
 ## Files and format
 
@@ -17,7 +18,8 @@ mode 0644. Their `.py` extension lets the frozen field workers retain them.
 The installed-file manifest covers both files. The application signature also
 covers them through the archive hash.
 
-The descriptor has these exact schema-1 fields:
+Schema 1 has the exact fields below. Schema 2 adds the signed recovery object
+described later in this document.
 
 | Field | Meaning |
 |---|---|
@@ -33,7 +35,7 @@ The descriptor has these exact schema-1 fields:
 | `supported_models` | The sorted Pi 3 A+ and Pi 4 model names from `release_verify.py`. |
 | `capabilities` | Exactly `signed_descriptor` and `self_upgrade`, both Boolean. |
 | `modules` | Exactly the six records below, in this order. |
-| `unit_changes` | Empty list. This version authorizes no controller integration changes. |
+| `unit_changes` | Schema 1: empty. Schema 2: signed records for generated recovery and supervisor drop-ins. |
 
 Each module record has exactly `path`, `size`, `mode`, and `sha256`.
 `size` is a positive byte count. `mode` is integer 420, which is octal 0644.
@@ -69,7 +71,8 @@ Verification rejects a missing signature, wrong key, changed descriptor,
 changed module, wrong hash, wrong size, wrong mode, missing module or extra module
 record. It also rejects incompatible application versions, platforms and sequence
 floors. An equal sequence is permitted when rechecking an accepted retained proof.
-Admission of a new promotion needs its own strict sequence check in later work.
+Recovery bootstrap now persists the accepted digest and sequence/version floors.
+The read-only proof API does not replace that admission check.
 
 Files are read through no-follow file descriptors. The selected root, its
 descendant directories and files must belong to the verifying user and exclude
@@ -94,7 +97,7 @@ python3 scripts/release/build.py v0.3.13-canary.1 \
 ```
 
 The builder checks both transports in two clean clones. It requires all six
-controller sources in the tracked payload allowlist. It then generates the
+controller sources and all three recovery files in the tracked payload allowlist. It then generates the
 descriptor, signs it once, and verifies the selected secret/public pair.
 The second clone must produce identical descriptor bytes. Both archives retain
 the same verified proof. Archive checks reject a mismatch before copying output.
@@ -127,7 +130,7 @@ supplies the controlled release root, current release keys, verified application
 version, platform, and sequence floor. The result contains the parsed descriptor,
 its SHA-256, and the signing key ID.
 
-A future helper must hold `trust_update.trust_lock`, finish `recover_trust`, and
+Recovery bootstrap and launcher hold the trust lock, finish `recover_trust`, and
 verify against that current generation. It must repeat verification before
 promotion. A descriptor signed by a removed key is rejected after trust rotation.
 An earlier build-time check does not override later revocation.
@@ -138,12 +141,12 @@ controller. `UPDATER_VERSION` remains 1.1.0 in this PR. No heartbeat or active
 capability changes.
 
 The minimum application field provides a lower version bound only. It does not
-prove state-format or rollback compatibility. Later work must bind integration
-files, helper artifacts and rollback compatibility before any promotion uses them.
-The future helper must enforce both protocol minima. This API does not attest a
+prove state-format or rollback compatibility. Schema 2 now binds recovery helper artifacts. Later work must bind complete
+controller integration and rollback compatibility before promotion. Recovery
+bootstrap and launcher enforce both protocol minima. This API does not attest a
 running launcher or helper.
-The empty `unit_changes` contract must be extended before such changes can be
-authorized by a descriptor.
+Schema 2 now signs the two generated recovery drop-ins in `unit_changes`.
+Each consuming helper must enforce its exact supported integration changes.
 
 Key storage, recovery copies, separate controller-key roles, emergency approval
 thresholds and rotation procedures are not settled by these tools. No production
@@ -151,7 +154,7 @@ secret key was used to test this change. No deployable release was signed here.
 
 ## Validation and remaining work
 
-Checks on 21 October 2026:
+Original PR 2 checks on 21 October 2026:
 
 | Command | Result |
 |---|---|
@@ -174,7 +177,24 @@ worker path, then verifies the retained proof offline. The fixed controller byte
 remain unchanged. Systemd, health and the enclosing application signature process
 use the PR 1 host substitutes. The descriptor signature uses real minisign.
 
-No promotion, recovery launcher, controller exchange, new-box installation,
-rollout permit, or shipment acceptance is implemented here. Live OTA, boot,
+Recovery support is now implemented as described below. Controller promotion,
+exchange, new-box recovery installation, rollout permits and shipment acceptance
+remain later work. Live OTA, boot,
 power-loss recovery, storage behavior and physical Cloud/wacli acceptance remain
 unverified. This PR adds no Cloud dependency to wacli.
+
+
+## Schema 2: recovery support
+
+Schema 1 remains readable. New complete payloads use schema 2. It adds a strict
+`recovery` object with `protocol=1`, `helper_version=1.0.0`, and the exact three
+`messagebox/recovery_*.py` files, each with size, mode 0644 and SHA-256. The six
+controller modules remain separate. All recovery files must also be in the
+installed manifest. `unit_changes` gives the two generated drop-in paths, sizes,
+modes and hashes. Bootstrap compares these signed values before it writes support. The builder and publisher check these exact archive bytes.
+
+The first recovery bootstrap stores persistent sequence, digest, controller
+version and helper version floors in one root-owned atomic record with helper
+selection. Equal sequence requires the same accepted digest. Read-only proof
+verification alone is still not promotion authorization. See
+[controller recovery](controller-recovery.md) for paths, ordering and limits.

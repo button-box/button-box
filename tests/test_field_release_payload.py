@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from field_updater import CONTROLLER, PROVENANCE, FieldBox, digest, write
 
@@ -40,7 +41,20 @@ class BuiltFieldPayload(unittest.TestCase):
             spec = importlib.util.spec_from_file_location('field_release_build', ROOT / 'scripts/release/build.py')
             build = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(build)
-            payload = build.payload_paths(checkout)
+            # Prepare an actual temporary index for uncommitted new payload
+            # files. No commit/tag is created; production build uses HEAD.
+            listing = (ROOT / 'scripts/release/payload.txt').read_text()
+            write(checkout / 'scripts/release/payload.txt', listing.encode())
+            for name in listing.splitlines():
+                if name and not name.startswith('#') and not (checkout / name).exists():
+                    write(checkout / name, (ROOT / name).read_bytes())
+            subprocess.run(['git', '-C', str(checkout), 'add', '--all'], check=True)
+            tree = build.git(checkout, 'write-tree')
+            real_git = build.git
+            def candidate_git(repo, *args):
+                return real_git(repo, 'ls-tree', '-r', tree) if args == ('ls-tree', '-r', 'HEAD') else real_git(repo, *args)
+            with mock.patch.object(build, 'git', side_effect=candidate_git):
+                payload = build.payload_paths(checkout)
             # Include current uncommitted candidate bytes. No commits or tags are
             # created. A production build instead enforces a clean stationary tag.
             for name, mode in payload.items():
@@ -85,6 +99,17 @@ class BuiltFieldPayload(unittest.TestCase):
                         platform={'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})
                     self.assertEqual(proof['descriptor_sha256'], digest(descriptor))
                     self.assertEqual(original, {p.name: digest(p) for p in assets.iterdir()})
+                    # Frozen bounded_update.py:248-251,1828-1844 accepts every
+                    # recovery source path in the real package. Bootstrap then
+                    # installs fixed support only after the app has committed.
+                    from messagebox import recovery_bootstrap, recovery_launcher
+                    from test_recovery_support import systemd
+                    for name in verify.RECOVERY_FILES:
+                        self.assertEqual((installed / name).read_bytes(), (checkout / name).read_bytes())
+                    write(box.installed('/etc/button-box-update/release-keys/test.pub'), public.read_bytes())
+                    recovery_bootstrap.bootstrap(box.root, platform={
+                        'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'}, run=systemd)
+                    self.assertEqual(recovery_launcher.launch(box.root), 'current')
             # The helper must pass through the builder's SHA256SUMS; it must
             # not silently repackage or repair damaged build output.
             rejected = FieldBox(root / 'damaged')

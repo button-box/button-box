@@ -55,6 +55,9 @@ messagebox/onboarding/voice_gate.py
 messagebox/onboarding/whatsapp.py
 messagebox/played_history.py
 messagebox/qrcodegen.py
+messagebox/recovery_bootstrap.py
+messagebox/recovery_helper.py
+messagebox/recovery_launcher.py
 messagebox/remote_access.py
 messagebox/runtime_paths.py
 messagebox/settings.py

@@ -21,21 +21,25 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
         payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
-        self.assertEqual(len(payload), 630)
+        self.assertEqual(len(payload), 633)
         for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
-                     'config/emergency-keys/README.md', 'scripts/install/health-probe.py'):
+                     'config/emergency-keys/README.md', 'scripts/install/health-probe.py',
+                     'messagebox/recovery_bootstrap.py', 'messagebox/recovery_launcher.py',
+                     'messagebox/recovery_helper.py'):
             self.assertIn(name, payload)
-        # The installed program mapping remains 616 files. Fixed trust code is
+        # The installed program mapping remains 619 files. Fixed trust code is
         # staged separately in updater/, and public pins are bootstrap-only.
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 616)
+        self.assertEqual(len(paths), 619)
         self.assertFalse(any('/etc/button-box-update/' in target for target in paths.values()))
 
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 616)
+        self.assertEqual(len(paths), 619)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
+        for name in ('recovery_bootstrap.py', 'recovery_launcher.py', 'recovery_helper.py'):
+            self.assertEqual(paths['messagebox/' + name], '/opt/messagebox/messagebox/' + name)
         self.assertEqual(len(paths.values()), len(set(paths.values())))
         self.assertEqual(paths["scripts/install/audio_config.py"], "/usr/lib/messagebox/audio_config.py")
         self.assertEqual(
@@ -128,7 +132,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 616)
+            self.assertEqual(len(entries), 619)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(

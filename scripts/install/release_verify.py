@@ -25,6 +25,17 @@ CONTROLLER_DESCRIPTOR = 'messagebox/controller_descriptor.py'
 CONTROLLER_SIGNATURE = 'messagebox/controller_signature.py'
 CONTROLLER_MODULES = ('bounded_update.py', 'health-probe.py', 'release_verify.py',
                       'trust_update.py', 'update_controller.py', 'update_discovery.py')
+RECOVERY_FILES = ('messagebox/recovery_bootstrap.py', 'messagebox/recovery_helper.py',
+                  'messagebox/recovery_launcher.py')
+RECOVERY_COMMAND = '/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py'
+RECOVERY_DROPINS = {
+    '/etc/systemd/system/messagebox-update-' + unit + '.service.d/messagebox.conf':
+    ('[Service]\nExecStartPre=' + RECOVERY_COMMAND + '\n').encode()
+    for unit in ('recovery', 'supervisor')
+}
+UPDATER_UNITS = frozenset('messagebox-update-' + name for name in (
+    'recovery.service', 'controller.service', 'install.service', 'supervisor.service',
+    'supervisor.timer', 'discovery.service', 'discovery.timer'))
 MAX_DESCRIPTOR = 16 * 1024
 MAX_CONTROLLER_SIGNATURE = 4096
 MAX_CONTROLLER_MODULE = 2 * 1024 * 1024
@@ -263,8 +274,10 @@ def parse_controller_descriptor(raw):
               'min_application_version', 'min_launcher_protocol', 'min_helper_protocol',
               'supported_os', 'supported_arch', 'supported_models', 'capabilities',
               'modules', 'unit_changes'}
+    if isinstance(value, dict) and value.get('schema') == 2:
+        fields.add('recovery')
     if (not isinstance(value, dict) or set(value) != fields or type(value['schema']) is not int
-            or value['schema'] != 1 or value['product'] != 'button-box-controller'
+            or value['schema'] not in {1, 2} or value['product'] != 'button-box-controller'
             or type(value['controller_sequence']) is not int or not 0 < value['controller_sequence'] < 2**63
             or any(type(value[key]) is not int or not 0 < value[key] < 2**16
                    for key in ('min_launcher_protocol', 'min_helper_protocol'))
@@ -274,7 +287,7 @@ def parse_controller_descriptor(raw):
             or set(value['capabilities']) != {'signed_descriptor', 'self_upgrade'}
             or value['capabilities']['signed_descriptor'] is not True
             or type(value['capabilities']['self_upgrade']) is not bool
-            or value['unit_changes'] != []
+            or (value['schema'] == 1 and value['unit_changes'] != [])
             or not isinstance(value['modules'], list) or len(value['modules']) != len(CONTROLLER_MODULES)):
         raise ReleaseError('invalid_controller_descriptor')
     _controller_version(value['controller_version'])
@@ -287,6 +300,36 @@ def parse_controller_descriptor(raw):
                 or type(entry['mode']) is not int or entry['mode'] != 0o644
                 or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
             raise ReleaseError('invalid_controller_modules')
+    if value['schema'] == 2:
+        units = value['unit_changes']
+        if not isinstance(units, list) or len(units) > 32:
+            raise ReleaseError('invalid_controller_units')
+        paths = []
+        for entry in units:
+            if (not isinstance(entry, dict) or set(entry) != {'path', 'size', 'mode', 'sha256'}
+                    or not isinstance(entry['path'], str)
+                    or not entry['path'].startswith('/etc/systemd/system/')
+                    or entry['path'].removeprefix('/etc/systemd/system/').removesuffix('.d/messagebox.conf') not in UPDATER_UNITS
+                    or type(entry['size']) is not int or not 0 < entry['size'] <= 64 * 1024
+                    or type(entry['mode']) is not int or entry['mode'] != 0o644
+                    or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
+                raise ReleaseError('invalid_controller_units')
+            paths.append(entry['path'])
+        if paths != sorted(set(paths)):
+            raise ReleaseError('invalid_controller_units')
+        recovery = value['recovery']
+        if (not isinstance(recovery, dict) or set(recovery) != {'protocol', 'helper_version', 'files'}
+                or type(recovery['protocol']) is not int or recovery['protocol'] != 1
+                or not isinstance(recovery['files'], list) or len(recovery['files']) != len(RECOVERY_FILES)):
+            raise ReleaseError('invalid_recovery_descriptor')
+        _controller_version(recovery['helper_version'])
+        for entry, path in zip(recovery['files'], RECOVERY_FILES):
+            if (not isinstance(entry, dict) or set(entry) != {'path', 'size', 'mode', 'sha256'}
+                    or entry['path'] != path or type(entry['size']) is not int
+                    or not 0 < entry['size'] <= MAX_CONTROLLER_MODULE
+                    or type(entry['mode']) is not int or entry['mode'] != 0o644
+                    or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
+                raise ReleaseError('invalid_recovery_descriptor')
     return value
 
 
@@ -346,7 +389,7 @@ def verify_retained_controller(release, keys, *, application_version, platform, 
     proof = verify_controller_proof(raw, signature, keys, run=run)
     value = proof['descriptor']
     check_controller_compatibility(value, application_version, platform, floor=floor)
-    for entry in value['modules']:
+    for entry in value['modules'] + value.get('recovery', {}).get('files', []):
         content, mode = controller_file(release, entry['path'], MAX_CONTROLLER_MODULE)
         if mode != entry['mode'] or len(content) != entry['size'] or hashlib.sha256(content).hexdigest() != entry['sha256']:
             raise ReleaseError('controller_module_mismatch')

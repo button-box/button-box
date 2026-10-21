@@ -305,3 +305,12 @@ bytes) as a **new tag with a higher release_sequence**, sign and review it norma
 Never reduce or reset the sequence floor or reuse a failed tag/sequence. The
 updater may restore its journal's exact previous release during a failed local
 transaction; that is separate from accepting an older network release.
+
+
+### Recovery files in controller proof
+
+New builds require the three recovery support files in the explicit payload.
+Descriptor schema 2 signs these files as well as the six controller modules.
+Publication rejects missing or changed recovery bytes. Schema 1 proof remains
+readable for old retained releases. Recovery bootstrap and its persistent
+sequence/version floors are described in [controller recovery](controller-recovery.md).

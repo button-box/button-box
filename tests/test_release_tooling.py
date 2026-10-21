@@ -50,6 +50,9 @@ class ReleaseToolingTests(unittest.TestCase):
             relative = 'scripts/install/' + name
             (self.repo / relative).write_text('# synthetic controller\n')
             self.tracked.append(relative)
+        for relative in build.RECOVERY_FILES:
+            (self.repo / relative).write_text('# synthetic recovery support\n')
+            self.tracked.append(relative)
         (self.repo / "scripts/release/payload.txt").write_text('\n'.join(sorted(self.tracked)) + '\n')
         (self.root / 'pin.pub').write_text('untrusted comment: synthetic public key\n' +
                                          base64.b64encode(b'Ed' + b'k' * 40).decode() + '\n')
@@ -354,6 +357,12 @@ class ReleaseToolingTests(unittest.TestCase):
             self.make_build()
         self.assertFalse((self.root / 'output').exists())
 
+    def test_builder_refuses_missing_recovery_payload_file(self):
+        self.tracked.remove(build.RECOVERY_FILES[0])
+        (self.repo / 'scripts/release/payload.txt').write_text('\n'.join(sorted(self.tracked)) + '\n')
+        with self.assertRaisesRegex(ValueError, 'recovery files missing'):
+            self.make_build()
+
     def test_controller_mismatch_or_missing_proof_blocks_publish_before_any_github_call(self):
         output = self.make_build()
         archive = release.checksums(output)
@@ -361,7 +370,7 @@ class ReleaseToolingTests(unittest.TestCase):
         notes = self.root / 'notes.md'
         notes.write_text('Synthetic release notes.\n')
         (output / 'SHA256SUMS.minisig').write_text('synthetic app signature\n')
-        for case in ('module', 'missing_signature', 'malformed_descriptor', 'oversized_descriptor'):
+        for case in ('module', 'recovery_file', 'missing_recovery', 'missing_signature', 'malformed_descriptor', 'oversized_descriptor'):
             with self.subTest(case=case):
                 (output / archive).write_bytes(original)
                 with tarfile.open(output / archive) as tar:
@@ -370,6 +379,10 @@ class ReleaseToolingTests(unittest.TestCase):
                     for member, data in members:
                         if case == 'missing_signature' and member.name == build.CONTROLLER_SIGNATURE:
                             continue
+                        if case == 'missing_recovery' and member.name == build.RECOVERY_FILES[0]:
+                            continue
+                        if case == 'recovery_file' and member.name == build.RECOVERY_FILES[0]:
+                            data += b'# tampered recovery\n'
                         if case == 'module' and member.name == 'scripts/install/bounded_update.py':
                             data += b'# tampered\n'
                         if member.name == build.CONTROLLER_DESCRIPTOR:

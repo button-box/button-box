@@ -63,6 +63,9 @@ rsync -azR \
   "$REPO_DIR/./messagebox/mic_capture.py" \
   "$REPO_DIR/./messagebox/device_http.py" \
   "$REPO_DIR/./messagebox/software.py" \
+  "$REPO_DIR/./messagebox/recovery_bootstrap.py" \
+  "$REPO_DIR/./messagebox/recovery_helper.py" \
+  "$REPO_DIR/./messagebox/recovery_launcher.py" \
   "$REPO_DIR/./messagebox/cloud_update.py" \
   "$REPO_DIR/./messagebox/maintenance.py" \
   "$REPO_DIR/./messagebox/cloud_device.py" \
