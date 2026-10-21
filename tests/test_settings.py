@@ -155,11 +155,11 @@ class SettingsStoreTests(unittest.TestCase):
     def test_voice_pack_migrates_defaults_normalizes_unknown_and_round_trips(self):
         from messagebox.settings import VOICE_PACKS
         initial = defaults({"TZ": "UTC"})
-        self.assertEqual(initial["voice_pack"], "jessica")
+        self.assertEqual(initial["voice_pack"], "buttonbox")
         old = {key: value for key, value in initial.items() if key != "voice_pack"}
         self.assertEqual(validate(old), initial)
         for unknown in ("unavailable", None, [], 7):
-            self.assertEqual(validate({**initial, "voice_pack": unknown})["voice_pack"], "jessica")
+            self.assertEqual(validate({**initial, "voice_pack": unknown})["voice_pack"], "buttonbox" if unknown is None else "jessica")
         store = SettingsStore(self.path, environ={"TZ": "UTC"})
         for pack in VOICE_PACKS:
             current, _ = store.load()

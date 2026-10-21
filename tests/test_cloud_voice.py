@@ -98,13 +98,13 @@ class ReactionTests(unittest.TestCase):
     def test_name_service_card_cache_and_old_cloud_fallback(self):
         self.runtime.heartbeat()
         audio=wav()
-        self.client.voice_line=mock.Mock(return_value={'clip_id':'a'*64,'voice_pack':'jessica',
+        self.client.voice_line=mock.Mock(return_value={'clip_id':'a'*64,'voice_pack':'buttonbox',
            'sha256':hashlib.sha256(audio).hexdigest(),'content_type':'audio/wav','media_url':'https://cloud.example/clip'})
         self.client.media=mock.Mock(return_value=audio)
         self.runtime._preload_voice_lines()
         jid=PERSON['wa_id']+'@s.whatsapp.net'
-        self.assertTrue(self.runtime.card_prompt_clip(jid,'jessica'))
-        self.assertTrue(self.runtime.named_card_clip(jid,'jessica','card_saved'))
+        self.assertTrue(self.runtime.card_prompt_clip(jid,'buttonbox'))
+        self.assertTrue(self.runtime.named_card_clip(jid,'buttonbox','card_saved'))
         before=self.client.voice_line.call_count
         self.runtime._preload_voice_lines()
         self.assertEqual(self.client.voice_line.call_count,before)

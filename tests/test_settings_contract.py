@@ -44,7 +44,7 @@ class SettingsContractTests(unittest.TestCase):
             self.assertEqual({key: value for key, value in contract["capabilities"].items() if key != "software_update"}, capabilities(nfc=False))
             self.assertEqual(contract["capabilities"]["software_update"]["protocol"], 1)
         self.assertEqual(contract["command_kinds"], sorted([
-            "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview",
+            "audio", "listened", "card_prompt", "setup_greeting", "settings", "preview_ringtone", "voice_preview",
             "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "install_update", "set_update_mode", "delete_message",
             "quiet_now", "mute", "reaction",
         ]))

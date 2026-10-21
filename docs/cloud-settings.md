@@ -99,22 +99,26 @@ lamp/press checks.
 
 ## Voice packs
 
-`voice_pack` defaults to `jessica`; absent or unknown values normalize to Jessica
-without losing the settings revision. Supported ids are `jessica`, `pirate`,
-`alien`, `dj`, `robot`, `french`, `charlie` and `tata`. Jessica lives in `sounds/voice/`;
-other packs live in `sounds/voices/<id>/`. Every spoken prompt resolves the current
-pack at use, with a per-file Jessica fallback and one warning per missing line.
+`voice_pack` defaults to `buttonbox` in both modes. A missing pack selects
+Button Box. Unknown values use a safe bundled default. Old local Jessica defaults select
+Button Box unless a settings update explicitly selects Jessica. The private
+`settings.voice-selection.json` sidecar records that choice and its revision.
+Keep this sidecar with the settings file during recovery.
 
-The `voice_packs` capability lists installed packs only after full WAV/manifest
-validation, always including Jessica. The Cloud must offer only those ids and
-must not send a non-Jessica setting to a box without that capability.
+Supported ids are `jessica`, `pirate`, `alien`, `dj`, `robot`, `french`, `charlie`,
+`tata`, and `buttonbox`. Jessica stays in `sounds/voice/`. Other packs use
+`sounds/voices/<id>/`. Missing shared lines use the Jessica file. New setup and
+settings lines use the Button Box pack. A missing new line is silent.
 
-A `voice_preview` command carries `voice_pack` and queues that pack's
-`voice-msg-start.wav` for the idle button audio owner, with the lamp off. Previews
-retain the existing bounded lifetime and crash receipts. Applied voice changes
-use the same settings-saved debounce and play the current pack's sample after
-volume is applied. If voice and volume/ringtone change together, the voice sample
-wins; changes to volume/ringtone alone keep their existing preview behavior.
+The `voice_packs` capability lists complete, validated packs. Cloud must offer
+only these ids. The old Jessica id and files remain valid.
+
+A `voice_preview` command queues the selected pack's `voice-msg-start.wav`.
+The button owner plays it when idle. A press during speech is discarded.
+After a real Cloud settings change, the box says `voice-setting-saved.wav` once
+per batch, after volume is applied. The first sync after boot, unchanged values,
+and local settings echoed by Cloud are silent. Explicit ringtone previews stay
+separate. Quiet hours discard settings confirmations.
 
 A Cloud listened receipt retains its payload `voice_pack` through restart. The
 button owner uses a cached name clip only when that value exactly matches the

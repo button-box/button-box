@@ -1,5 +1,7 @@
 """Capture authority and regression inventory; no GPIO or audio hardware."""
 
+from speaker_helpers import isolate_audio
+
 import ast
 import contextlib
 from pathlib import Path
@@ -18,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MicAccessTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def test_synthetic_input_cannot_mint_a_physical_permit(self):
         class PhysicalButton:
             is_pressed = True

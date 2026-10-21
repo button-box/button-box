@@ -38,7 +38,7 @@ class AudioRequests:
         request = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(request, dict) or not isinstance(request.get("key"), str)
                 or self._path(request["key"]).name != path.name
-                or request.get("kind") not in {"success", "preview", "voice_preview", "settings_saved"}
+                or request.get("kind") not in {"success", "preview", "voice_preview", "settings_saved", "setup_greeting"}
                 or (request.get("kind") == "preview" and normalize_ringtone_id(request.get("ringtone_id")) not in RINGTONES)
                 or (request.get("kind") == "voice_preview" and request.get("voice_pack") not in VOICE_PACKS)
                 or not isinstance(request.get("account_scope"), str)

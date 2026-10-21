@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from messagebox import cloud_setup
 from messagebox.cloud_device import (CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudRateLimited,
                                      CloudVoiceNotFound, RATE_LIMIT_DEFAULT_SECONDS, atomic_json, capabilities)
 from messagebox.audio_requests import AudioRequests, preview_key, success_key
@@ -867,6 +868,7 @@ class CloudRuntime:
             metadata["state"] = "pending"
             atomic_json(job_dir / "job.json", metadata)
             return
+        cloud_setup.SetupGuide().sent(metadata["message_id"], metadata.get("account_scope"), status)
         self.queue_send_success(metadata, status)
         metadata.update({"state": "cloud_retained", "cloud_message_id": status["message_id"],
                          "cloud_state": status["state"], "expires_at": status["expires_at"],
@@ -899,6 +901,7 @@ class CloudRuntime:
             return
         if metadata.get("account_scope") != scope:
             return
+        cloud_setup.SetupGuide().sent(metadata["message_id"], scope, status, ready=True)
         self.audio_requests.enqueue_for(success_key(scope, metadata["message_id"]),
             "success", scope, remaining)
 
@@ -1424,6 +1427,24 @@ class CloudRuntime:
             return self._listened(item, server_time)
         if kind == "card_prompt":
             return self._card_prompt(item)
+        if kind == "setup_greeting":
+            if capabilities().get("guided_setup_v1") is not True:
+                raise CloudRuntimeError("guided setup is unavailable")
+            snapshot = self._snapshot()
+            settings, warning = self.settings.load()
+            if warning or payload.get("voice_pack") != settings["voice_pack"]:
+                raise CloudRuntimeError("setup greeting voice is invalid")
+            clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload)
+            if clip:
+                key = "setup_greeting:" + item["operation_id"]
+                self.audio_requests.enqueue_for(key, "setup_greeting", snapshot["account_scope"],
+                    item["expires_at"] - self.server_now(), clip=clip)
+                self.state["pending_previews"][item["operation_id"]] = key
+                self._save()
+                self._ack(item["operation_id"], "received")
+            else:
+                self._ack(item["operation_id"], "rejected")
+            return
         if kind in {"quiet_now", "mute"}:
             key = "quiet_until" if kind == "quiet_now" else "muted"
             if key not in payload:
@@ -1657,7 +1678,7 @@ class CloudRuntime:
                 entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
+                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "setup_greeting", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (

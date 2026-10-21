@@ -83,7 +83,7 @@ Names match `[a-z0-9][a-z0-9._-]{0,80}\.wav`. Only the existing cue, Cloud,
 voice, ringtone and named voice-pack folders are supported; no arbitrary nested
 folders or links. Metadata additions are limited to `manifest.json` and
 `cues.json`; existing README and lamp files retain their exact mappings.
-The limits are 2 MiB per sound file, 128 MiB total including sound metadata, and
+The limits are 2 MiB per sound file, 160 MiB total including sound metadata, and
 2,000 sound files. The current pack already exceeds 64 MiB. Each installed
 release owns its sounds, including original ringtones at their existing path,
 so rollback restores the previous pack's bytes.

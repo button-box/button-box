@@ -4,6 +4,8 @@ Only subprocess/audio boundaries are faked; routing and durable state are real.
 These contracts always select wacli, including in the Cloud matrix job.
 """
 
+from speaker_helpers import isolate_audio
+
 import json
 import tempfile
 import unittest
@@ -28,6 +30,7 @@ CARD = "04:A1:00:FF"
 
 class WacliContractTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)

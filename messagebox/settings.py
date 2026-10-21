@@ -33,10 +33,12 @@ RINGTONES = {
 }
 LEGACY_RINGTONES = frozenset({"gentle_music_box", "playful_chiptune", "ding_dong", "cuckoo_clock"})
 DEFAULT_RINGTONE = "hello_piano"
-VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie", "tata")
+VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie", "tata", "buttonbox")
 
 
 def normalize_voice_pack(value):
+    if value is None:
+        return "buttonbox"
     return value if isinstance(value, str) and value in VOICE_PACKS else "jessica"
 
 
@@ -232,7 +234,7 @@ def defaults(environ=None):
         "swoosh_sound_enabled": True,
         "card_name_prompt": True,
         "say_reactions": True,
-        "voice_pack": "jessica",
+        "voice_pack": "buttonbox",
         "announce_messages_voice": False,
     }
 
@@ -270,8 +272,8 @@ def validate(document):
     document = normalize_recording_settings(
         {key: value for key, value in document.items() if key in _ROOT_KEYS})
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
-        # Persisted settings from earlier releases retain their cue and default voice.
-        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": "jessica", "card_name_prompt": True,
+        # Preserve old cue defaults; missing voices use the new local default.
+        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": "buttonbox", "card_name_prompt": True,
                                                "announce_messages_voice": False, **document})
         document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
@@ -404,7 +406,15 @@ class SettingsStore:
 
     def _read(self, path):
         with open(path, encoding="utf-8") as handle:
-            return validate(json.load(handle))
+            document = validate(json.load(handle))
+        if document["voice_pack"] == "jessica":
+            try:
+                selected = json.loads(self.path.with_suffix(".voice-selection.json").read_text())
+            except (OSError, ValueError):
+                selected = {}
+            if selected != {"revision": document["revision"], "voice_pack": "jessica"}:
+                document["voice_pack"] = "buttonbox"
+        return document
 
     def load(self):
         try:
@@ -433,7 +443,7 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
-        candidate = {**QUIET_DEFAULTS, "voice_pack": "jessica", "card_name_prompt": True, "say_reactions": True,
+        candidate = {**QUIET_DEFAULTS, "voice_pack": "buttonbox", "card_name_prompt": True, "say_reactions": True,
                      "announce_messages_voice": False, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
         candidate = normalize_recording_settings(
@@ -456,6 +466,9 @@ class SettingsStore:
                     **candidate,
                 }
                 document = validate(document)
+                if document["voice_pack"] == "jessica":
+                    _atomic_json(self.path.with_suffix(".voice-selection.json"),
+                                 {"revision": revision, "voice_pack": "jessica"})
                 self._write_pair(document)
                 return document
             finally:

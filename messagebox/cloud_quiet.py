@@ -10,6 +10,7 @@ from pathlib import Path
 
 from messagebox.cloud_device import CLOUD_DIR, atomic_json
 from messagebox.settings import _open_shared_lock
+from messagebox import speaker
 
 
 SILENCE_FILE = CLOUD_DIR / "silence.json"
@@ -93,8 +94,15 @@ def start_player(args, *, allow_muted=False, **kwargs):
     if not reservation.__enter__():
         reservation.__exit__(None, None, None)
         raise AudioSilenced("software installation in progress")
+    def launch(command, **options):
+        # A queued player must check silence again after it gets the speaker.
+        state = silence_store.load()
+        if state["muted"] and not allow_muted or state["stop_sequence"] > before["stop_sequence"]:
+            raise AudioSilenced("audio stopped while waiting for speaker")
+        return subprocess.Popen(command, **options)
+
     try:
-        process = subprocess.Popen(args, **kwargs)
+        process = speaker.start_player(args, popen=launch, **kwargs)
     except BaseException:
         reservation.__exit__(None, None, None)
         raise
@@ -126,13 +134,20 @@ def start_player(args, *, allow_muted=False, **kwargs):
 
 
 def play(args, *, timeout, allow_muted=False):
-    process = start_player(args, allow_muted=allow_muted)
-    try:
-        code = process.wait(timeout=timeout)
-        if code:
-            raise subprocess.CalledProcessError(code, "aplay")
-        return subprocess.CompletedProcess(args, code)
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+    for attempt in range(2):
+        process = start_player(args, allow_muted=allow_muted, stderr=subprocess.PIPE)
+        try:
+            _, error = process.communicate(timeout=timeout)
+            code = process.returncode
+            if code:
+                if speaker.busy(error):
+                    if attempt:
+                        raise speaker.SpeakerBusy("speaker unavailable")
+                    time.sleep(0.15)
+                    continue
+                raise subprocess.CalledProcessError(code, "aplay")
+            return subprocess.CompletedProcess(args, code)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()

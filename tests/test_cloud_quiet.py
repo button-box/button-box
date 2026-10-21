@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import os
 import sys
 import tempfile
@@ -26,6 +27,7 @@ def period(start, end):
 
 class QuietScheduleTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.settings = defaults({"TZ": "Europe/Lisbon"})
         self.settings["quiet_schedules"] = {
             "school_days": [period("22:00", "07:00"), period("13:00", "15:00")],
@@ -134,6 +136,7 @@ class QuietScheduleTests(unittest.TestCase):
 
 class SilenceTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "silence.json"
@@ -302,6 +305,7 @@ class SilenceTests(unittest.TestCase):
 
 class MorningRingTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.marker = Path(self.temp.name) / "morning.json"

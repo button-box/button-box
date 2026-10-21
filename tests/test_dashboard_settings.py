@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import io
 import json
 import subprocess
@@ -13,6 +14,7 @@ from messagebox.settings import SettingsError, SettingsStore
 
 class DashboardSettingsTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.store = SettingsStore(
             Path(self.directory.name) / "settings.json", environ={"TZ": "UTC"}

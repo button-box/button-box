@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from messagebox import speaker
 import subprocess
 import threading
 import time
@@ -828,7 +829,7 @@ def create_app(
             with interaction() as allowed:
                 if not allowed:
                     raise RequestError("409 Conflict", "Software installation in progress")
-                subprocess.run(
+                speaker.run(
                     ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
                     check=True,
                     timeout=30,

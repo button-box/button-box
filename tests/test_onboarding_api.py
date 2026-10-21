@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import io
 import json
 import subprocess
@@ -314,6 +315,7 @@ def header(response, name):
 
 class OnboardingAPITests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.clock = Clock()
         self.state_path = Path(self.directory.name) / "state.json"

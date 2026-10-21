@@ -157,7 +157,7 @@ folders. WAV basenames must match `[a-z0-9][a-z0-9._-]{0,80}\.wav`.
 README files and ringtone lamp files retain only their exact existing mappings.
 Other folders, nested paths, traversal, links and nonregular files are rejected.
 Each WAV must be nonempty RIFF/WAVE PCM, 48 kHz, 16-bit mono, with complete frame
-data. Limits are 2 MiB per sound file, 128 MiB for all sound files (including
+data. Limits are 2 MiB per sound file, 160 MiB for all sound files (including
 metadata), and 2,000 sound files. The shipped tree already exceeds 64 MiB.
 New sounds map beneath `/opt/messagebox/sounds`; original ringtones retain
 `/opt/messagebox/ringtones` for the shared runtime. Both paths live in each

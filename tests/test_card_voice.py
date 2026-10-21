@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 from mic_helpers import physical_capture
 from functools import partial
 import contextlib
@@ -24,6 +25,7 @@ JID = "12025550101@s.whatsapp.net"
 
 class CardVoiceTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
