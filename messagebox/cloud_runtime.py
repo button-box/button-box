@@ -1230,8 +1230,11 @@ class CloudRuntime:
                 current = wanted if category == "recipient" else cards
                 if current.get(key) == fields:
                     mapping = self.state["recipient_voice_cache" if category == "recipient" else "voice_line_cache"]
-                    mapping[key] = {"clip": clip, "sha256": digest if clip else "",
-                                    "retry_at": self.server_now() + (3600 if clip else 60)}
+                    if clip:
+                        mapping[key] = {"clip": clip, "sha256": digest, "retry_at": self.server_now() + 3600}
+                    else:
+                        # A failed refresh must not invalidate the last verified clip.
+                        mapping.setdefault(key, {})["retry_at"] = self.server_now() + 60
                 self._prune_recipient_voice(wanted)
             if self._voice_thread is not None and not self._voice_thread.is_alive():
                 self._voice_thread = None

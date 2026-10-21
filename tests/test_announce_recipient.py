@@ -341,6 +341,53 @@ class RecipientPrefetchTests(unittest.TestCase):
             "",
         )
 
+    def test_failed_refresh_keeps_cached_clips_hashes_and_retry_delay(self):
+        self.enable()
+        recipient_response = self.client.voice_line.side_effect
+
+        def response(template, *, deadline=None, **reference):
+            if template in RECIPIENT_TEMPLATES:
+                return recipient_response(template, **reference)
+            return {"clip_id": hashlib.sha256((template + next(iter(reference.values()))).encode()).hexdigest(),
+                    "voice_pack": "jessica", "sha256": hashlib.sha256(wav()).hexdigest(),
+                    "content_type": "audio/wav", "media_url": API + "/device/voice-lines/clip"}
+
+        self.client.voice_line.side_effect = response
+        for row in self.runtime.state["voice_line_cache"].values():
+            row["retry_at"] = 0
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=2)
+        caches = ("recipient_voice_cache", "voice_line_cache")
+        expected = {name: {key: {field: value for field, value in row.items() if field != "retry_at"}
+                          for key, row in self.runtime.state[name].items()} for name in caches}
+        self.assertTrue(all(len(rows) == 4 for rows in expected.values()))
+        for failure in (CloudDeviceError("offline"), {"use_fallback": True}):
+            with self.subTest(failure=type(failure).__name__):
+                for name in caches:
+                    for row in self.runtime.state[name].values():
+                        row["retry_at"] = 0
+                if isinstance(failure, Exception):
+                    self.client.voice_line.side_effect = failure
+                else:
+                    self.client.voice_line.side_effect = None
+                    self.client.voice_line.return_value = failure
+                runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
+                # Persistence and the next preload pass must retain the last good WAV.
+                self.runtime.state = self.runtime._load()
+                for name in caches:
+                    for key, row in self.runtime.state[name].items():
+                        self.assertEqual({field: value for field, value in row.items() if field != "retry_at"},
+                                         expected[name][key])
+                        self.assertEqual(row["retry_at"], self.runtime.server_now() + 60)
+                        self.assertEqual(Path(row["clip"]).read_bytes(), wav())
+                for jid in (JID, "box:" + BOX["id"]):
+                    for template in RECIPIENT_TEMPLATES:
+                        self.assertTrue(self.runtime.recipient_voice_clip(jid, "jessica", template))
+                    for template in ("card_prompt", "card_saved"):
+                        self.assertTrue(self.runtime.named_card_clip(jid, "jessica", template))
+                calls = self.client.voice_line.call_count
+                runtime_tests.finish_voice_preloads(self.runtime)
+                self.assertEqual(self.client.voice_line.call_count, calls)
+
     def test_wrong_subject_mapping_never_downloads_and_bad_voice_never_breaks_heartbeat(
         self,
     ):
