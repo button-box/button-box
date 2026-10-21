@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -61,6 +62,22 @@ class SettingsContractTests(unittest.TestCase):
         gitdir = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "--absolute-git-dir"], text=True).strip()
         (repo / ".git").write_text(f"gitdir: {gitdir}\n")
         return repo
+
+    def test_recipient_capability_is_exported_when_local_fallbacks_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.alternate_checkout(directory)
+            (repo / "sounds").unlink()
+            voice = repo / "sounds" / "voice"
+            voice.mkdir(parents=True)
+            for name in ("recording", "sent"):
+                with wave.open(str(voice / f"voice-{name}.wav"), "wb") as output:
+                    output.setparams((1, 2, 48000, 0, "NONE", ""))
+                    output.writeframes(b"\0\0" * 480)
+            result = self.export(repo)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(result.stdout)
+        self.assertIs(contract["capabilities"]["announce_recipient_v1"], True)
+        self.assertEqual(contract["keys"]["announce_recipient"], {"type": "bool"})
 
     def test_other_checkout_is_described_without_importing_startup_code(self):
         with tempfile.TemporaryDirectory() as directory:

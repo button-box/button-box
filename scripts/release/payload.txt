@@ -255,6 +255,7 @@ sounds/voice/voice-msg-start.wav
 sounds/voice/voice-not-sent.wav
 sounds/voice/voice-online-ready.wav
 sounds/voice/voice-online.wav
+sounds/voice/voice-recording.wav
 sounds/voice/voice-review.wav
 sounds/voice/voice-sent-applause.wav
 sounds/voice/voice-sent-big-laugh.wav
@@ -269,6 +270,7 @@ sounds/voice/voice-sent-smile.wav
 sounds/voice/voice-sent-surprise.wav
 sounds/voice/voice-sent-tear.wav
 sounds/voice/voice-sent-thumbs-up.wav
+sounds/voice/voice-sent.wav
 sounds/voice/voice-setup-online.wav
 sounds/voice/voice-stuck.wav
 sounds/voices/README.md
@@ -303,6 +305,7 @@ sounds/voices/alien/voice-msg-start.wav
 sounds/voices/alien/voice-not-sent.wav
 sounds/voices/alien/voice-online-ready.wav
 sounds/voices/alien/voice-online.wav
+sounds/voices/alien/voice-recording.wav
 sounds/voices/alien/voice-review.wav
 sounds/voices/alien/voice-sent-applause.wav
 sounds/voices/alien/voice-sent-big-laugh.wav
@@ -317,6 +320,7 @@ sounds/voices/alien/voice-sent-smile.wav
 sounds/voices/alien/voice-sent-surprise.wav
 sounds/voices/alien/voice-sent-tear.wav
 sounds/voices/alien/voice-sent-thumbs-up.wav
+sounds/voices/alien/voice-sent.wav
 sounds/voices/alien/voice-stuck.wav
 sounds/voices/charlie/manifest.json
 sounds/voices/charlie/voice-age-2-days-ago.wav
@@ -349,6 +353,7 @@ sounds/voices/charlie/voice-msg-start.wav
 sounds/voices/charlie/voice-not-sent.wav
 sounds/voices/charlie/voice-online-ready.wav
 sounds/voices/charlie/voice-online.wav
+sounds/voices/charlie/voice-recording.wav
 sounds/voices/charlie/voice-review.wav
 sounds/voices/charlie/voice-sent-applause.wav
 sounds/voices/charlie/voice-sent-big-laugh.wav
@@ -363,6 +368,7 @@ sounds/voices/charlie/voice-sent-smile.wav
 sounds/voices/charlie/voice-sent-surprise.wav
 sounds/voices/charlie/voice-sent-tear.wav
 sounds/voices/charlie/voice-sent-thumbs-up.wav
+sounds/voices/charlie/voice-sent.wav
 sounds/voices/charlie/voice-stuck.wav
 sounds/voices/dj/manifest.json
 sounds/voices/dj/voice-age-2-days-ago.wav
@@ -395,6 +401,7 @@ sounds/voices/dj/voice-msg-start.wav
 sounds/voices/dj/voice-not-sent.wav
 sounds/voices/dj/voice-online-ready.wav
 sounds/voices/dj/voice-online.wav
+sounds/voices/dj/voice-recording.wav
 sounds/voices/dj/voice-review.wav
 sounds/voices/dj/voice-sent-applause.wav
 sounds/voices/dj/voice-sent-big-laugh.wav
@@ -409,6 +416,7 @@ sounds/voices/dj/voice-sent-smile.wav
 sounds/voices/dj/voice-sent-surprise.wav
 sounds/voices/dj/voice-sent-tear.wav
 sounds/voices/dj/voice-sent-thumbs-up.wav
+sounds/voices/dj/voice-sent.wav
 sounds/voices/dj/voice-stuck.wav
 sounds/voices/french/manifest.json
 sounds/voices/french/voice-age-2-days-ago.wav
@@ -441,6 +449,7 @@ sounds/voices/french/voice-msg-start.wav
 sounds/voices/french/voice-not-sent.wav
 sounds/voices/french/voice-online-ready.wav
 sounds/voices/french/voice-online.wav
+sounds/voices/french/voice-recording.wav
 sounds/voices/french/voice-review.wav
 sounds/voices/french/voice-sent-applause.wav
 sounds/voices/french/voice-sent-big-laugh.wav
@@ -455,6 +464,7 @@ sounds/voices/french/voice-sent-smile.wav
 sounds/voices/french/voice-sent-surprise.wav
 sounds/voices/french/voice-sent-tear.wav
 sounds/voices/french/voice-sent-thumbs-up.wav
+sounds/voices/french/voice-sent.wav
 sounds/voices/french/voice-stuck.wav
 sounds/voices/pirate/manifest.json
 sounds/voices/pirate/voice-age-2-days-ago.wav
@@ -487,6 +497,7 @@ sounds/voices/pirate/voice-msg-start.wav
 sounds/voices/pirate/voice-not-sent.wav
 sounds/voices/pirate/voice-online-ready.wav
 sounds/voices/pirate/voice-online.wav
+sounds/voices/pirate/voice-recording.wav
 sounds/voices/pirate/voice-review.wav
 sounds/voices/pirate/voice-sent-applause.wav
 sounds/voices/pirate/voice-sent-big-laugh.wav
@@ -501,6 +512,7 @@ sounds/voices/pirate/voice-sent-smile.wav
 sounds/voices/pirate/voice-sent-surprise.wav
 sounds/voices/pirate/voice-sent-tear.wav
 sounds/voices/pirate/voice-sent-thumbs-up.wav
+sounds/voices/pirate/voice-sent.wav
 sounds/voices/pirate/voice-stuck.wav
 sounds/voices/robot/manifest.json
 sounds/voices/robot/voice-age-2-days-ago.wav
@@ -533,6 +545,7 @@ sounds/voices/robot/voice-msg-start.wav
 sounds/voices/robot/voice-not-sent.wav
 sounds/voices/robot/voice-online-ready.wav
 sounds/voices/robot/voice-online.wav
+sounds/voices/robot/voice-recording.wav
 sounds/voices/robot/voice-review.wav
 sounds/voices/robot/voice-sent-applause.wav
 sounds/voices/robot/voice-sent-big-laugh.wav
@@ -547,6 +560,7 @@ sounds/voices/robot/voice-sent-smile.wav
 sounds/voices/robot/voice-sent-surprise.wav
 sounds/voices/robot/voice-sent-tear.wav
 sounds/voices/robot/voice-sent-thumbs-up.wav
+sounds/voices/robot/voice-sent.wav
 sounds/voices/robot/voice-stuck.wav
 sounds/voices/tata/manifest.json
 sounds/voices/tata/voice-age-2-days-ago.wav
@@ -579,6 +593,7 @@ sounds/voices/tata/voice-msg-start.wav
 sounds/voices/tata/voice-not-sent.wav
 sounds/voices/tata/voice-online-ready.wav
 sounds/voices/tata/voice-online.wav
+sounds/voices/tata/voice-recording.wav
 sounds/voices/tata/voice-review.wav
 sounds/voices/tata/voice-sent-applause.wav
 sounds/voices/tata/voice-sent-big-laugh.wav
@@ -593,6 +608,7 @@ sounds/voices/tata/voice-sent-smile.wav
 sounds/voices/tata/voice-sent-surprise.wav
 sounds/voices/tata/voice-sent-tear.wav
 sounds/voices/tata/voice-sent-thumbs-up.wav
+sounds/voices/tata/voice-sent.wav
 sounds/voices/tata/voice-stuck.wav
 systemd/messagebox-audio-detect.service
 systemd/messagebox-button.service

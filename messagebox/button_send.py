@@ -243,6 +243,66 @@ def play_moment(cue=None, voice=None):
         play_audio_ordinary(path)
 
 
+def recipient_announcement(recipient, template, *, scope=None, settings=None):
+    if transport_mode() != "cloud":
+        return None
+    settings = settings or caregiver_settings()
+    pack = settings.get("voice_pack", "jessica")
+    if not sound_pack.recipient_fallbacks_ready(pack):
+        return None
+    if (settings.get("announce_recipient", True) is not True
+            or settings.get("master_volume_percent", 0) == 0 or quiet_hours(settings)):
+        return None
+    clip = cloud_runtime.recipient_voice_clip(recipient, pack, template, scope) if recipient else ""
+    return Path(clip) if clip else sound_pack.recipient_fallback_path(template, pack)
+
+
+def play_recipient_line(path, *, talk_mode="tap", timeout=4):
+    """Own the speaker and ignore taps. A hold release is latched before capture."""
+    if path is None:
+        return talk_mode != "hold" or button.is_pressed
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    deadline = time.monotonic() + timeout
+    held = True
+    try:
+        while True:
+            held = held and (talk_mode != "hold" or button.is_pressed)
+            code = process.poll()
+            if code is not None:
+                if code:
+                    raise subprocess.CalledProcessError(code, "aplay")
+                break
+            if not held or quiet_hours():
+                break
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("aplay", timeout)
+            time.sleep(POLL_S)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.2)
+    return held
+
+
+def prepare_cloud_capture(recipient, talk_mode, scope):
+    path = recipient_announcement(recipient, "recording_recipient", scope=scope)
+    if path is None:
+        play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+        return talk_mode != "hold" or button.is_pressed
+    try:
+        if not play_recipient_line(path, talk_mode=talk_mode):
+            return False
+    except (OSError, subprocess.SubprocessError):
+        pass  # Optional speech never prevents an otherwise valid recording.
+    if talk_mode == "tap" and path is not None:
+        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+    return play_recipient_line(sound_pack.cue_path("rec_go"), talk_mode=talk_mode, timeout=5)
+
+
 def message_intro_voice(settings=None):
     """Cloud option: the pack's "A message for you!" line after the sparkle cue.
 
@@ -1163,7 +1223,7 @@ def _send_cloud_upload(job):
             pass  # A stale heartbeat can suppress sound, never the accepted outcome.
         else:
             cloud_audio_requests.enqueue_for(success_key(job.account_scope, job.message_id),
-                "success", job.account_scope, remaining)
+                "success", job.account_scope, remaining, recipient=job.recipient)
     metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
                      "cloud_state": result["state"], "expires_at": result["expires_at"],
                      "server_time": result["server_time"],
@@ -1806,6 +1866,11 @@ def maybe_play_cloud_sound():
             try:
                 if request["kind"] == "success":
                     played = play_send_success_cue()
+                    path = recipient_announcement(request.get("recipient"), "sent_recipient", scope=scope)
+                    if path is not None:
+                        play_recipient_line(path)
+                        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+                        played = True
                 elif request["kind"] == "settings_saved":
                     # Voice switches sample the new pack at the newly applied volume.
                     played = False
@@ -1981,11 +2046,17 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, account_scope=None):
     global _recording
     require_permit(press_token)
     # Synchronous playback must complete before the microphone is opened.
-    play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+    # A press during a card prompt already has spoken context and must reach
+    # the start cue without another line or a wait for the press to end.
+    if transport_mode() == "cloud" and not card_prompt:
+        if not prepare_cloud_capture(recipient, talk_mode, account_scope):
+            return RecordingResult(None, 0, False)
+    else:
+        play_sound(sound_pack.cue_path("rec_go"), timeout=5)
     if talk_mode == "hold" and not button.is_pressed:
         return RecordingResult(None, 0, False)
     capture_id = uuid.uuid4().hex
@@ -2089,13 +2160,14 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False, talk_mode="tap"):
+    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False, talk_mode="tap", account_scope=None):
         self.press_token = _capture_permit
         self.recipient = recipient
         self.session_id = session_id
         self.max_seconds = max_seconds
         self.card_prompt = card_prompt
         self.talk_mode = talk_mode
+        self.account_scope = account_scope
 
     def play_ordinary(self, path):
         play_audio_ordinary(path)
@@ -2107,6 +2179,7 @@ class PiGuidedIO:
         return capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
             card_prompt=self.card_prompt, talk_mode=self.talk_mode, press_token=self.press_token,
+            **({"account_scope": self.account_scope} if transport_mode() == "cloud" else {}),
         )
 
     def wait_for_approval(self, timeout):
@@ -2196,7 +2269,8 @@ def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=No
         return
     session_id = uuid.uuid4().hex
     io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
-                    card_prompt=bool(card_prompt_uid), talk_mode="hold")
+                    card_prompt=bool(card_prompt_uid), talk_mode="hold",
+                    **({"account_scope": scope} if transport_mode() == "cloud" else {}))
     global _guided_active
     _guided_active = True
     outcome = None
@@ -2286,7 +2360,8 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
 
     led.off()
     io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
-                    **({"card_prompt": True} if card_prompt_uid else {}))
+                    **({"card_prompt": True} if card_prompt_uid else {}),
+                    **({"account_scope": scope} if transport_mode() == "cloud" else {}))
 
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:

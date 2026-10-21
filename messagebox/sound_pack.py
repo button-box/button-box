@@ -83,6 +83,32 @@ def _playable_wav(path):
         return False
 
 
+def recipient_fallback_path(template, pack=None):
+    """Optional field-updater assets: never substitute a different voice pack."""
+    names = {"recording_recipient": "recording", "sent_recipient": "sent"}
+    if template not in names:
+        return None
+    pack = current_voice_pack() if pack is None else pack
+    if pack not in VOICE_PACKS:
+        return None
+    directory = SOUND_DIR / "voice" if pack == "jessica" else SOUND_DIR / "voices" / pack
+    path = directory / f"voice-{names[template]}.wav"
+    if directory.is_symlink() or directory.parent.is_symlink() or not _playable_wav(path):
+        return None
+    try:
+        with wave.open(str(path), "rb") as sound:
+            if sound.getnframes() > 4 * 48000:
+                return None
+    except (OSError, EOFError, wave.Error):
+        return None
+    return path
+
+
+def recipient_fallbacks_ready(pack=None):
+    return all(recipient_fallback_path(template, pack) is not None
+               for template in ("recording_recipient", "sent_recipient"))
+
+
 def reaction_sent_key(emoji):
     plain = "".join(character for character in str(emoji or "")
                     if character not in "\ufe0e\ufe0f" and not "\U0001f3fb" <= character <= "\U0001f3ff")

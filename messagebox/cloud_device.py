@@ -294,6 +294,19 @@ class CloudDeviceClient:
         return result
 
     def voice_line(self, template, **reference):
+        if not isinstance(template, str) or template not in {
+                "listened", "box_listened", "card_prompt", "confirm_prompt", "card_saved",
+                "reaction", "heart", "text_message", "text_message_nameless",
+                "reaction_fallback", "heart_fallback", "text_fallback",
+                "recording_recipient", "sent_recipient"}:
+            raise CloudDeviceError("voice line request is invalid")
+        if template in {"recording_recipient", "sent_recipient"}:
+            body = {"template": template, **reference}
+            if (set(reference) not in ({"identity_id"}, {"link_id"})
+                    or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+                           for value in reference.values())
+                    or len(json.dumps(body).encode()) > 2048):
+                raise CloudDeviceError("voice line request is invalid")
         try:
             result = json.loads(self.request("/device/voice-lines", method="POST",
                                              body={"template": template, **reference}))
@@ -437,6 +450,11 @@ def _update_capability():
     return capability()
 
 
+def _announce_capability():
+    from messagebox.sound_pack import recipient_fallbacks_ready
+    return {"announce_recipient_v1": True} if recipient_fallbacks_ready() else {}
+
+
 def capabilities(*, nfc=False) -> dict:
     from messagebox.sound_pack import installed_voice_packs
     return {
@@ -452,6 +470,7 @@ def capabilities(*, nfc=False) -> dict:
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
         "voice_lines": 1,
+        **_announce_capability(),
         "reactions": 1,
         "reaction_cards": 1,
         "reaction_sent_voice": 1,

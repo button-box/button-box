@@ -314,5 +314,19 @@
    "seed": 7,
    "sha256": "9953812320c19be91a412ff0a5e94ae43b651872f1207f9b6155c83f45f46085"
   }
+ ],
+ "recipient_lines": [
+  {
+   "file": "voice-recording.wav",
+   "text": "J'enregistre !",
+   "seconds": 1.44,
+   "sha256": "3787e9e3cdfb9b5f858e08005ea6ee587ee70edcde9caec87050dbea95766168"
+  },
+  {
+   "file": "voice-sent.wav",
+   "text": "Envoyé !",
+   "seconds": 1.84,
+   "sha256": "7e4bf28976765ac89c274a709409b457f44bff2dd97c996a294b74cf7c97e4af"
+  }
  ]
 }

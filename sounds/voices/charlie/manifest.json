@@ -312,5 +312,19 @@
    "seed": 7,
    "sha256": "9b74c3dcb89da636788c8502e396c5ec79093f71190a941d534c9847ee16e229"
   }
+ ],
+ "recipient_lines": [
+  {
+   "file": "voice-recording.wav",
+   "text": "Righto, recording!",
+   "seconds": 1.44,
+   "sha256": "97e91b253922f4116b822ef2f79c2378dc3a02a1148d79e79ffd3c8450015fad"
+  },
+  {
+   "file": "voice-sent.wav",
+   "text": "Sent, mate!",
+   "seconds": 1.84,
+   "sha256": "82172b317ad62e6ed54f1d445d3d87046a85d7c1ffa4155d45351f47525f05ea"
+  }
  ]
 }

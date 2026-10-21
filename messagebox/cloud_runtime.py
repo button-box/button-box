@@ -24,7 +24,8 @@ from messagebox.audio_requests import AudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
-from messagebox.cloud_voice import VoiceCache, ReactionQueue, fallback
+from messagebox.cloud_voice import (VoiceCache, ReactionQueue, fallback, RECIPIENT_TEMPLATES,
+    recipient_voice_cache, recipient_voice_key, recipient_voice_valid, MAX_RECIPIENT_BYTES)
 from messagebox.listened_receipts import ReceiptStore
 from messagebox.nfc_state import CardReferenceStore, EnrollmentStore, NfcError, NfcRouter, SelectionStore
 from messagebox.played_history import played_history_lock
@@ -34,7 +35,7 @@ from messagebox.settings import (
     in_quiet_hours, ignored_settings, RevisionConflict, SettingsError, SettingsStore, RINGTONES, VOICE_PACKS, normalize_ringtone_id, normalize_voice_pack, validate as validate_settings,
 )
 from messagebox.voicepoll import queue_message
-from messagebox import cloud_quiet, cloud_update
+from messagebox import cloud_quiet, cloud_update, sound_pack
 from messagebox.remote_access import remote_access
 
 STATE_FILE = CLOUD_DIR / "runtime.json"
@@ -900,7 +901,7 @@ class CloudRuntime:
         if metadata.get("account_scope") != scope:
             return
         self.audio_requests.enqueue_for(success_key(scope, metadata["message_id"]),
-            "success", scope, remaining)
+            "success", scope, remaining, recipient=metadata.get("recipient"))
 
     def _audio(self, item, server_time):
         payload = item["payload"]
@@ -1087,7 +1088,119 @@ class CloudRuntime:
         snapshot = self._snapshot()
         return hashlib.sha256(json.dumps([snapshot["account_scope"], template, recipient, name, pack]).encode()).hexdigest()
 
+    def _recipient_voice_subject(self, jid, pack, template, scope=None):
+        settings, warning = self.settings.load()
+        if warning or settings.get("voice_pack") != pack or template not in RECIPIENT_TEMPLATES:
+            raise CloudRuntimeError("recipient voice settings are unavailable")
+        snapshot = self._snapshot()
+        if scope is not None and scope != snapshot["account_scope"]:
+            raise CloudRuntimeError("recipient voice scope changed")
+        subject = self.recipient_id(jid)
+        box = jid.startswith("box:")
+        person = (self._boxes() if box else self._people())[subject]
+        name = person["box_name" if box else "display_name"]
+        return dict(scope=snapshot["account_scope"], kind="box" if box else "identity",
+                    subject=subject, template=template, pack=pack,
+                    name_hash=hashlib.sha256(name.encode()).hexdigest())
+
+    def _recipient_voice_wanted(self):
+        settings, warning = self.settings.load()
+        if warning or settings.get("announce_recipient") is not True:
+            return {}
+        pack = settings["voice_pack"]
+        if not sound_pack.recipient_fallbacks_ready(pack):
+            return {}
+        snapshot = self._snapshot()
+        if not snapshot["entitlement"]["send"]:
+            return {}
+        subjects = [("identity", person["id"], person["display_name"]) for person in snapshot["people"]]
+        subjects += [("box", box["id"], box["box_name"]) for box in snapshot.get("connected_boxes", [])]
+        subjects.sort(key=lambda row: row[1] != snapshot["default_recipient_id"])
+        wanted = {}
+        for kind, subject, name in subjects:
+            for template in RECIPIENT_TEMPLATES:
+                fields = dict(scope=snapshot["account_scope"], kind=kind, subject=subject,
+                              template=template, pack=pack, name_hash=hashlib.sha256(name.encode()).hexdigest())
+                wanted[recipient_voice_key(**fields)] = fields
+        return wanted
+
+    def _prune_recipient_voice(self, wanted):
+        mapping = self.state.get("recipient_voice_cache", {})
+        mapping = mapping if isinstance(mapping, dict) else {}
+        self.state["recipient_voice_cache"] = {key: row for key, row in mapping.items()
+                                                if key in wanted and isinstance(row, dict)}
+        directory = self.state_path.parent / "recipient-voice"
+        for path in directory.glob("*"):
+            if path.suffix != ".wav" or path.stem not in wanted:
+                path.unlink(missing_ok=True)
+
+    def _recipient_voice_file(self, key, cached):
+        path = self.state_path.parent / "recipient-voice" / (key + ".wav")
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_RECIPIENT_BYTES:
+                return ""
+            audio = path.read_bytes()
+            if hashlib.sha256(audio).hexdigest() != cached.get("sha256"):
+                return ""
+            with wave.open(io.BytesIO(audio), "rb") as sound:
+                frames = sound.getnframes()
+                if (sound.getparams()[:3] != (1, 2, 48000) or sound.getcomptype() != "NONE"
+                        or not 0 < frames <= 4 * 48000 or len(sound.readframes(frames)) != frames * 2):
+                    return ""
+            return str(path)
+        except (OSError, ValueError, EOFError, wave.Error):
+            return ""
+
+    def _preload_recipient_lines(self):
+        # This optional feature must never turn a bad voice response into a lost heartbeat.
+        try:
+            wanted = self._recipient_voice_wanted()
+            self._prune_recipient_voice(wanted)
+            mapping = self.state["recipient_voice_cache"]
+            calls = 0
+            for key, fields in wanted.items():
+                cached = mapping.get(key, {})
+                if (cached.get("retry_at", 0) > self.server_now()
+                        and (not cached.get("sha256") or self._recipient_voice_file(key, cached))):
+                    continue
+                if calls >= 3 or not hasattr(self.client, "voice_line"):
+                    continue
+                calls += 1
+                clip = ""
+                payload = {}
+                try:
+                    reference = {"link_id" if fields["kind"] == "box" else "identity_id": fields["subject"]}
+                    payload = self.client.voice_line(fields["template"], **reference)
+                    if recipient_voice_valid(payload, **fields, api_url=self.client.api_url):
+                        if not self._recipient_voice_file(key, cached):
+                            (self.state_path.parent / "recipient-voice" / (key + ".wav")).unlink(missing_ok=True)
+                        clip = recipient_voice_cache(self.state_path.parent / "recipient-voice").download(
+                            self.client, payload, key=key)
+                    # Recheck after the network boundary. A stale response cannot acquire a new subject.
+                    current = self._recipient_voice_wanted()
+                    if key not in current:
+                        self._prune_recipient_voice(current)
+                        continue
+                except (CloudDeviceError, CloudRuntimeError, OSError, ValueError, TypeError, AttributeError):
+                    clip = ""
+                mapping = self.state["recipient_voice_cache"]
+                mapping[key] = {"sha256": payload["sha256"] if clip else "",
+                                "retry_at": self.server_now() + (3600 if clip else 60)}
+            self._save()
+        except (CloudDeviceError, CloudRuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
+            return
+
+    def recipient_voice_clip(self, jid, pack, template, scope=None):
+        """Only the frozen route is accepted. No default or card selection occurs here."""
+        try:
+            fields = self._recipient_voice_subject(jid, pack, template, scope)
+            key = recipient_voice_key(**fields)
+            return self._recipient_voice_file(key, self.state.get("recipient_voice_cache", {}).get(key, {}))
+        except (CloudRuntimeError, OSError, ValueError, KeyError, TypeError, AttributeError):
+            return ""
+
     def _preload_voice_lines(self):
+        self._preload_recipient_lines()
         if not hasattr(self.client, "voice_line"):
             return
         settings, warning = self.settings.load()
@@ -1842,6 +1955,13 @@ def record_played(metadata):
 def listened_status(metadata):
     """Check local authorization only; the button owner never downloads media."""
     return CloudRuntime(client=object()).listened_status(metadata)
+
+
+def recipient_voice_clip(jid, pack, template, scope=None):
+    try:
+        return CloudRuntime(client=object()).recipient_voice_clip(jid, pack, template, scope)
+    except (OSError, ValueError, CloudRuntimeError):
+        return ""
 
 
 def card_prompt_clip(jid, pack):
