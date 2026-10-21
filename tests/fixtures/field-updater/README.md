@@ -6,7 +6,9 @@ Add a new snapshot if another field controller has different bytes.
 ## Files added
 
 - `tests/field_updater.py`: the host harness.
-- `tests/test_field_updater_contract.py`: 22 contract tests.
+- `tests/test_field_updater_contract.py`: 33 contract tests.
+- `tests/test_field_release_payload.py`: a full checkout payload integration test.
+- `tests/fixtures/field-updater/bootstrap-state.json`: recorded bootstrap state.
 - `tests/fixtures/field-updater/provenance.json`: source and hash records.
 - `tests/fixtures/field-updater/README.md`: this report.
 - 44 source files under `tests/fixtures/field-updater/shared/`. The hash table lists every path.
@@ -33,7 +35,8 @@ An application version alone does not identify its installed controller.
 
 ## Host harness
 
-`../../field_updater.py` builds a synthetic payload and a temporary device root.
+`../../field_updater.py` loads a recorded bootstrap state into a temporary device
+root. It builds a synthetic default candidate for focused rejection tests.
 It imports the frozen worker, verifier, controller and trust code by file path.
 It does not import the current product updater. The default candidate mapper
 and mode migration inputs are frozen sources. Tests can change the candidate.
@@ -41,20 +44,80 @@ and mode migration inputs are frozen sources. Tests can change the candidate.
 The harness runs real validation, extraction, locks, atomic file writes,
 journals, application switches and restoration. The pipeline tests enter at
 `update_controller.worker()`. Only host boundaries are replaced: systemd,
-platform and installed identity, boot identity, time, the minisign process result,
-and successful health. The candidate sound validator is a minimal function;
+platform and installed identity, boot identity, time, disk capacity, the minisign
+process result, and successful health. The candidate sound validator is a minimal function;
 the frozen worker's own path, WAV, size and count checks still run.
 
 A positive signature result is synthetic. This harness does not prove signature
-cryptography, download behavior, broker socket permissions, real probation,
+cryptography, network download behavior, broker socket permissions, device probation,
 boot order, power-loss recovery, or physical device health. The archive size
 checks use the original constants and real files. The compressed-size test
 uses a sparse file in the signed envelope; extraction uses real gzip archives.
 
+### Recorded bootstrap state
+
+`bootstrap-state.json` records paths, literal bytes or frozen-source references,
+modes, symbolic owners, symlink targets, and service states. `FieldBox` loads it
+before each test. It includes the six fixed modules, seven updater units, all
+25 generated `software-update.conf` drop-ins, enabled recovery and controller
+services, enabled supervisor and discovery timers, installed marker, trust-key
+generation link, stable NFC dependency link, policy, committed bootstrap journal,
+and known-good record. Tests retain and check the existing bootstrap journal
+when a candidate fails before mutation.
+
+The record is derived from frozen `update-bootstrap.sh:33-89`,
+`bounded_update.py:1556-1616`, and `trust_update.py:132-158,202-235`.
+Tests compare the generated drop-in bytes and enabled links with the frozen
+shell and unit sources. They also run the frozen Python layout conversion and
+compare its resulting journal, pointers, dependency move, pruning, and service
+states with the record. The shell script is not run on the host.
+
+This is a source-derived record, not a captured device image. The fixture's
+`inferred` list names its assumptions. Application identity and bytes, public-key
+bytes, UUIDs, timezone and jitter use synthetic values. Pre-existing application
+service states and successful `systemctl enable --now` results are inferred.
+Root and updater ownership is symbolic; host tests use the current user. The
+pre-existing NFC requirements bytes match the field commit named in the record.
+Broker sockets and transient evidence are omitted.
+
+All harness-created directories have explicit modes. Frozen execution uses a
+scoped process umask of `0022` and restores the caller's umask after success or
+failure. The controller unit sets `UMask=0022`; the install worker's systemd
+manager default of `0022` is inferred, not verified on a box. The frozen
+extractor relies on that process setting for intermediate parent directories.
+No extracted directories are repaired after extraction. The generated shell
+drop-ins also assume root umask `0022`; the old script does not set their mode.
+The suite runs from a host shell with umask `002` as a separate regression.
+
+### Real release payload entry point
+
+Later bridge PRs must call `FieldBox.run_built_release(assets)` with the directory
+emitted by `scripts/release/build.py`, then assert their bridge-specific installed
+files and state for every frozen worker. The helper copies the archive,
+external manifest and checksums unchanged. It runs the frozen controller worker,
+requires a committed application release, checks that fixed modules did not
+change, and checks download cleanup. It does not rebuild the archive from the
+synthetic candidate. Damaged builder checksums reject before installation.
+
+`test_field_release_payload.py` packages the actual checkout's explicit payload
+with the builder's `payload_paths`, `controller_descriptor`, `release_manifest`
+and `package` functions. It uses a temporary clone and copies the current
+candidate bytes into it. It creates no commits or tags. It signs controller
+proof with a disposable key, runs the package through all four frozen workers,
+and verifies the retained proof offline. The candidate mapper, sound validator,
+application files, modules and units are real checkout inputs.
+
+This integration does not run the top-level clean-tag, production key-custody,
+check, or duplicate-build gates. Those remain the responsibility of `build()`.
+It skips when Git or minisign is absent. Source hash checks still run without
+Git. Outer application signature acceptance, systemd and device health remain
+explicit substitutes; retained controller signature verification uses minisign.
+
 Run the focused contract:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_field_updater_contract.py -v
+umask 002
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_field*.py' -v
 ```
 
 Run the required checks for both transports:
@@ -92,10 +155,32 @@ carry the same citations. The byte comparisons bind them to all four releases.
 | Exactly 256 MiB expanded data passes. One extra byte rejects before extraction. | `scripts/install/release_verify.py:14,138-140` |
 | Symlinks, hardlinks, FIFOs, character and block devices, duplicate names, traversal, absolute paths and noncanonical paths reject before extraction. | `scripts/install/release_verify.py:130-140` |
 | Exactly 128 MiB compressed-envelope bytes pass. One extra byte rejects. | `scripts/install/release_verify.py:13,85-90` |
+| Exact free space `2 * installed bytes + 64 MiB` accepts; one byte less defers automatic work without mutation. Retrying with enough space commits. | `scripts/install/bounded_update.py:1820-1822`; `scripts/install/update_controller.py:591-600,611-615` |
+| Bootstrap-generated drop-ins, enabled updater services and timers, layout conversion and synthetic-variable record match frozen source. | `scripts/install/update-bootstrap.sh:33-89`; `scripts/install/bounded_update.py:1556-1616`; `scripts/install/trust_update.py:132-158,202-235` |
+| Host umask `002` does not change harness directory modes. The service execution umask and caller restoration are explicit. | `systemd/messagebox-update-controller.service:14`; install worker manager default is inferred |
+| Download passes socket timeout 30, preserves the previous file on a controlled timeout and removes partial data. | `scripts/install/update_discovery.py:121-140` |
+| Discovery and install service files retain `TimeoutStartSec=900` and `330`. Host systemd enforcement is unverified. | `systemd/messagebox-update-discovery.service:15`; `systemd/messagebox-update-install.service:9` |
+| Healthy probation needs 60 continuous seconds; an unready result resets the window. Success at second 298 passes; reaching the 300-second deadline rejects and restores the old release. | `scripts/install/bounded_update.py:1253-1255,1761-1787,1869-1870,1924-1927` |
+| Missing Git skips only history comparison; SHA-256 and Git blob hashes still run. | `provenance.json`; all 44 frozen paths |
+| The actual checkout payload packaged by build.py installs through every frozen worker, keeps fixed controller bytes unchanged, retains verifiable proof, and rejects changed archive bytes. | `scripts/install/bounded_update.py:1804-1844,1882-1923`; `scripts/install/update_controller.py:579-590,611-619` |
+
 
 ## Results and limits
 
-Validation on 21 October 2026:
+Review follow-up validation on 21 October 2026:
+
+| Command | Result |
+|---|---|
+| `MSGBOX_TEST_TRANSPORT=cloud make check` | PASS: syntax, lint, 1,148 Python tests and 54 JavaScript tests. |
+| `MSGBOX_TEST_TRANSPORT=wacli make check` | PASS: syntax, lint, 1,148 Python tests and 54 JavaScript tests. |
+| `umask 002; PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_field*.py'` | PASS: all 34 tests; no skips. |
+
+The Git comparison and real payload integration ran. The latter used every
+frozen worker and real retained controller signatures. A final independent
+review found no remaining blocker within this request. The frozen source
+bytes and provenance hashes are unchanged. Product code and units are unchanged.
+
+Original PR 1 validation on 21 October 2026:
 
 | Command | Result |
 |---|---|
@@ -103,18 +188,20 @@ Validation on 21 October 2026:
 | `MSGBOX_TEST_TRANSPORT=wacli make check` | PASS: syntax, lint, 1,120 Python tests and 54 JavaScript tests. |
 
 All 22 new contract tests passed in each run. The Git source comparison ran;
-it was not skipped. An independent code review found no blocking defect.
+it was not skipped. A later adversarial review found host-setting, bootstrap-state and limit-test gaps;
+the follow-up changes above address those findings.
 
 All three required bridge facts have executable tests. No tested bridge fact
 contradicts the source design. This does not prove a complete self-upgrade.
-A queued promotion service, retained controller proof, independent recovery,
-controller exchange, activation, rollout permits, and unattended repeat upgrades
-are not implemented here. Their device acceptance remains unverified.
+PR 2 added retained controller proof. A queued promotion service, independent
+controller recovery, controller exchange, activation, rollout permits, and
+unattended repeat upgrades are not implemented here. Their device acceptance remains unverified.
 
 The candidate mapper retry test proves exception propagation only. It does not
 implement or verify a Cloud admission client, hold, expiry, or timeout policy.
-No bootstrap script or systemd unit is executed on the host. The fixtures are
-source records, not captured field installation images or bootstrap output.
+No bootstrap shell script or systemd unit is executed on the host. The added
+bootstrap state is a source-derived record with explicit inferences. Field device
+state, boot order, real service timeouts, and power-loss recovery remain unverified.
 
 ### wacli impact
 

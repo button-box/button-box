@@ -8,6 +8,9 @@ import base64
 import hashlib
 import io
 import json
+import os
+import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -15,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from field_updater import CONTROLLER, FIXTURES, PROVENANCE, FieldBox, digest, load_frozen, wav, write
+from field_updater import CONTROLLER, FIXTURES, PROVENANCE, FieldBox, digest, load_frozen, mkdir, wav, write
 
 
 class FrozenFieldSources(unittest.TestCase):
@@ -41,6 +44,8 @@ class FrozenFieldSources(unittest.TestCase):
 
     def test_provenance_matches_available_git_commit_objects(self):
         # Git history is not required on a source-only or shallow CI checkout.
+        if shutil.which("git") is None:
+            self.skipTest("Git unavailable; content hashes still checked")
         repo = Path(__file__).resolve().parents[1]
         for release in PROVENANCE["releases"].values():
             exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", release["commit"] + "^{commit}"],
@@ -55,6 +60,112 @@ class FrozenFieldSources(unittest.TestCase):
                     tree = subprocess.check_output(["git", "-C", str(repo), "ls-tree", release["commit"], "--", relative], text=True)
                     self.assertEqual(tree.split()[:3], [evidence["mode"], "blob", evidence["git_blob"]])
 
+    def test_absent_git_skips_only_history_comparison(self):
+        # File hashes and Git blob hashes do not need a Git executable.
+        with mock.patch("shutil.which", return_value=None):
+            self.test_all_four_field_sets_have_identical_bytes_and_recorded_hashes()
+            with self.assertRaises(unittest.SkipTest):
+                self.test_provenance_matches_available_git_commit_objects()
+
+
+class BootstrapContract(unittest.TestCase):
+    def test_recorded_bootstrap_paths_bytes_modes_links_and_services_are_loaded(self):
+        # update-bootstrap.sh:33-89; bounded_update.py:1556-1616.
+        with tempfile.TemporaryDirectory() as directory:
+            box = FieldBox(directory)
+            for entry in box.bootstrap["entries"]:
+                path = box.root / entry["path"].lstrip("/")
+                with self.subTest(path=entry["path"]):
+                    self.assertEqual(path.lstat().st_uid, os.geteuid())
+                    if entry["kind"] == "symlink":
+                        self.assertEqual(os.readlink(path), entry["target"])
+                    else:
+                        self.assertEqual(path.stat().st_mode & 0o777, int(entry["mode"], 8))
+                        if entry["kind"] == "directory":
+                            self.assertTrue(path.is_dir())
+                        else:
+                            expected = ((box.snapshot / entry["source"]).read_bytes()
+                                        if "source" in entry else entry["text"].encode())
+                            self.assertEqual(path.read_bytes(), expected)
+            self.assertEqual(box.states, box.bootstrap["services"])
+            self.assertEqual(box.worker.controlled_release(box.root), box.old)
+            self.assertEqual(box.bootstrap_journal["kind"], "bootstrap")
+            self.assertEqual(box.bootstrap_journal["phase"], "committed")
+            self.assertEqual(box.worker.read_state(box.root, "policy.json")["mode"], "auto")
+
+    def test_bootstrap_generated_dropins_units_and_enable_links_match_frozen_source(self):
+        # update-bootstrap.sh:34-61,65-89; trust_update.py:132-158,202-235.
+        with tempfile.TemporaryDirectory() as directory:
+            box = FieldBox(directory)
+            script = (box.snapshot / "scripts/install/update-bootstrap.sh").read_text()
+            units = re.search(r"for unit in (messagebox.target .*?); do", script).group(1).split()
+            content = re.search(r"<<'EOF'\n(.*?)EOF", script, re.S).group(1).encode()
+            dropins = {e["path"] for e in box.bootstrap["entries"] if e["path"].endswith("/software-update.conf")}
+            self.assertEqual(dropins, {"/etc/systemd/system/" + unit + ".d/software-update.conf" for unit in units})
+            self.assertEqual(set(units), set(box.worker.UNITS))
+            for path in dropins:
+                self.assertEqual(box.installed(path).read_bytes(), content)
+            enabled = re.search(r"systemctl enable --now (messagebox-update-recovery.service messagebox-update-controller.service .*)", script).group(1).split()
+            for unit in enabled:
+                source = (box.snapshot / "systemd" / unit).read_text()
+                wanted = re.search(r"^WantedBy=(.+)$", source, re.M).group(1)
+                link = box.installed("/etc/systemd/system/" + wanted + ".wants/" + unit)
+                self.assertEqual(os.readlink(link), "/etc/systemd/system/" + unit)
+                self.assertEqual(box.states[unit], {"active": "active", "enabled": "enabled"})
+            # The recorded defaults match the bootstrap's explicit install -d.
+            for name in ('snapshots', 'staging', 'downloads'):
+                self.assertEqual(box.installed('/var/lib/button-box-update/' + name).stat().st_mode & 0o777, 0o700)
+            self.assertTrue(box.bootstrap["inferred"])
+
+    def test_recorded_layout_matches_real_frozen_bootstrap_conversion(self):
+        # bounded_update.py:1556-1616. Execute the conversion, not the host shell.
+        with tempfile.TemporaryDirectory() as directory:
+            box = FieldBox(directory)
+            pointer = box.root / "opt/messagebox"
+            pointer.unlink()
+            legacy = box.installed(box.old)
+            (legacy / "venv-nfc").unlink()
+            stable = box.installed(box.worker.STABLE_NFC)
+            stable.rename(legacy / "venv-nfc")
+            legacy.rename(pointer)
+            box.installed('/var/lib/button-box-update/journal.json').unlink()
+            box.installed('/var/lib/button-box-update/known-good.json').unlink()
+            before_states = {u: dict(state) for u, state in box.states.items()}
+            self.assertEqual(box.worker.bootstrap_layout(root=box.root, run=box.run), box.old)
+            observed = box.worker.read_state(box.root, 'journal.json')
+            observed['backup'] = box.bootstrap_journal['backup']  # Synthetic UUID only.
+            self.assertEqual(observed, box.bootstrap_journal)
+            self.assertEqual(box.states, before_states)
+            self.assertEqual(os.readlink(pointer), box.old)
+            self.assertEqual(os.readlink(box.installed(box.old) / 'venv-nfc'), box.worker.STABLE_NFC)
+            self.assertTrue((stable / 'pyvenv.cfg').is_file())
+            for name in ('snapshots', 'staging'):
+                self.assertEqual(list(box.installed('/var/lib/button-box-update/' + name).iterdir()), [])
+
+    def test_group_writable_host_umask_does_not_change_test_directory_modes(self):
+        # bounded_update.py:1303-1319 rejects a writable controlled release.
+        previous = os.umask(0o002)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                box = FieldBox(directory)
+                for tree in (box.root, box.source):
+                    for path in (tree, *tree.rglob('*')):
+                        if path.is_dir() and not path.is_symlink():
+                            self.assertEqual(path.stat().st_mode & 0o022, 0, str(path))
+                with box.controller() as controller:
+                    box.bundle(controller)
+                    controller.worker()
+                    self.assertEqual(controller.read('journal.json')['phase'], 'committed')
+                self.assertEqual(os.umask(0o002), 0o002)
+                failed = FieldBox(Path(directory) / 'failure')
+                with self.assertRaisesRegex(ValueError, 'bad_signature'):
+                    with failed.controller(signature_ok=False) as controller:
+                        failed.bundle(controller)
+                        controller.worker()
+                self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(previous)
+
 
 class BridgeContract(unittest.TestCase):
     def setUp(self):
@@ -68,8 +179,31 @@ class BridgeContract(unittest.TestCase):
         with self.assertRaisesRegex(self.worker.UpdateError, reason):
             self.box.install()
         self.assertEqual(self.box.tree(), before)
-        self.assertIsNone(self.worker.read_state(self.box.root, "journal.json"))
+        self.assertEqual(self.worker.read_state(self.box.root, "journal.json"), self.box.bootstrap_journal)
         self.assertFalse(self.box.commands)
+
+    def test_disk_capacity_exact_threshold_accepts_and_one_byte_less_defers(self):
+        # bounded_update.py:1820-1822; update_controller.py:591-600,611-615.
+        size = sum(entry['source_path'].stat().st_size for entry in
+                   self.worker.load_candidate(self.box.source, self.box.manifest, self.box.root)[1])
+        required = size * 2 + 64 * 1024 * 1024
+        self.box.free_bytes = required - 1
+        with self.box.controller() as controller:
+            bundle = self.box.bundle(controller)
+            before = self.box.tree()
+            controller.worker()
+            self.assertEqual(controller.read('result.json')['reason'], 'low_disk')
+            self.assertEqual(controller.read('result.json')['state'], 'waiting_for_window')
+            self.assertEqual(self.box.tree(), before)
+            self.assertEqual(controller.read('journal.json'), self.box.bootstrap_journal)
+            self.assertTrue(bundle.is_dir())
+            self.assertFalse(any(c[0] == 'systemctl' for c in self.box.commands))
+            self.box.free_bytes = required
+            self.box.now += 60
+            controller.worker()
+            self.assertEqual(controller.read('result.json')['state'], 'installed')
+            self.assertFalse(bundle.exists())
+        self.assertEqual(self.box.disk_queries, [self.box.installed(self.worker.RELEASES)] * 2)
 
     def test_supervisor_dropin_installs_with_each_frozen_field_worker(self):
         # bounded_update.py:257-258,1809-1819,1882-1887;
@@ -121,7 +255,7 @@ class BridgeContract(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "mapper_refused"):
             self.box.install()
         self.assertEqual(self.box.tree(), before)
-        self.assertIsNone(self.worker.read_state(self.box.root, "journal.json"))
+        self.assertEqual(self.worker.read_state(self.box.root, "journal.json"), self.box.bootstrap_journal)
         self.assertFalse(self.box.commands)
 
     def test_controller_modules_are_staged_in_release_not_fixed_directory(self):
@@ -253,7 +387,7 @@ class FrozenWorkerPipeline(unittest.TestCase):
             self.assertTrue(bundle.is_dir())
             self.assertTrue(controller.read("available.json"))
             self.assertEqual(list((controller.STATE / "staging").iterdir()), [])
-            self.assertIsNone(controller.read("journal.json"))
+            self.assertEqual(controller.read("journal.json"), self.box.bootstrap_journal)
             self.assertFalse(any(command[0] == "systemctl" for command in self.box.commands))
             # A later automatic attempt keeps the same candidate and retry path.
             self.box.now += 60
@@ -275,7 +409,106 @@ class FrozenWorkerPipeline(unittest.TestCase):
                     self.assertEqual(controller.read("result.json")["reason"], "verification_failed")
                     self.assertFalse(bundle.exists())
                     self.assertFalse(controller.read("available.json"))
-                    self.assertIsNone(controller.read("journal.json"))
+                    self.assertEqual(controller.read("journal.json"), box.bootstrap_journal)
+
+
+class TimeContract(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.box = FieldBox(temporary.name)
+        self.worker = self.box.worker
+
+    def test_frozen_service_limits_remain_900_and_330_seconds(self):
+        # systemd/messagebox-update-discovery.service:15;
+        # systemd/messagebox-update-install.service:9. No host systemd is run.
+        for name, seconds in (('discovery', 900), ('install', 330)):
+            raw = self.box.installed('/etc/systemd/system/messagebox-update-' + name + '.service').read_text()
+            self.assertEqual(re.findall(r'^TimeoutStartSec=(.+)$', raw, re.M), [str(seconds)])
+
+    def test_download_sets_30_second_socket_timeout_and_cleans_partial_on_timeout(self):
+        # update_discovery.py:121-140. Socket timeout, not total transfer time.
+        url = 'https://github.com/button-box/button-box/releases/download/v0.3.13/payload'
+        path = self.box.source / 'download.bin'
+        write(path, b'previous')
+        box = self.box
+        for stall in (True, False):
+            with self.subTest(stall=stall), box.controller():
+                discovery = load_frozen(box.version, 'scripts/install/update_discovery.py')
+                start = box.now
+
+                def opener(request, *, timeout):
+                    self.assertEqual(request.full_url, url)
+                    self.assertEqual(timeout, 30)
+
+                    class Response:
+                        reads = 0
+                        def __enter__(self):
+                            return self
+                        def __exit__(self, *args):
+                            pass
+                        def read(self, size):
+                            self.reads += 1
+                            if self.reads == 1:
+                                return b'candidate'
+                            box.sleep(timeout if stall else timeout - 1)
+                            if stall:
+                                raise TimeoutError('controlled socket timeout')
+                            return b''
+                    return Response()
+
+                client = discovery.Discovery(mkdir(box.source / 'cache', 0o750),
+                                             opener=opener, clock=lambda: box.now)
+                if stall:
+                    with self.assertRaisesRegex(TimeoutError, 'controlled socket timeout'):
+                        client.download(url, path, 1024)
+                    self.assertEqual(path.read_bytes(), b'previous')
+                    self.assertEqual(box.now - start, 30)
+                else:
+                    client.download(url, path, 1024)
+                    self.assertEqual(path.read_bytes(), b'candidate')
+                    self.assertEqual(box.now - start, 29)
+                self.assertFalse(path.with_suffix('.bin.part').exists())
+
+    def sustain(self, journal, ready):
+        samples = []
+        def sample(*args):
+            samples.append(self.box.now)
+            return ready(self.box.now), {}
+        self.worker.sustain_health(self.box.root, journal, self.box.run, sample=sample,
+                                   monotonic=lambda: self.box.now, sleep=self.box.sleep)
+        return samples
+
+    def test_health_requires_60_continuous_seconds_and_resets_on_unready(self):
+        # bounded_update.py:1253-1255,1761-1787.
+        self.assertEqual(self.worker.HEALTH_STABLE, 60)
+        journal = {'deadline_mono': 300}
+        samples = self.sustain(journal, lambda now: True)
+        self.assertEqual((samples[0], samples[-1]), (0, 60))
+        self.box.now = 0
+        samples = self.sustain(journal, lambda now: now != 58)
+        self.assertEqual(samples[-1], 120)  # Stable again from 60 through 120.
+
+    def test_install_records_300_second_deadline_and_rolls_back_at_boundary(self):
+        # bounded_update.py:1253,1869-1870,1765-1787,1924-1927.
+        self.assertEqual(self.worker.HEALTH_DEADLINE, 300)
+        observed = []
+        before = self.box.tree()
+        def health(root, journal, run):
+            observed.append((journal['started_mono'], journal['deadline_mono']))
+            # Ready for the last 60 seconds only: reaching the deadline is too late.
+            self.sustain(journal, lambda now: now >= journal['deadline_mono'] - 60)
+        with self.assertRaisesRegex(self.worker.UpdateError, 'health_timeout'):
+            self.box.install(health=health)
+        self.assertEqual(observed[0][1] - observed[0][0], 300)
+        self.assertGreaterEqual(self.box.now, observed[0][1])
+        self.assertEqual(self.box.tree(), before)
+        self.assertEqual(self.worker.read_state(self.box.root, 'journal.json')['phase'], 'rolled_back')
+
+    def test_health_can_finish_just_before_300_second_deadline(self):
+        # bounded_update.py:1779-1787: final success must precede the deadline.
+        samples = self.sustain({'deadline_mono': 300}, lambda now: now >= 238)
+        self.assertEqual(samples[-1], 298)
 
 
 class SoundContract(unittest.TestCase):

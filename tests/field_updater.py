@@ -1,8 +1,9 @@
-"""Host harness for the frozen field worker. Never import the current updater.
+"""Host harness whose worker always comes from the frozen field sources.
 
-The payload and device are synthetic. systemd and health are explicit host
-substitutes. File validation, locks, writes, journals, switch and recovery run
-through the frozen worker. This does not simulate power loss or boot a Pi.
+The default payload and recorded device baseline use synthetic variable data.
+Real build output can replace the default payload. systemd and health are
+explicit host substitutes. File validation, locks, writes, journals, switch
+and recovery run through the frozen worker. This does not simulate power loss or boot a Pi.
 """
 
 import base64
@@ -11,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -42,8 +44,30 @@ def digest(path):
     return value.hexdigest()
 
 
+@contextlib.contextmanager
+def service_environment():
+    # Model the systemd process boundary, not the invoking test shell. Frozen
+    # extraction creates intermediate directories with the process umask.
+    # controller.service explicitly sets 0022; install.service inherits the
+    # systemd manager default (inferred as 0022, not observed on a field box).
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+def mkdir(path, mode=0o755):
+    """Set every new parent mode explicitly, independent of the host umask."""
+    if not path.exists():
+        mkdir(path.parent)
+        path.mkdir(mode=mode)
+        path.chmod(mode)
+    return path
+
+
 def write(path, content, mode=0o644):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    mkdir(path.parent)
     path.write_bytes(content)
     path.chmod(mode)
     return path
@@ -51,7 +75,7 @@ def write(path, content, mode=0o644):
 
 def wav(path, size=46):
     """Write a valid mono, 16-bit, 48 kHz WAV of the requested even size."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    mkdir(path.parent)
     with wave.open(str(path), "wb") as stream:
         stream.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
         stream.writeframes(b"\0" * (size - 44))
@@ -60,7 +84,7 @@ def wav(path, size=46):
 
 
 class FieldBox:
-    def __init__(self, directory, version="v0.3.12"):
+    def __init__(self, directory, version="v0.3.12", *, free_bytes=4 * 1024**3):
         self.version = version
         self.root = Path(directory).resolve() / "device"
         self.source = Path(directory).resolve() / "payload"
@@ -73,16 +97,19 @@ class FieldBox:
         self.worker.time = SimpleNamespace(monotonic=lambda: self.now, sleep=self.sleep)
         self.worker._boot = lambda: "synthetic-boot"
         self.commands = []
-        self.states = {unit: {"active": "inactive", "enabled": "static"}
-                       for unit in self.worker.UNITS}
-        self.states["messagebox.target"] = {"active": "active", "enabled": "enabled"}
-        self.old = self.worker.RELEASES + "/v0.3.8-" + "b" * 40
-        write(self.installed(self.old) / "release.json",
-              json.dumps({"version": "v0.3.8", "commit": "b" * 40}).encode())
-        write(self.installed(self.old) / "messagebox/example.py", b"VALUE = 'old'\n")
-        (self.root / "opt/messagebox").symlink_to(self.old)
-        (self.root / "etc/messagebox-onboarding").mkdir(parents=True, mode=0o750)
-        (self.root / "etc/systemd/system/multi-user.target.wants").mkdir(parents=True)
+        self.free_bytes = free_bytes
+        self.disk_queries = []
+        # Give this frozen module its own shutil namespace; never patch the
+        # process-wide shutil module or change the worker's disk threshold.
+        self.worker.shutil = SimpleNamespace(**vars(shutil))
+        self.worker.shutil.disk_usage = self.disk_usage
+        self.bootstrap = json.loads((FIXTURES / "bootstrap-state.json").read_text())
+        self.states = {unit: dict(state) for unit, state in self.bootstrap["services"].items()}
+        self.old = self.bootstrap["old_release"]
+        mkdir(self.root)
+        mkdir(self.source)
+        self.load_bootstrap()
+        self.bootstrap_journal = self.worker.read_state(self.root, "journal.json")
 
         # Seed only frozen sources and synthetic data. Future product changes
         # must not silently change the field baseline or its payload floor.
@@ -94,7 +121,6 @@ class FieldBox:
         for name in CONTROLLER:
             content = (self.snapshot / f"scripts/install/{name}.py").read_bytes()
             write(self.source / f"scripts/install/{name}.py", content)
-            write(self.installed(f"/usr/lib/messagebox-update/{name}.py"), content)
         for relative in sorted(self.worker.EXPLICIT_TARGETS):
             path = self.source / relative
             if path.exists():
@@ -103,25 +129,49 @@ class FieldBox:
                 wav(path)
             else:
                 write(path, b"{}\n" if path.suffix == ".json" else b"# synthetic payload\n")
+        # Candidate NFC dependencies must match the existing field baseline.
+        dependency = self.worker.EXPLICIT_TARGETS["config/requirements-nfc.txt"]
+        write(self.source / "config/requirements-nfc.txt", self.installed(dependency).read_bytes())
         for unit in sorted(self.worker.FIXED_UNITS):
             relative = "systemd/" + unit
             content = (self.snapshot / relative).read_bytes()
             write(self.source / relative, content)
-            write(self.installed("/etc/systemd/system/" + unit), content)
         # This candidate validator is deliberately minimal. The frozen worker's
         # WAV/path/count/byte checks remain real; product sound semantics are not
         # covered by this harness.
         write(self.source / "messagebox/sound_pack.py",
               b"def validate_sounds(root):\n    return None\n")
         write(self.source / "messagebox/example.py", b"VALUE = 'candidate'\n")
-        dependency = self.worker.EXPLICIT_TARGETS["config/requirements-nfc.txt"]
-        write(self.installed(dependency), (self.source / "config/requirements-nfc.txt").read_bytes())
         for pack in ("cloud", "cues", "voice", "voices", "ringtones", "voices/pirate",
                      "voices/alien", "voices/dj", "voices/robot", "voices/french",
                      "voices/charlie", "voices/tata"):
-            (self.source / "sounds" / pack).mkdir(parents=True, exist_ok=True)
-        self.worker.save_state(self.root, "known-good.json", {"current": self.old, "previous": None})
+            mkdir(self.source / "sounds" / pack)
         self.refresh()
+
+    def load_bootstrap(self):
+        # Absolute links stay device-relative records. The frozen worker's
+        # _rooted() redirects the application pointer inside the temp root.
+        for entry in self.bootstrap["entries"]:
+            path = self.root / entry["path"].lstrip("/")
+            if entry["kind"] == "directory":
+                mkdir(path, int(entry["mode"], 8))
+                path.chmod(int(entry["mode"], 8))
+            elif entry["kind"] == "file":
+                content = ((self.snapshot / entry["source"]).read_bytes()
+                           if "source" in entry else entry["text"].encode())
+                write(path, content, int(entry["mode"], 8))
+            elif entry["kind"] == "symlink":
+                mkdir(path.parent)
+                path.symlink_to(entry["target"])
+            else:
+                raise AssertionError("unknown bootstrap fixture entry")
+
+    def disk_usage(self, path):
+        if path != self.installed(self.worker.RELEASES):
+            raise AssertionError(f"unexpected disk boundary: {path}")
+        self.disk_queries.append(path)
+        return SimpleNamespace(total=8 * 1024**3, used=8 * 1024**3 - self.free_bytes,
+                               free=self.free_bytes)
 
     def installed(self, absolute):
         return self.worker._rooted(self.root, absolute)
@@ -174,9 +224,10 @@ class FieldBox:
 
     def install(self, *, health=None):
         # Successful host health is an explicit substitute, never Pi acceptance.
-        return self.worker.install_transaction(
-            self.source, self.manifest, root=self.root, run=self.run,
-            sequence=1, health=health or (lambda *args: None))
+        with service_environment():
+            return self.worker.install_transaction(
+                self.source, self.manifest, root=self.root, run=self.run,
+                sequence=1, health=health or (lambda *args: None))
 
     def tree(self):
         """Installed bytes/modes/links, excluding worker locks and state files."""
@@ -198,7 +249,7 @@ class FieldBox:
     def controller(self, *, signature_ok=True):
         """Run the frozen worker pipeline with all filesystem paths redirected.
 
-        Only platform identity, minisign, installed identity, systemd and health
+        Only platform identity, minisign, installed identity, disk, systemd and health
         cross host boundaries. Verifier, extraction, trust lock and worker code
         remain frozen. This is not a signature or live OTA acceptance test.
         """
@@ -234,7 +285,7 @@ class FieldBox:
 
         with mock.patch.dict(sys.modules, {"bounded_update": self.worker, "release_verify": verifier,
                                            "trust_update": trust}), \
-                mock.patch.object(self.worker, "install_transaction", side_effect=install):
+                mock.patch.object(self.worker, "install_transaction", side_effect=install), service_environment():
             yield controller
 
     def bundle(self, controller, *, mismatched_manifest=False):
@@ -245,7 +296,7 @@ class FieldBox:
                          supported_models=["Raspberry Pi 4 Model B"])
         self.save_manifest()
         bundle = controller.STATE / "downloads" / ("c" * 32)
-        bundle.mkdir(parents=True)
+        mkdir(bundle, 0o700)
         archive = bundle / f"button-box-{self.data['version']}.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
             for path in sorted(self.source.rglob("*")):
@@ -261,8 +312,12 @@ class FieldBox:
         write(bundle / "SHA256SUMS.minisig", b"synthetic host signature")
         key = base64.b64encode(b"Ed" + b"k" * 40).decode()
         write(controller.KEYS / "synthetic.pub", ("untrusted comment: synthetic test key\n" + key + "\n").encode())
+        self.queue_bundle(controller, bundle, self.data["version"])
+        return bundle
+
+    def queue_bundle(self, controller, bundle, version):
         ticket = {"operation_id": "auto:" + digest(bundle / "release-manifest.json"),
-                  "bundle": str(bundle), "version": self.data["version"],
+                  "bundle": str(bundle), "version": version,
                   "manifest_sha256": digest(bundle / "release-manifest.json")}
         controller.save("ticket.json", ticket)
         controller.save("available.json", ticket)
@@ -270,4 +325,34 @@ class FieldBox:
         controller.save(controller.operation_name(ticket["operation_id"]), {
             "operation_id": ticket["operation_id"], "action": "automatic", "state": "installing",
             "version": ticket["version"], "boot": "synthetic-boot", "expires_mono": 10000})
-        return bundle
+
+    def run_built_release(self, assets):
+        """Install an unchanged build.py output through the frozen worker.
+
+        Later bridge PRs must use this entry point with their actual release
+        assets, then check bridge-specific installed state. No synthetic mapper,
+        validator, module or manifest replaces the built archive. Only the outer
+        minisign result and the documented host boundaries are substituted.
+        This accepts unsigned build output; production signing is a separate gate.
+        """
+        assets = Path(assets)
+        manifest = json.loads((assets / "release-manifest.json").read_bytes())
+        version = manifest["version"]
+        with self.controller() as controller:
+            bundle = mkdir(controller.STATE / "downloads" / ("c" * 32), 0o700)
+            names = (f"button-box-{version}.tar.gz", "release-manifest.json", "SHA256SUMS")
+            for name in names:
+                write(bundle / name, (assets / name).read_bytes())
+            # build.py emits unsigned application assets. The frozen verifier
+            # still checks every SHA256SUMS entry and the archive manifest.
+            write(bundle / "SHA256SUMS.minisig", b"synthetic host signature")
+            self.queue_bundle(controller, bundle, version)
+            before = self.fixed_bytes()
+            controller.worker()
+            result = controller.read("result.json")
+            journal = controller.read("journal.json")
+            if (result["state"] != "installed" or journal["phase"] != "committed"
+                    or self.worker.controlled_release(self.root) != journal["new"]
+                    or self.fixed_bytes() != before or bundle.exists()):
+                raise AssertionError("built release did not complete the frozen worker contract")
+            return self.installed(journal["new"])
