@@ -130,15 +130,19 @@ supplies the controlled release root, current release keys, verified application
 version, platform, and sequence floor. The result contains the parsed descriptor,
 its SHA-256, and the signing key ID.
 
-Recovery bootstrap and launcher hold the trust lock, finish `recover_trust`, and
-verify against that current generation. It must repeat verification before
-promotion. A descriptor signed by a removed key is rejected after trust rotation.
-An earlier build-time check does not override later revocation.
+New admission holds the trust lock, finishes `recover_trust`, and verifies against
+the current key generation. It repeats verification before promotion. A removed
+key cannot admit another descriptor. An earlier build-time check does not
+override revocation. Recovery dispatch uses separate root-owned digest pins for
+previously accepted descriptor and signature bytes. Key replacement cannot
+invalidate those helper slots, and recovery pins cannot authorize new admission.
 
 The builder currently emits `signed_descriptor=True` and `self_upgrade=False`.
-Version `1.3.0` names the target bundle. It does not identify the running fixed
-controller. `UPDATER_VERSION` remains 1.1.0 in this PR. No heartbeat or active
-capability changes.
+The candidate sources set `UPDATER_VERSION` to `1.3.0`. The frozen field worker
+stages those sources in the release's `updater/` directory. The active fixed
+controller remains at `1.1.0` until a verified promotion commits. A descriptor
+or staged version alone does not prove the active version. No heartbeat or
+active capability changes are part of descriptor installation.
 
 The minimum application field provides a lower version bound only. It does not
 prove state-format or rollback compatibility. Schema 2 now binds recovery helper artifacts. Later work must bind complete
@@ -148,8 +152,8 @@ running launcher or helper.
 Schema 2 now signs the two generated recovery drop-ins in `unit_changes`.
 Each consuming helper must enforce its exact supported integration changes.
 
-Key storage, recovery copies, separate controller-key roles, emergency approval
-thresholds and rotation procedures are not settled by these tools. No production
+Secret-key custody, separate controller-key roles, emergency approval
+thresholds and operational rotation procedures are not settled by these tools. No production
 secret key was used to test this change. No deployable release was signed here.
 
 ## Validation and remaining work

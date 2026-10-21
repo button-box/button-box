@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from messagebox import recovery_launcher as recovery
@@ -27,7 +28,7 @@ LEGACY_HASHES = {'bounded_update.py': '49c285b51f745a6894ee2533df516d681e9e9992f
  'update_discovery.py': 'f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540'}
 DROPINS = {
     RECOVERY_DROPIN: ('[Service]\nExecStartPre=' + LAUNCH + '\n').encode(),
-    SUPERVISOR_DROPIN: ('[Service]\nExecStartPre=' + LAUNCH + '\n').encode(),
+    SUPERVISOR_DROPIN: ('[Service]\nExecStartPre=' + LAUNCH + ' --supervisor\n').encode(),
 }
 
 
@@ -131,7 +132,8 @@ def effective_units(run):
                     return []
                 commands.append(fields.get('argv[]'))
             return commands
-        if (values.get('LoadState') != 'loaded' or commands(values.get('ExecStartPre', '')) != [LAUNCH]
+        expected_pre = LAUNCH + (' --supervisor' if unit.endswith('supervisor.service') else '')
+        if (values.get('LoadState') != 'loaded' or commands(values.get('ExecStartPre', '')) != [expected_pre]
                 or commands(values.get('ExecStart', '')) != ['/usr/bin/python3 ' + start]):
             raise recovery.RecoveryError('recovery_unit_mismatch')
         if unit.endswith('recovery.service'):
@@ -150,11 +152,12 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
     # State/lock directories are outside the old application rollback journal.
     with recovery.directory(root, recovery.STATE, create=True, step=step):
         pass
-    lock_path = recovery.STATE + '/promotion.lock'
-    try:
-        recovery.read(root, lock_path, 1, mode=0o600)
-    except FileNotFoundError:
-        recovery.write(root, lock_path, b'', step=step)
+    for name in ('promotion.lock', 'owner.lock'):
+        lock_path = recovery.STATE + '/' + name
+        try:
+            recovery.read(root, lock_path, 1, mode=0o600)
+        except FileNotFoundError:
+            recovery.write(root, lock_path, b'', step=step)
     with recovery.locks(root):
         relative, identity = application(root)
         verify, initial_trust = initial_verifier(root, relative)
@@ -194,6 +197,7 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
         # A changed signature is authenticated again before it is retained.
         verify_anchor.verify_controller_proof(raw_descriptor, signature, root / recovery.TRUST / 'release-keys')
         if state is None:
+            recovery.write(root, recovery.STATE + '/recovery-reserve', b'\0' * (2 * 1024 * 1024), step=step)
             legacy = []
             for name in recovery.MODULES:
                 raw = recovery.read(root, recovery.ACTIVE + '/' + name, mode=0o644)
@@ -208,7 +212,7 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
                     recovery.write(root, base + '/' + path, raw, mode=0o644, step=step)
                 recovery.write(root, base + '/' + verify.CONTROLLER_DESCRIPTOR, raw_descriptor, mode=0o644, step=step)
                 recovery.write(root, base + '/' + verify.CONTROLLER_SIGNATURE, signature, mode=0o644, step=step)
-                slots[role] = {'directory': base, 'digest': accepted['digest']}
+                slots[role] = {'directory': base, 'digest': accepted['digest'], 'signature_sha256': recovery.sha(signature)}
             for name in ('release_verify.py', 'trust_update.py'):
                 fixed(root, recovery.SUPPORT + '/' + name, contents['updater/' + name], step)
             fixed(root, recovery.SUPPORT + '/launcher.py', contents['messagebox/recovery_launcher.py'], step)
@@ -218,6 +222,7 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
                     raise recovery.RecoveryError('permanent_recovery_changed')
             except FileNotFoundError:
                 recovery.save(root, recovery.SUPPORT + '/anchors.json', anchor_record, step=step)
+            recovery.retain_recovery_keys(root, verify_anchor, step=step)
             state = {'schema': 1, 'accepted': accepted, 'helpers': slots,
                      'legacy': {'directory': recovery.STATE + '/controllers/legacy', 'files': legacy},
                      'application': {'path': relative, **identity}}
@@ -236,12 +241,21 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
             checked = {**state, 'helpers': {'current': slot, 'fallback': slot}}
             if recovery.select_helper(root, checked, verify_anchor)[0] != 'current':
                 raise recovery.RecoveryError('recovery_helper_unavailable')
+        monitor = 'etc/systemd/system/' + recovery.MONITOR
+        # The frozen worker maps messagebox-*.service directly into /etc, not
+        # the release tree. Its exact bytes are pinned by the signed launcher.
+        raw_monitor = recovery.read(root, monitor, mode=0o644)
+        if raw_monitor != recovery.MONITOR_UNIT:
+            raise recovery.RecoveryError('invalid_recovery_monitor')
+        fixed(root, monitor, raw_monitor, step)
         # Support and both independent helper copies are durable before these
         # hooks are visible. The existing enabled recovery service is preserved.
         for path, raw in DROPINS.items():
             fixed(root, path, raw, step)
         run(['systemctl', 'daemon-reload'], check=True, timeout=30)
         step('daemon_reload', 'systemd')
+        run(['systemctl', 'enable', '--now', recovery.MONITOR], check=True, timeout=30)
+        step('monitor_armed', 'systemd')
         effective_units(run)
         step('effective_units', 'systemd')
         recovery.save(root, recovery.STATE + '/journal.json', {'schema': 1, 'kind': 'bootstrap', 'phase': 'armed'}, step=step)
@@ -249,6 +263,23 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=recover
 
 
 def promote(root=Path('/'), *, platform=None, run=subprocess.run, **boundaries):
+    # A separate owner lock is held through activation. The broker may take
+    # trust/update locks while it starts; another promotion or recovery may not.
+    with recovery.lock(root, recovery.STATE + '/owner.lock'):
+        recovery.save(root, recovery.STATE + '/owner.json',
+                      {'pid': os.getpid(), 'token': recovery.process_token(os.getpid()),
+                       'boot': recovery.boot_id(), 'deadline_mono': time.monotonic() + 180})
+        try:
+            return _promote(root, platform=platform, run=run, **boundaries)
+        finally:
+            try:
+                with recovery.directory(root, recovery.STATE) as fd:
+                    os.unlink('owner.json', dir_fd=fd)
+            except OSError:
+                pass
+
+
+def _promote(root, *, platform, run, **boundaries):
     """Explicit internal entry point; no OTA trigger or network admission here.
 
     Authenticate captured candidate helper bytes before execution. The helper
@@ -257,7 +288,7 @@ def promote(root=Path('/'), *, platform=None, run=subprocess.run, **boundaries):
     root = Path(root)
     # Recover any prior transaction before candidate admission. This is the
     # same immutable launcher entry point used by the boot/supervisor hooks.
-    recovery.launch(root)
+    recovery.launch(root, owned=True)
     with recovery.locks(root):
         relative, identity = application(root)
         verify, trust = recovery.anchors(root)
@@ -272,6 +303,10 @@ def promote(root=Path('/'), *, platform=None, run=subprocess.run, **boundaries):
         raw = recovery.read(root, relative + '/' + entry['path'], mode=entry['mode'])
         if recovery.sha(raw) != entry['sha256'] or len(raw) != entry['size']:
             raise recovery.RecoveryError('candidate_helper_changed')
+        # This check belongs to trusted dispatch, before any candidate top-level
+        # code. A helper that hangs before promote() cannot arm its own deadline.
+        run(['systemctl', 'is-active', '--quiet', recovery.MONITOR], check=True,
+            capture_output=True, text=True, timeout=15)
         namespace = {'__name__': 'verified_promotion_helper'}
         exec(compile(raw, '<verified-promotion-helper>', 'exec'), namespace)
     return namespace['promote']({'root': root, 'release': relative, 'platform': platform or verify.local_platform(),

@@ -1,0 +1,15 @@
+[Unit]
+Description=Permanent controller-independent recovery monitor
+After=local-fs.target messagebox-update-recovery.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py --monitor
+Restart=always
+RestartSec=1
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

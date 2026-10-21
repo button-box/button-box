@@ -47,6 +47,8 @@ class UpdaterHost:
         self.fail = None
         self.jobs = ''
         self.supervisor_pre = False
+        self.launcher_pid = os.getpid()
+        self.io_fault = None
         self.real_run = subprocess.run
 
     def identity(self):
@@ -64,13 +66,15 @@ class UpdaterHost:
         if command[0] == 'minisign':
             return self.real_run(command, **kwargs)
         if command[0] == 'systemctl':
+            if command[1] == 'is-active':
+                return subprocess.CompletedProcess(command, 0, '')
             if command[1] == 'show':
                 unit, prop = command[2], command[3]
                 if prop == '--property=ActiveState,UnitFileState,MainPID':
                     state = self.units[unit]
                     text = f"ActiveState={state['active']}\nUnitFileState={state['enabled']}\nMainPID={123 if state['active'] == 'active' else 0}\n"
                 elif prop == '--property=ActiveState,MainPID,ControlPID':
-                    text = 'ActiveState=activating\nMainPID=0\nControlPID=' + str(os.getpid() if self.supervisor_pre else 0) + '\n'
+                    text = 'ActiveState=activating\nMainPID=0\nControlPID=' + str(self.launcher_pid if self.supervisor_pre else 0) + '\n'
                 elif prop == '--property=ActiveState,MainPID':
                     state = self.units[unit]
                     text = f"ActiveState={state['active']}\nMainPID={123 if state['active'] == 'active' else 0}\n"
@@ -87,6 +91,8 @@ class UpdaterHost:
                     return baseline.systemd(command, **kwargs)
                 return subprocess.CompletedProcess(command, 0, text)
             if command[1] == 'stop':
+                if self.supervisor_pre and 'messagebox-update-supervisor.service' in command[2:]:
+                    raise AssertionError('would kill launcher owner')
                 for unit in command[2:]:
                     self.units[unit]['active'] = 'inactive'
             elif command[1] in {'enable', 'disable'}:
@@ -100,11 +106,12 @@ class UpdaterHost:
             elif command[1] != 'daemon-reload':
                 return baseline.systemd(command, **kwargs)
             return subprocess.CompletedProcess(command, 0, '')
-        if command[0] == 'runuser':
-            if self.fail == 'discovery':
+        if command[0] == 'systemd-run':
+            if (self.fail == 'discovery' and command[-1] == '--self-test'
+                    or self.fail == 'self-test' and command[-1] == 'self-test'):
                 raise subprocess.CalledProcessError(1, command)
             # Execute the real offline code; native restricted UID is a Pi check.
-            return self.real_run(command[4:], **kwargs)
+            return self.real_run([sys.executable, *command[command.index('--') + 2:]], **kwargs)
         if command[-1] == 'self-test':
             if self.fail == 'self-test':
                 raise subprocess.CalledProcessError(1, command)
@@ -144,7 +151,46 @@ class PromotionFixture:
     @contextlib.contextmanager
     def host_boundaries(self):
         # Execute the signed recovery helper with a controlled systemd boundary.
-        with mock.patch.object(subprocess, 'run', side_effect=self.host):
+        real_popen = subprocess.Popen
+        def popen(command, *args, **kwargs):
+            if isinstance(command, list) and command[-1] == launcher.CHILD_CODE:
+                # The product starts a fresh interpreter. Inject only the host
+                # boundaries into that interpreter; retain the real captured
+                # helper, process deadline, state reads and filesystem writes.
+                setup = ("import sys,ctypes,subprocess,os,tempfile,errno\nfrom pathlib import Path\n"
+                         "sys.path.insert(0," + repr(str(ROOT)) + ")\n"
+                         "sys.path.insert(0," + repr(str(ROOT / 'tests')) + ")\n"
+                         "from test_controller_promotion import UpdaterHost\n"
+                         "host=UpdaterHost(Path(" + repr(str(self.root)) + "))\n"
+                         "host.units=" + repr(self.host.units) + "\n"
+                         "host.fail=" + repr(self.host.fail) + "\n"
+                         "host.jobs=" + repr(self.host.jobs) + "\n"
+                         "host.supervisor_pre=" + repr(self.host.supervisor_pre) + "\n"
+                         "host.launcher_pid=" + str(os.getpid()) + "\nsubprocess.run=host\n")
+                if sys.platform == 'darwin':
+                    setup += ("real_cdll=ctypes.CDLL\n"
+                              "class LinuxLibc:\n"
+                              " def __init__(self):\n"
+                              "  library=real_cdll(None,use_errno=True)\n"
+                              "  self.renameat2=library.renameatx_np\n"
+                              "  self.renameatx_np=library.renameatx_np\n"
+                              "ctypes.CDLL=lambda *a,**k:LinuxLibc()\n")
+                if self.host.io_fault == 'noalloc':
+                    setup += ("real_open=os.open\n"
+                              "def no_allocate(path,flags,*a,**k):\n"
+                              " if flags & os.O_CREAT:\n"
+                              "  try:os.stat(path,dir_fd=k.get('dir_fd'),follow_symlinks=False)\n"
+                              "  except FileNotFoundError:raise OSError(errno.ENOSPC,'injected no inodes')\n"
+                              " return real_open(path,flags,*a,**k)\n"
+                              "def full(*a,**k):raise OSError(errno.ENOSPC,'injected full disk')\n"
+                              "os.open=no_allocate\nos.pwrite=full\ntempfile.TemporaryDirectory=full\n")
+                elif self.host.io_fault == 'readonly':
+                    setup += ("def forbidden(*a,**k):raise AssertionError('terminal mutation')\n"
+                              "os.pwrite=forbidden\nos.replace=forbidden\nos.fsync=forbidden\n")
+                command = [*command[:-1], setup + launcher.CHILD_CODE]
+            return real_popen(command, *args, **kwargs)
+        with mock.patch.object(subprocess, 'Popen', side_effect=popen), \
+                mock.patch.object(subprocess, 'run', side_effect=self.host):
             if sys.platform == 'darwin':
                 real_cdll = ctypes.CDLL
                 class LinuxLibc:
@@ -160,6 +206,9 @@ class PromotionFixture:
 
     def promote(self, **kwargs):
         options = {'run': self.host, 'exchange': host_exchange, 'handshake': self.host.handshake}
+        if self.host.fail == 'handshake':
+            ticks = iter(range(0, 10000, 5))
+            options.update(monotonic=lambda: next(ticks), sleep=lambda _: None)
         options.update(kwargs)
         with self.host_boundaries():
             return bootstrap.promote(self.root, platform=PLATFORM, **options)
@@ -211,11 +260,9 @@ class PromotionFixture:
                 write(self.root / base / path, data)
             write(self.root / base / verify.CONTROLLER_DESCRIPTOR, raw)
             write(self.root / base / verify.CONTROLLER_SIGNATURE, self.sign(raw))
-            slots[role] = {'directory': base, 'digest': digest}
-        for name in ('release_verify.py', 'trust_update.py'):
-            write(self.root / launcher.SUPPORT / name, files['updater/' + name])
-        launcher.save(self.root, launcher.SUPPORT + '/anchors.json',
-                      {name: launcher.sha(files['updater/' + name]) for name in ('release_verify.py', 'trust_update.py')})
+            slots[role] = {'directory': base, 'digest': digest, 'signature_sha256': launcher.sha((self.root / base / verify.CONTROLLER_SIGNATURE).read_bytes())}
+        # The first permanent installation is this revision; retain old helper
+        # bytes to test protocol migration, with the corrected permanent anchors.
         state.update(helpers=slots, accepted={'sequence': 6, 'digest': digest,
                      'controller_version': '1.3.0', 'helper_version': '1.0.0'})
         launcher.save(self.root, helper.STATE + '/state.json', state)
@@ -496,7 +543,11 @@ class DiskModel:
     def step(self, event, relative):
         path = self.root / relative
         if event in {'file_write', 'mkdir'}:
-            self.node(path, fresh=True)
+            # Journal slots overwrite existing allocated inodes. Their dirent
+            # keeps the SAME inode identity across a data flush; no rename is
+            # needed to publish those bytes. A torn overwrite is invalid data.
+            in_place = event == 'file_write' and relative in {helper.JOURNAL, helper.JOURNAL + '.copy'}
+            self.node(path, fresh=not in_place)
             if event == 'file_write':
                 # Names may survive without the unflushed file contents.
                 value = self.content(path)

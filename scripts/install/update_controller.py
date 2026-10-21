@@ -730,6 +730,31 @@ def controller_self_test():
     spec = importlib.util.spec_from_file_location('controller_health_probe', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Exercise the same manifest/path/hash validation used by the worker,
+    # without an install or application mutation. Both failures must occur
+    # before the unrelated complete-sound-pack requirement.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='controller-validation-') as directory:
+        root = Path(directory).resolve()
+        source = root / 'source'
+        (source / 'scripts/dev').mkdir(parents=True)
+        (source / 'scripts/dev/release-manifest.py').write_text('# validation fixture\n')
+        (source / 'messagebox').mkdir()
+        (source / 'messagebox/probe.py').write_text('# probe\n')
+        for target, digest, reason in (
+                ('/opt/messagebox/messagebox/probe.py', '0' * 64, 'hash does not match'),
+                ('/etc/shadow', hashlib.sha256(b'# probe\n').hexdigest(), 'outside the install allowlist')):
+            manifest = {'version': 'v0.3.0', 'commit': 'a' * 40,
+                        'files': [{'source': 'messagebox/probe.py', 'installed': target, 'sha256': digest}]}
+            path = source / 'release-manifest.json'
+            path.write_text(json.dumps(manifest))
+            try:
+                update.load_candidate(source, path, root)
+            except update.UpdateError as exc:
+                if reason not in str(exc):
+                    raise ValueError('controller_validation_self_test') from exc
+            else:
+                raise ValueError('controller_validation_accepted_invalid')
     return controller_identity()
 
 

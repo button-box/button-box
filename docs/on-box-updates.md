@@ -597,7 +597,9 @@ bootstrap crash checks and unverified device acceptance.
 
 Controller promotion now has a separate journal and verified helper transaction.
 It stages and atomically exchanges complete sets, checks activation, and restores
-the previous set on failure. Unsupported atomic exchange leaves the old set
-active. There is no OTA trigger or Cloud permit in this step. See
+the previous set on failure. Two integrity-checked records, accepted helper pins,
+reserved recovery space and a permanent independent monitor protect recovery.
+Service finalization is durable. Unsupported atomic exchange leaves the old set
+active; there is no two-rename fallback. There is no OTA trigger or Cloud permit in this step. See
 [controller recovery and promotion](controller-recovery.md) for phases, locks,
 admission, fallback and verification limits.

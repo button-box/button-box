@@ -610,6 +610,7 @@ systemd/messagebox-update-controller.service
 systemd/messagebox-update-discovery.service
 systemd/messagebox-update-discovery.timer
 systemd/messagebox-update-install.service
+systemd/messagebox-update-monitor.service
 systemd/messagebox-update-recovery.service
 systemd/messagebox-update-supervisor.service
 systemd/messagebox-update-supervisor.timer

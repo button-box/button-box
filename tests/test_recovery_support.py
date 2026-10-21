@@ -21,14 +21,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def systemd(command, **kwargs):
-    if command == ['systemctl', 'daemon-reload']:
+    if command == ['systemctl', 'daemon-reload'] or command == ['systemctl', 'enable', '--now', launcher.MONITOR]:
         return subprocess.CompletedProcess(command, 0, '')
     if command[:2] == ['systemctl', 'is-enabled']:
         return subprocess.CompletedProcess(command, 0, 'enabled\n')
     if command[:2] == ['systemctl', 'show']:
         unit = command[2]
         start = ('recover --boot' if unit.endswith('recovery.service') else 'supervise')
-        value = ('LoadState=loaded\nExecStartPre={ path=/usr/bin/python3 ; argv[]=' + bootstrap.LAUNCH + ' ; ignore_errors=no ; }' +
+        value = ('LoadState=loaded\nExecStartPre={ path=/usr/bin/python3 ; argv[]=' + bootstrap.LAUNCH + (' --supervisor' if unit.endswith('supervisor.service') else '') + ' ; ignore_errors=no ; }' +
                  '\nExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /usr/lib/messagebox-update/bounded_update.py ' + start + ' ; ignore_errors=no ; }' +
                  '\nBefore=messagebox.target comitup.service messagebox-update-controller.service\n'
                  'After=messagebox-update-recovery.service\n')
@@ -71,6 +71,7 @@ class RecoverySupport(unittest.TestCase):
         box = FieldBox(path, version)
         for name in verify.CONTROLLER_MODULES:
             write(box.source / 'scripts/install' / name, (ROOT / 'scripts/install' / name).read_bytes())
+        box.add('systemd/' + launcher.MONITOR, launcher.MONITOR_UNIT)
         for name in verify.RECOVERY_FILES:
             box.add(name, (ROOT / name).read_bytes())
         raw = build.controller_descriptor(box.source, 7, 'v0.3.13')
@@ -215,9 +216,9 @@ class RecoverySupport(unittest.TestCase):
     def test_revoked_signer_and_unknown_journal_cannot_bypass_recovery(self):
         state = self.prepare()
         (self.root / 'etc/button-box-update/release-keys/test.pub').unlink()
-        self.assertEqual(launcher.launch(self.root), 'legacy_no_helper')
+        self.assertEqual(launcher.launch(self.root), 'current')
         launcher.save(self.root, launcher.STATE + '/journal.json', {'schema': 1, 'kind': 'promotion', 'phase': 'exchange_intent'})
-        with self.assertRaisesRegex(launcher.RecoveryError, 'helper_required'):
+        with self.assertRaisesRegex(launcher.RecoveryError, 'invalid_promotion_journal'):
             launcher.launch(self.root)
         write(self.root / 'etc/button-box-update/release-keys/test.pub', self.public.read_bytes())
         # The permanent launcher dispatches this future journal to the signed
@@ -230,8 +231,7 @@ class RecoverySupport(unittest.TestCase):
     def test_busy_lock_and_changed_anchor_do_not_enter_helper(self):
         self.prepare()
         with launcher.lock(self.root, launcher.STATE + '/promotion.lock'):
-            with self.assertRaises(BlockingIOError):
-                launcher.launch(self.root)
+            self.assertEqual(launcher.launch(self.root, supervisor=True), 'deferred')
         path = self.root / launcher.SUPPORT / 'release_verify.py'
         path.write_bytes(path.read_bytes() + b'\n# damaged\n')
         with self.assertRaisesRegex(launcher.RecoveryError, 'anchor_mismatch'):

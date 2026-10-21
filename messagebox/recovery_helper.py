@@ -15,6 +15,7 @@ import os
 import re
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -23,7 +24,7 @@ from pathlib import Path
 
 PROTOCOL = 1
 HELPER_VERSION = '1.1.0'
-LAUNCHER_SHA256 = '6fee72beb953b1980df155e991cabce1f6bf9426875e631f9878d702564af7dc'
+LAUNCHER_SHA256 = 'debd79c662c1f622c71786105efadd2d4aae086e1d3b122b135dbe826fd18f3c'
 STATE = 'var/lib/button-box-controller'
 ACTIVE = 'usr/lib/messagebox-update'
 INHIBIT = 'run/messagebox-update/promotion-inhibit.json'
@@ -171,6 +172,8 @@ def validate_journal(journal):
                                            'committed', 'restore_intent', 'restored', 'unsupported', 'aborted'}
             or journal.get('helper_protocol') != 1):
         raise PromotionError('invalid_promotion_journal')
+    if type(journal.get('services_restored', False)) is not bool:
+        raise PromotionError('invalid_service_finalization')
     for key in ('old', 'new'):
         value = journal[key]
         if ([entry['path'] for entry in value['files']] != list(MODULES)
@@ -186,11 +189,13 @@ def validate_journal(journal):
         raise PromotionError('invalid_service_snapshot')
     paths = ['etc/systemd/system/messagebox-update-' + name + '.service.d/messagebox.conf'
              for name in ('recovery', 'supervisor')]
-    gate = b'[Service]\nExecStartPre=/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py\n'
+    def gate(path):
+        suffix = ' --supervisor' if 'supervisor.service' in path else ''
+        return ('[Service]\nExecStartPre=/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py' + suffix + '\n').encode()
     if ([entry['path'] for entry in journal['units']] != paths
             or any(set(entry) != {'path', 'prior', 'new', 'mode'} or entry['mode'] != 0o644
-                   or base64.b64decode(entry['prior'], validate=True) != gate
-                   or base64.b64decode(entry['new'], validate=True) != gate
+                   or base64.b64decode(entry['prior'], validate=True) != gate(entry['path'])
+                   or base64.b64decode(entry['new'], validate=True) != gate(entry['path'])
                    for entry in journal['units'])):
         raise PromotionError('invalid_integration_snapshot')
     for key in ('old', 'new'):
@@ -222,7 +227,7 @@ def states(run):
     return result
 
 
-def quiesce(run, step, *, recovering=False):
+def quiesce(run, step, *, recovering=False, launcher_pid=None):
     own = set()
     if recovering:
         unit = 'messagebox-update-supervisor.service'
@@ -231,7 +236,7 @@ def quiesce(run, step, *, recovering=False):
         # The permanent launcher is this unit's ExecStartPre. No supervisor
         # controller code has started yet. Stopping our own unit would kill
         # recovery before it could restore; exempt only this exact process.
-        if values.get('ControlPID') == str(os.getpid()) and values.get('MainPID') == '0':
+        if values.get('ControlPID') == str(launcher_pid or os.getpid()) and values.get('MainPID') == '0':
             own.add(unit)
     for batch in (TIMERS, tuple(unit for unit in SERVICES if unit not in own)):
         call(run, ['systemctl', 'stop', *batch], timeout=30)
@@ -304,6 +309,10 @@ def integration(api, root, proof):
 
 def restore_integration(api, root, journal, step):
     for entry in journal['units']:
+        # This protocol never changes integration. Do not allocate an inode to
+        # rewrite identical bytes, especially on the emergency restore path.
+        if api.read(root, entry['path'], 65536, mode=entry['mode']) == base64.b64decode(entry['prior']):
+            continue
         if entry['prior'] is None:
             with api.directory(root, str(Path(entry['path']).parent)) as fd:
                 try:
@@ -317,27 +326,36 @@ def restore_integration(api, root, journal, step):
             api.write(root, entry['path'], base64.b64decode(entry['prior'], validate=True), mode=entry['mode'], step=step)
 
 
-def reconcile(api, root, journal, *, run, exchange, step, boot):
+def reconcile(api, root, journal, *, run, exchange, step, boot, launcher_pid=None):
     validate_journal(journal)
     old_active = matches(api, root, ACTIVE, journal['old'])
     new_active = matches(api, root, ACTIVE, journal['new'])
-    if journal['phase'] == 'committed':
-        if not new_active or not matches(api, root, journal['stage'], journal['old']):
-            raise PromotionError('committed_controller_invalid')
-        record(api, root, journal, 'committed', step)
-        clear_inhibit(api, root, step)
-        restore_services(run, journal['services'], step, boot=boot)
-        return 'committed'
+    known_good = matches(api, root, journal['stage'], journal['old'])
+    if journal['phase'] == 'committed' and new_active:
+        finalize(api, root, journal, run, step, boot=boot)
+        # A damaged spare disables admission, not the intact active controller.
+        return 'committed' if known_good else 'degraded'
+    if journal['phase'] in TERMINAL and old_active:
+        if journal['phase'] == 'committed':
+            journal.update(phase='restored', services_restored=False)
+        finalize(api, root, journal, run, step, boot=boot)
+        return 'recovered'
     # A durable non-commit always returns to the exact previous set. The phase
     # cannot tell us if exchange completed; compare complete identities instead.
-    known_good = matches(api, root, journal['stage'], journal['old'])
     if new_active or not old_active and known_good:
         # A failed activation can leave changed candidate bytes. The exact
         # known-good set is enough to restore it; do not execute those bytes.
         if not known_good:
             raise PromotionError('known_good_missing')
-        record(api, root, journal, 'restore_intent', step)
-        quiesce(run, step, recovering=boot)
+        release_reserve(api, root, step)
+        try:
+            record(api, root, journal, 'restore_intent', step)
+        except (OSError, ValueError):
+            pass
+        # The durable pre-exchange record already identifies both directories.
+        # Restore first. It needs no new inode or block allocation. If a journal
+        # write or fsync fails, the next attempt compares the same identities.
+        quiesce(run, step, recovering=boot, launcher_pid=launcher_pid)
         swap(api, root, journal, exchange, step)
         if not matches(api, root, ACTIVE, journal['old']):
             raise PromotionError('restore_identity_failed')
@@ -347,10 +365,47 @@ def reconcile(api, root, journal, *, run, exchange, step, boot):
     call(run, ['systemctl', 'daemon-reload'])
     step('daemon_reload', 'systemd')
     outcome = journal['phase'] if journal['phase'] in {'unsupported', 'aborted'} else 'restored'
-    record(api, root, journal, outcome, step)
-    clear_inhibit(api, root, step)
-    restore_services(run, journal['services'], step, boot=boot)
+    journal['services_restored'] = False
+    try:
+        record(api, root, journal, outcome, step)
+    except (OSError, ValueError):
+        # A complete verified old set is already active. Do not make app startup
+        # depend on writing a diagnostic terminal record to a failing disk.
+        restore_services(run, journal['services'], step, boot=boot)
+        return 'degraded'
+    finalize(api, root, journal, run, step, boot=boot)
     return 'recovered'
+
+
+def finalize(api, root, journal, run, step, *, boot):
+    # Inhibit absence is volatile and cannot prove that timers/services were
+    # restored. Publish completion only after every saved service operation.
+    if not journal.get('services_restored', False):
+        restore_services(run, journal['services'], step, boot=boot)
+        journal['services_restored'] = True
+        record(api, root, journal, journal['phase'], step)
+        step('services_finalized', JOURNAL)
+    if (root / INHIBIT).exists():
+        clear_inhibit(api, root, step)
+
+
+def release_reserve(api, root, step):
+    with api.directory(root, STATE) as fd:
+        try:
+            os.unlink('recovery-reserve', dir_fd=fd)
+        except OSError:
+            return
+        step('unlink', STATE + '/recovery-reserve')
+        try:
+            os.fsync(fd)
+            step('directory_fsync', STATE)
+        except OSError:
+            # Unlink is an aid to progress, never a prerequisite to exchange.
+            pass
+
+
+def reserve(api, root, step):
+    api.write(root, STATE + '/recovery-reserve', b'\0' * (2 * 1024 * 1024), step=step)
 
 
 def recover(context):
@@ -362,7 +417,7 @@ def recover(context):
         return 'legacy'
     api = runtime(context['root'])
     return reconcile(api, Path(context['root']), journal, run=subprocess.run,
-                     exchange=exchange_at, step=checkpoint, boot=True)
+                     exchange=exchange_at, step=checkpoint, boot=True, launcher_pid=context.get('launcher_pid'))
 
 
 def admitted(proof, accepted):
@@ -418,6 +473,7 @@ def helper_bundle(api, root, source, proof, state, verify, step):
     if api.sha(raw) != accepted['digest']:
         raise PromotionError('candidate_changed')
     verify.verify_controller_proof(raw, sig, Path(root) / 'etc/button-box-update/release-keys')
+    api.retain_recovery_keys(root, verify, step=step)
     if files['messagebox/recovery_helper.py'] != api.read(root, source + '/messagebox/recovery_helper.py', mode=0o644):
         raise PromotionError('candidate_changed')
     # The calling helper must be the candidate's own verified implementation.
@@ -449,11 +505,11 @@ def helper_bundle(api, root, source, proof, state, verify, step):
             api.write(root, base + '/' + path, content, mode=0o644, step=step)
         api.write(root, base + '/' + verify.CONTROLLER_DESCRIPTOR, raw, mode=0o644, step=step)
         api.write(root, base + '/' + verify.CONTROLLER_SIGNATURE, sig, mode=0o644, step=step)
-        checked = {**state, 'helpers': {'current': {'directory': base, 'digest': accepted['digest']},
-                                      'fallback': {'directory': base, 'digest': accepted['digest']}}}
+        checked = {**state, 'helpers': {'current': {'directory': base, 'digest': accepted['digest'], 'signature_sha256': api.sha(sig)},
+                                      'fallback': {'directory': base, 'digest': accepted['digest'], 'signature_sha256': api.sha(sig)}}}
         if api.select_helper(root, checked, verify)[0] != 'current':
             raise PromotionError('helper_slot_invalid')
-        slots[role] = {'directory': base, 'digest': accepted['digest']}
+        slots[role] = {'directory': base, 'digest': accepted['digest'], 'signature_sha256': api.sha(sig)}
     result = {**state, 'accepted': accepted, 'helpers': slots}
     api.save(root, STATE + '/state.json', result, step=step)
     return result, files
@@ -478,11 +534,17 @@ def mode_locks(api, root):
                 os.close(fd)
 
 
-def controller_handshake(root):
+def controller_handshake(root, *, timeout=5):
     path = str(Path(root) / 'run/messagebox-update/control.sock')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(5)
+        connection.settimeout(timeout)
         connection.connect(path)
+        # A stale socket can belong to a root process from an earlier broker.
+        # The live systemd MainPID is checked by activation as well as peer UID.
+        if hasattr(socket, 'SO_PEERCRED'):
+            pid, uid, _gid = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if uid != 0:
+                raise PromotionError('handshake_peer_not_root')
         connection.sendall(b'{"command":"controller_handshake"}\n')
         raw = bytearray()
         while b'\n' not in raw and len(raw) <= 16384:
@@ -492,7 +554,10 @@ def controller_handshake(root):
             raw.extend(part)
         if len(raw) > 16384:
             raise PromotionError('handshake_limit')
-        return json.loads(raw)
+        value = json.loads(raw)
+        if hasattr(socket, 'SO_PEERCRED'):
+            value['_peer_pid'] = pid
+        return value
 
 
 def effective_units(run):
@@ -515,7 +580,8 @@ def effective_units(run):
                     return []
                 commands.append(fields.get('argv[]'))
             return commands
-        if (values.get('LoadState') != 'loaded' or commands(values.get('ExecStartPre', '')) != ['/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py']
+        expected_pre = '/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py' + (' --supervisor' if unit.endswith('supervisor.service') else '')
+        if (values.get('LoadState') != 'loaded' or commands(values.get('ExecStartPre', '')) != [expected_pre]
                 or commands(values.get('ExecStart', '')) != ['/usr/bin/python3 ' + start]):
             raise PromotionError('recovery_unit_mismatch')
         if unit.endswith('recovery.service'):
@@ -545,29 +611,74 @@ def effective_units(run):
             user = 'messagebox-update' if unit.endswith('discovery.service') else ''
             if values.get('User') != user:
                 raise PromotionError('activation_user_changed')
-        expected = {'messagebox-update-discovery.service': '15min', 'messagebox-update-install.service': '5min 30s'}.get(unit)
-        if expected and values.get('TimeoutStartUSec') != expected:
+        expected = {'messagebox-update-discovery.service': {'15min', '30min'},
+                    'messagebox-update-install.service': {'5min 30s'}}.get(unit)
+        if expected and values.get('TimeoutStartUSec') not in expected:
             raise PromotionError('activation_timeout_changed')
 
 
-def activate(api, root, journal, run, handshake, monotonic, step):
+def discovery_command(root):
+    # Run real poll/download/verification code in the discovery service's
+    # sandbox. A runuser subprocess alone does not reproduce these restrictions.
+    properties = ('User=messagebox-update', 'Group=messagebox-update',
+                  'SupplementaryGroups=messagebox-settings', 'NoNewPrivileges=yes',
+                  'PrivateTmp=yes', 'PrivateDevices=yes', 'ProtectSystem=strict', 'ProtectHome=yes',
+                  'ReadWritePaths=/var/cache/button-box-update',
+                  'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6', 'CapabilityBoundingSet=',
+                  'UMask=0027', 'RuntimeMaxSec=30')
+    command = ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec']
+    for value in properties:
+        command.extend(['--property', value])
+    return [*command, '--', '/usr/bin/python3', '-B',
+            str(Path(root) / ACTIVE / 'update_discovery.py'), '--self-test']
+
+
+def controller_command(root):
+    properties = ('SupplementaryGroups=messagebox-update', 'UMask=0022', 'NoNewPrivileges=yes',
+                  'PrivateTmp=yes', 'ProtectSystem=strict', 'ProtectHome=yes',
+                  'ReadWritePaths=/var/lib/button-box-update /run/messagebox-update /etc/button-box-update',
+                  'RestrictAddressFamilies=AF_UNIX', 'CapabilityBoundingSet=CAP_CHOWN', 'RuntimeMaxSec=30')
+    command = ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec']
+    for value in properties:
+        command.extend(['--property', value])
+    return [*command, '--', '/usr/bin/python3', '-B',
+            str(Path(root) / ACTIVE / 'update_controller.py'), 'self-test']
+
+
+def activate(api, root, journal, run, handshake, monotonic, step, sleep=time.sleep):
     if monotonic() >= journal['deadline_mono']:
         raise PromotionError('activation_timeout')
     effective_units(run)
     expected = {entry['path']: entry['sha256'] for entry in journal['new']['files']}
-    command = [sys.executable, '-B', str(Path(root) / ACTIVE / 'update_controller.py'), 'self-test']
-    result = json.loads(call(run, command, timeout=max(1, journal['deadline_mono'] - monotonic())).stdout)
+    result = json.loads(call(run, controller_command(root), timeout=min(35, max(1, journal['deadline_mono'] - monotonic()))).stdout)
     if result != {'protocol': 1, 'version': journal['new']['version'], 'hashes': expected}:
         raise PromotionError('controller_self_test_mismatch')
     step('self_test', ACTIVE)
     call(run, ['systemctl', 'start', 'messagebox-update-controller.service'], timeout=20)
     step('controller_start', 'systemd')
-    result = handshake(root)
-    if result != {'protocol': 1, 'version': journal['new']['version'], 'hashes': expected}:
-        raise PromotionError('controller_handshake_mismatch')
+    while True:
+        if monotonic() >= journal['deadline_mono']:
+            raise PromotionError('controller_handshake_timeout')
+        if not matches(api, root, ACTIVE, journal['new']):
+            raise PromotionError('activation_controller_changed')
+        try:
+            before = call(run, ['systemctl', 'show', 'messagebox-update-controller.service',
+                                '--property=ActiveState,MainPID']).stdout
+            fields = dict(line.split('=', 1) for line in before.splitlines() if '=' in line)
+            result = dict(handshake(root, timeout=min(5, max(0.05, journal['deadline_mono'] - monotonic())))
+                          if handshake is controller_handshake else handshake(root))
+            peer = result.pop('_peer_pid', None)
+            after = call(run, ['systemctl', 'show', 'messagebox-update-controller.service',
+                               '--property=ActiveState,MainPID']).stdout
+            if (before == after and fields.get('ActiveState') == 'active' and fields.get('MainPID') not in {None, '0'}
+                    and (peer is None and handshake is not controller_handshake or peer == int(fields['MainPID']))
+                    and result == {'protocol': 1, 'version': journal['new']['version'], 'hashes': expected}):
+                break
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        sleep(min(0.2, max(0, journal['deadline_mono'] - monotonic())))
     step('handshake', ACTIVE)
-    result = json.loads(call(run, ['runuser', '-u', 'messagebox-update', '--', sys.executable, '-B',
-                                 str(Path(root) / ACTIVE / 'update_discovery.py'), '--self-test'], timeout=15).stdout)
+    result = json.loads(call(run, discovery_command(root), timeout=35).stdout)
     if result != {'protocol': 1, 'dry_run': True}:
         raise PromotionError('discovery_dry_run_failed')
     step('discovery_self_test', ACTIVE)
@@ -594,7 +705,7 @@ def reverify(api, root, source, expected, application, platform):
 
 
 def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoint,
-            handshake=controller_handshake, monotonic=time.monotonic):
+            handshake=controller_handshake, monotonic=time.monotonic, sleep=time.sleep):
     root, source, platform = Path(context['root']), context['release'], context['platform']
     api = runtime(root)
     journal = None
@@ -621,6 +732,8 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
             raise PromotionError('controller_quarantined')
         if prior.get('kind') == 'controller' and prior.get('phase') == 'committed':
             old = prior['new']
+            if not matches(api, root, prior['stage'], prior['old']):
+                raise PromotionError('controller_redundancy_required')
         elif prior.get('kind') == 'controller' and prior.get('phase') in {'restored', 'unsupported', 'aborted'}:
             old = prior['old']
         else:
@@ -633,6 +746,11 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
             return {'state': 'already_committed'}
         services = states(run)
         units = integration(api, root, proof)
+        # Admission may allocate. Once any controller can be exchanged, recovery
+        # records, reserve blocks, helper slots and independent monitor exist.
+        reserve(api, root, step)
+        call(run, ['systemctl', 'is-active', '--quiet', api.MONITOR])
+        step('monitor_checked', 'systemd')
         state, contents = helper_bundle(api, root, source, proof, state, verify, step)
         transaction = uuid.uuid4().hex
         stage = 'usr/lib/messagebox-update-stage-' + transaction
@@ -646,8 +764,12 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
                    'helper_protocol': 1, 'descriptor_sha256': proof['descriptor_sha256'],
                    'signing_key_id': proof['signing_key_id'], 'sequence': proof['descriptor']['controller_sequence'],
                    'units': units, 'services': services, 'attempt': 1,
+                   'services_restored': False,
                    'deadline_mono': monotonic() + 90, 'rollout_policy_revision': None}
         record(api, root, journal, 'intent', step)
+        api.save(root, STATE + '/owner.json', {'pid': os.getpid(), 'token': api.process_token(os.getpid()),
+                                             'boot': api.boot_id(),
+                                             'deadline_mono': journal['deadline_mono']}, step=step)
         api.write(root, INHIBIT, encoded({'transaction': transaction}), mode=0o644, step=step)
         try:
             quiesce(run, step)
@@ -663,9 +785,8 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
             record(api, root, journal, 'exchange_intent', step)
             swap(api, root, journal, exchange, step)
             record(api, root, journal, 'exchanged', step)
-            for entry in units:
-                api.write(root, entry['path'], base64.b64decode(entry['new']), mode=entry['mode'], step=step)
-                step('integration_write', entry['path'])
+            # Integration is unchanged in this protocol; allocating redundant
+            # replacements here would make restore depend on free disk space.
             call(run, ['systemctl', 'daemon-reload'])
             step('daemon_reload', 'systemd')
         except ExchangeUnavailable:
@@ -673,10 +794,12 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
         except Exception:
             # A power cut is injected as BaseException and intentionally bypasses
             # this live cleanup; the permanent boot launcher then reconciles it.
-            record(api, root, journal, 'restore_intent', step)
+            # The last valid record suffices even if the failed syscall was a
+            # journal write. Do not attempt another allocation before restore.
+            journal['phase'] = 'restore_intent'
     if journal['phase'] == 'exchanged':
         try:
-            activate(api, root, journal, run, handshake, monotonic, step)
+            activate(api, root, journal, run, handshake, monotonic, step, sleep)
             # Reacquire in canonical order, never update/trust while holding guard.
             with api.locks(root), mode_locks(api, root):
                 current = api.document(root, JOURNAL)
@@ -689,8 +812,12 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
                     raise PromotionError('activation_controller_changed')
                 record(api, root, journal, 'activated', step)
                 record(api, root, journal, 'committed', step)
-                clear_inhibit(api, root, step)
             restore_services(run, services, step)
+            with api.locks(root), mode_locks(api, root):
+                journal['services_restored'] = True
+                record(api, root, journal, 'committed', step)
+                step('services_finalized', JOURNAL)
+                clear_inhibit(api, root, step)
             return {'state': 'committed', 'version': new['version'], 'transaction': transaction}
         except Exception:
             pass
@@ -699,8 +826,7 @@ def promote(context, *, run=subprocess.run, exchange=exchange_at, step=checkpoin
         if current['transaction'] != journal['transaction']:
             raise PromotionError('promotion_transaction_changed')
         reconcile(api, root, current, run=run, exchange=exchange, step=step, boot=True)
-    # Jobs may now start: all consumer locks have been released.
-    restore_services(run, journal['services'], step)
+    # Queued recovery jobs may now start: all consumer locks are released.
     outcome = current['phase']
     return {'state': outcome, 'version': new['version'] if outcome == 'committed' else old['version'],
             'transaction': transaction}

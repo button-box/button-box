@@ -71,6 +71,7 @@ for path in \
   scripts/dev/hardware-test.sh \
   scripts/messageboxctl \
   messagebox/syncloop.sh \
+  systemd/messagebox-update-monitor.service \
   systemd/messagebox-button.service \
   systemd/messagebox-audio-detect.service \
   systemd/messagebox-sync.service \

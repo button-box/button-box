@@ -30,7 +30,7 @@ RECOVERY_FILES = ('messagebox/recovery_bootstrap.py', 'messagebox/recovery_helpe
 RECOVERY_COMMAND = '/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py'
 RECOVERY_DROPINS = {
     '/etc/systemd/system/messagebox-update-' + unit + '.service.d/messagebox.conf':
-    ('[Service]\nExecStartPre=' + RECOVERY_COMMAND + '\n').encode()
+    ('[Service]\nExecStartPre=' + RECOVERY_COMMAND + (' --supervisor' if unit == 'supervisor' else '') + '\n').encode()
     for unit in ('recovery', 'supervisor')
 }
 UPDATER_UNITS = frozenset('messagebox-update-' + name for name in (
@@ -429,12 +429,17 @@ def promotion_inhibited(root=Path('/'), *, journal=True, owner=None):
             descriptors.append(fd)
             info = os.fstat(fd)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_nlink != 1
-                    or info.st_mode & 0o022 or info.st_size > 16384):
+                    or info.st_mode & 0o022 or info.st_size > 32768):
                 return True
-            raw = os.read(fd, 16385)
+            raw = os.read(fd, 32769)
             if len(raw) != info.st_size:
                 return True
             value = json.loads(raw)
+            if set(value) == {'generation', 'sha256', 'value'}:
+                body = (json.dumps({'generation': value['generation'], 'value': value['value']}, sort_keys=True) + '\n').encode()
+                if hashlib.sha256(body).hexdigest() != value['sha256']:
+                    return True
+                value = value['value']
             if relative.endswith('promotion-inhibit.json'):
                 return True
             if value.get('kind') == 'controller' and value.get('phase') not in {

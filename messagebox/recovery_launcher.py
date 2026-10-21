@@ -6,14 +6,18 @@ launcher only dispatches verified bytes through the stable protocol 1 envelope.
 """
 
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
 import json
 import os
 import re
+import signal
+import subprocess
 import stat
 import sys
+import time
 import types
 import uuid
 from pathlib import Path
@@ -25,6 +29,26 @@ TRUST = 'etc/button-box-update'
 MODULES = ('bounded_update.py', 'health-probe.py', 'release_verify.py', 'trust_update.py',
            'update_controller.py', 'update_discovery.py')
 LIMIT = 2 * 1024 * 1024
+RECORD_SIZE = 32768
+HELPER_TIMEOUT = 45
+JOURNAL = STATE + '/journal.json'
+MONITOR = 'messagebox-update-monitor.service'
+MONITOR_UNIT = b'''[Unit]
+Description=Permanent controller-independent recovery monitor
+After=local-fs.target messagebox-update-recovery.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py --monitor
+Restart=always
+RestartSec=1
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+'''
 
 
 class RecoveryError(ValueError):
@@ -138,7 +162,7 @@ def write(root, relative, raw, *, mode=0o600, step=checkpoint):
                 pass
 
 
-def document(root, relative):
+def json_document(raw):
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -146,11 +170,80 @@ def document(root, relative):
                 raise RecoveryError('duplicate_state_key')
             result[key] = value
         return result
-    return json.loads(read(root, relative, 16384, mode=0o600), object_pairs_hook=unique)
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+def records(root):
+    valid = []
+    for path in (JOURNAL, JOURNAL + '.copy'):
+        try:
+            item = json_document(read(root, path, RECORD_SIZE, mode=0o600))
+            if (set(item) != {'generation', 'sha256', 'value'} or type(item['generation']) is not int
+                    or item['generation'] < 1 or item['sha256'] != sha(canonical(
+                        {'generation': item['generation'], 'value': item['value']}))):
+                continue
+            valid.append((item['generation'], path, item['value']))
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    return sorted(valid, reverse=True)
+
+
+def canonical(value):
+    return (json.dumps(value, sort_keys=True) + '\n').encode()
+
+
+def document(root, relative):
+    if relative == JOURNAL:
+        found = records(root)
+        if not found:
+            if not any((Path(root) / path).exists() for path in (JOURNAL, JOURNAL + '.copy')):
+                raise FileNotFoundError(relative)
+            raise RecoveryError('no_valid_recovery_record')
+        return found[0][2]
+    return json_document(read(root, relative, 16384, mode=0o600))
 
 
 def save(root, relative, value, *, step=checkpoint):
-    write(root, relative, (json.dumps(value, sort_keys=True) + '\n').encode(), step=step)
+    if relative != JOURNAL:
+        write(root, relative, canonical(value), step=step)
+        return
+    found = records(root)
+    generation = found[0][0] + 1 if found else 1
+    body = {'generation': generation, 'value': value}
+    raw = canonical({**body, 'sha256': sha(canonical(body))})
+    if len(raw) > RECORD_SIZE:
+        raise RecoveryError('recovery_record_limit')
+    raw = raw.ljust(RECORD_SIZE, b' ')
+    # Never overwrite the only latest valid record first. Existing slots have
+    # allocated blocks and inodes; restore requires neither a temp file nor rename.
+    paths = [JOURNAL, JOURNAL + '.copy']
+    if found and found[0][1] == paths[0]:
+        paths.reverse()
+    for path in paths:
+        names = parts(path)
+        with directory(root, '/'.join(names[:-1])) as parent:
+            try:
+                fd = os.open(names[-1], os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            except FileNotFoundError:
+                write(root, path, raw, step=step)
+                continue
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
+                        or stat.S_IMODE(info.st_mode) != 0o600):
+                    raise RecoveryError('unsafe_recovery_record')
+                if info.st_size != RECORD_SIZE:
+                    os.ftruncate(fd, RECORD_SIZE)
+                    step('truncate', path)
+                if os.pwrite(fd, raw, 0) != RECORD_SIZE:
+                    raise OSError('short_recovery_record_write')
+                step('file_write', path)
+                os.fsync(fd)
+                step('file_fsync', path)
+                os.fsync(parent)
+                step('directory_fsync', '/'.join(names[:-1]))
+            finally:
+                os.close(fd)
 
 
 @contextlib.contextmanager
@@ -215,7 +308,9 @@ def validate_state(value):
             or set(value['helpers']) != {'current', 'fallback'}):
         raise RecoveryError('invalid_recovery_state')
     for slot in value['helpers'].values():
-        if (set(slot) != {'directory', 'digest'} or not re.fullmatch('[0-9a-f]{64}', slot['digest'])
+        if (set(slot) != {'directory', 'digest', 'signature_sha256'}
+                or not re.fullmatch('[0-9a-f]{64}', slot['signature_sha256'])
+                or not re.fullmatch('[0-9a-f]{64}', slot['digest'])
                 or slot['directory'] not in {STATE + '/helpers/' + slot['digest'] + '/current',
                                              STATE + '/helpers/' + slot['digest'] + '/fallback'}):
             raise RecoveryError('invalid_helper_slot')
@@ -243,6 +338,37 @@ def legacy_valid(root, state):
     return True
 
 
+def verified_controller(root, state, verify, base=ACTIVE):
+    """Independent identities survive loss of either (or both) journal copies."""
+    candidates = [(state['legacy']['files'], None)]
+    for slot in state['helpers'].values():
+        try:
+            raw = read(root, slot['directory'] + '/' + verify.CONTROLLER_DESCRIPTOR,
+                       verify.MAX_DESCRIPTOR, mode=0o644)
+            if sha(raw) != slot['digest']:
+                continue
+            value = verify.parse_controller_descriptor(raw)
+            metadata = canonical({'schema': 1, 'version': value['controller_version'],
+                                  'descriptor_sha256': slot['digest']})
+            candidates.append(([{**entry, 'path': Path(entry['path']).name}
+                                for entry in value['modules']], metadata))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    for files, metadata in candidates:
+        try:
+            for entry in files:
+                raw = read(root, base + '/' + entry['path'], mode=0o644)
+                if len(raw) != entry['size'] or sha(raw) != entry['sha256']:
+                    break
+            else:
+                if metadata is not None and read(root, base + '/controller.json', 16384, mode=0o644) != metadata:
+                    continue
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def select_helper(root, state, verify):
     for role in ('current', 'fallback'):
         slot = state['helpers'][role]
@@ -250,9 +376,15 @@ def select_helper(root, state, verify):
             path = Path(root) / slot['directory']
             raw = read(root, slot['directory'] + '/' + verify.CONTROLLER_DESCRIPTOR, verify.MAX_DESCRIPTOR, mode=0o644)
             sig = read(root, slot['directory'] + '/' + verify.CONTROLLER_SIGNATURE, verify.MAX_CONTROLLER_SIGNATURE, mode=0o644)
-            proof = verify.verify_controller_proof(raw, sig, Path(root) / TRUST / 'release-keys')
-            value = proof['descriptor']
-            if (proof['descriptor_sha256'] != slot['digest'] or value['schema'] != 2
+            # Recovery authorization is separate from release admission. Only
+            # state-pinned, previously accepted descriptor digests can use these
+            # retained public pins. Revocation still applies to every new admission.
+            # Admission verifies the signature with current release trust before
+            # publishing these root-owned digest pins. Recovery checks exactly
+            # those accepted bytes without temporary files, new inodes, or a
+            # dependence on later release-key generations.
+            value = verify.parse_controller_descriptor(raw)
+            if (sha(raw) != slot['digest'] or sha(sig) != slot['signature_sha256'] or value['schema'] != 2
                     or value['min_launcher_protocol'] != 1 or value['min_helper_protocol'] != 1
                     or value['recovery']['protocol'] != 1):
                 raise RecoveryError('unapproved_helper')
@@ -271,7 +403,112 @@ def select_helper(root, state, verify):
     return None, None
 
 
-def launch(root=Path('/')):
+def retain_recovery_keys(root, verify, *, step=checkpoint):
+    for key in sorted((Path(root) / TRUST / 'release-keys').glob('*.pub')):
+        line = verify.public_key_line(key)
+        name = verify.public_key_id(line) + '.pub'
+        write(root, SUPPORT + '/recovery-keys/' + name,
+              ('untrusted comment: retained recovery authorization\n' + line + '\n').encode(),
+              mode=0o644, step=step)
+
+
+def process_token(pid):
+    try:
+        return Path('/proc/' + str(pid) + '/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def boot_id():
+    try:
+        return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:
+        return None
+
+
+def expire_owner(root, *, monotonic=time.monotonic, kill=os.kill):
+    try:
+        with lock(root, STATE + '/owner.lock'):
+            return
+    except BlockingIOError:
+        pass
+    try:
+        lease = document(root, STATE + '/owner.json')
+        if (type(lease['pid']) is int and lease['pid'] > 1 and lease['token'] is not None
+                and lease.get('boot') is not None and lease['boot'] == boot_id()
+                and lease['token'] == process_token(lease['pid'])
+                and monotonic() >= lease['deadline_mono']):
+            kill(lease['pid'], signal.SIGKILL)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+# A fresh interpreter avoids inherited Python locks from threaded callers. The
+# launcher API and helper bytes are captured before dispatch; no temporary file
+# or candidate import path is needed. This code has no product test hooks.
+CHILD_CODE = r"""
+import base64, contextlib, ctypes, json, os, signal, sys
+from pathlib import Path
+payload = json.loads(sys.stdin.buffer.read(8 * 1024 * 1024 + 1))
+if sys.platform == 'linux':
+    if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0):
+        os._exit(1)
+    if os.getppid() != payload['parent']:
+        os._exit(1)
+api = {'__name__': 'recovery_child_api'}
+exec(compile(base64.b64decode(payload['launcher']), '<permanent-launcher>', 'exec'), api)
+namespace = {'__name__': 'verified_recovery_helper'}
+try:
+    with open(os.devnull, 'w') as quiet, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+        exec(compile(base64.b64decode(payload['helper']), '<verified-recovery-helper>', 'exec'), namespace)
+        context = {'root': Path(payload['root']), 'journal': payload['journal'], 'state': payload['state'],
+                   'launcher_pid': payload['parent'],
+                   'check_legacy': lambda: api['legacy_valid'](Path(payload['root']), payload['state'])}
+        result = namespace['recover'](context)
+        if result not in {'legacy', 'recovered', 'committed', 'deferred', 'degraded'}:
+            raise ValueError('invalid_helper_result')
+    answer = {'result': result}
+except BaseException as exc:
+    answer = {'error': str(exc)[:512]}
+print(json.dumps(answer), flush=True)
+"""
+
+
+def run_helper(raw, root, state, journal, *, timeout=HELPER_TIMEOUT):
+    """Run captured, accepted bytes in a fresh, independently bounded process."""
+    payload = canonical({'root': str(root), 'state': state, 'journal': journal, 'parent': os.getpid(),
+                         'launcher': base64.b64encode(read(root, SUPPORT + '/launcher.py', mode=0o644)).decode(),
+                         'helper': base64.b64encode(raw).decode()})
+    process = subprocess.Popen([sys.executable, '-I', '-B', '-c', CHILD_CODE], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               start_new_session=True, close_fds=True)
+    try:
+        output, _error = process.communicate(payload, timeout=timeout)
+        if process.returncode != 0 or len(output) > 4096:
+            raise RecoveryError('helper_exit_or_result_limit')
+        value = json_document(output)
+        if 'error' in value:
+            raise RecoveryError(value['error'])
+        return value['result']
+    except subprocess.TimeoutExpired as exc:
+        raise RecoveryError('helper_timeout') from exc
+    except (ValueError, KeyError) as exc:
+        raise RecoveryError('helper_failed:' + str(exc)) from exc
+    finally:
+        # Stop descendants before fallback, including after the leader exits.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if process.poll() is None:
+                raise
+        process.wait(timeout=5)
+        for stream in (process.stdin, process.stdout):
+            stream.close()
+
+
+def _launch(root, *, helper_timeout):
     root = Path(root)
     try:
         state = document(root, STATE + '/state.json')
@@ -289,14 +526,52 @@ def launch(root=Path('/')):
         return 'not_initialized'
     with locks(root):
         state = validate_state(document(root, STATE + '/state.json'))
-        verify, trust = anchors(root)
-        trust.recover_trust(root / TRUST, root / 'var/lib/button-box-update')
-        journal = document(root, STATE + '/journal.json')
+        verify, _trust = anchors(root)
+        # Recovery uses accepted digest pins. Finishing a release-key change
+        # may allocate and is admission work; it cannot gate emergency restore.
+        try:
+            journal = document(root, JOURNAL)
+        except (OSError, ValueError):
+            if verified_controller(root, state, verify):
+                # With no transaction record, there is no authority to exchange.
+                # Preserve a separately verified active set and disable promotion.
+                return 'verified_no_journal'
+            raise
         if (not isinstance(journal, dict) or journal.get('schema') != 1
                 or not isinstance(journal.get('kind'), str) or not isinstance(journal.get('phase'), str)):
             raise RecoveryError('invalid_recovery_journal')
-        role, raw = select_helper(root, state, verify)
-        if raw is None:
+        last = None
+        for role in ('current', 'fallback'):
+            # A helper can fail after a durable mutation. Never hand the next
+            # helper the first helper's stale in-memory journal or selection.
+            state = validate_state(document(root, STATE + '/state.json'))
+            journal = document(root, JOURNAL)
+            slot = state['helpers'][role]
+            selected, raw = select_helper(root, {**state, 'helpers': {'current': slot, 'fallback': slot}}, verify)
+            if selected is None:
+                continue
+            try:
+                run_helper(raw, root, state, journal, timeout=helper_timeout)
+                if not verified_controller(root, state, verify):
+                    raise RecoveryError('helper_left_unverified_controller')
+                found = records(root)
+                if len(found) != 2 or found[0][0] != found[1][0]:
+                    # Repair a damaged primary too: the existing admission
+                    # guard reads that path. One bad copy must not freeze OTA.
+                    try:
+                        save(root, JOURNAL, document(root, JOURNAL))
+                    except (OSError, ValueError):
+                        pass
+                return role
+            except (OSError, ValueError) as exc:
+                last = exc
+        if (journal.get('kind') == 'controller'
+                and journal.get('phase') in {'committed', 'restored', 'unsupported', 'aborted'}
+                and verified_controller(root, state, verify)):
+            return 'verified_no_helper'
+        if last is not None and journal.get('kind') != 'bootstrap':
+            raise RecoveryError(str(last))
+        else:
             # No exchange exists in this protocol. Both independently checked
             # initial sets are intact, so old application recovery stays usable.
             if journal not in ({'schema': 1, 'kind': 'bootstrap', 'phase': phase}
@@ -304,26 +579,80 @@ def launch(root=Path('/')):
                 raise RecoveryError('helper_required')
             legacy_valid(root, state)
             return 'legacy_no_helper'
-        namespace = {'__name__': 'verified_recovery_helper'}
-        exec(compile(raw, '<verified-recovery-helper>', 'exec'), namespace)
-        # Helpers receive the fixed root and bounded state. A future signed
-        # helper can recover controller transactions without replacing this file.
-        def checked_legacy():
-            return legacy_valid(root, state)
-        result = namespace['recover']({'journal': journal, 'root': root, 'state': state,
-                                       'check_legacy': checked_legacy})
-        if result not in {'legacy', 'recovered', 'committed', 'deferred'}:
-            raise RecoveryError('invalid_helper_result')
-        return role
+
+
+def launch(root=Path('/'), *, owned=False, helper_timeout=HELPER_TIMEOUT,
+           supervisor=False, monitoring=False, lock_wait=70):
+    root = Path(root)
+    deadline = time.monotonic() + lock_wait
+    while True:
+        try:
+            if owned or not (root / STATE / 'state.json').exists():
+                if owned:
+                    release_space_if_needed(root)
+                return _launch(root, helper_timeout=helper_timeout)
+            with lock(root, STATE + '/owner.lock'):
+                try:
+                    if not monitoring:
+                        release_space_if_needed(root)
+                    return _launch(root, helper_timeout=helper_timeout)
+                except BlockingIOError:
+                    # An app installer owns only the inner locks; it cannot
+                    # exchange controllers. Let its supervisor stop it first.
+                    if supervisor or monitoring:
+                        return 'deferred'
+                    raise
+        except BlockingIOError:
+            # A controller owner can still exchange modules. Neither boot nor
+            # supervisor may execute controller code until that owner finishes.
+            if monitoring:
+                return 'deferred'
+            if time.monotonic() >= deadline:
+                raise RecoveryError('recovery_busy') from None
+            time.sleep(0.05)
+
+
+def release_space_if_needed(root):
+    # The frozen application recovery command follows the boot gate and makes
+    # small atomic metadata writes even in a terminal state. Give it reserved
+    # blocks and an inode under pressure; controller restore itself allocates none.
+    try:
+        space = os.statvfs(Path(root) / STATE)
+    except OSError:
+        return
+    if space.f_bavail * space.f_frsize >= 1024 * 1024 and space.f_favail >= 8:
+        return
+    with directory(root, STATE) as fd:
+        try:
+            os.unlink('recovery-reserve', dir_fd=fd)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+
+
+def monitor(root=Path('/'), *, interval=1, stop=lambda: False):
+    while not stop():
+        expire_owner(root)
+        try:
+            launch(root, monitoring=True)
+        except (OSError, ValueError, KeyError, TypeError):
+            # The independent service remains armed even after a failed attempt.
+            pass
+        time.sleep(interval)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument('--monitor', action='store_true')
+    parser.add_argument('--supervisor', action='store_true')
+    args = parser.parse_args()
     if os.geteuid() != 0:
         parser.exit(1, 'root_required\n')
     try:
-        launch()
+        monitor() if args.monitor else launch(supervisor=args.supervisor)
     except (OSError, ValueError, KeyError, TypeError):
         parser.exit(1, 'recovery_support_invalid\n')
 
