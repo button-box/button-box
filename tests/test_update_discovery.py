@@ -2,6 +2,7 @@
 
 import io
 import importlib
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -89,6 +90,20 @@ class SignatureTests(unittest.TestCase):
                     with self.assertRaisesRegex(verify.ReleaseError, 'bad_signature|hash_mismatch'):
                         self.verify(directory, metadata, keys=keys)
 
+    def test_voice_release_requires_promoted_controller(self):
+        old_path = Path(__file__).parent / 'fixtures/pi-v0.3.12/release_verify.py'
+        spec = importlib.util.spec_from_file_location('v0312_release_verify', old_path)
+        old = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(old)
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = manifest()
+            metadata['min_updater_version'] = '1.2.0'
+            self.bundle(directory, metadata)
+            self.assertEqual(self.verify(directory, metadata), metadata)
+            with self.assertRaisesRegex(old.ReleaseError, 'incompatible'):
+                old.verify_bundle(directory, self.keys, version=metadata['version'], channel='stable',
+                                  floor=0, platform=PLATFORM)
+
     def test_signed_downgrade_canary_to_stable_and_pi3_are_rejected(self):
         cases = [(manifest(), 1, 'stable', PLATFORM),
                  (manifest('v0.3.0-canary.1'), 0, 'stable', PLATFORM),
@@ -118,6 +133,29 @@ class SignatureTests(unittest.TestCase):
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_slow_download_has_deadline_and_removes_partial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            now = [0]
+            class SlowResponse(io.BytesIO):
+                def read(self, size):
+                    now[0] += 750
+                    return super().read(size)
+            opener = mock.Mock(return_value=SlowResponse(b'x' * (64 * 1024 + 1)))
+            client = discovery.Discovery(directory, opener=opener, monotonic=lambda: now[0])
+            target = Path(directory) / 'archive.tar.gz'
+            with self.assertRaisesRegex(discovery.DownloadError, 'download_timeout'):
+                client.download('https://github.com/button-box/button-box/releases/download/v0.3.0/archive.tar.gz',
+                                target, 2 * 1024 * 1024)
+            self.assertFalse(target.exists())
+            self.assertFalse(target.with_suffix('.gz.part').exists())
+            self.assertEqual(opener.call_args.kwargs['timeout'], 30)
+        dropin = (INSTALL.parents[1] / 'config/update-discovery-voice-ready.conf').read_text()
+        self.assertIn('TimeoutStartSec=1800', dropin)
+        self.assertEqual(discovery.DOWNLOAD_SECONDS, 1500)
+        bootstrap = (INSTALL / 'update-bootstrap.sh').read_text()
+        self.assertIn('config/update-discovery-voice-ready.conf', bootstrap)
+        self.assertIn('/etc/systemd/system/messagebox-update-discovery.service.d/voice-ready.conf', bootstrap)
+
     def test_etag_304_and_rate_limit_are_persisted_across_boot_and_hints(self):
         with tempfile.TemporaryDirectory() as directory:
             class Response(io.BytesIO):

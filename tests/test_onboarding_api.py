@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import io
 import json
 import subprocess
@@ -314,6 +315,7 @@ def header(response, name):
 
 class OnboardingAPITests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.clock = Clock()
         self.state_path = Path(self.directory.name) / "state.json"
@@ -542,6 +544,40 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertNotIn(b'id="copy-setup-url"', cloud)
         self.assertNotIn(b"Copy this address first", cloud)
         self.assertNotIn(b"SETUP-", cloud)
+
+    def test_cloud_handoff_words_do_not_change_wacli_setup(self):
+        reconnect = b"When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi."
+        for transport in ("cloud", "wacli"):
+            with self.subTest(transport=transport), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": transport}):
+                app = create_app(
+                    mode="HOTSPOT", config={"device_id": "A7K2"},
+                    state_store=StateStore(Path(self.directory.name) / (transport + "-wording.json")),
+                    adapter=self.adapter, connectivity_checker=self.checker,
+                    caregiver_settings=self.settings, clock=self.clock,
+                    sleep=self.sleeps.append, handoff_delay=0.25, start_claim_watcher=False,
+                )
+                client = WSGIHarness(app)
+                page = client.request("GET", "/")["body"]
+                handoff = client.form("POST", "/wifi/connect", {
+                    "ssid": "Home", "security": "protected", "password": "synthetic-password",
+                }, close=False)
+                handoff["iterable"].close()
+                if transport == "cloud":
+                    for body in (page, handoff["body"]):
+                        self.assertIn(b"Connected!", body)
+                        self.assertIn(reconnect, body)
+                        self.assertIn(b"Go back to WhatsApp.", body)
+                        self.assertIn(b"scan the QR code on your setup card", body)
+                    self.assertIn(b"checkWifiHandoff", handoff["body"])
+                else:
+                    self.assertIn(b"Choose Wi-Fi for your box", page)
+                    self.assertIn(b"Copy this address first. Connecting will close the setup hotspot and may close this page.", page)
+                    self.assertIn(b"Join the same Wi-Fi", handoff["body"])
+                    self.assertIn(b"Join the Wi-Fi you chose for your Button Box, then open this link to continue:", handoff["body"])
+                    for body in (page, handoff["body"]):
+                        self.assertNotIn(reconnect, body)
+                        self.assertNotIn(b"Connected!", body)
+                        self.assertNotIn(b"checkWifiHandoff", body)
 
     def test_clipboard_asset_is_served_by_setup_and_runtime(self):
         from messagebox.dashboard.app import DASHBOARD_STATIC

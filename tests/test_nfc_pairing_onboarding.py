@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import json
 import os
 import tempfile
@@ -32,6 +33,9 @@ class Reader:
 
 
 class TonePlayerTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def test_read_and_success_use_bundled_assets_without_generation(self):
         root = Path(__file__).resolve().parents[1] / "sounds/cues"
         calls = []
@@ -103,6 +107,7 @@ def completed_recipients(root, clock):
 
 class NfcPairingOnboardingTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.clock = Clock()

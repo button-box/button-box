@@ -30,7 +30,7 @@ def installed_paths(root):
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
     for pack in ("cloud", "cues", "voice", "voices", "voices/pirate", "voices/alien",
-                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata"):
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata", "voices/buttonbox"):
         # The Cloud-only fallbacks were introduced after the legacy release layout.
         if pack == "cloud" and not (root / "sounds" / pack).exists():
             continue

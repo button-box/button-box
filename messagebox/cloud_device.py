@@ -281,7 +281,8 @@ class CloudDeviceClient:
     def inbox(self, cursor: int) -> dict:
         if type(cursor) is not int or cursor < 0:
             raise CloudDeviceError("inbox cursor is invalid")
-        return self.json(f"/device/inbox?cursor={cursor}")
+        # A saved heartbeat may belong to a runtime that was rolled back.
+        return self.json(f"/device/inbox?cursor={cursor}&features=guided_setup_v1")
 
     def ack(self, ack: dict) -> dict:
         try:
@@ -335,6 +336,8 @@ class CloudDeviceClient:
 
     def media(self, media_url: str, *, limit=10 * 1024 * 1024) -> bytes:
         """Fetch only an authenticated media path on this exact API origin."""
+        if not isinstance(media_url, str) or not media_url or len(media_url) > 2048:
+            raise CloudDeviceError("media URL is invalid")
         parsed = urlsplit(media_url)
         if (
             parsed.scheme != "https"
@@ -452,6 +455,7 @@ def capabilities(*, nfc=False) -> dict:
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
         "voice_lines": 1,
+        "guided_setup_v1": True,
         "reactions": 1,
         "reaction_cards": 1,
         "reaction_sent_voice": 1,

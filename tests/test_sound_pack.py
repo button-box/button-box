@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 from mic_helpers import physical_capture
 import contextlib
 import json
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SoundPackTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -89,7 +91,7 @@ class SoundPackTests(unittest.TestCase):
             self.assertEqual(capabilities()["voice_packs"], list(VOICE_PACKS))
             (target / "voices/dj/voice-count-new.wav").unlink()
             (target / "voices/alien/voice-online.wav").write_bytes(b"damaged")
-            self.assertEqual(capabilities()["voice_packs"], ["jessica", "pirate", "robot", "french", "charlie", "tata"])
+            self.assertEqual(capabilities()["voice_packs"], ["jessica", "pirate", "robot", "french", "charlie", "tata", "buttonbox"])
             shutil.rmtree(target / "voices")
             self.assertEqual(capabilities()["voice_packs"], ["jessica"])
 
@@ -150,7 +152,7 @@ class SoundPackTests(unittest.TestCase):
         self.assertEqual(order, ["cue-rec_go.wav", "mic", "cue-deleted.wav"])
         vad.start.assert_called_once_with(0)
 
-    def test_setup_voice_is_jessica_and_once_despite_old_online_receipt(self):
+    def test_setup_voice_is_buttonbox_and_once_despite_old_online_receipt(self):
         self.state.write_text('{"online":true}')
         with mock.patch.object(runtime.cloud_claim, "setup_online_cue", return_value=True), \
              mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
@@ -159,10 +161,8 @@ class SoundPackTests(unittest.TestCase):
             runtime.play_setup_online(runtime.claim_beeps())
             runtime.play_setup_online(runtime.claim_beeps())
         self.assertEqual([Path(call.args[0][-1]).name for call in run.call_args_list],
-                         ["cue-connected.wav", "voice-setup-online.wav", "cue-connected.wav"])
-        self.assertEqual(Path(run.call_args_list[1].args[0][-1]), ROOT / "sounds/voice/voice-setup-online.wav")
-        self.assertGreater(run.call_args_list[1].kwargs["timeout"], 6.56)
-        self.assertTrue(json.loads(self.state.read_text())["setup_online"])
+                         ["voice-setup-scan.wav"])
+        self.assertEqual(Path(run.call_args.args[0][-1]), ROOT / "sounds/voices/buttonbox/voice-setup-scan.wav")
 
     def test_online_ready_edges_survive_restart_and_rate_limit_flapping(self):
         def edge(boot, online, mono, wall, audible=True):
@@ -539,7 +539,8 @@ class MessageAgeLineTests(unittest.TestCase):
         for directory in self.directories():
             with self.subTest(directory=directory.name):
                 rows = {row["file"]: row for row in
-                        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["age_lines"]}
+                        (json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["age_lines"]
+                         if directory.name != "buttonbox" else [row for row in json.loads((directory / "manifest.json").read_text())["lines"] if row["file"].startswith("voice-age-")])}
                 self.assertEqual(set(rows), {f"voice-age-{key}.wav" for key in PHRASE_KEYS})
                 for key in PHRASE_KEYS:
                     path = directory / f"voice-age-{key}.wav"
@@ -567,7 +568,8 @@ class MessageAgeLineTests(unittest.TestCase):
             root = Path(directory) / "sounds"
             shutil.copytree(ROOT / "sounds", root)
             for path in [*root.glob("voices/*/voice-age-*.wav"), *root.glob("voice/voice-age-*.wav")]:
-                path.unlink()
+                if "buttonbox" not in path.parts:
+                    path.unlink()
             sound_pack.validate_sounds(root)
             from messagebox.settings import VOICE_PACKS
             self.assertEqual(sound_pack.installed_voice_packs(root), list(VOICE_PACKS))
@@ -598,7 +600,8 @@ class ReactionSentLineTests(unittest.TestCase):
         for directory in self.directories():
             with self.subTest(directory=directory.name):
                 rows = {row["file"]: row for row in
-                        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["reaction_lines"]}
+                        (json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["reaction_lines"]
+                         if directory.name != "buttonbox" else [row for row in json.loads((directory / "manifest.json").read_text())["lines"] if row["file"].startswith("voice-sent-")])}
                 self.assertEqual(set(rows), {f"voice-sent-{key}.wav" for key in self.EXPECTED})
                 for key, text in self.EXPECTED.items():
                     path = directory / f"voice-sent-{key}.wav"
@@ -636,8 +639,10 @@ class ReactionSentLineTests(unittest.TestCase):
             root = Path(directory) / "sounds"
             shutil.copytree(ROOT / "sounds", root)
             for path in root.glob("voice*/**/voice-sent-*.wav"):
-                path.unlink()
+                if "buttonbox" not in path.parts:
+                    path.unlink()
             for path in (root / "voice").glob("voice-sent-*.wav"):
-                path.unlink()
+                if "buttonbox" not in path.parts:
+                    path.unlink()
             sound_pack.validate_sounds(root)
             self.assertIn("pirate", sound_pack.installed_voice_packs(root))

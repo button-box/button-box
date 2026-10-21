@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
 
 class SendSuccessTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.notices = button_send.queue.SimpleQueue()

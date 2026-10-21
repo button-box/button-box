@@ -23,6 +23,74 @@ VOICE_NAMES = (
     "listened", "card-needed", "card-unknown", "card-prompt", "card-saved", "stuck", "fail",
 )
 SETUP_VOICE_NAMES = ("setup-online",)
+GUIDE_VOICE_NAMES = (
+    "setup-scan", "setup-press", "setup-names", "setup-your-turn", "setup-remind-stop",
+    "setup-ask-send", "setup-sent", "setup-deleted", "listened-noname", "setting-saved",
+    "auto-updates-on", "update-reminder", "update-installing",
+)
+# This pack also includes every optional Jessica age and reaction line.
+BUTTONBOX_NAMES = ('last-chance',
+ 'all-set',
+ 'online',
+ 'listened',
+ 'count-reply',
+ 'card-unknown',
+ 'card-needed',
+ 'not-sent',
+ 'count-new',
+ 'empty',
+ 'msg-start',
+ 'ask-send-1',
+ 'review',
+ 'ask-send-2',
+ 'ask-send-3',
+ 'stuck',
+ 'fail',
+ 'card-saved',
+ 'card-prompt',
+ 'online-ready',
+ 'setup-online',
+ 'update-reminder',
+ 'update-installing',
+ 'auto-updates-on',
+ 'setup-scan',
+ 'setup-press',
+ 'setup-names',
+ 'setup-your-turn',
+ 'setup-remind-stop',
+ 'setup-ask-send',
+ 'setup-sent',
+ 'setup-deleted',
+ 'listened-noname',
+ 'setting-saved',
+ 'sent-heart',
+ 'sent-big-laugh',
+ 'sent-applause',
+ 'sent-heart-eyes',
+ 'sent-thumbs-up',
+ 'sent-fire',
+ 'sent-celebration',
+ 'sent-kiss',
+ 'sent-surprise',
+ 'sent-tear',
+ 'sent-hooray',
+ 'sent-smile',
+ 'sent-reaction',
+ 'age-this-morning',
+ 'age-this-afternoon',
+ 'age-this-evening',
+ 'age-last-night',
+ 'age-yesterday',
+ 'age-2-days-ago',
+ 'age-3-days-ago',
+ 'age-4-days-ago',
+ 'age-5-days-ago',
+ 'age-6-days-ago',
+ 'age-last-week',
+ 'age-a-while-ago',
+ 'update-ready',
+ 'auto-updates',
+ 'update-done')
 # Reaction-card emoji (variation selectors and skin tones removed) to its
 # bundled "You just sent ..." line. Words follow Cloud's emoji words and card
 # names. Any other emoji uses the generic "You just sent a reaction!" line.
@@ -51,12 +119,13 @@ def current_voice_pack():
 
 
 def voice_path(name, pack=None):
-    if name not in VOICE_NAMES + SETUP_VOICE_NAMES:
+    if name not in VOICE_NAMES + SETUP_VOICE_NAMES + GUIDE_VOICE_NAMES:
         raise ValueError("unknown voice line")
-    if name in SETUP_VOICE_NAMES:
-        return SOUND_DIR / "voice" / f"voice-{name}.wav"
     pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
     fallback = SOUND_DIR / "voice" / f"voice-{name}.wav"
+    if name in GUIDE_VOICE_NAMES:
+        path = SOUND_DIR / "voices" / "buttonbox" / fallback.name
+        return path
     if pack == "jessica":
         return fallback
     path = SOUND_DIR / "voices" / pack / fallback.name
@@ -163,7 +232,7 @@ def installed_voice_packs(root=None):
     installed = ["jessica"]
     for pack in VOICE_PACKS[1:]:
         try:
-            _validate_pack(root / "voices" / pack, VOICE_NAMES, "lines", "voice")
+            _validate_pack(root / "voices" / pack, BUTTONBOX_NAMES if pack == "buttonbox" else VOICE_NAMES, "lines", "voice")
         except ValueError:
             continue
         installed.append(pack)
@@ -176,7 +245,7 @@ def validate_sounds(root=None, *, require_voice_packs=True):
     _validate_pack(root / "voice", VOICE_NAMES + SETUP_VOICE_NAMES, "lines", "voice")
     if require_voice_packs:
         for pack in VOICE_PACKS[1:]:
-            _validate_pack(root / "voices" / pack, VOICE_NAMES, "lines", "voice")
+            _validate_pack(root / "voices" / pack, BUTTONBOX_NAMES if pack == "buttonbox" else VOICE_NAMES, "lines", "voice")
 
 
 def consume_moment(name, path=SOUND_STATE, *, token=True):

@@ -923,7 +923,7 @@ function renderSetup(state) {
   const cloud = isCloud(state);
   document.getElementById("required-tasks").replaceChildren(
     taskStatus("Connect Wi-Fi", progress.wifi, activeSetup ? "#continue" : "#advanced"),
-    taskStatus("Link WhatsApp", progress.whatsapp, cloud ? cloudDashboard : "#whatsapp"),
+    taskStatus(cloud ? "Press the button and name your box" : "Link WhatsApp", progress.whatsapp, cloud ? cloudDashboard : "#whatsapp"),
     taskStatus("Choose a default recipient", progress.recipient, cloud ? cloudDashboard : activeSetup ? "#continue" : "#advanced"),
     taskStatus("Receive, play, record, and send a test message", progress.first_message, activeSetup ? "#continue" : "#activity"),
   );

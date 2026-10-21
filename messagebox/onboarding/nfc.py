@@ -9,6 +9,7 @@ import math
 import os
 import socket
 import socketserver
+from messagebox import speaker
 import subprocess
 import tempfile
 import threading
@@ -134,11 +135,11 @@ class TonePlayer:
                   f'{settings["master_volume_percent"]}%', "unmute"], check=True,
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
-        self.run(["aplay", "-q", "-D", device, os.fspath(path)], check=True,
+        speaker.run(["aplay", "-q", "-D", device, os.fspath(path)], runner=self.run, check=True,
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         if kind == "success":
             voice = sound_pack.voice_path("card-saved", settings.get("voice_pack"))
-            self.run(["aplay", "-q", "-D", device, os.fspath(voice)], check=True,
+            speaker.run(["aplay", "-q", "-D", device, os.fspath(voice)], runner=self.run, check=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
 

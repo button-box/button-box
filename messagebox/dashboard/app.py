@@ -29,6 +29,7 @@ import os
 import secrets
 import socket
 import struct
+from messagebox import speaker
 import subprocess
 import threading
 import time
@@ -326,7 +327,7 @@ def preview_ringtone(ringtone_id):
         raise SettingsError("Button Box audio is busy")
 
     try:
-        subprocess.run(
+        speaker.run(
             ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
             check=True,
             timeout=30,

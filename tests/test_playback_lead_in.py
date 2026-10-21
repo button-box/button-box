@@ -1,5 +1,7 @@
 """An inbound message after a cue starts with a short silence (USB speaker settle)."""
 
+from speaker_helpers import isolate_audio
+
 import os
 import tempfile
 import unittest
@@ -20,6 +22,9 @@ def write_wav(path, frames, rate=48000, width=2):
 
 
 class LeadInTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def test_copy_starts_with_150_ms_of_silence_then_the_exact_message(self):
         for width, silence in ((2, b"\x00\x00"), (1, b"\x80")):
             with self.subTest(width=width), tempfile.TemporaryDirectory() as directory:
@@ -84,6 +89,9 @@ class IO:
 
 
 class SessionLeadInTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def run_session(self, io, **paths):
         with tempfile.TemporaryDirectory() as directory:
             store = OutboxStore(Path(directory) / "outbox", transport="wacli")

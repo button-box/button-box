@@ -1,0 +1,26 @@
+def _load(self):
+    try:
+        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"version": 1, "cursor": 0, "acks": {}, "seen": {}, "deleted": [], "pending_nfc": {}, "pending_settings": {}, "outbox_status_cursor": 0, "pending_previews": {}, "pending_listened": {}}
+    except (OSError, ValueError) as exc:
+        raise CloudRuntimeError("cloud state is unavailable") from exc
+    if (not isinstance(state, dict) or state.get("version") != 1
+            or type(state.get("cursor")) is not int or state["cursor"] < 0
+            or not isinstance(state.get("acks"), dict)
+            or not isinstance(state.get("seen"), dict)
+            or not isinstance(state.get("deleted"), list)
+            or not isinstance(state.get("pending_nfc"), dict)
+            or not isinstance(state.get("pending_settings"), dict)
+            or type(state.get("outbox_status_cursor", 0)) is not int
+            or state.get("outbox_status_cursor", 0) < 0
+            or type(state.get("queue_hold_sequence", -1)) is not int
+            or state.get("queue_hold_sequence", -1) < -1):
+        raise CloudRuntimeError("cloud state is invalid")
+    if not isinstance(state.setdefault("pending_previews", {}), dict):
+        raise CloudRuntimeError("cloud state is invalid")
+    if not isinstance(state.setdefault("pending_updates", {}), dict):
+        raise CloudRuntimeError("cloud state is invalid")
+    if not isinstance(state.setdefault("pending_listened", {}), dict):
+        raise CloudRuntimeError("cloud state is invalid")
+    return state

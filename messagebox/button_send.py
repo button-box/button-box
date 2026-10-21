@@ -18,9 +18,12 @@ import wave
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from contextlib import nullcontext
 from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
+
+from messagebox import speaker, cloud_setup
 
 from messagebox.mic_capture import CaptureDenied, capture_session, require_permit, open_microphone
 
@@ -42,7 +45,7 @@ from messagebox.guided_reply import (
     voice_send_command,
     valid_account_scope,
 )
-from messagebox.audio_requests import AudioRequests, success_key
+from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import _BOX_JID, ContactError, ContactStore
@@ -88,6 +91,7 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 SEND_SUCCESS_WAV = str(sound_pack.cue_path("sent"))
 send_success_notices = queue.SimpleQueue()
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
+cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
                  else LOCAL_CONTACTS_FILE)
 
@@ -171,14 +175,14 @@ def box_muted():
 def start_player(args, **kwargs):
     if transport_mode() == "cloud":
         return cloud_quiet.start_player(args, **kwargs)
-    return subprocess.Popen(args, **kwargs)
+    return speaker.start_player(args, popen=subprocess.Popen, **kwargs)
 
 
 def play_sound(path, *, timeout, allow_muted=False):
     args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
     if transport_mode() == "cloud":
         return cloud_quiet.play(args, timeout=timeout, allow_muted=allow_muted)
-    return subprocess.run(args, check=True, timeout=timeout)
+    return speaker.run(args, runner=subprocess.run, check=True, timeout=timeout)
 
 
 def play_update_sound(path, *, timeout):
@@ -290,6 +294,12 @@ def announce_first_online():
 
 
 def announce_all_set():
+    if transport_mode() == "cloud":
+        guide = cloud_setup.SetupGuide()
+        guide.advance({"scan", "press"}, "names")
+        if guide.speak(play_setup_line, quiet=quiet_hours()):
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        return
     if not quiet_hours() and sound_pack.ALL_SET_REQUEST.is_file() and sound_pack.consume_moment("all_set"):
         play_moment("all_set", "all-set")
 
@@ -1164,6 +1174,9 @@ def _send_cloud_upload(job):
         else:
             cloud_audio_requests.enqueue_for(success_key(job.account_scope, job.message_id),
                 "success", job.account_scope, remaining)
+    cloud_setup.SetupGuide().sent(job.message_id, job.account_scope, result,
+        ready=result["state"] in {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
+        and result.get("deleted") is not True)
     metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
                      "cloud_state": result["state"], "expires_at": result["expires_at"],
                      "server_time": result["server_time"],
@@ -1685,6 +1698,16 @@ def play_pending_listened(limit=4):
         if getattr(notice, "cloud", None) and not os.path.isfile(clip):
             # A bounded cache can evict a voice while its notice waits for idle.
             clip = fallback
+        setup_notice = transport_mode() == "cloud" and cloud_setup.SetupGuide().listened(getattr(notice, "cloud", None))
+        if setup_notice:
+            guide = cloud_setup.SetupGuide()
+            clip = str(sound_pack.voice_path("listened-noname"))
+            state = guide.load()
+            if (state.get("listened_started") or not sound_pack._playable_wav(Path(clip))
+                    or not guide.change("fields", listened_started=True)):
+                receipt_store.complete(notice, cloud_result="rejected")
+                guide.advance({"await_listened"}, "done")
+                continue
         # Pending receipts from prior releases persist the old bundled default.
         if clip == str(APP_DIR / "sounds/listen-receipts/someone-listened.wav"):
             clip = fallback
@@ -1699,11 +1722,17 @@ def play_pending_listened(limit=4):
             play_moment("listened")
             play_audio_ordinary(clip)
             receipt_store.complete(notice)
+            if setup_notice:
+                cloud_setup.SetupGuide().advance({"await_listened"}, "done")
             played += 1
             unavailable_events.available("listen_announcement")
             log_event("listen_announced")
             log("announced listened receipt")
         except Exception as exc:
+            if setup_notice:
+                receipt_store.complete(notice, cloud_result="rejected")
+                cloud_setup.SetupGuide().advance({"await_listened"}, "done")
+                continue
             receipt_store.release(notice)
             announcement_gate.blocked()
             if unavailable_events.unavailable("listen_announcement"):
@@ -1753,6 +1782,9 @@ def play_idle_sound(path, timeout, lamp_ringtone=None):
     """Yield to a press and release the speaker before recording can start."""
     if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
         return False
+    if transport_mode() == "cloud" and Path(path).name.startswith("voice-"):
+        play_audio_ordinary(path)
+        return True
     process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
     deadline = time.monotonic() + timeout
     try:
@@ -1789,38 +1821,83 @@ def play_send_success_cue():
 unavailable_events = UnavailableEvents()
 
 
+def play_optional_greeting(path):
+    """A real note or press always preempts this optional setup line."""
+    def cancelled():
+        return button.is_pressed or bool(queued()) or quiet_hours()
+
+    if cancelled():
+        return False
+    try:
+        # Optional speech never holds the button owner behind another player.
+        process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)],
+                               cancel=cancelled, wait=False)
+    except speaker.SpeakerBusy:
+        return False
+    deadline = time.monotonic() + 60
+    try:
+        while process.poll() is None:
+            if cancelled() or time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_S)
+        return process.returncode == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
 def maybe_play_cloud_sound():
     """Only this main-loop owner starts cloud sounds, never the poller."""
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
         return False
     try:
         scope = cloud_runtime.account_scope(fresh=True)
-        with cloud_audio_requests.owner() as acquired:
-            if not acquired:
+        optional_owner = (cloud_optional_audio_requests.owner()
+                          if cloud_optional_audio_requests.directory.exists() else nullcontext(True))
+        with cloud_audio_requests.owner() as acquired, optional_owner as optional_acquired:
+            if not acquired or not optional_acquired:
                 unavailable_events.available("cloud_scope")
                 return False
-            request = cloud_audio_requests.claim_next(scope)
+            requests = cloud_audio_requests
+            request = requests.claim_next(scope)
+            if request is None and cloud_optional_audio_requests.directory.exists():
+                requests = cloud_optional_audio_requests
+                request = requests.claim_next(scope)
             unavailable_events.available("cloud_scope")
             if request is None:
                 return False
             try:
                 if request["kind"] == "success":
-                    played = play_send_success_cue()
+                    guide = cloud_setup.SetupGuide()
+                    state = guide.load()
+                    if state and request["key"].endswith(":" + state.get("local_id", "!")):
+                        played = guide.speak(play_setup_line, quiet=quiet_hours())
+                    else:
+                        played = play_send_success_cue()
                 elif request["kind"] == "settings_saved":
-                    # Voice switches sample the new pack at the newly applied volume.
                     played = False
                     if not quiet_hours() and apply_master_volume():
-                        if request.get("voice_changed"):
-                            path = sound_pack.voice_path("msg-start", caregiver_settings().get("voice_pack"))
-                            led.off()
-                            played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
-                        elif request.get("volume_changed"):
-                            played = play_ringtone_snippet(None if request.get("ringtone_changed") else VOLUME_PREVIEW_SECONDS)
-                        else:
-                            played = play_idle_sound(sound_pack.cue_path("card_saved"), 5)
+                        path = sound_pack.voice_path("setting-saved")
+                        play_audio_ordinary(path)
+                        played = True
                     if not played and not quiet_hours():
-                        cloud_audio_requests.finish(request, "pending")
+                        requests.finish(request, "pending")
                         return False
+                elif request["kind"] == "setup_greeting":
+                    path = Path(request["clip"])
+                    guide = cloud_setup.SetupGuide()
+                    state = guide.load()
+                    played = False
+                    if (not queued() and state and state["stage"] in {"names", "waiting_note"}
+                            and not state.get("greeting_spoken") and not quiet_hours() and path.parent == cloud_runtime.STATE_FILE.parent / "voice-lines"
+                            and sound_pack._playable_wav(path)):
+                        guide.change("fields", greeting_spoken=True)
+                        played = play_optional_greeting(path)
                 elif request["kind"] == "voice_preview":
                     path = sound_pack.voice_path("msg-start", request["voice_pack"])
                     led.off()
@@ -1832,11 +1909,11 @@ def maybe_play_cloud_sound():
                                              lamp_ringtone=ringtone_id)
                 else:
                     played = False
-                cloud_audio_requests.finish(request, "played" if played else "rejected")
+                requests.finish(request, "played" if played else "rejected")
                 unavailable_events.available("cloud_playback")
                 return played
             except (OSError, subprocess.SubprocessError, CloudRuntimeError):
-                cloud_audio_requests.finish(request, "rejected")
+                requests.finish(request, "rejected")
                 if unavailable_events.unavailable("cloud_playback"):
                     log_event("cloud_sound_unavailable")
     except (OSError, ValueError, CloudRuntimeError):
@@ -1949,9 +2026,9 @@ class RecordingLimitCue:
         if not self.intervals and now - self.started >= self.maximum - 5:
             self.intervals.append([now - self.started, None])
             try:
-                if not box_muted():
+                if not box_muted() and not (hasattr(self, "path") and quiet_hours()):
                     self.process = start_player(["aplay", "-q", "-D", SPK_DEV,
-                                                     str(sound_pack.cue_path("rec_limit"))])
+                                                     str(getattr(self, "path", sound_pack.cue_path("rec_limit")))])
                 else:
                     self.intervals[-1][1] = now - self.started
             except (OSError, cloud_quiet.AudioSilenced):
@@ -1981,111 +2058,121 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None):
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, setup_reply=False):
     global _recording
     require_permit(press_token)
-    # Synchronous playback must complete before the microphone is opened.
-    play_sound(sound_pack.cue_path("rec_go"), timeout=5)
-    if talk_mode == "hold" and not button.is_pressed:
-        return RecordingResult(None, 0, False)
-    capture_id = uuid.uuid4().hex
-    raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
-    wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
-    vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
-    started = time.monotonic()
-    vad.start(started)
-    warning = RecordingLimitCue(started, max_seconds)
-    presence_last = started
-    closed_since = None
-    stopped_by_press = False
-    timed_out = False
-    open_since = None
-    stop_armed = not button.is_pressed
-    process = open_microphone(press_token, MIC_DEV, popen=subprocess.Popen)
-    _recording = True
-    try:
-        led.on()
-        presence("recording", recipient)
-        with open(raw_path, "wb") as raw:
-            while True:
-                now = time.monotonic()
-                warning.update(now)
-                readable, _, _ = select.select([process.stdout], [], [], 0.02)
-                if readable:
-                    chunk = os.read(process.stdout.fileno(), 4096)
-                    if chunk:
-                        raw.write(chunk)
-                        vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
-                if now - started >= max_seconds:
-                    timed_out = talk_mode == "tap"
-                    break
-                if talk_mode == "hold":
-                    if not button.is_pressed:
-                        open_since = open_since or now
-                        if now - open_since >= CONFIRM_RELEASE_S:
+    with speaker.capture_owner():
+        # Synchronous playback must complete before the microphone is opened.
+        play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+        if talk_mode == "hold" and not button.is_pressed:
+            return RecordingResult(None, 0, False)
+        capture_id = uuid.uuid4().hex
+        raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
+        wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
+        vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
+        started = time.monotonic()
+        vad.start(started)
+        warning = RecordingLimitCue(started, max_seconds)
+        if setup_reply:
+            warning.maximum = 45
+            warning.path = sound_pack.voice_path("setup-remind-stop")
+        presence_last = started
+        closed_since = None
+        stopped_by_press = False
+        timed_out = False
+        open_since = None
+        stop_armed = not button.is_pressed
+        process = open_microphone(press_token, MIC_DEV, popen=subprocess.Popen)
+        _recording = True
+        try:
+            led.on()
+            presence("recording", recipient)
+            with open(raw_path, "wb") as raw:
+                while True:
+                    now = time.monotonic()
+                    warning.update(now)
+                    readable, _, _ = select.select([process.stdout], [], [], 0.02)
+                    if readable:
+                        chunk = os.read(process.stdout.fileno(), 4096)
+                        if chunk:
+                            raw.write(chunk)
+                            vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
+                    if now - started >= max_seconds:
+                        timed_out = talk_mode == "tap"
+                        break
+                    if talk_mode == "hold":
+                        if not button.is_pressed:
+                            open_since = open_since or now
+                            if now - open_since >= CONFIRM_RELEASE_S:
+                                break
+                        else:
+                            open_since = None
+                    elif warning.process is not None and setup_reply:
+                        stop_armed = False
+                        closed_since = None
+                    elif button.is_pressed and stop_armed:
+                        closed_since = closed_since or now
+                        if now - closed_since >= CONFIRM_PRESS_S:
+                            stopped_by_press = True
                             break
                     else:
-                        open_since = None
-                elif button.is_pressed and stop_armed:
-                    closed_since = closed_since or now
-                    if now - closed_since >= CONFIRM_PRESS_S:
-                        stopped_by_press = True
-                        break
-                else:
-                    closed_since = None
-                    if not button.is_pressed:
-                        stop_armed = True
-                if now - presence_last >= 8:
-                    presence("recording", recipient)
-                    presence_last = now
-                if process.poll() is not None:
-                    raise RuntimeError("arecord exited unexpectedly")
-            process.send_signal(signal.SIGINT)
-            try:
-                remainder, _ = process.communicate(timeout=3)
-            except subprocess.TimeoutExpired:
+                        closed_since = None
+                        if not button.is_pressed:
+                            stop_armed = True
+                    if now - presence_last >= 8:
+                        presence("recording", recipient)
+                        presence_last = now
+                    if process.poll() is not None:
+                        raise RuntimeError("arecord exited unexpectedly")
+                process.send_signal(signal.SIGINT)
+                try:
+                    remainder, _ = process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                    remainder, _ = process.communicate(timeout=3)
+                if remainder:
+                    raw.write(remainder)
+                    vad.feed(remainder, now=time.monotonic())
+                raw.flush()
+                os.fsync(raw.fileno())
+        except BaseException:
+            if process.poll() is None:
                 process.terminate()
-                remainder, _ = process.communicate(timeout=3)
-            if remainder:
-                raw.write(remainder)
-                vad.feed(remainder, now=time.monotonic())
-            raw.flush()
-            os.fsync(raw.fileno())
-    except BaseException:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
-        for path in (raw_path, wav_path):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        raise
-    finally:
-        try:
-            warning.finish(time.monotonic())
-            presence("paused", recipient)
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+            for path in (raw_path, wav_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
         finally:
             try:
-                led.off()
+                warning.finish(time.monotonic())
+                presence("paused", recipient)
             finally:
-                _recording = False
-        if stopped_by_press:
-            acknowledge_guided_press("stop_recording", session_id)
-            wait_for_stable_open()
+                try:
+                    led.off()
+                finally:
+                    _recording = False
+            if stopped_by_press:
+                acknowledge_guided_press("stop_recording", session_id)
+                wait_for_stable_open()
 
-    recorded_seconds = raw_path.stat().st_size / (16000 * 2)
-    bounds = vad.trim_bounds()
-    if bounds is None:
+        recorded_seconds = raw_path.stat().st_size / (16000 * 2)
+        bounds = vad.trim_bounds()
+        if setup_reply and bounds is not None:
+            # Keep the whole first reply, including words spoken over the reminder.
+            bounds = (0, raw_path.stat().st_size // 2)
+        if bounds is None:
+            raw_path.unlink(missing_ok=True)
+            return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
+        duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
         raw_path.unlink(missing_ok=True)
-        return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
-    duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
-    raw_path.unlink(missing_ok=True)
-    return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds)
+        return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds)
 
 
 class PiGuidedIO:
@@ -2096,21 +2183,35 @@ class PiGuidedIO:
         self.max_seconds = max_seconds
         self.card_prompt = card_prompt
         self.talk_mode = talk_mode
+        self.setup_reply = False
 
     def play_ordinary(self, path):
-        play_audio_ordinary(path)
+        if self.setup_reply and Path(path) == sound_pack.cue_path("deleted"):
+            play_setup_line("setup-deleted")
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        else:
+            play_audio_ordinary(path)
 
     def play_after_cue(self, path):
         play_audio_after_cue(path)
 
     def record(self):
-        return capture_guided_recording(
+        result = capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
             card_prompt=self.card_prompt, talk_mode=self.talk_mode, press_token=self.press_token,
+            setup_reply=self.setup_reply,
         )
+        if self.setup_reply and result.timed_out:
+            return RecordingResult(result.path, result.duration, result.meaningful, False, result.recorded_seconds)
+        return result
 
     def wait_for_approval(self, timeout):
-        return wait_for_approval(timeout, self.session_id)
+        if self.setup_reply:
+            cloud_setup.SetupGuide().advance({"recording"}, "review")
+            play_setup_line("setup-ask-send")
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        approved = wait_for_approval(timeout, self.session_id)
+        return approved
 
     def delete(self, path):
         try:
@@ -2243,6 +2344,12 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
     if card_state == "stale" and not claim:
         block_unavailable_recipient()
         return
+    guide = cloud_setup.SetupGuide() if transport_mode() == "cloud" else None
+    first_reply = bool(guide and not claim and guide.first_reply())
+    if first_reply:
+        settings = {**settings, "max_recording_seconds": 60, "review_before_send": True, "talk_mode": "tap"}
+    setup_state = guide.load() if guide else None
+    first_note = bool(claim and setup_state and setup_state["stage"] in {"names", "waiting_note", "your_turn"})
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
@@ -2253,6 +2360,18 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )
+    if first_reply and card_state == "none" and not card_prompt_uid:
+        saved = guide.load()
+        recipient = saved.get("recipient") if saved.get("scope") == scope else None
+        try:
+            allowed = ContactStore(CONTACTS_FILE).allowed_jids()
+        except (OSError, ContactError):
+            allowed = set()
+        if not recipient or recipient not in allowed:
+            block_unavailable_recipient()
+            return
+        context = {"via_card": False}
+
     if not claim:
         if context is None:
             block_unavailable_recipient()
@@ -2288,6 +2407,10 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
     io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
                     **({"card_prompt": True} if card_prompt_uid else {}))
 
+    io.setup_reply = first_reply
+    if first_reply:
+        guide.advance({"your_turn"}, "recording", scope=scope)
+
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
             data["source_file"] = claim["path"].name
@@ -2295,16 +2418,25 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
         if kind == "guided_inbound_played":
             claim["played_at"] = time.time()
             react_played(metadata)
+            if first_note:
+                guide.advance({"names", "waiting_note", "your_turn"}, "your_turn", recipient=recipient, scope=scope)
+                guide.speak(play_setup_line, quiet=quiet_hours())
+                discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        if first_reply and kind == "guided_approved":
+            guide.change("stage", stage="await_listened", local_id=data["message_id"], scope=scope)
+        elif first_reply and kind in {"guided_deleted", "guided_recording_empty"}:
+            guide.change("stage", stage="done")
 
-    session = GuidedSession(io, outbox_store, session_event)
+    session_store = cloud_setup.ReplyOutbox(outbox_store, guide) if first_reply else outbox_store
+    session = GuidedSession(io, session_store, session_event)
     _guided_active = True
     outcome = None
     try:
         if claim and not inbound_audio_authorized(metadata):
             release_claim(claim)
             return
-        intro = message_intro_voice(settings) if claim else None
-        age = message_age_voice(metadata, settings) if claim else None
+        intro = message_intro_voice(settings) if claim and not first_note else None
+        age = message_age_voice(metadata, settings) if claim and not first_note else None
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
@@ -2312,7 +2444,7 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
             review_before_send=settings.get("review_before_send", True),
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
-            auto_record_after_incoming=settings["after_listening"] == "invite_reply",
+            auto_record_after_incoming=not first_note and settings["after_listening"] == "invite_reply",
             account_scope=scope,
             incoming_cue_path=str(sound_pack.cue_path("msg_start")),
             incoming_voice_path=str(intro) if intro else None,
@@ -2372,25 +2504,32 @@ def claim_button_press(cues):
         play_claim_cue(cues, NFC_UNKNOWN_BEEP)
 
 
-_setup_online_failed = False
+def play_setup_line(name):
+    try:
+        if name == "setup-sent" and caregiver_settings().get("swoosh_sound_enabled", True):
+            play_sound(SEND_SUCCESS_WAV, timeout=5)
+        play_sound(sound_pack.voice_path(name), timeout=20)
+        if globals().get("button") is not None:
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
 
 
 def play_setup_online(cues):
-    global _setup_online_failed
     if quiet_hours():
-        return
+        return False
+    guide = cloud_setup.SetupGuide()
     try:
         if cloud_claim.setup_online_cue(consume=True):
-            if play_claim_cue(cues, "online"):
-                # Claim mode has no Button instance used by ordinary playback.
-                if sound_pack.consume_moment("setup_online"):
-                    play_sound(sound_pack.voice_path("setup-online", "jessica"), timeout=15)
-        _setup_online_failed = False
-    except (OSError, ValueError, CloudDeviceError, subprocess.SubprocessError):
-        # This runs on every idle poll; report a failure once until it recovers.
-        if not _setup_online_failed:
-            log("setup online audio unavailable")
-        _setup_online_failed = True
+            guide.change("start")
+            if guide.speak(play_setup_line):
+                return True
+        state = guide.load()
+        if state and state["stage"] in {"scan", "press"} and cloud_claim.CLAIM_FILE.is_file():
+            guide.advance({"scan"}, "press")
+        return guide.speak(play_setup_line)
+    except (OSError, ValueError, CloudDeviceError):
+        return False
 
 
 def claim_only_loop():
@@ -2405,13 +2544,20 @@ def claim_only_loop():
             time.sleep(POLL_S)
         while not switch.is_pressed:
             apply_master_volume()
-            play_setup_online(cues)
+            if play_setup_online(cues):
+                # Every press made during speech belongs to that speech.
+                while switch.is_pressed:
+                    time.sleep(POLL_S)
             time.sleep(POLL_S)
         started = time.monotonic()
         while switch.is_pressed and time.monotonic() - started < CONFIRM_PRESS_S:
             time.sleep(POLL_S)
         if switch.is_pressed:
-            claim_button_press(cues)
+            state = cloud_setup.SetupGuide().load()
+            if state and state["stage"] == "scan":
+                cloud_setup.SetupGuide().speak(play_setup_line, replay=True, quiet=quiet_hours())
+            else:
+                claim_button_press(cues)
         while switch.is_pressed:
             time.sleep(POLL_S)
 
@@ -2444,6 +2590,9 @@ def _capture_confirmed_press(closed_at, *, card_prompt_uid=None):
 
 def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
     """Dispatch a debounced press through the normal routing and audio flow."""
+    if speaker.is_busy():
+        wait_for_stable_open()
+        return True
     if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
         log_event("cloud_claim_button_pressed")
         wait_for_stable_open()
@@ -2451,6 +2600,14 @@ def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
     if transport_mode() == "cloud":
         cloud_runtime.play_reactions(lambda path: cloud_quiet.play(
             ["aplay", "-q", "-D", SPK_DEV, str(path)], timeout=60, allow_muted=True), deliberate=True)
+    if transport_mode() == "cloud":
+        state = cloud_setup.SetupGuide().load()
+        if state and state["stage"] in {"names", "waiting_note"} and not queued():
+            wait_for_stable_open()
+            if state["stage"] == "names":
+                cloud_setup.SetupGuide().speak(play_setup_line, quiet=quiet_hours(), replay=True)
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+            return True
     interaction_settings = normalize_recording_settings(caregiver_settings())
     if box_muted():
         led.on()
@@ -2459,7 +2616,9 @@ def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         wait_for_stable_open()
         return True
     try:
-        if interaction_settings["talk_mode"] == "tap":
+        state = cloud_setup.SetupGuide().load() if transport_mode() == "cloud" else None
+        setup_action = state and state["stage"] in {"names", "waiting_note", "your_turn"}
+        if setup_action or interaction_settings["talk_mode"] == "tap":
             # The session starts from this press only after its release; it can
             # never be carried into incoming audio or recording.
             if card_prompt_uid:
@@ -2471,6 +2630,8 @@ def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         else:
             record_and_send_legacy(interaction_settings, pressed_at=closed_at,
                                    **({"card_prompt_uid": card_prompt_uid} if card_prompt_uid else {}))
+    except speaker.SpeakerBusy:
+        return False
     except Exception as exc:
         log(f"button flow error: {exc}")
         log_event(
@@ -2511,6 +2672,8 @@ def main():
     for _ in range(receipt_store.recover_inflight()):
         log_event("listen_announcement_recovered")
     cleanup_temp_recordings()
+    if transport_mode() == "cloud":
+        cloud_setup.SetupGuide().advance({"recording", "review"}, "done")
     for partial in Path(OUTBOX_DIR).glob("*.part"):
         partial.unlink()
     for message_id in outbox_store.recover_startup():
@@ -2570,6 +2733,11 @@ def main():
             apply_master_volume()
             maybe_play_send_success()
             maybe_play_cloud_sound()
+            if transport_mode() == "cloud" and button.is_pressed:
+                break
+            if transport_mode() == "cloud":
+                if cloud_setup.SetupGuide().speak(play_setup_line, quiet=quiet_hours()):
+                    discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
             try:
                 maybe_play_connectivity()
                 announce_all_set()

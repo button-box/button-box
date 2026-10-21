@@ -28,7 +28,7 @@ function render(data) {
   cancel.hidden = !(waiting || cancelling) || !currentClaim;
   cancel.textContent = cancelling ? "Retry cancellation" : "Cancel connection";
   start.hidden = hasLink || cancelling || data.status === "claimed";
-  title.textContent = data.status === "claimed" ? "All set!" : "Welcome!";
+  title.textContent = data.status === "claimed" ? "Connected! Go back to WhatsApp to name your box." : "Welcome!";
   intro.hidden = data.status === "claimed";
   link.hidden = !hasLink;
   qr.hidden = !hasLink;
@@ -48,7 +48,7 @@ function render(data) {
     not_started: "",
     awaiting_button: "Open WhatsApp and send the message. Then press the button on your box once.",
     waiting_for_whatsapp: "Button press received. Send the message in WhatsApp to finish connecting.",
-    claimed: "Your box is ready. Go back to WhatsApp.",
+    claimed: "Reconnect your phone to your home Wi-Fi, then go back to WhatsApp.",
     cancelled: "Connection cancelled. Get a new connection link when you're ready.",
     cancellation_pending: "Cancellation is not confirmed yet. Retry cancellation before starting a new connection.",
     expired: "The connection link expired. Get a new one to continue."
@@ -56,7 +56,7 @@ function render(data) {
   if (waiting && !hasLink && !actionError) {
     status.textContent = data.status === "waiting_for_whatsapp"
       ? "Button press received. Send the message in WhatsApp to finish connecting."
-      : "Scan the QR code on your setup card and send the message in WhatsApp. Then press the button on your Button Box once. No card? Use Connect WhatsApp here.";
+      : "Scan the QR code on your setup card and send the message in WhatsApp. Then press the button on your box once. No card? Use Connect WhatsApp on this page.";
   }
 }
 

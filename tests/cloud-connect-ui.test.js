@@ -125,14 +125,14 @@ test("a poll already in flight cannot replace a successful connection start", as
   expect(h.node("cloud-claim").hidden).toBe(false);
 });
 
-test("claimed shows the ready message without a completion request", async () => {
+test("connection sends the parent back to WhatsApp for naming without a completion request", async () => {
   const h = harness();
   await h.respond(h.requests[0], { status: "claimed" });
   await h.poll({ status: "claimed" });
-  expect(h.node("cloud-status").textContent).toBe("Your box is ready. Go back to WhatsApp.");
+  expect(h.node("cloud-status").textContent).toBe("Reconnect your phone to your home Wi-Fi, then go back to WhatsApp.");
   expect(h.node("cloud-start").hidden).toBe(true);
   expect(h.node("cloud-claim").hidden).toBe(true);
-  expect(h.node("cloud-title").textContent).toBe("All set!");
+  expect(h.node("cloud-title").textContent).toBe("Connected! Go back to WhatsApp to name your box.");
   expect(h.node("cloud-intro").hidden).toBe(true);
   expect(h.requests.some(request => request.url === "/onboarding/complete")).toBe(false);
   const page = fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/cloud-connect.html`, "utf8");

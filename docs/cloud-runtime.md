@@ -160,28 +160,18 @@ service restart; a fresh snapshot resets the outage. There are no added network
 probes. Unclaimed boxes, snapshots from another boot and wacli mode do not imply
 offline. Quiet hours, recording, prompts and button presses suppress it.
 
-After the guarded setup completion succeeds, it queues a group-readable
-`setup-complete-sound.json` request. The runtime plays `cue-all_set.wav` then
-`voice-all-set.wav` once per box. Program updates do not themselves create this
-request. All bundled assets are in the release manifest and bounded updater;
-private sound receipts and requests are excluded.
+Cloud setup uses the durable voice guide in [voice onboarding](voice-onboarding.md).
+The button owner plays all guide lines. The poller only downloads and queues
+optional speech. Old all-set sound requests remain valid for wacli.
 
-When the physical-button owner applies changed Cloud settings successfully,
-the poller queues a `settings_saved` audio request before acknowledging that
-revision as applied. The idle button owner plays `cue-card_saved.wav` after
-the new master volume takes effect. Consecutive saves within three seconds
-share one confirmation, played after that debounce window. Ringtone changes
-use this confirmation; the dashboard's explicit ringtone preview stays separate.
-Recording, guided sessions, message playback and held presses defer the cue
-for at most 30 seconds from application, using a current-boot monotonic deadline.
-Playback runs synchronously on the same main-loop audio owner, so it cannot
-overlap a message. A press interrupts the cue and leaves it pending within its
-original deadline. Quiet hours discard confirmations, including saves applied
-during quiet hours; they do not sound later. First settings adoption after button
-service startup, unchanged values and box-originated revisions echoed by Cloud
-stay silent. Private apply markers and command intents retain the boot, origin
-and changed-values evidence; request receipts prevent replay after restart.
-No Cloud API change, new setting ID or new sound asset is required.
+After the button owner applies a real Cloud settings change, the poller queues
+one `settings_saved` request. Saves within the one-second debounce window share
+one `voice-setting-saved.wav` line. It uses the new master volume. Recording,
+message playback, and held presses defer it for at most 30 seconds. Presses during
+speech are discarded. Quiet hours discard the confirmation. The first settings
+sync after boot, unchanged values, and local revisions echoed by Cloud stay
+silent. Private apply markers and command intents retain the boot, origin, and
+change evidence. Durable queue receipts prevent replay after a restart.
 
 B20 needs a real-box check for the captive-page handoff, online beep audibility
 and one-shot behavior, QR-to-WhatsApp-to-button completion, connection errors,
