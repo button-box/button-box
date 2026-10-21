@@ -393,15 +393,17 @@ class VoiceRoundTwoTests(unittest.TestCase):
                 self.assertEqual(bool(notes), interrupt == 'note')
             self.assertFalse(speaker.is_busy())
 
-    def test_cloud_pending_settings_without_voice_key_keep_the_missing_key_default(self):
-        document = {**defaults({'TZ': 'UTC'}), 'revision': 7}
-        self.runtime.state['pending_settings'][OP] = {key: value for key, value in document.items()
-                                                     if key != 'voice_pack'}
-        cloud_runtime.atomic_json(cloud_runtime.APPLIED_FILE, {'revision': 7, 'settings': document})
-        self.runtime._finish_settings()
-        self.runtime.flush_acks()
-        self.assertEqual(self.runtime.client.acks[-1]['state'], 'applied')
-        self.assertEqual(self.runtime.state['pending_settings'], {})
+    def test_cloud_pending_settings_without_voice_key_keep_the_applied_voice(self):
+        for pack in ('jessica', 'buttonbox'):
+            with self.subTest(pack=pack):
+                document = {**defaults({'TZ': 'UTC'}), 'revision': 7, 'voice_pack': pack}
+                self.runtime.state['pending_settings'][OP] = {key: value for key, value in document.items()
+                                                             if key != 'voice_pack'}
+                cloud_runtime.atomic_json(cloud_runtime.APPLIED_FILE, {'revision': 7, 'settings': document})
+                self.runtime._finish_settings()
+                self.runtime.flush_acks()
+                self.assertEqual(self.runtime.client.acks[-1]['state'], 'applied')
+                self.assertEqual(self.runtime.state['pending_settings'], {})
 
     def test_wacli_pre_upgrade_writer_jessica_and_ambiguous_saved_values_survive(self):
         spec = importlib.util.spec_from_file_location('v0312_settings', HISTORICAL / 'settings.py')

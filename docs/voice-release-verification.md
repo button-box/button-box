@@ -11,6 +11,38 @@ and setup-page corrections. This follow-up adds the mandatory per-poll feature
 declaration and restricts greeting wire ACKs to the four agreed names. No push,
 deployment, device, or hardware test was done. Review source files stay untracked.
 
+**Paired Cloud voice omission rule**
+
+The follow-up to `fbad216` retains the current applied voice when a Cloud
+settings document omits `voice_pack`. An explicit Cloud buttonbox choice and
+a fresh local install can select buttonbox. Existing legacy Cloud files with
+no voice field use Jessica. The shared local wacli behavior is unchanged.
+
+`test_cloud_settings_voice.py` covers omitted Jessica, explicit buttonbox,
+restart before pending-state persistence, revision replay, an unapplied desired
+voice, unavailable applied snapshots, and the frozen v0.3.12 state/settings
+readers. `test_settings.py` checks fresh defaults in both modes, saved choices,
+and a Cloud local update without a voice. The pending-receipt test in
+`test_voice_review_round2.py` checks both applied Jessica and buttonbox.
+
+| Paired-rule check | Proof |
+| --- | --- |
+| Omitted voice, restart, replay, and v0.3.12 readers | [tests/test_cloud_settings_voice.py:51](../tests/test_cloud_settings_voice.py#L51) |
+| Explicit buttonbox and old-reader fallback | [tests/test_cloud_settings_voice.py:83](../tests/test_cloud_settings_voice.py#L83) |
+| Applied voice wins over an unapplied desired voice | [tests/test_cloud_settings_voice.py:97](../tests/test_cloud_settings_voice.py#L97) |
+| Unavailable snapshot cannot choose a new default | [tests/test_cloud_settings_voice.py:107](../tests/test_cloud_settings_voice.py#L107) |
+
+The fleet contract exporter was rerun. Supported keys and capabilities are
+unchanged. Historical exact-commit fixture files are unchanged. Export the
+final release fixture after the corrected source is committed.
+
+Current paired-rule `make check`: **PASS** on the changes to `fbad216`.
+All 1,152 Python tests passed in 491.710 seconds. All 54 JavaScript tests,
+syntax checks, and lint checks passed. The 51 focused settings, Cloud voice,
+wacli, and fleet-contract tests passed. `git diff --check` passed. No commit,
+push, deployment, or hardware test was done. Physical voice behavior remains
+unverified.
+
 **Current release order**
 
 Release A is the self-upgrade bridge being built on `feat/updater-self-upgrade`.
@@ -39,7 +71,7 @@ release to ship first. Its source and verification history remain below.
 | --- | --- | --- | --- |
 | 1. Mandatory greeting contract | Require the current poll feature, a fresh latest heartbeat, and an atomic pending-to-offered change before the response. Never redeliver. Cover failed rollback heartbeat, concurrent polls, expiry, ACK mapping, and retention. | [docs/voice-onboarding.md:68](voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:210](../tests/test_voice_review_round2.py#L210); [tests/test_voice_review_round2.py:224](../tests/test_voice_review_round2.py#L224); [tests/test_voice_review_round2.py:199](../tests/test_voice_review_round2.py#L199); [tests/test_voice_review_round2.py:202](../tests/test_voice_review_round2.py#L202) |
 | 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:345](../tests/test_voice_review_round2.py#L345); [tests/test_voice_review_round2.py:369](../tests/test_voice_review_round2.py#L369); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
-| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:406](../tests/test_voice_review_round2.py#L406); [tests/test_voice_review_round2.py:396](../tests/test_voice_review_round2.py#L396) |
+| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1619](../messagebox/cloud_runtime.py#L1619) | [tests/test_voice_review_round2.py:408](../tests/test_voice_review_round2.py#L408); [tests/test_voice_review_round2.py:396](../tests/test_voice_review_round2.py#L396) |
 | 4. Exact fleet fixtures | Replace the mislabelled export with separate exports from clean detached checkouts of 04d53cd and 9a3ae40. Step 1 has no guided setup capability or greeting command. | [docs/fixtures/README.md:3](../docs/fixtures/README.md#L3) | [tests/test_settings_contract.py:52](../tests/test_settings_contract.py#L52) |
 | 5. Release evidence | Record the committed step identities and completed rebase. Replace the old embedded fixture with links to the two exact exports. Label prior test/size results as historical; keep physical and Cloud acceptance open. | [docs/voice-release-verification.md:3](voice-release-verification.md#L3) | Exact-commit export checks above; documentation review and git diff --check. |
 
@@ -198,7 +230,8 @@ The optional audio queue is Cloud-only. Shared deployment changes are the
 audio-detect service, tmpfiles configuration, and both onboarding service units.
 wacli keeps its existing setup, recipient routing, send, receive/play, reply,
 family-card, quiet-hours, and listened-notice paths. Existing local voice choices now keep their value and revision without any
-selection receipt. Only fresh settings or a missing voice key get buttonbox. The shared speaker lock moves to the writable runtime
+selection receipt. Fresh local settings use buttonbox. An omitted Cloud voice keeps the current
+applied voice; the wacli default rules are unchanged. The shared speaker lock moves to the writable runtime
 directory. No Cloud requests are added to wacli. Updater bootstrap still requires
 Cloud mode.
 

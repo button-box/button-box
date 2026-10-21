@@ -264,14 +264,14 @@ def ignored_settings(document):
                   and isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key))[:32]
 
 
-def validate(document):
+def validate(document, *, default_voice_pack="buttonbox"):
     if not isinstance(document, dict):
         raise SettingsError("settings have an invalid schema")
     document = normalize_recording_settings(
         {key: value for key, value in document.items() if key in _ROOT_KEYS})
     if _REQUIRED_ROOT_KEYS <= set(document) <= _ROOT_KEYS:
-        # Preserve old cue defaults; missing voices use the new local default.
-        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": "buttonbox", "card_name_prompt": True,
+        # Callers that accept a Cloud document must supply its retained voice.
+        document = normalize_quiet_settings({"say_reactions": True, "swoosh_sound_enabled": True, "voice_pack": default_voice_pack, "card_name_prompt": True,
                                                "announce_messages_voice": False, **document})
         document["voice_pack"] = normalize_voice_pack(document["voice_pack"])
     if set(document) != _ROOT_KEYS:
@@ -404,7 +404,9 @@ class SettingsStore:
 
     def _read(self, path):
         with open(path, encoding="utf-8") as handle:
-            return validate(json.load(handle))
+            # An existing legacy Cloud file is not a fresh install.
+            fallback = "jessica" if self.environ.get("MSGBOX_TRANSPORT") == "cloud" else "buttonbox"
+            return validate(json.load(handle), default_voice_pack=fallback)
 
     def load(self):
         try:
@@ -433,6 +435,7 @@ class SettingsStore:
     def update(self, candidate, expected_revision, *, desired_revision=None):
         if not isinstance(candidate, dict):
             raise SettingsError("settings request must be an object")
+        retain_voice = self.environ.get("MSGBOX_TRANSPORT") == "cloud" and "voice_pack" not in candidate
         candidate = {**QUIET_DEFAULTS, "voice_pack": "buttonbox", "card_name_prompt": True, "say_reactions": True,
                      "announce_messages_voice": False, **candidate}
         value_keys = _ROOT_KEYS - {"version", "revision"}
@@ -445,6 +448,8 @@ class SettingsStore:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 current, _warning = self.load()
+                if retain_voice:
+                    candidate["voice_pack"] = current["voice_pack"]
                 if type(expected_revision) is not int or expected_revision != current["revision"]:
                     raise RevisionConflict("settings changed in another browser; reload and try again")
                 revision = current["revision"] + 1 if desired_revision is None else desired_revision

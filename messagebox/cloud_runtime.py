@@ -1482,7 +1482,21 @@ class CloudRuntime:
             # Normalize pre-update commands before replay comparison and ACKs.
             ignored = ignored_settings(document)
             try:
-                document = validate_settings(document)
+                retained_voice = current["voice_pack"]
+                if "voice_pack" not in document:
+                    try:
+                        marker = json.loads(APPLIED_FILE.read_text(encoding="utf-8"))
+                    except (OSError, ValueError) as exc:
+                        raise CloudSettingsRejected("settings_revision_invalid") from exc
+                    applied = marker.get("settings") if isinstance(marker, dict) else None
+                    if (not isinstance(applied, dict) or applied.get("version") != 1
+                            or type(applied.get("revision")) is not int
+                            or not 0 <= applied["revision"] <= current["revision"]
+                            or marker.get("revision") != applied["revision"]):
+                        raise CloudSettingsRejected("settings_revision_invalid")
+                    # Old applied snapshots without this field used Jessica.
+                    retained_voice = normalize_voice_pack(applied.get("voice_pack"))
+                document = validate_settings(document, default_voice_pack=retained_voice)
             except SettingsError as exc:
                 raise CloudSettingsRejected("settings_unsupported") from exc
             candidate = {key: value for key, value in document.items()
@@ -1608,10 +1622,14 @@ class CloudRuntime:
         except (OSError, ValueError):
             return
         revision = marker.get("revision") if isinstance(marker, dict) else None
+        applied = marker.get("settings") if isinstance(marker, dict) else None
+        if not isinstance(applied, dict):
+            return
+        applied = {**applied, "voice_pack": normalize_voice_pack(applied.get("voice_pack"))}
         for operation_id, document in list(self.state["pending_settings"].items()):
             if isinstance(document, dict) and "ringtone_id" in document:
                 document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"]),
-                            "voice_pack": normalize_voice_pack(document.get("voice_pack", "buttonbox"))}
+                            "voice_pack": normalize_voice_pack(document.get("voice_pack", applied["voice_pack"]))}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 try:
@@ -1620,7 +1638,7 @@ class CloudRuntime:
                     intent = {}
                 ignored = intent.get("ignored_settings", [])
                 fields = {"ignored_settings": ignored} if ignored else {}
-                if marker.get("settings") == document:
+                if applied == document:
                     self._queue_settings_saved(operation_id, marker)
                     self._ack(operation_id, "applied", applied_revision=desired, **fields)
                 else:

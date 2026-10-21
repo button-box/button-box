@@ -167,6 +167,35 @@ class SettingsStoreTests(unittest.TestCase):
             self.assertEqual(store.load(), (saved, False))
             self.assertEqual(saved["voice_pack"], pack)
 
+    def test_cloud_and_wacli_fresh_defaults_and_saved_legacy_voice_rules(self):
+        for mode in ('cloud', 'wacli'):
+            with self.subTest(mode=mode):
+                path = self.path.with_name(mode + '.json')
+                store = SettingsStore(path, environ={'MSGBOX_TRANSPORT': mode, 'TZ': 'UTC'})
+                fresh, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(fresh['voice_pack'], 'buttonbox')
+                selected = store.update(self.candidate(fresh, voice_pack='jessica'), 0)
+                self.assertEqual(store.load(), (selected, False))
+                legacy = {key: value for key, value in selected.items() if key != 'voice_pack'}
+                path.write_text(json.dumps(legacy))
+                before = path.read_bytes()
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(loaded['voice_pack'], 'jessica' if mode == 'cloud' else 'buttonbox')
+                self.assertEqual(loaded['revision'], selected['revision'])
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_cloud_store_update_without_voice_keeps_current_choice(self):
+        store = SettingsStore(self.path, environ={'MSGBOX_TRANSPORT': 'cloud'})
+        fresh, _ = store.load()
+        selected = store.update(self.candidate(fresh, voice_pack='jessica'), 0)
+        candidate = self.candidate(selected, master_volume_percent=41)
+        candidate.pop('voice_pack')
+        updated = store.update(candidate, selected['revision'])
+        self.assertEqual(updated['voice_pack'], 'jessica')
+        self.assertEqual(store.load(), (updated, False))
+
     def test_swoosh_setting_requires_boolean(self):
         document = defaults({"TZ": "UTC"})
         with self.assertRaises(SettingsError):

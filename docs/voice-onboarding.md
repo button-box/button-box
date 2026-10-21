@@ -3,10 +3,12 @@
 Cloud boxes use the Button Box voice for first setup and the first reply.
 The WhatsApp assistant can complete setup if the speaker fails. wacli boxes
 keep their normal setup and message flow. Both modes use `buttonbox` as the
-default voice for fresh settings and share the speaker lock. Existing saved
-voice choices keep their value and revision in both modes, including `jessica`
-with no selection receipt. Only a fresh install or settings with no `voice_pack`
-key select `buttonbox`. Unsupported saved values use the Jessica audio fallback.
+default voice for fresh local installs and share the speaker lock. Existing
+saved voice choices keep their value and revision in both modes, including
+`jessica` with no selection receipt. A Cloud settings document with no
+`voice_pack` keeps the current applied voice. Only an explicit Cloud buttonbox
+choice or a fresh local install can select it in Cloud mode. The wacli default
+rules are unchanged. Unsupported explicit values use the Jessica audio fallback.
 
 ## Speech order
 

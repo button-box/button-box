@@ -99,12 +99,25 @@ lamp/press checks.
 
 ## Voice packs
 
-`voice_pack` defaults to `buttonbox` for a fresh install or a document with no
-`voice_pack` key, in both modes. Existing valid choices keep their value and
-revision, including Jessica defaults that cannot be distinguished from an old
-explicit choice. Unknown or null values use the Jessica audio fallback. No
-selection receipt is required. Earlier `settings.voice-selection.json` files
-are ignored and do not need to be created or changed during recovery.
+A fresh local install with no saved settings defaults to `buttonbox`. In Cloud
+mode, an incoming settings document without `voice_pack` retains the voice in
+the current applied-settings snapshot. It cannot select buttonbox by omission.
+An explicit `voice_pack: "buttonbox"` can select it. Cloud must send the field
+explicitly to boxes that advertise `voice_packs`.
+
+The box resolves an omitted voice before revision comparison and persists the
+resolved value in pending settings. Restart and revision replay use that same
+value. Old pending documents with no voice use the applied snapshot during
+receipt comparison. An unavailable or invalid snapshot rejects the new command
+with `settings_revision_invalid`; it does not guess a new default.
+
+An existing legacy Cloud settings file with no voice field uses Jessica, as
+old software did. A local Cloud update that omits the field keeps the saved
+choice under the settings lock. Existing explicit choices keep their value and
+revision. The wacli defaults, legacy-file handling, and explicit choices are
+unchanged. Unknown or null explicit values use the Jessica audio fallback.
+No selection receipt is required. Earlier `settings.voice-selection.json`
+files are ignored and do not need to be changed during recovery.
 
 Supported ids are `jessica`, `pirate`, `alien`, `dj`, `robot`, `french`, `charlie`,
 `tata`, and `buttonbox`. Jessica stays in `sounds/voice/`. Other packs use
