@@ -6,7 +6,7 @@ async function handoff(states) {
   const nodes = {
     "handoff-title": { textContent: "Connecting…" },
     "handoff-status": { textContent: "Your box is joining your Wi-Fi. This page may lose its connection." },
-    "handoff-next": { textContent: "Wait for the beep or the Connected! message. Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card." },
+    "handoff-next": { textContent: "When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card." },
     pulse: { hidden: false },
   };
   let calls = 0;
@@ -36,7 +36,7 @@ test("verified Cloud Wi-Fi proof shows success and retains it after the hotspot 
   ]);
   expect(nodes["handoff-title"].textContent).toBe("Connected!");
   expect(nodes["handoff-status"].textContent).toBe("Your box is online.");
-  expect(nodes["handoff-next"].textContent).toBe("Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card.");
+  expect(nodes["handoff-next"].textContent).toBe("When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.");
   expect(nodes.pulse.hidden).toBe(true);
   expect(calls).toBe(3); // No later request can overwrite success.
 });
@@ -55,5 +55,6 @@ test("failed association gives a retry handoff without success", async () => {
   const { nodes, calls } = await handoff([{ transport: "cloud", phase: "WIFI_FAILED" }]);
   expect(nodes["handoff-title"].textContent).toBe("Could not connect");
   expect(nodes["handoff-status"].textContent).toContain("try again");
+  expect(nodes["handoff-next"].textContent).toBe("When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp.");
   expect(calls).toBe(1);
 });

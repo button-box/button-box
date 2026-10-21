@@ -46,14 +46,14 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.guide.speak(play))
         self.assertFalse(self.guide.first_reply())
 
-    def test_old_default_changes_but_explicit_jessica_survives_restart(self):
+    def test_existing_jessica_survives_without_a_selection_receipt(self):
         path = self.root / "settings.json"
         old = {**defaults({}), "voice_pack": "jessica"}
         path.write_text(json.dumps(old))
         store = SettingsStore(path, environ={"MSGBOX_TRANSPORT": "wacli"})
         current, warning = store.load()
         self.assertFalse(warning)
-        self.assertEqual(current["voice_pack"], "buttonbox")
+        self.assertEqual(current, old)
         candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
         saved = store.update({**candidate, "voice_pack": "jessica"}, 0)
         self.assertEqual(SettingsStore(path, environ={"MSGBOX_TRANSPORT": "wacli"}).load(), (saved, False))

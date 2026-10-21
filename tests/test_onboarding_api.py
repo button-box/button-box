@@ -546,7 +546,7 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertNotIn(b"SETUP-", cloud)
 
     def test_cloud_handoff_words_do_not_change_wacli_setup(self):
-        reconnect = b"Reconnect your phone to your home Wi-Fi, then go back to WhatsApp."
+        reconnect = b"When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi."
         for transport in ("cloud", "wacli"):
             with self.subTest(transport=transport), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": transport}):
                 app = create_app(
@@ -566,6 +566,7 @@ class OnboardingAPITests(unittest.TestCase):
                     for body in (page, handoff["body"]):
                         self.assertIn(b"Connected!", body)
                         self.assertIn(reconnect, body)
+                        self.assertIn(b"Go back to WhatsApp.", body)
                         self.assertIn(b"scan the QR code on your setup card", body)
                     self.assertIn(b"checkWifiHandoff", handoff["body"])
                 else:

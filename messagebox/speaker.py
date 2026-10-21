@@ -18,14 +18,30 @@ _capture = threading.local()
 
 
 @contextmanager
-def reservation():
+def reservation(*, cancel=None, wait=True):
+    if cancel is not None and cancel():
+        raise SpeakerBusy("speaker playback cancelled")
     if getattr(_capture, "active", False):
         yield
         return
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _open_shared_lock(LOCK_FILE) as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if cancel is None and wait:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        else:
+            while True:
+                if cancel is not None and cancel():
+                    raise SpeakerBusy("speaker playback cancelled")
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if not wait:
+                        raise SpeakerBusy("speaker unavailable") from None
+                    time.sleep(0.02)
         try:
+            if cancel is not None and cancel():
+                raise SpeakerBusy("speaker playback cancelled")
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
@@ -83,9 +99,9 @@ class SpeakerPlayer:
         return result
 
 
-def start_player(args, *, popen=None, **kwargs):
+def start_player(args, *, popen=None, cancel=None, wait=True, **kwargs):
     """Keep the cross-process lock until the caller reaps this player."""
-    context = reservation()
+    context = reservation(cancel=cancel, wait=wait)
     context.__enter__()
     try:
         process = (subprocess.Popen if popen is None else popen)(args, **kwargs)

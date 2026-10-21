@@ -83,6 +83,66 @@ class SpeakerTests(unittest.TestCase):
         detect = (root / 'systemd/messagebox-audio-detect.service').read_text()
         self.assertIn('systemd-tmpfiles --create --prefix=/run/messagebox-speaker', detect)
 
+    def test_cancellable_wait_stops_on_press_or_new_note_before_unlock(self):
+        import threading
+        for reason in ('press', 'note'):
+            with self.subTest(reason=reason):
+                cancel = threading.Event()
+                waiting = threading.Event()
+                outcome = []
+                launch = mock.Mock()
+                def cancelled():
+                    waiting.set()
+                    return cancel.is_set()
+                def play():
+                    try:
+                        speaker.start_player(['synthetic'], popen=launch, cancel=cancelled)
+                    except speaker.SpeakerBusy:
+                        outcome.append('cancelled')
+                with speaker.LOCK_FILE.open('a+b') as held:
+                    fcntl.flock(held, fcntl.LOCK_EX)
+                    worker = threading.Thread(target=play)
+                    worker.start()
+                    try:
+                        self.assertTrue(waiting.wait(1))
+                        cancel.set()
+                        worker.join(1)
+                        self.assertFalse(worker.is_alive())
+                        self.assertEqual(outcome, ['cancelled'])
+                        launch.assert_not_called()
+                        self.assertTrue(speaker.is_busy())
+                    finally:
+                        cancel.set()
+                        fcntl.flock(held, fcntl.LOCK_UN)
+                        worker.join(2)
+
+    def test_wacli_button_player_keeps_the_blocking_speaker_default(self):
+        import threading
+        from test_cloud_runtime import button_send
+        launched = threading.Event()
+        result = []
+        process = mock.Mock()
+        process.wait.return_value = 0
+        def popen(*args, **kwargs):
+            launched.set()
+            return process
+        with mock.patch.dict('os.environ', {'MSGBOX_TRANSPORT': 'wacli'}), \
+             mock.patch.object(button_send.subprocess, 'Popen', side_effect=popen):
+            with speaker.LOCK_FILE.open('a+b') as held:
+                fcntl.flock(held, fcntl.LOCK_EX)
+                worker = threading.Thread(target=lambda: result.append(button_send.start_player(['synthetic'])))
+                worker.start()
+                try:
+                    self.assertFalse(launched.wait(.1))
+                    self.assertTrue(worker.is_alive())
+                finally:
+                    fcntl.flock(held, fcntl.LOCK_UN)
+                    worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(launched.is_set())
+            result[0].wait(timeout=1)
+        self.assertFalse(speaker.is_busy())
+
     def test_async_player_holds_lock_until_reaped(self):
         process = speaker.start_player([sys.executable, "-c", "import time; time.sleep(.1)"])
         self.assertTrue(speaker.is_busy())

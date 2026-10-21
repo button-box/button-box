@@ -1611,7 +1611,7 @@ class CloudRuntime:
         for operation_id, document in list(self.state["pending_settings"].items()):
             if isinstance(document, dict) and "ringtone_id" in document:
                 document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"]),
-                            "voice_pack": normalize_voice_pack(document.get("voice_pack"))}
+                            "voice_pack": normalize_voice_pack(document.get("voice_pack", "buttonbox"))}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 try:

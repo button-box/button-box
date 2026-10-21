@@ -1,34 +1,58 @@
 # Voice release verification · 21 October 2026
 
-The eight review findings have code changes and regression tests. No commit,
-push, PR change, release, device access, or hardware test was done. The review
-source `.astra-pi189-r1.md` stays untracked and unchanged.
+Step 1 is committed at `04d53cd8b4968ff435b21f5fa72e3d1c6ba3ff7c` on
+`feat/updater-voice-ready`, based on `origin/release-v0.3.12`. The voice branch
+already contains that commit. Its reviewed step-2 source is
+`9a3ae40259a21db53a625903004dca06546e1af2`, including the setup-page wording.
+The earlier rebase is complete. No rebase command remains to be run.
 
-The step-1 branch exists as `feat/updater-voice-ready` in the temporary worktree
-`/private/tmp/button-box-updater-voice-ready`. Its base is
-`3fb1c2a3a4e25fccee6a2454f02f0675579a11dc` (`origin/release-v0.3.12`). Its
-changes are uncommitted. The voice branch stays at `1416c10`, with uncommitted
-corrections. An actual rebase needs a committed step-1 target. It is not done,
-because this task prohibits commits. Review and commit each change set first;
-then rebase the voice branch onto `feat/updater-voice-ready` and run checks again.
-After both commits exist and both worktrees are clean, the rebase command is:
+Round-2 corrections follow these commits in the local checkout. They have not
+been committed, pushed, or deployed in this run. Both review source files stay
+untracked. No device or hardware test was done.
 
-```sh
-git rebase --onto feat/updater-voice-ready origin/release-v0.3.12 feat/voice-onboarding
-```
+**Round-2 findings and proof**
 
-This command was not run.
+| Finding | Change | File | Test |
+| --- | --- | --- | --- |
+| 1. Current-heartbeat gate | Require boolean true at creation and every delivery. Test successful-heartbeat cancellation with the historical reader. The failed-heartbeat redelivery boundary remains open; see the verified failure probe below. | [docs/voice-onboarding.md:68](../docs/voice-onboarding.md#L68) | [tests/test_voice_review_round2.py:54](../tests/test_voice_review_round2.py#L54); [tests/test_voice_review_round2.py:123](../tests/test_voice_review_round2.py#L123) |
+| 2. Speaker contention | Skip an optional greeting immediately if the speaker is busy. Recheck button, note queue, and quiet state after lock acquisition. A cancellable wait is also available. Do not consume a press; check it before further idle speech. | [messagebox/speaker.py:21](../messagebox/speaker.py#L21); [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824) | [tests/test_voice_review_round2.py:131](../tests/test_voice_review_round2.py#L131); [tests/test_voice_review_round2.py:155](../tests/test_voice_review_round2.py#L155); [tests/test_speaker.py:86](../tests/test_speaker.py#L86); [tests/test_speaker.py:119](../tests/test_speaker.py#L119) |
+| 3. Saved wacli voice | Remove the ambiguous Jessica migration and selection-receipt requirement. Keep valid saved voice and revision. Use buttonbox only for a fresh install or a missing voice key. Unsupported/null choices fall back to Jessica. | [messagebox/settings.py:405](../messagebox/settings.py#L405); [messagebox/settings.py:39](../messagebox/settings.py#L39); [messagebox/cloud_runtime.py:1614](../messagebox/cloud_runtime.py#L1614) | [tests/test_voice_review_round2.py:192](../tests/test_voice_review_round2.py#L192); [tests/test_voice_review_round2.py:182](../tests/test_voice_review_round2.py#L182) |
+| 4. Exact fleet fixtures | Replace the mislabelled export with separate exports from clean detached checkouts of 04d53cd and 9a3ae40. Step 1 has no guided setup capability or greeting command. | [docs/fixtures/README.md:3](../docs/fixtures/README.md#L3) | [tests/test_settings_contract.py:52](../tests/test_settings_contract.py#L52) |
+| 5. Release evidence | Record the committed step identities and completed rebase. Replace the old embedded fixture with links to the two exact exports. Label prior test/size results as historical; keep physical and Cloud acceptance open. | [docs/voice-release-verification.md:3](voice-release-verification.md#L3) | Exact-commit export checks above; documentation review and git diff --check. |
 
-**Findings and proof**
+The Cloud test uses the actual historical startup loop and strict inbox reader
+with a contract server model. It proves the documented flow after a successful
+current heartbeat, when Cloud enforces the gate and cancellation. It does not verify the deployed
+Cloud service. Cloud implementation and integration acceptance remain open.
+No Pi-side retirement mechanism was added.
+
+**Remaining HIGH boundary:** a rollback heartbeat can fail before Cloud records
+it. The historical loop then polls with cached authorization, while Cloud can
+still hold the preceding `guided_setup_v1: true` snapshot. A read-only failure
+probe reproduced the unsupported greeting, the old reader's `cloud inbox item
+is invalid` error, and zero ordinary-command calls. Thus option (a) alone does
+not guarantee that this redelivery never reaches the old reader. See the
+[failed-heartbeat boundary and proposed Cloud extension](voice-onboarding.md).
+Cloud must resolve and test this boundary before release acceptance. The Pi
+cannot filter a response using code that is no longer running after rollback.
+
+Round-2 focused checks passed: six delivery/speaker/voice regression tests,
+six speaker tests, 21 settings tests, 11 setup tests, and four fleet-contract
+tests. Final `make check`: **PASS**. Syntax and all lint checks passed;
+1,136 Python tests passed in 715.115 seconds, and 54 JavaScript tests passed.
+`git diff --check` also passed. These results apply to the local round-2
+corrections on HEAD `9a3ae40`. No physical acceptance is implied.
+
+**Earlier findings and proof**
 
 | Finding | Change | Code | Regression test |
 | --- | --- | --- | --- |
 | 1 | Prepare a separate updater release. Permit the new pack and setup WAVs. Raise the total sound limit to 160 MiB. Set controller version 1.2.0. Add a bounded download budget and an attended 1,800-second service drop-in. | [scripts/install/bounded_update.py:185](../scripts/install/bounded_update.py#L185); [scripts/install/update_discovery.py:76](../scripts/install/update_discovery.py#L76); [scripts/install/update-bootstrap.sh:56](../scripts/install/update-bootstrap.sh#L56) | [tests/test_voice_release_transition.py:46](../tests/test_voice_release_transition.py#L46); [tests/test_voice_release_transition.py:57](../tests/test_voice_release_transition.py#L57); [tests/test_update_discovery.py:93](../tests/test_update_discovery.py#L93); [tests/test_update_discovery.py:136](../tests/test_update_discovery.py#L136) |
 | 2 | Put greetings and voice previews in a separate optional audio queue and state map. v0.3.12 ignores both. Do not write a new kind or buttonbox preview into the old strict queue. | [messagebox/cloud_runtime.py:218](../messagebox/cloud_runtime.py#L218); [messagebox/audio_requests.py:208](../messagebox/audio_requests.py#L208) | [tests/test_voice_review.py:30](../tests/test_voice_review.py#L30) |
 | 3 | Require a nonempty string URL of at most 2,048 characters. Reject invalid greeting fields with an ACK error. Keep the poller running. | [messagebox/cloud_runtime.py:1443](../messagebox/cloud_runtime.py#L1443); [messagebox/cloud_device.py:338](../messagebox/cloud_device.py#L338) | [tests/test_voice_review.py:60](../tests/test_voice_review.py#L60) |
-| 4 | Keep an explicit Cloud Jessica selection at its stored revision. Limit the old-default migration to wacli. | [messagebox/settings.py:410](../messagebox/settings.py#L410) | [tests/test_voice_review.py:76](../tests/test_voice_review.py#L76); [tests/test_cloud_setup.py:49](../tests/test_cloud_setup.py#L49) |
+| 4 | Keep existing Jessica selections at their stored revision in both modes. Round 2 removes the ambiguous local-default migration. | [messagebox/settings.py:405](../messagebox/settings.py#L405) | [tests/test_voice_review.py:76](../tests/test_voice_review.py#L76); [tests/test_cloud_setup.py:49](../tests/test_cloud_setup.py#L49) |
 | 5 | Use the shared lock under /run. Create its group permissions before audio starts. Give both strict onboarding services write access. Keep NFC settings read-only. | [messagebox/speaker.py:16](../messagebox/speaker.py#L16); [systemd/messagebox-audio-detect.service:7](../systemd/messagebox-audio-detect.service#L7); [systemd/onboarding/messagebox-onboarding-nfc.service:31](../systemd/onboarding/messagebox-onboarding-nfc.service#L31); [systemd/messagebox.tmpfiles.conf:3](../systemd/messagebox.tmpfiles.conf#L3) | [tests/test_speaker.py:52](../tests/test_speaker.py#L52) |
-| 6 | Skip a greeting if a real note waits. Stop it if a new note or button press arrives. Keep the press for the button owner. | [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824); [messagebox/button_send.py:1888](../messagebox/button_send.py#L1888) | [tests/test_voice_review.py:144](../tests/test_voice_review.py#L144); [tests/test_voice_review.py:163](../tests/test_voice_review.py#L163) |
+| 6 | Skip a greeting if a real note waits. Stop it if a new note or button press arrives. Keep the press for the button owner. | [messagebox/button_send.py:1824](../messagebox/button_send.py#L1824); [messagebox/button_send.py:1895](../messagebox/button_send.py#L1895) | [tests/test_voice_review.py:144](../tests/test_voice_review.py#L144); [tests/test_voice_review.py:163](../tests/test_voice_review.py#L163) |
 | 7 | Check state structure before set membership. Invalid state disables the guide and writes a content-free log warning. | [messagebox/cloud_setup.py:22](../messagebox/cloud_setup.py#L22) | [tests/test_voice_review.py:87](../tests/test_voice_review.py#L87) |
 | 8 | Include pack, text hash, and clip ID in the cache key. Require the Cloud greeting text_hash field. | [messagebox/cloud_voice.py:33](../messagebox/cloud_voice.py#L33) | [tests/test_voice_review.py:103](../tests/test_voice_review.py#L103) |
 
@@ -40,7 +64,7 @@ need network access or Git history in CI.
 
 **Two-release plan**
 
-1. Review and commit the updater branch. Build it with minimum updater 1.1.0.
+1. Use committed step 1 (`04d53cd`). Build it with minimum updater 1.1.0.
    Use the next available version and release sequence. Test box 4 first. The
    v0.3.12 controller installs its complete payload in the test simulation.
    Its application and sound files remain those from v0.3.12.
@@ -50,9 +74,9 @@ need network access or Git history in CI.
    Do not rerun bootstrap on an installed box. An ordinary application update
    only stages these modules; it does not activate them. This maintenance step
    is necessary before the voice release can install.
-3. Review and commit the voice corrections. Rebase the voice branch onto the
-   committed updater branch. Build it with minimum updater 1.2.0 and a higher
-   sequence. The signed-bundle test proves that the v0.3.12 verifier rejects this
+3. The voice branch is already based on committed step 1. Review and commit
+   the round-2 corrections, then regenerate the final-build fixture. Build the
+   voice release with minimum updater 1.2.0 and a higher sequence. The signed-bundle test proves that the v0.3.12 verifier rejects this
    minimum. All six controller modules are byte-identical in the prepared
    worktrees. Test box 4 first, then use the normal release batches.
 
@@ -63,7 +87,8 @@ fixed controller or this drop-in; attended controller fallback must restore both
 
 **Measured size and calculated transfer time**
 
-These are local, unsigned review archives. The production builder's `package`
+These are historical, unsigned round-1 review archives. They are not measurements
+of commits `04d53cd`, `9a3ae40`, or the round-2 corrected source. The production builder's `package`
 function produced them with `gzip -n -9`, the explicit payload list, and a
 manifest from `scripts/dev/release-manifest.py`. It included generated identity
 files. It did not use the production tag-only build, sign, or publish. Temporary
@@ -95,19 +120,18 @@ after extraction. Add the stored download and staging tree: the estimates are
 525.36 MiB for step 1 and 579.33 MiB for step 2, before filesystem and tar padding
 or other retained files. Actual peak Pi disk use is **unverified**.
 
-**Commands and results**
+**Historical round-1 commands and results**
 
 - `make check`, updater worktree: PASS. 1,102 Python tests in 211.146 s;
   one step-2-only test skipped. 54 JavaScript tests passed.
 - `MSGBOX_TEST_TRANSPORT=cloud make check`, voice worktree: PASS. 1,125 Python
   tests in 223.554 s; 54 JavaScript tests passed. This check preceded the last saved-state validation and test additions.
-- `MSGBOX_TEST_TRANSPORT=wacli make check`, final voice source: PASS. 1,126
+- `MSGBOX_TEST_TRANSPORT=wacli make check`, earlier round-1 source: PASS. 1,126
   Python tests in 214.108 s; 54 JavaScript tests passed. Syntax and all lint
   checks passed. This suite includes explicit Cloud and wacli contracts.
 - `python3 -m unittest discover -s tests -p test_voice_review.py -v`: PASS,
   all eight focused regression tests.
-- `python3 scripts/dev/settings_contract.py`: PASS. Exact provisional output
-  is below. The same command with `--repo` for the updater worktree also passed.
+- `python3 scripts/dev/settings_contract.py`: PASS. The earlier export was provisional and is superseded by the exact-commit fixtures below. The same command with `--repo` for the updater worktree also passed.
 - `git diff --check`, both worktrees: PASS.
 - Compared all six controller module bytes between worktrees: identical.
   Compared all historical fixtures with v0.3.12 source: exact, with only class
@@ -120,9 +144,8 @@ Shared runtime changes are `button_send.py`, `settings.py`, and `speaker.py`.
 The optional audio queue is Cloud-only. Shared deployment changes are the
 audio-detect service, tmpfiles configuration, and both onboarding service units.
 wacli keeps its existing setup, recipient routing, send, receive/play, reply,
-family-card, quiet-hours, and listened-notice paths. The approved local default
-migration to buttonbox remains. An explicit local Jessica selection still uses
-its selection receipt. The shared speaker lock moves to the writable runtime
+family-card, quiet-hours, and listened-notice paths. Existing local voice choices now keep their value and revision without any
+selection receipt. Only fresh settings or a missing voice key get buttonbox. The shared speaker lock moves to the writable runtime
 directory. No Cloud requests are added to wacli. Updater bootstrap still requires
 Cloud mode.
 
@@ -158,7 +181,19 @@ the button for ten seconds during boot. This risk remains.
 - Full physical wacli send, receive/play, reply, family card, quiet hours, and
   listened notice. No merge to main before this check passes.
 
-**Changed files in this correction**
+**Changed files in round 2**
+
+- Runtime: `messagebox/button_send.py`, `messagebox/cloud_runtime.py`,
+  `messagebox/settings.py`, and `messagebox/speaker.py`.
+- Documentation: `docs/cloud-settings.md`, `docs/voice-onboarding.md`,
+  this report, and `docs/fixtures/README.md`.
+- Fixtures: replace `docs/fixtures/voice-onboarding-fleet.json` with the two
+  exact-commit exports below. Add the historical `settings.py`, `run.py.txt`,
+  and `poll_once.py.txt` under `tests/fixtures/pi-v0.3.12/`; update its README.
+- Tests: add `tests/test_voice_review_round2.py`; update `test_cloud_setup.py`,
+  `test_settings.py`, `test_settings_contract.py`, and `test_speaker.py`.
+
+**Earlier round-1 changed files**
 
 - `config/update-discovery-voice-ready.conf`
 - `docs/on-box-updates.md`
@@ -202,240 +237,16 @@ application service units.
 
 **Fleet fixture output**
 
-`python3 scripts/dev/settings_contract.py` produced the exact output below.
-The build field is still `1416c10`, because corrections are uncommitted. This is
-a provisional handoff. Regenerate it from the final commit before it goes to
-the Cloud repository at `tests/fixtures/box-builds/`. The greeting payload must
-also include `text_hash`; the fleet fixture describes command kinds and
-capabilities, not the payload field schema.
+The two exact-commit exports are separate files:
 
-```json
-{
-  "build": "1416c10",
-  "capabilities": {
-    "announce_messages_voice": true,
-    "audio": true,
-    "box_link": true,
-    "card_name_prompt": true,
-    "guided_setup_v1": true,
-    "holiday_mode": true,
-    "kit_cards": 1,
-    "listened_announcements": true,
-    "message_age_phrase": true,
-    "morning_ring": true,
-    "mute": true,
-    "nfc": false,
-    "quiet_now": true,
-    "quiet_periods": 3,
-    "quiet_schedules": true,
-    "reaction_cards": 1,
-    "reaction_sent_voice": 1,
-    "reactions": 1,
-    "recording_modes": [
-      "tap_review",
-      "hold_release"
-    ],
-    "review_before_send": true,
-    "ringtones": [
-      "hello_piano",
-      "sunshine",
-      "bouncy",
-      "sing_along",
-      "island",
-      "hello",
-      "ukulele"
-    ],
-    "settings_unknown_keys": "ignore",
-    "settings_version": 1,
-    "software_update": {
-      "modes": [
-        "auto",
-        "ask"
-      ],
-      "physical_confirmation": true,
-      "protocol": 1
-    },
-    "swoosh_sound_enabled": true,
-    "talk_modes": [
-      "tap",
-      "hold"
-    ],
-    "text_to_voice": 1,
-    "voice_lines": 1,
-    "voice_packs": [
-      "jessica",
-      "pirate",
-      "alien",
-      "dj",
-      "robot",
-      "french",
-      "charlie",
-      "tata",
-      "buttonbox"
-    ],
-    "weekend_days": true
-  },
-  "command_kinds": [
-    "audio",
-    "card_prompt",
-    "delete_message",
-    "install_update",
-    "listened",
-    "mute",
-    "nfc_cancel",
-    "nfc_enroll",
-    "nfc_unpair",
-    "preview_ringtone",
-    "queue_hold",
-    "quiet_now",
-    "reaction",
-    "set_update_mode",
-    "settings",
-    "setup_greeting",
-    "voice_preview"
-  ],
-  "keys": {
-    "after_listening": {
-      "type": "enum",
-      "values": [
-        "invite_reply",
-        "play_only"
-      ]
-    },
-    "announce_messages_voice": {
-      "type": "bool"
-    },
-    "arrival_signal": {
-      "type": "enum",
-      "values": [
-        "lamp_only",
-        "ring_and_lamp",
-        "ring_only",
-        "silent"
-      ]
-    },
-    "card_name_prompt": {
-      "type": "bool"
-    },
-    "holiday_until": {
-      "format": "YYYY-MM-DD",
-      "nullable": true,
-      "type": "string"
-    },
-    "master_volume_percent": {
-      "max": 100,
-      "min": 0,
-      "type": "int"
-    },
-    "max_recording_seconds": {
-      "type": "enum",
-      "values": [
-        30,
-        60,
-        120
-      ]
-    },
-    "morning_ring": {
-      "type": "bool"
-    },
-    "nfc_confirmation_beep": {
-      "type": "bool"
-    },
-    "quiet_hours": {
-      "type": "object"
-    },
-    "quiet_schedules": {
-      "keys": [
-        "school_days",
-        "weekend"
-      ],
-      "nullable": true,
-      "period_keys": [
-        "start",
-        "end"
-      ],
-      "periods_max": 3,
-      "time_format": "HH:MM",
-      "type": "object"
-    },
-    "recording_mode": {
-      "type": "enum",
-      "values": [
-        "hold_release",
-        "tap_review"
-      ]
-    },
-    "review_before_send": {
-      "type": "bool"
-    },
-    "revision": {
-      "min": 0,
-      "type": "int"
-    },
-    "ringtone_id": {
-      "type": "enum",
-      "values": [
-        "bouncy",
-        "cuckoo_clock",
-        "ding_dong",
-        "gentle_music_box",
-        "hello",
-        "hello_piano",
-        "island",
-        "playful_chiptune",
-        "sing_along",
-        "sunshine",
-        "ukulele"
-      ]
-    },
-    "say_reactions": {
-      "type": "bool"
-    },
-    "swoosh_sound_enabled": {
-      "type": "bool"
-    },
-    "talk_mode": {
-      "type": "enum",
-      "values": [
-        "hold",
-        "tap"
-      ]
-    },
-    "timezone": {
-      "max": 64,
-      "type": "string"
-    },
-    "version": {
-      "type": "enum",
-      "values": [
-        1
-      ]
-    },
-    "voice_pack": {
-      "type": "enum",
-      "values": [
-        "jessica",
-        "pirate",
-        "alien",
-        "dj",
-        "robot",
-        "french",
-        "charlie",
-        "tata",
-        "buttonbox"
-      ]
-    },
-    "weekend_days": {
-      "items": "int",
-      "max": 6,
-      "max_items": 7,
-      "min": 0,
-      "nullable": true,
-      "type": "array",
-      "unique": true
-    }
-  },
-  "settings_version": 1,
-  "unknown_keys": "ignore"
-}
-```
+- [Step 1: 04d53cd](fixtures/voice-onboarding-step1-04d53cd.json).
+  It does not advertise `guided_setup_v1` or accept `setup_greeting`.
+- [Step 2: 9a3ae40](fixtures/voice-onboarding-step2-9a3ae40.json).
+  It advertises `guided_setup_v1` and accepts `setup_greeting`.
+
+See [fixture provenance and regeneration](fixtures/README.md). The incorrectly
+labelled `voice-onboarding-fleet.json` is removed. The field build `3fb1c2a`
+must never be assigned the step-2 capabilities. These exports describe the two
+named commits, not the local round-2 corrections. Generate a new fixture from
+the final committed release before Cloud handoff. Greeting delivery still
+requires the current heartbeat; a fleet fixture cannot authorize redelivery.

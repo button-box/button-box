@@ -99,11 +99,12 @@ lamp/press checks.
 
 ## Voice packs
 
-`voice_pack` defaults to `buttonbox` in both modes. A missing pack selects
-Button Box. Unknown values use a safe bundled default. Old local Jessica defaults select
-Button Box unless a settings update explicitly selects Jessica. The private
-`settings.voice-selection.json` sidecar records that choice and its revision.
-Keep this sidecar with the settings file during recovery.
+`voice_pack` defaults to `buttonbox` for a fresh install or a document with no
+`voice_pack` key, in both modes. Existing valid choices keep their value and
+revision, including Jessica defaults that cannot be distinguished from an old
+explicit choice. Unknown or null values use the Jessica audio fallback. No
+selection receipt is required. Earlier `settings.voice-selection.json` files
+are ignored and do not need to be created or changed during recovery.
 
 Supported ids are `jessica`, `pirate`, `alien`, `dj`, `robot`, `french`, `charlie`,
 `tata`, and `buttonbox`. Jessica stays in `sounds/voice/`. Other packs use

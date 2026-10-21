@@ -37,8 +37,6 @@ VOICE_PACKS = ("jessica", "pirate", "alien", "dj", "robot", "french", "charlie",
 
 
 def normalize_voice_pack(value):
-    if value is None:
-        return "buttonbox"
     return value if isinstance(value, str) and value in VOICE_PACKS else "jessica"
 
 
@@ -406,15 +404,7 @@ class SettingsStore:
 
     def _read(self, path):
         with open(path, encoding="utf-8") as handle:
-            document = validate(json.load(handle))
-        if document["voice_pack"] == "jessica" and self.environ.get("MSGBOX_TRANSPORT", "wacli") == "wacli":
-            try:
-                selected = json.loads(self.path.with_suffix(".voice-selection.json").read_text())
-            except (OSError, ValueError):
-                selected = {}
-            if selected != {"revision": document["revision"], "voice_pack": "jessica"}:
-                document["voice_pack"] = "buttonbox"
-        return document
+            return validate(json.load(handle))
 
     def load(self):
         try:
@@ -466,9 +456,6 @@ class SettingsStore:
                     **candidate,
                 }
                 document = validate(document)
-                if document["voice_pack"] == "jessica":
-                    _atomic_json(self.path.with_suffix(".voice-selection.json"),
-                                 {"revision": revision, "voice_pack": "jessica"})
                 self._write_pair(document)
                 return document
             finally:

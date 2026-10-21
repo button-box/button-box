@@ -115,13 +115,13 @@ _HANDOFF_HTML = b"""<!doctype html>
 _QR_WIFI_NEXT = b"""        <aside class="notice">
           <strong>Next</strong>
           <span>Your phone leaves this page when Button Box joins your Wi-Fi. That is normal.</span>
-          <span>Wait for the beep or the Connected! message. Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card.</span>
+          <span>When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</span>
         </aside>
 """
 _QR_HANDOFF_CONTENT = """<div class="wifi-handoff" role="status" aria-live="polite">
 <h1 id="handoff-title">Connecting…</h1>
 <p id="handoff-status" class="lede">Your box is joining your Wi-Fi. This page may lose its connection.</p>
-<p id="handoff-next" class="lede">Wait for the beep or the Connected! message. Reconnect your phone to your home Wi-Fi, then go back to WhatsApp. To start the chat, scan the QR code on your setup card.</p>
+<p id="handoff-next" class="lede">When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</p>
 </div>
 <p class="field-help">If the connection fails, rejoin the setup hotspot and try again.</p>
 <p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>

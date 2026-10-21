@@ -1823,13 +1823,21 @@ unavailable_events = UnavailableEvents()
 
 def play_optional_greeting(path):
     """A real note or press always preempts this optional setup line."""
-    if queued() or button.is_pressed or quiet_hours():
+    def cancelled():
+        return button.is_pressed or bool(queued()) or quiet_hours()
+
+    if cancelled():
         return False
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    try:
+        # Optional speech never holds the button owner behind another player.
+        process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)],
+                               cancel=cancelled, wait=False)
+    except speaker.SpeakerBusy:
+        return False
     deadline = time.monotonic() + 60
     try:
         while process.poll() is None:
-            if queued() or button.is_pressed or quiet_hours() or time.monotonic() >= deadline:
+            if cancelled() or time.monotonic() >= deadline:
                 return False
             time.sleep(POLL_S)
         return process.returncode == 0
@@ -2725,6 +2733,8 @@ def main():
             apply_master_volume()
             maybe_play_send_success()
             maybe_play_cloud_sound()
+            if transport_mode() == "cloud" and button.is_pressed:
+                break
             if transport_mode() == "cloud":
                 if cloud_setup.SetupGuide().speak(play_setup_line, quiet=quiet_hours()):
                     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)

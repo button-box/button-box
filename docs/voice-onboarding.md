@@ -3,8 +3,10 @@
 Cloud boxes use the Button Box voice for first setup and the first reply.
 The WhatsApp assistant can complete setup if the speaker fails. wacli boxes
 keep their normal setup and message flow. Both modes use `buttonbox` as the
-local default voice and share the speaker lock. An explicit Cloud voice selection
-keeps its value, including `jessica`. Only the old local wacli default migrates.
+default voice for fresh settings and share the speaker lock. Existing saved
+voice choices keep their value and revision in both modes, including `jessica`
+with no selection receipt. Only a fresh install or settings with no `voice_pack`
+key select `buttonbox`. Unsupported saved values use the Jessica audio fallback.
 
 ## Speech order
 
@@ -32,7 +34,7 @@ that WhatsApp delivered the message or that the parent played it.
 | --- | --- | --- |
 | Boot | The existing ten-second Wi-Fi reset gesture stays in force. | Runtime waits for a stable release. |
 | Claim pending | Confirm the claim. The same press cannot start recording. | Release before another action. |
-| Setup guide | Before claim, replay scan. After claim, replay the current names step if no note waits. After the first note, a new press starts the first reply. | Ignore presses during speech. Discard a held press when speech ends. |
+| Setup guide | Before claim, replay scan. After claim, replay the current names step if no note waits. After the first note, a new press starts the first reply. | Ignore presses during required speech. Optional greetings yield to a press or a real note. |
 | Recording | A new press stops tap recording. In the first reply, the 40-second reminder ignores presses; 60 seconds stops capture. Normal hold mode stops on release. | The start press must be released before a stop press. |
 | Review | Play the whole recording and the setup send question. A new press in the next ten seconds sends. No press deletes. | The stop press and all playback presses must be released before approval. |
 | Normal runtime | Keep the selected tap/hold, playback, family-card, and review actions. Cloud speech ignores presses. | A press consumed by playback, claim, or an update cannot enter another action. |
@@ -63,8 +65,51 @@ silent. It does not prevent claim completion through WhatsApp.
 
 ## Cloud greeting contract
 
-Send `setup_greeting` only to a box whose heartbeat advertises
-`capabilities.guided_setup_v1: true`. Unknown command kinds remain rejected.
+Cloud **MUST** gate `setup_greeting` on the box's **current heartbeat**:
+
+- Require `capabilities.guided_setup_v1` to be the boolean `true` when creating
+  a greeting and again when delivering an inbox response or redelivery.
+- Replace the stored capabilities on each heartbeat. Do not merge a removed
+  capability back from registration, an earlier heartbeat, or a fleet fixture.
+  A missing, false, or invalid value does not permit a greeting.
+- When a heartbeat stops reporting the capability, durably cancel every pending
+  greeting before acknowledging that heartbeat. Do not deliver it later if the
+  box upgrades again. Keep ordinary inbox commands available.
+
+This is required for rollback safety. A power cut can occur after the Pi saves
+its optional-audio request but before the `received` ACK is durable. The server
+command can then remain pending for longer than the local 30-second audio
+lifetime. The old runtime cannot parse `setup_greeting`. Its startup flow attempts
+a heartbeat before polling the inbox; after acceptance, Cloud must use that capability
+snapshot and cancel the greeting before returning the next inbox response.
+Queue separation alone does not close this server redelivery case.
+
+`test_current_heartbeat_contract_cancels_redelivery_after_pre_ack_rollback`
+executes the historical startup and inbox reader against an executable Cloud
+contract model. It covers a never-capable box and rollback before the ACK.
+The test is not verification of the deployed Cloud implementation. The Cloud
+repository must test and implement the same ordering and cancellation. No
+Pi-side greeting retirement mechanism is added. Unknown command kinds remain
+rejected.
+
+**Failed heartbeat boundary — not closed by option (a)**
+
+The historical startup loop catches a heartbeat error and can still poll with
+its valid cached authorization. If the rollback heartbeat fails before Cloud
+records it, the stored current capability can still be `true`. A read-only
+probe with the frozen historical startup and inbox methods reproduced delivery
+of the pending greeting, `cloud inbox item is invalid`, and zero calls to the
+following ordinary command. The normal successful-heartbeat test above does
+not prove safety for this failure case.
+
+Cloud must address this remaining redelivery boundary before release acceptance.
+One possible extension is to durably record a greeting's delivery attempt before
+returning it, and never redeliver it after a lost ACK. A lost response would then
+skip this optional line, as the guide already permits. This extension is proposed,
+not implemented or verified here. A Pi-side audio expiry or retirement record
+cannot prevent an old runtime from receiving and rejecting an unsupported
+command in its downloaded inbox response. No Pi-side retirement was added.
+
 The command uses the normal operation ID, sequence, timestamps, and payload.
 The payload uses the existing voice-line cache contract:
 
@@ -97,7 +142,10 @@ late, expired, or invalid greeting is skipped. It cannot delay the first note.
 The guide stores a receipt before the greeting, so another operation cannot
 repeat it during the same setup. A queued real note skips the greeting. A new
 note or button press stops an active greeting. The greeting does not consume
-that press; the normal button owner handles it.
+that press; the normal button owner handles it. A greeting never waits behind
+another speaker owner. It is skipped if the speaker is busy, and the button,
+message queue, and quiet state are checked again after acquiring the lock.
+The main loop checks the button before starting any further idle speech.
 
 ## Speaker access
 
@@ -107,7 +155,8 @@ The audio-detect prerequisite creates the lock with tmpfiles before audio
 services start. Its directory is root-owned, group `messagebox-settings`, mode
 2770. Its file is mode 0660. Both strict onboarding services can write this
 directory. The NFC service also has the settings group. Its settings directory
-can remain read-only. Playback waits for the lock. Synchronous playback retries a busy ALSA
+can remain read-only. Ordinary playback waits for the lock. Optional setup
+greetings skip a busy speaker. Synchronous playback retries a busy ALSA
 open once after 150 ms. A second busy error stops that action without a button
 flow error. Incoming audio remains recoverable through its normal queue rules.
 The lock stays held until an asynchronous player is reaped. Recording reserves
