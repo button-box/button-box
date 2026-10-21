@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from messagebox.played_history import played_history_lock
+from messagebox.nfc_state import SelectionStore
+from messagebox.runtime_paths import NFC_SELECTION_FILE
 
 
 def env_flag(name: str, default: bool = False, environ=None) -> bool:
@@ -360,14 +362,31 @@ def cloud_upload_payload(job_dir, metadata):
     return path, upload
 
 
+def reconcile_card_selection(job_dir, selection_path):
+    """A committed job is the durable receipt for consuming its card choice."""
+    try:
+        metadata = json.loads((Path(job_dir) / "job.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return  # A concurrent deletion must pass this same reconciliation gate.
+    if "nfc_selection_id" not in metadata:
+        return
+    selection_id = metadata["nfc_selection_id"]
+    recipient = metadata.get("recipient")
+    if (not isinstance(selection_id, str) or not re.fullmatch(r"[a-f0-9]{32}", selection_id)
+            or not isinstance(recipient, str) or not recipient):
+        raise ValueError("outbox card selection is invalid")
+    SelectionStore(selection_path).consume_id(selection_id, recipient)
+
+
 class OutboxStore:
     """Crash-aware jobs whose recipient is always persisted with the audio."""
 
-    def __init__(self, root: str, *, transport: str = "wacli"):
+    def __init__(self, root: str, *, transport: str = "wacli", selection_path=NFC_SELECTION_FILE):
         if not isinstance(transport, str) or transport not in OUTBOX_TRANSPORTS:
             raise ValueError("unsupported outbox transport")
         self.root = Path(root)
         self.transport = transport
+        self.selection_path = Path(selection_path)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def approve(
@@ -379,11 +398,16 @@ class OutboxStore:
         message_id: str | None = None,
         *,
         account_scope: str | None = None,
+        nfc_selection_id: str | None = None,
     ) -> OutboxJob:
         if not recipient:
             raise ValueError("recipient is required")
         if self.transport == "cloud" and not valid_account_scope(account_scope):
             raise ValueError("cloud recording account is unavailable")
+        if nfc_selection_id is not None and (
+            not isinstance(nfc_selection_id, str) or not re.fullmatch(r"[a-f0-9]{32}", nfc_selection_id)
+        ):
+            raise ValueError("recording card selection is invalid")
         mid = message_id or uuid.uuid4().hex
         final_dir = self.root / f"{mid}.job"
         if final_dir.exists():
@@ -394,6 +418,9 @@ class OutboxStore:
                 raise ValueError("message id already bound to a different account")
             if existing.recipient != recipient:
                 raise ValueError("message id already bound to a different recipient")
+            metadata = json.loads((final_dir / "job.json").read_text(encoding="utf-8"))
+            if metadata.get("nfc_selection_id") != nfc_selection_id:
+                raise ValueError("message id already bound to a different card selection")
             return existing
         tmp_dir = self.root / f".{mid}.tmp"
         tmp_dir.mkdir(mode=0o700)
@@ -414,6 +441,8 @@ class OutboxStore:
         }
         if self.transport == "cloud":
             payload["account_scope"] = account_scope
+        if nfc_selection_id is not None:
+            payload["nfc_selection_id"] = nfc_selection_id
         _write_json_atomic(tmp_dir / "job.json", payload)
         _fsync_dir(tmp_dir)
         os.replace(tmp_dir, final_dir)
@@ -492,8 +521,15 @@ class OutboxStore:
         return audio_path, metadata["cloud_upload"]
 
     def complete(self, job: OutboxJob) -> None:
+        reconcile_card_selection(job.path, self.selection_path)
         shutil.rmtree(job.path)
         _fsync_dir(self.root)
+
+    def reconcile_card_selections(self):
+        # All committed states count, including failed/uncertain jobs and jobs
+        # from another mode. This is local state work, never a transport call.
+        for path in self.root.glob("*.job"):
+            reconcile_card_selection(path, self.selection_path)
 
     def recover_startup(self) -> list[str]:
         """Remove unapproved staging and quarantine crash-ambiguous sends.
@@ -539,6 +575,7 @@ class GuidedSession:
         session_id: str | None = None,
         auto_record_after_incoming: bool = True,
         account_scope: str | None = None,
+        nfc_selection_id: str | None = None,
         incoming_cue_path: str | None = None,
         incoming_voice_path: str | None = None,
         incoming_age_path: str | None = None,
@@ -587,6 +624,7 @@ class GuidedSession:
                 flow_kind,
                 recording.duration,
                 account_scope=account_scope,
+                **({"nfc_selection_id": nfc_selection_id} if nfc_selection_id is not None else {}),
             )
             self.event(
                 "guided_approved",
