@@ -1186,6 +1186,47 @@ class CardSelectionLifecycleTests(unittest.TestCase):
                         s.run()
                         self.assertEqual([job.recipient for job in s.store.jobs()], [FAMILY])
 
+    def test_changed_mapping_blocks_after_expiry_before_reader_refresh(self):
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                for change in ("reassigned", "unpaired"):
+                    with self.subTest(mode=mode, talk=talk, change=change), self.session(mode, talk) as s:
+                        announcements = AnnouncementStore(s.selection.path.parent / "announcements.json")
+                        router = NfcRouter(s.contacts, s.selection, EnrollmentStore(s.selection.path.parent / "enrollment.json"), announcements)
+                        reader = NfcRuntime(router, Announcer(announcements))
+                        reader.observe(CARD, 0)
+                        s.now[0] = 1029
+                        if change == "reassigned":
+                            s.contacts.assign_card(FAMILY, CARD)
+                        else:
+                            s.contacts.clear_cards(GRANDMA)
+                        # The button resolves the expired choice before the
+                        # held card gets its next reader refresh.
+                        s.now[0] = 1031
+                        self.assertIsNone(button_send.current_recipient_context())
+                        self.assertIsNone(button_send.recording_recipient_context())
+                        self.assertFalse(s.selection.claimed_path.exists())
+                        with mock.patch.object(button_send, "block_unavailable_recipient") as blocked:
+                            s.run()
+                            # Repair the mapping before the reader refresh, so
+                            # only the resolver can retain the invalid state.
+                            s.contacts.assign_card(GRANDMA, CARD)
+                            self.assertIsNone(button_send.current_recipient_context())
+                            self.assertIsNone(button_send.recording_recipient_context())
+                            reader.observe(CARD, 1)
+                            s.run()
+                            reader.observe(None, 2)
+                            s.run()
+                        self.assertEqual(blocked.call_count, 3)
+                        s.io.record.assert_not_called()
+                        self.assertEqual(s.store.jobs(), [])
+                        reader.observe(CARD, 3)
+                        context = button_send.current_recipient_context()
+                        self.assertTrue(context["via_card"])
+                        self.assertEqual(context["contact"]["jid"], GRANDMA)
+                        s.run()
+                        self.assert_card_job(s, mode)
+
 
 if __name__ == "__main__":
     unittest.main()

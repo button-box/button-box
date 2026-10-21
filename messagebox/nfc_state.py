@@ -347,11 +347,16 @@ class SelectionStore:
             snapshot = self._load(max_age=None)
             if snapshot is None:
                 return ("blocked" if exists else "none"), None
+            jid, contact = _contact_for_uid(document, snapshot["uid"])
+            if jid != snapshot["jid"] or contact is None:
+                # Invalidation must survive expiry and later mapping repairs.
+                # Only a new presentation can clear this block.
+                self._block_locked(snapshot["uid"], state="invalid")
+                return "blocked", None
             if self.clock() - snapshot["selected_at"] > max_age:
                 os.replace(self.path, self.claimed_path)
                 return "none", None
-            jid, contact = _contact_for_uid(document, snapshot["uid"])
-            if document["revision"] != snapshot["contacts_revision"] or jid != snapshot["jid"] or contact is None:
+            if document["revision"] != snapshot["contacts_revision"]:
                 return "blocked", None
             if snapshot["selection_id"] is None:
                 # Existing deployed sidecars predate selection IDs. Assign one
