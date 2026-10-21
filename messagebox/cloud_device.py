@@ -10,6 +10,7 @@ import re
 import secrets
 import stat
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -194,7 +195,7 @@ class CloudDeviceClient:
         return cls(api_url, (identity_store or DeviceIdentityStore()).load_or_create())
 
     def request(self, path: str, *, method="GET", body=None, limit=128 * 1024,
-                ack_gone=False, voice_not_found=False) -> bytes:
+                ack_gone=False, voice_not_found=False, deadline=None) -> bytes:
         if not path.startswith("/device/") or ".." in path or "#" in path:
             raise CloudDeviceError("device request path is invalid")
         headers = {
@@ -211,10 +212,33 @@ class CloudDeviceClient:
             self.api_url + path, data=data, headers=headers, method=method
         )
         try:
-            with self.open_request(request, timeout=30) as response:
+            remaining = 30 if deadline is None else min(30, deadline - time.monotonic())
+            if remaining <= 0:
+                raise CloudDeviceError("cloud request budget expired")
+            with self.open_request(request, timeout=remaining) as response:
                 if response.status != 200:
                     raise CloudDeviceError("cloud request was rejected")
-                payload = response.read(limit + 1)
+                if deadline is None:
+                    payload = response.read(limit + 1)
+                else:
+                    payload = bytearray()
+                    while len(payload) <= limit:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise CloudDeviceError("cloud request budget expired")
+                        # urllib's HTTPResponse exposes the connected socket here.
+                        # Reset its timeout before each read so a trickle cannot
+                        # renew the optional job's absolute deadline.
+                        response.fp.raw._sock.settimeout(remaining)
+                        chunk = response.read1(min(65536, limit + 1 - len(payload)))
+                        if time.monotonic() >= deadline:
+                            raise CloudDeviceError("cloud request budget expired")
+                        if not chunk:
+                            break
+                        payload.extend(chunk)
+                        if response.isclosed():
+                            break
+                    payload = bytes(payload)
         except urllib.error.HTTPError as exc:
             try:
                 if exc.code == 429:
@@ -235,7 +259,7 @@ class CloudDeviceClient:
             finally:
                 exc.close()
             raise CloudDeviceError("cloud request was rejected") from exc
-        except (OSError, urllib.error.URLError) as exc:
+        except (OSError, urllib.error.URLError, AttributeError) as exc:
             raise CloudDeviceError("cloud request failed") from exc
         if len(payload) > limit:
             raise CloudDeviceError("cloud response is too large")
@@ -293,10 +317,24 @@ class CloudDeviceClient:
             raise CloudDeviceError("cloud response is invalid")
         return result
 
-    def voice_line(self, template, **reference):
+    def voice_line(self, template, *, deadline=None, **reference):
+        if not isinstance(template, str) or template not in {
+                "listened", "box_listened", "card_prompt", "confirm_prompt", "card_saved",
+                "reaction", "heart", "text_message", "text_message_nameless",
+                "reaction_fallback", "heart_fallback", "text_fallback",
+                "recording_recipient", "sent_recipient"}:
+            raise CloudDeviceError("voice line request is invalid")
+        if template in {"recording_recipient", "sent_recipient"}:
+            body = {"template": template, **reference}
+            if (set(reference) not in ({"identity_id"}, {"link_id"})
+                    or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value)
+                           for value in reference.values())
+                    or len(json.dumps(body).encode()) > 2048):
+                raise CloudDeviceError("voice line request is invalid")
         try:
             result = json.loads(self.request("/device/voice-lines", method="POST",
-                                             body={"template": template, **reference}))
+                                             body={"template": template, **reference},
+                                             **({"deadline": deadline} if deadline is not None else {})))
         except (ValueError, TypeError) as exc:
             raise CloudDeviceError("voice line response is invalid") from exc
         if not isinstance(result, dict):
@@ -333,7 +371,7 @@ class CloudDeviceClient:
             raise CloudDeviceError("voice status is invalid")
         return result
 
-    def media(self, media_url: str, *, limit=10 * 1024 * 1024) -> bytes:
+    def media(self, media_url: str, *, limit=10 * 1024 * 1024, deadline=None) -> bytes:
         """Fetch only an authenticated media path on this exact API origin."""
         parsed = urlsplit(media_url)
         if (
@@ -348,7 +386,8 @@ class CloudDeviceClient:
             or parsed.fragment
         ):
             raise CloudDeviceError("media URL is invalid")
-        return self.request(parsed.path.removeprefix("/cloud-api/v1"), limit=limit)
+        return self.request(parsed.path.removeprefix("/cloud-api/v1"), limit=limit,
+                            **({"deadline": deadline} if deadline is not None else {}))
 
     def send_voice(
         self, ogg_path: str | Path, recipient_id: str, idempotency_key: str,
@@ -437,6 +476,11 @@ def _update_capability():
     return capability()
 
 
+def _announce_capability():
+    from messagebox.sound_pack import recipient_fallbacks_ready
+    return {"announce_recipient_v1": True} if recipient_fallbacks_ready() else {}
+
+
 def capabilities(*, nfc=False) -> dict:
     from messagebox.sound_pack import installed_voice_packs
     return {
@@ -452,6 +496,7 @@ def capabilities(*, nfc=False) -> dict:
         "swoosh_sound_enabled": True,
         "listened_announcements": True,
         "voice_lines": 1,
+        **_announce_capability(),
         "reactions": 1,
         "reaction_cards": 1,
         "reaction_sent_voice": 1,

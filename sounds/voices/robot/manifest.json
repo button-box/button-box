@@ -312,5 +312,19 @@
    "seed": 7,
    "sha256": "d1d24e812f4a7f4cb25ab3a4264c013529ffdb1fa44b56d762bfcac1fe3547f0"
   }
+ ],
+ "recipient_lines": [
+  {
+   "file": "voice-recording.wav",
+   "text": "Beep boop. Recording.",
+   "seconds": 1.772,
+   "sha256": "004a9cd2325633b832ee937fd3f8cc343cbdbc918e135e4943a309615b550911"
+  },
+  {
+   "file": "voice-sent.wav",
+   "text": "Beep boop. Sent.",
+   "seconds": 1.452,
+   "sha256": "2fcab083621bc808f2cb2d6c14caf40d921a1f1c26a23368970d4640c907a976"
+  }
  ]
 }

@@ -312,5 +312,19 @@
    "seed": 7,
    "sha256": "285986e77fa52e395850360127d1db2ede804f00cdcad88c25af02dda335cd4a"
   }
+ ],
+ "recipient_lines": [
+  {
+   "file": "voice-recording.wav",
+   "text": "Arr, recording!",
+   "seconds": 2.0,
+   "sha256": "d59957ec7966c184ff4ee81e4a7bbb578abdaac746be5987d7e1f0a70b21fc1e"
+  },
+  {
+   "file": "voice-sent.wav",
+   "text": "Sent, matey!",
+   "seconds": 1.44,
+   "sha256": "be9232a4199a88d9bd39baaf0bc3b246ef2d384f44c1663e40a8f5642184fb1b"
+  }
  ]
 }

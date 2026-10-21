@@ -312,5 +312,19 @@
    "seed": 7,
    "sha256": "56a9a8d4fb55fd4cc46d3340c2652aca14fdadced77d33f44ea4ceb885300565"
   }
+ ],
+ "recipient_lines": [
+  {
+   "file": "voice-recording.wav",
+   "text": "Recording transmission!",
+   "seconds": 1.84,
+   "sha256": "971a8888d64f599b5db969487ea03b42761301cc0292486c2c3255705bf06db2"
+  },
+  {
+   "file": "voice-sent.wav",
+   "text": "Transmission sent!",
+   "seconds": 1.28,
+   "sha256": "14f0a6dbca3fb21738b8ea6ee75f962d5cd0a7ac3f780e77e5b1617ef96a7bbc"
+  }
  ]
 }

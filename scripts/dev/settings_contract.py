@@ -41,13 +41,15 @@ def literal(node, constants):
             else:
                 result[literal(key, constants)] = literal(value, constants)
         return result
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+        return literal(node.left, constants) * literal(node.right, constants)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
         return literal(node.left, constants) - literal(node.right, constants)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.func.id in {"frozenset", "list", "bool", "set"}:
             constructor = {"frozenset": frozenset, "list": list, "bool": bool, "set": set}[node.func.id]
             return constructor(literal(node.args[0], constants)) if node.args else constructor()
-        if node.func.id in {"installed_voice_packs", "_update_capability"} and not node.args:
+        if node.func.id in {"installed_voice_packs", "_update_capability", "_announce_capability"} and not node.args:
             return constants[node.func.id]()
     raise ContractError(f"unsupported expression: {ast.unparse(node)}")
 
@@ -205,6 +207,10 @@ def export_contract(repo):
                            "hashlib": hashlib, "wave": wave, "SOUND_DIR": repo / "sounds"}
         isolated_functions(sound, {"_validate_pack", "installed_voice_packs"}, sound_namespace)
         constants["installed_voice_packs"] = sound_namespace["installed_voice_packs"]
+        if any(isinstance(node, ast.FunctionDef) and node.name == "_announce_capability" for node in device.body):
+            isolated_functions(sound, {"_playable_wav", "recipient_fallback_path", "recipient_fallbacks_ready"}, sound_namespace)
+            constants["_announce_capability"] = lambda: ({"announce_recipient_v1": True}
+                if sound_namespace["recipient_fallbacks_ready"]("jessica") else {})
     returns = [node for node in ast.walk(capability_function) if isinstance(node, ast.Return)]
     if len(returns) != 1:
         raise ContractError("cannot describe capabilities: expected one return")

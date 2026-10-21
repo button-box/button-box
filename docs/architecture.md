@@ -289,3 +289,12 @@ clock is not verified by a recent heartbeat (`cloud_runtime.verified_now()`),
 and during Mute, Quiet now and quiet schedules. Lines are bundled
 (`voice-age-<key>.wav`, `age_lines` in each manifest) and fall back to Jessica,
 then to silence. wacli boxes never play the phrase.
+
+
+## Recipient announcements
+
+Cloud mode can announce the frozen recording and outbox recipient. See
+[Recipient announcements](recipient-announcements.md) for the setting, media
+contract, cache limits, required fallback files and field-updater checks.
+The capability stays off until both fallback files exist for the current pack.
+wacli behavior does not change.
