@@ -2,6 +2,7 @@ import json
 from contextlib import ExitStack, contextmanager
 import sys
 import tempfile
+import threading
 import types
 import unittest
 import wave
@@ -15,6 +16,7 @@ with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
     import messagebox.button_send as button_send  # noqa: E402
 from messagebox.contacts import ContactStore  # noqa: E402
 from messagebox.guided_reply import OutboxStore, RecordingResult  # noqa: E402
+from messagebox import guided_reply  # noqa: E402
 from messagebox.nfc import Announcer, NfcRuntime  # noqa: E402
 from messagebox.nfc_state import AnnouncementStore, EnrollmentStore, NfcRouter, SelectionStore  # noqa: E402
 
@@ -98,10 +100,7 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(button_send.routing_mode(), "no_contacts")
 
         self.add_grandma()
-        with mock.patch.object(
-            button_send, "active_selection", side_effect=AssertionError("card claimed")
-        ):
-            sole = button_send.current_recipient_context()
+        sole = button_send.current_recipient_context()
         self.assertEqual(sole["contact"]["jid"], GRANDMA)
         self.assertFalse(sole["via_card"])
         self.assertEqual(button_send.routing_mode(), "default_recipient")
@@ -256,12 +255,10 @@ class ButtonRoutingTests(unittest.TestCase):
         self.assertEqual(restored["contact"]["jid"], GRANDMA)
         self.assertFalse(restored["via_card"])
 
-    def test_zero_tag_setup_keeps_default_independent_of_unknown_reader_marker(self):
+    def test_unknown_reader_marker_blocks_default_even_without_paired_cards(self):
         self.add_grandma()
         SelectionStore(self.selection_path).block_unknown()
-        default = button_send.recording_recipient_context()
-        self.assertEqual(default["contact"]["jid"], GRANDMA)
-        self.assertFalse(default["via_card"])
+        self.assertIsNone(button_send.recording_recipient_context())
 
     def test_unknown_marker_malformed_or_unavailable_never_permits_fallback(self):
         self.add_grandma()
@@ -759,12 +756,11 @@ class CardSelectionLifecycleTests(unittest.TestCase):
             contacts.assign_card(GRANDMA, CARD)
             contacts.assign_card(FAMILY, "04:B2:00:FF")
             selection_type = button_send.SelectionStore
-            resolve_selection = button_send.active_selection
             selection = selection_type(root / "selection.json", clock=lambda: now[0])
             selection.select(CARD, GRANDMA, contacts.load()["revision"])
             health = root / "health"
             health.touch()
-            store = OutboxStore(root / "outbox", transport=mode)
+            store = OutboxStore(root / "outbox", transport=mode, selection_path=selection.path)
             audio = root / "recording.wav"
             io = mock.Mock()
             io.wait_for_approval.return_value = True
@@ -783,11 +779,11 @@ class CardSelectionLifecycleTests(unittest.TestCase):
             }.items():
                 stack.enter_context(mock.patch.object(button_send, name, value, create=True))
             stack.enter_context(mock.patch.object(button_send, "SelectionStore", side_effect=lambda path: selection_type(path, clock=lambda: now[0])))
-            stack.enter_context(mock.patch.object(button_send, "active_selection", side_effect=lambda *args, **kwargs: resolve_selection(*args, **kwargs, clock=lambda: now[0])))
             stack.enter_context(mock.patch.object(button_send.time, "time", side_effect=lambda: now[0]))
             stack.enter_context(mock.patch.object(button_send, "PiGuidedIO", return_value=io))
             stack.enter_context(mock.patch.object(button_send, "recent_reply_recipient", return_value=("route", FAMILY)))
             scope = stack.enter_context(mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64))
+            stack.enter_context(mock.patch.object(button_send.CloudDeviceClient, "from_environment", side_effect=AssertionError("unexpected Cloud client")))
             for name, value in {
                 "claim_oldest": None, "ensure_nfc_confirmation": True,
                 "acknowledge_and_classify_legacy_press": "record", "queued": [],
@@ -922,6 +918,273 @@ class CardSelectionLifecycleTests(unittest.TestCase):
                     with self.assertRaises(OSError):
                         s.run()
                     self.assert_card_job(s, mode)
+
+
+    def test_queue_commit_crashes_reconcile_before_the_next_recording(self):
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                for crash in ("before_queue_commit", "queue_commit", "before_consumption", "after_consumption"):
+                    with self.subTest(mode=mode, talk=talk, crash=crash), self.session(mode, talk) as s:
+                        original = s.selection.load()
+                        selection_type = type(s.selection)
+                        if crash in {"before_queue_commit", "queue_commit"}:
+                            real_fsync = guided_reply._fsync_dir
+
+                            def stop_after_commit(path):
+                                real_fsync(path)
+                                if Path(path) == s.store.root or (crash == "before_queue_commit" and Path(path).name.endswith(".tmp")):
+                                    raise SystemExit("crash after durable queue commit")
+
+                            patcher = mock.patch.object(guided_reply, "_fsync_dir", side_effect=stop_after_commit)
+                        else:
+                            real_consume = selection_type.consume
+
+                            def stop_at_consumption(store, snapshot):
+                                if crash == "after_consumption":
+                                    real_consume(store, snapshot)
+                                raise SystemExit("crash at selection consumption")
+
+                            patcher = mock.patch.object(selection_type, "consume", new=stop_at_consumption)
+                        with patcher, self.assertRaises(SystemExit):
+                            s.run()
+                        jobs = s.store.jobs()
+                        self.assertEqual(len(jobs), 0 if crash == "before_queue_commit" else 1)
+                        if jobs:
+                            metadata = json.loads((jobs[0].path / "job.json").read_text())
+                            self.assertEqual(metadata["nfc_selection_id"], original["selection_id"])
+                            self.assertEqual(jobs[0].recipient, GRANDMA)
+                        self.assertEqual(s.selection.load() is None, crash == "after_consumption")
+                        restarted = OutboxStore(s.store.root, transport=mode, selection_path=s.selection.path)
+                        restarted.recover_startup()
+
+                        def record_after_recovery():
+                            if crash == "before_queue_commit":
+                                self.assertEqual(s.selection.load(), original)
+                            else:
+                                self.assertIsNone(s.selection.load(), "input preceded reconciliation")
+                            return s.record()
+
+                        s.io.record.side_effect = record_after_recovery
+                        with mock.patch.object(button_send, "outbox_store", restarted):
+                            s.run()
+                        expected = [GRANDMA] if crash == "before_queue_commit" else [GRANDMA, FAMILY]
+                        self.assertEqual(sorted(job.recipient for job in restarted.jobs()), sorted(expected))
+
+    def test_button_startup_reconciles_before_constructing_the_button(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.session(mode, "tap") as s:
+                with mock.patch.object(type(s.selection), "consume", side_effect=SystemExit), self.assertRaises(SystemExit):
+                    s.run()
+
+                def button_after_recovery(*_args):
+                    self.assertIsNone(s.selection.load())
+                    raise SystemExit("button constructed after recovery")
+
+                with ExitStack() as stack:
+                    for name, value in {"OUTBOX_DIR": str(s.store.root), "QUEUE_DIR": str(s.store.root.parent / "queue"),
+                                        "TEMP_DIR": str(s.store.root.parent / "temp")}.items():
+                        stack.enter_context(mock.patch.object(button_send, name, value))
+                    stack.enter_context(mock.patch.object(button_send, "Button", side_effect=button_after_recovery))
+                    stack.enter_context(mock.patch.object(button_send, "ReceiptStore", return_value=mock.Mock(recover_inflight=lambda: 0)))
+                    stack.enter_context(mock.patch.object(button_send.threading, "Thread"))
+                    stack.enter_context(mock.patch.object(button_send.sys, "argv", ["button_send.py"]))
+                    stack.enter_context(mock.patch.dict(button_send.os.environ, {"MSGBOX_CLAIM_ONLY": "0"}))
+                    for name in ("validate_sounds", "validate_prompts", "recover_inflight"):
+                        stack.enter_context(mock.patch.object(button_send, name))
+                    with self.assertRaisesRegex(SystemExit, "button constructed after recovery"):
+                        button_send.main()
+                self.assertEqual(len(s.store.jobs()), 1)
+
+    def test_sender_deletion_between_queue_commit_and_recorder_return_is_safe(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.session(mode, "tap") as s:
+                real_fsync = guided_reply._fsync_dir
+
+                def sender_finishes_before_recorder_returns(path):
+                    real_fsync(path)
+                    if Path(path) == s.store.root:
+                        # complete() fsyncs this directory too; restore the real
+                        # boundary while simulating the sender's cleanup turn.
+                        with mock.patch.object(guided_reply, "_fsync_dir", side_effect=real_fsync):
+                            s.store.complete(s.store.jobs()[0])
+                        raise SystemExit("recorder crashed after sender cleanup")
+
+                with mock.patch.object(guided_reply, "_fsync_dir", side_effect=sender_finishes_before_recorder_returns), self.assertRaises(SystemExit):
+                    s.run()
+                self.assertEqual(s.store.jobs(), [])
+                self.assertIsNone(s.selection.load())
+                s.run()
+                self.assertEqual([job.recipient for job in s.store.jobs()], [FAMILY])
+
+    def test_reconciliation_failure_blocks_input_and_job_deletion(self):
+        for mode in ("wacli", "cloud"):
+            for talk in ("hold", "tap"):
+                with self.subTest(mode=mode, talk=talk), self.session(mode, talk) as s:
+                    with mock.patch.object(type(s.selection), "consume", side_effect=SystemExit), self.assertRaises(SystemExit):
+                        s.run()
+                    job = s.store.jobs()[0]
+                    s.io.record.reset_mock()
+                    with mock.patch.object(guided_reply.SelectionStore, "consume_id", side_effect=PermissionError("synthetic consumption failure")):
+                        with self.assertRaises(PermissionError):
+                            s.run()
+                        with self.assertRaises(PermissionError):
+                            s.store.complete(job)
+                        self.assertFalse(button_send.handle_confirmed_press(0))
+                    s.io.record.assert_not_called()
+                    self.assertTrue(job.path.exists())
+                    self.assertIsNotNone(s.selection.load())
+                    s.store.complete(job)
+                    self.assertFalse(job.path.exists())
+                    self.assertIsNone(s.selection.load())
+
+    def test_old_committed_job_cannot_consume_a_new_presentation(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.session(mode, "tap") as s:
+                with mock.patch.object(type(s.selection), "consume", side_effect=SystemExit), self.assertRaises(SystemExit):
+                    s.run()
+                # Same card, same wall time: only the presentation ID differs.
+                s.selection.select(CARD, GRANDMA, s.contacts.load()["revision"])
+                replacement = s.selection.load()
+                s.store.reconcile_card_selections()
+                s.store.complete(s.store.jobs()[0])
+                self.assertEqual(s.selection.load(), replacement)
+
+    def test_unknown_writer_before_reader_never_uses_default_or_recent_sender(self):
+        for mode in ("wacli", "cloud"):
+            for resolver in (button_send.current_recipient_context, button_send.recording_recipient_context):
+                with self.subTest(mode=mode, resolver=resolver.__name__), self.session(mode, "tap") as s:
+                    published, reader_entered, release = threading.Event(), threading.Event(), threading.Event()
+                    errors, results = [], []
+                    selection_type = type(s.selection)
+                    namespace = selection_type.block_unknown.__globals__
+                    real_write, real_resolve = namespace["_atomic_json"], selection_type.resolve
+
+                    def publish_then_pause(path, payload):
+                        real_write(path, payload)
+                        if Path(path) == s.selection.unknown_path:
+                            published.set()
+                            if not release.wait(3):
+                                raise RuntimeError("reader did not enter")
+
+                    def read_state(store, *args, **kwargs):
+                        reader_entered.set()
+                        return real_resolve(store, *args, **kwargs)
+
+                    def writer():
+                        try:
+                            # The reader service has not published its announcement.
+                            s.selection.block_unknown("04:FF:00:FF")
+                        except BaseException as exc:
+                            errors.append(exc)
+
+                    def reader():
+                        try:
+                            results.append(resolver())
+                        except BaseException as exc:
+                            errors.append(exc)
+
+                    with mock.patch.dict(namespace, {"_atomic_json": publish_then_pause}), mock.patch.object(selection_type, "resolve", new=read_state):
+                        writer_thread = threading.Thread(target=writer)
+                        reader_thread = threading.Thread(target=reader)
+                        writer_thread.start()
+                        try:
+                            self.assertTrue(published.wait(3))
+                            self.assertTrue(s.selection.path.exists())  # The old route still exists.
+                            reader_thread.start()
+                            self.assertTrue(reader_entered.wait(3))
+                        finally:
+                            release.set()
+                            writer_thread.join(3)
+                            if reader_thread.ident is not None:
+                                reader_thread.join(3)
+                    self.assertFalse(writer_thread.is_alive())
+                    self.assertFalse(reader_thread.is_alive())
+                    self.assertEqual(errors, [])
+                    self.assertEqual(results, [None])
+                    self.assertEqual(s.selection.resolve(s.contacts.load())[0], "blocked")
+
+    def test_unknown_writer_between_block_and_selection_read_is_serialized(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.session(mode, "tap") as s:
+                at_selection_read, writer_attempted = threading.Event(), threading.Event()
+                errors = []
+                selection_type = type(s.selection)
+                real_load = selection_type._load
+
+                def pause_read(store, **kwargs):
+                    at_selection_read.set()
+                    self.assertTrue(writer_attempted.wait(3))
+                    return real_load(store, **kwargs)
+
+                def writer():
+                    try:
+                        if not at_selection_read.wait(3):
+                            raise RuntimeError("reader did not inspect selection")
+                        writer_attempted.set()
+                        s.selection.block_unknown("04:FF:00:FF")
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                thread = threading.Thread(target=writer)
+                with mock.patch.object(selection_type, "_load", new=pause_read):
+                    thread.start()
+                    try:
+                        context = button_send.current_recipient_context()
+                    finally:
+                        thread.join(3)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertTrue(context["via_card"])
+                self.assertEqual(context["contact"]["jid"], GRANDMA)
+                self.assertIsNone(button_send.current_recipient_context())
+
+    def test_unknown_scan_during_history_lookup_blocks_fallback(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.session(mode, "tap") as s:
+                s.selection.clear()
+
+                def lookup(*_args):
+                    s.selection.block_unknown("04:FF:00:FF")
+                    return "route", FAMILY
+
+                with mock.patch.object(button_send, "recent_reply_recipient", side_effect=lookup):
+                    self.assertIsNone(button_send.recording_recipient_context())
+
+    def test_contacts_refresh_preserves_expiry_and_changed_mapping_stays_blocked(self):
+        for mode in ("wacli", "cloud"):
+            for changed_person in (False, "reassigned", "unpaired"):
+                with self.subTest(mode=mode, changed_person=changed_person), self.session(mode, "tap") as s:
+                    initial = s.selection.load()
+                    announcements = AnnouncementStore(s.selection.path.parent / "announcements.json")
+                    router = NfcRouter(s.contacts, s.selection, EnrollmentStore(s.selection.path.parent / "enrollment.json"), announcements)
+                    reader = NfcRuntime(router, Announcer(announcements))
+                    reader.observe(CARD, 0)
+                    initial = s.selection.load()
+                    s.now[0] = 1029
+                    if changed_person == "reassigned":
+                        s.contacts.assign_card(FAMILY, CARD)
+                    elif changed_person == "unpaired":
+                        s.contacts.clear_cards(GRANDMA)
+                    else:
+                        s.contacts.add_contact("15551234569@s.whatsapp.net", "Another person")
+                    reader.observe(CARD, 1)
+                    if changed_person:
+                        self.assertIsNone(button_send.current_recipient_context())
+                        s.contacts.assign_card(GRANDMA, CARD)
+                        reader.observe(CARD, 2)
+                        self.assertIsNone(button_send.current_recipient_context())
+                        reader.observe(None, 3)
+                        self.assertIsNone(button_send.current_recipient_context())
+                        reader.observe(CARD, 4)
+                        self.assertEqual(button_send.current_recipient_context()["contact"]["jid"], GRANDMA)
+                    else:
+                        refreshed = s.selection.load()
+                        self.assertEqual(refreshed["selected_at"], initial["selected_at"])
+                        self.assertEqual(refreshed["selection_id"], initial["selection_id"])
+                        self.assertEqual(refreshed["contacts_revision"], s.contacts.load()["revision"])
+                        s.now[0] = 1031
+                        s.run()
+                        self.assertEqual([job.recipient for job in s.store.jobs()], [FAMILY])
 
 
 if __name__ == "__main__":

@@ -75,6 +75,22 @@ queue or saving silent audio. A button-service crash before approval leaves
 the choice available until expiry; there is no claim to recover. Invalid card
 state blocks outbound routing rather than selecting a recent sender or default.
 
+Each card recording saves its selection ID with the durable outbox job. Button
+startup and input reconcile committed jobs before routing another recording.
+Successful-send cleanup and all Cloud job deletion paths reconcile before
+removing that receipt. A crash after the queue commit therefore cannot leave
+an old card choice armed; a later presentation has a different ID and survives
+reconciliation of an older job. Reconciliation failure keeps input blocked and
+the job available for retry. The unknown-card block and selection are read
+together under the same lock used by the NFC writer; blocked state never means
+that the default or recent sender may be used.
+
+An NFC service restart preserves unused choices, consumed markers and their
+original timestamps. A held card is resumed as the same presentation until the
+reader confirms removal for the normal grace interval. An unrelated contacts
+revision refreshes the same person's mapping without renewing the choice. A
+changed mapping blocks that presentation until removal and a new scan.
+
 In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14
 days, newest first. Playable media is further bounded to the 10 newest files and

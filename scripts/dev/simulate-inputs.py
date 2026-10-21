@@ -540,7 +540,7 @@ def execute(plan, manifest, send, scratch=None):
                 raise SimulationError("card event does not match the verified routing state")
     announcement = nfc.AnnouncementStore(nfc.NFC_ANNOUNCEMENT_FILE)
     runtime.led = StatusLamp()
-    runtime.outbox_store = runtime.OutboxStore(runtime.OUTBOX_DIR, transport=runtime.transport_mode())
+    runtime.outbox_store = runtime.OutboxStore(runtime.OUTBOX_DIR, transport=runtime.transport_mode(), selection_path=runtime.NFC_SELECTION_FILE)
     runtime.receipt_store = runtime.ReceiptStore(runtime.LISTENED_DIR)
     Path(runtime.TEMP_DIR).mkdir(parents=True, exist_ok=True)
     runtime.validate_sounds()

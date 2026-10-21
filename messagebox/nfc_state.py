@@ -208,17 +208,61 @@ class SelectionStore:
             return False
         return True
 
-    def block_unknown(self):
+    def block_unknown(self, uid=None, *, new_presentation=True):
         with self.locked():
-            # Publish the block before clearing a previously selected route.
-            if not self.unknown_present():
-                _atomic_json(self.unknown_path, {"version": 1, "state": "unknown"})
-            for path in (self.path, self.claimed_path):
-                path.unlink(missing_ok=True)
+            block = _load_json(self.unknown_path) if not new_presentation else None
+            invalidated = not new_presentation and (
+                self.path.exists() or (block is not None and block.get("state") == "invalid")
+            )
+            self._block_locked(uid, state="invalid" if invalidated else "unknown")
+
+    def _block_locked(self, uid, *, state="unknown"):
+        # Publish the block before clearing a previously selected route.
+        _atomic_json(self.unknown_path, {"version": 1, "state": state, "uid": uid, "present": True})
+        for path in (self.path, self.claimed_path):
+            path.unlink(missing_ok=True)
 
     def clear_unknown(self):
         with self.locked():
             self.unknown_path.unlink(missing_ok=True)
+
+    def presentation(self):
+        """Resume a held presentation, including a consumed or unknown card."""
+        with self.locked():
+            if self.unknown_present():
+                if self.unknown_path.is_symlink():
+                    return None, True
+                block = _load_json(self.unknown_path)
+                if block is None:
+                    return None, True
+                if not block.get("present", True):
+                    return None, False
+                try:
+                    uid = normalize_uid(block["uid"]) if block.get("uid") is not None else None
+                except NfcError:
+                    uid = None
+                return uid, True
+            for path in (self.path, self.claimed_path):
+                payload = _load_json(path)
+                if payload is not None and payload.get("present", True):
+                    return normalize_uid(payload.get("uid")), True
+            return None, False
+
+    def card_absent(self):
+        with self.locked():
+            # Preserve the choice and its expiry, but remember confirmed removal
+            # so the next presentation can rearm it even after a service restart.
+            for path in (self.path, self.claimed_path):
+                payload = _load_json(path)
+                if payload is not None and payload.get("present", True):
+                    payload["present"] = False
+                    _atomic_json(path, payload)
+            block = None if self.unknown_path.is_symlink() else _load_json(self.unknown_path)
+            if block is not None and block.get("state") == "invalid":
+                block["present"] = False
+                _atomic_json(self.unknown_path, block)
+            else:
+                self.unknown_path.unlink(missing_ok=True)
 
     @contextmanager
     def locked(self):
@@ -238,16 +282,15 @@ class SelectionStore:
                     self.claimed_path.unlink()
                 except FileNotFoundError:
                     pass
-            elif self.claimed_path.exists():
+            elif self.claimed_path.exists() or self.unknown_present():
                 return False
             previous = self._load(max_age=None)
-            changed = (
-                new_presentation
-                or previous is None
-                or previous["uid"] != uid
-                or previous["jid"] != jid
-                or previous["contacts_revision"] != contacts_revision
-            )
+            if not new_presentation and (
+                previous is None or previous["uid"] != uid or previous["jid"] != jid
+            ):
+                self._block_locked(uid, state="invalid")
+                return False
+            changed = new_presentation
             _atomic_json(
                 self.path,
                 {
@@ -258,6 +301,7 @@ class SelectionStore:
                     "selection_id": uuid.uuid4().hex if changed else previous.get("selection_id"),
                     "selected_at": now if changed else previous["selected_at"],
                     "last_seen_at": now,
+                    "present": True,
                 },
             )
             self.unknown_path.unlink(missing_ok=True)
@@ -277,13 +321,49 @@ class SelectionStore:
 
     def consume(self, snapshot):
         """Consume only the presentation whose recording was queued."""
+        return self.consume_id(snapshot["selection_id"], snapshot["jid"])
+
+    def consume_id(self, selection_id, recipient):
         with self.locked():
-            current = self._load(max_age=None)
-            keys = ("uid", "jid", "contacts_revision", "selected_at", "selection_id")
-            if current is None or any(current.get(key) != snapshot.get(key) for key in keys):
+            # The queue receipt remains authoritative even after expiry or a
+            # clock correction. Routing-time timestamp checks must not undo it.
+            current = _load_json(self.path)
+            if current is None or current.get("selection_id") != selection_id or current.get("jid") != recipient:
                 return False
             os.replace(self.path, self.claimed_path)
+            directory = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
             return True
+
+    def resolve(self, document, *, max_age=DEFAULT_SELECTION_TTL_S):
+        """Read the block and choice atomically; invalid state is never absence."""
+        with self.locked():
+            if self.unknown_present():
+                return "blocked", None
+            exists = self.path.exists()
+            snapshot = self._load(max_age=None)
+            if snapshot is None:
+                return ("blocked" if exists else "none"), None
+            if self.clock() - snapshot["selected_at"] > max_age:
+                os.replace(self.path, self.claimed_path)
+                return "none", None
+            jid, contact = _contact_for_uid(document, snapshot["uid"])
+            if document["revision"] != snapshot["contacts_revision"] or jid != snapshot["jid"] or contact is None:
+                return "blocked", None
+            if snapshot["selection_id"] is None:
+                # Existing deployed sidecars predate selection IDs. Assign one
+                # without renewing either timestamp.
+                snapshot["selection_id"] = uuid.uuid4().hex
+                payload = _load_json(self.path)
+                payload["selection_id"] = snapshot["selection_id"]
+                _atomic_json(self.path, payload)
+            return "selected", {
+                "contact": _public_contact(jid, contact), "uid": snapshot["uid"],
+                "selection": snapshot, "via_card": True,
+            }
 
     def expire(self, *, max_age=DEFAULT_SELECTION_TTL_S):
         with self.locked():
@@ -318,6 +398,9 @@ class SelectionStore:
             uid = normalize_uid(payload.get("uid"))
             jid = payload.get("jid")
             revision = payload.get("contacts_revision")
+            selection_id = payload.get("selection_id")
+            if selection_id is not None and (not isinstance(selection_id, str) or not re.fullmatch(r"[a-f0-9]{32}", selection_id)):
+                raise ValueError
             selected_at = float(payload.get("selected_at"))
             last_seen_at = float(payload.get("last_seen_at"))
             if not isinstance(jid, str) or not jid:
@@ -673,11 +756,14 @@ class NfcRouter:
         document = self.contacts.load()
         jid, contact = _contact_for_uid(document, uid)
         if contact is None:
-            self.selection.block_unknown()
+            self.selection.block_unknown(uid, new_presentation=new_presentation)
             return ScanResult("unknown", uid, None, new_presentation)
         public_contact = _public_contact(jid, contact)
         if len(document["contacts"]) < 2:
-            self.selection.clear()
+            if new_presentation:
+                self.selection.clear()
+            elif self.selection.path.exists() or self.selection.claimed_path.exists():
+                self.selection.select(uid, jid, document["revision"], new_presentation=False)
             return ScanResult("recognized", uid, public_contact, new_presentation)
         changed = self.selection.select(
             uid,
@@ -743,7 +829,7 @@ class NfcRouter:
         )
 
     def card_absent(self):
-        self.selection.clear_unknown()
+        self.selection.card_absent()
         return ScanResult("removed")
 
     def active_contact(self, max_age=DEFAULT_SELECTION_TTL_S):
