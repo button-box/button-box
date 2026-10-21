@@ -4,6 +4,7 @@ config/emergency-keys/README.md
 config/journald.conf.d/messagebox.conf
 config/release-keys/README.md
 config/requirements-nfc.txt
+config/update-discovery-voice-ready.conf
 messagebox/QR-PROVENANCE.md
 messagebox/__init__.py
 messagebox/audio_requests.py

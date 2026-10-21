@@ -136,7 +136,8 @@ The schema matches the release tooling: `schema: 1`, `product: "button-box"`,
 `release_sequence`, `channel: "stable" | "canary"`, `supported_os`,
 `supported_arch`, `supported_models`, `min_updater_version` as `major.minor.patch`,
 and the existing complete installed-file mapping/hashes. This controller is
-`1.1.0`. Releases that add sounds require `min_updater_version: "1.1.0"`.
+`1.2.0`. The voice release requires `min_updater_version: "1.2.0"`. The updater
+preparation release remains installable with `min_updater_version: "1.1.0"`.
 Sequence ordering is global across channels; version strings are never
 sorted to decide eligibility. Stable boxes reject canaries; canary boxes may
 accept a stable release with a higher signed sequence. Recovery permits only
@@ -150,7 +151,7 @@ unchanged: the signature covers the manifest list and every file byte through
 the signed hashes.
 
 New files are allowed directly in `sounds/cues`, `sounds/cloud`, `sounds/voice`,
-`sounds/ringtones`, or the existing `sounds/voices/{pirate,alien,dj,robot,french,charlie,tata}`
+`sounds/ringtones`, or the existing `sounds/voices/{pirate,alien,dj,robot,french,charlie,tata,buttonbox}`
 folders. WAV basenames must match `[a-z0-9][a-z0-9._-]{0,80}\.wav`.
 `manifest.json` and `cues.json` are also permitted in those folders. Existing
 README files and ringtone lamp files retain only their exact existing mappings.
@@ -406,11 +407,14 @@ controller separately. Do not remove `/etc/button-box-update/installed`, rerun
 Keep policy, pins, trust/sequence floors, quarantine, journals and snapshots.
 
 The release-defined sound support changes the fixed `bounded_update.py` module
-and bumps `release_verify.py` to controller version 1.1.0. An already bootstrapped
+and bumps `release_verify.py` to controller version 1.2.0. The downloader also
+gets a 1,500-second transfer budget, checked between 64 KiB reads, with the
+existing 30-second socket timeout. Its fixed service needs the reviewed
+1,800-second maintenance drop-in. An already bootstrapped
 canary needs the attended procedure below before it can accept extra sounds.
 The maintenance module list remains **bounded_update, release_verify, trust_update,
 update_controller, update_discovery, health-probe**; stage and exchange the complete
-set even though only two modules changed. All fixed systemd units are unchanged:
+set even though only three modules changed. All fixed systemd unit files are unchanged:
 compare them with the source, do not reinstall them. New boxes get this through
 bootstrap. Ordinary signed application updates cannot perform this promotion.
 
@@ -429,7 +433,8 @@ run both transport checks, and complete the release privacy review before
 transferring any artifacts. Transfer only the reviewed installer modules and
 fixed unit files into a root-owned, non-writable-by-others maintenance source,
 for example `/root/button-box-maintenance`. Keep its installer files under
-`scripts/install/` and unit files under `systemd/`. No secret signing keys belong
+`scripts/install/`, unit files under `systemd/`, and the reviewed
+`update-discovery-voice-ready.conf` under `config/`. No secret signing keys belong
 on the box. The following commands run **on the verified box**, as root:
 
 ```sh
@@ -535,6 +540,18 @@ finally:
     os.close(fd)
 PY
 # NEXT now holds the previous complete controller for attended fallback.
+# Record any existing voice-ready.conf privately before this maintenance.
+# Abort if an existing file differs; review its owner and purpose first.
+DROPIN=/etc/systemd/system/messagebox-update-discovery.service.d
+install -d -o root -g root -m 0755 "$DROPIN"
+if [ -e "$DROPIN/voice-ready.conf" ]; then
+  cmp "$SOURCE/config/update-discovery-voice-ready.conf" "$DROPIN/voice-ready.conf"
+else
+  install -o root -g root -m 0644 "$SOURCE/config/update-discovery-voice-ready.conf" "$DROPIN/voice-ready.conf"
+fi
+cmp "$SOURCE/config/update-discovery-voice-ready.conf" "$DROPIN/voice-ready.conf"
+systemctl daemon-reload
+[ "$(systemctl show messagebox-update-discovery.service --property=TimeoutStartUSec --value)" = 30min ]
 flock -u 7
 flock -u 8
 flock -u 9
@@ -575,3 +592,41 @@ rollback/reboot recovery, then physical send/play/reply, NFC, quiet hours and
 listened notices. Fixed-controller promotion, atomic exchange/power-loss
 behavior and physical canary acceptance require device verification; local
 checks establish none of those outcomes.
+
+
+## Voice release transition from v0.3.12
+
+Use two releases. Test box 4 first at each step. Do not send the second release
+until the first release and fixed-controller maintenance pass acceptance.
+
+1. Build the updater preparation branch from `origin/release-v0.3.12`. Set
+   `--min-updater-version 1.1.0`. It changes the controller sound allowlist and
+   raises the total sound limit from 128 MiB to 160 MiB. It adds `buttonbox`
+   paths and accepts the new setup WAVs through the existing sound-path rule.
+   It keeps per-file, count, hash, PCM, routing, and archive checks. The fixed
+   v0.3.12 controller can install this application payload. The payload keeps
+   the old packs and runtime unchanged.
+2. Promote the complete six-module controller set with the attended procedure
+   above. Verify version 1.2.0 and all six file hashes. Apply and read back the
+   discovery drop-in in the same maintenance window. An application update
+   alone only stages the modules in its `updater/` directory. It does not
+   activate them. Never rerun bootstrap on an installed box.
+3. Build the voice release after it is based on the preparation commit. Set
+   `--min-updater-version 1.2.0`, with a higher release sequence. The old verifier
+   rejects this minimum before downloading the archive. The preparation
+   controller can install it. Verify box 4, then use the normal batched rollout.
+
+The larger time budget keeps WAV playback and all existing voice packs. It
+allows a slow or failed download to occupy discovery for longer. The 1,800-second
+service limit is the final bound. The 128 MiB compressed archive limit, 256 MiB
+expanded limit, signature checks, and partial-file cleanup stay in force. No
+resume support is added. A link slower than the budget can still fail safely.
+Do not publish the second release until the drop-in is active on its target.
+New controller bootstrap installs this same drop-in; wacli does not use bootstrap.
+
+For attended controller fallback, quiesce and lock as above. Exchange the
+complete old module directory back. Restore the previous discovery drop-in, or
+remove only this maintenance-created file if it did not exist before. Reload
+systemd, verify the effective timeout, and restore the recorded service states.
+Application rollback alone does not restore the fixed controller or its drop-in.
+Physical power-loss and controller-fallback tests remain required.

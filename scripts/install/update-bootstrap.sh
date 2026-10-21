@@ -52,6 +52,8 @@ PY
 for unit in "$REPO_DIR"/systemd/messagebox-update-*; do
   install -o root -g root -m 0644 "$unit" /etc/systemd/system/
 done
+install -d -o root -g root -m 0755 /etc/systemd/system/messagebox-update-discovery.service.d
+install -o root -g root -m 0644 "$REPO_DIR/config/update-discovery-voice-ready.conf" /etc/systemd/system/messagebox-update-discovery.service.d/voice-ready.conf
 install -o root -g root -m 0644 /dev/null /run/messagebox-update/maintenance.lock
 # Add ordering to existing units, including activators and ComItUp. Dependencies
 # live in bootstrap drop-ins so ordinary wacli setup does not need recovery.
