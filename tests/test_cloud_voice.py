@@ -101,7 +101,8 @@ class ReactionTests(unittest.TestCase):
         self.client.voice_line=mock.Mock(return_value={'clip_id':'a'*64,'voice_pack':'jessica',
            'sha256':hashlib.sha256(audio).hexdigest(),'content_type':'audio/wav','media_url':'https://cloud.example/clip'})
         self.client.media=mock.Mock(return_value=audio)
-        self.runtime._preload_voice_lines()
+        with mock.patch.object(self.runtime, "_recipient_voice_wanted", return_value={}):
+            runtime_tests.finish_voice_preloads(self.runtime)
         jid=PERSON['wa_id']+'@s.whatsapp.net'
         self.assertTrue(self.runtime.card_prompt_clip(jid,'jessica'))
         self.assertTrue(self.runtime.named_card_clip(jid,'jessica','card_saved'))

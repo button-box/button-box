@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
 import wave
 from pathlib import Path
@@ -211,7 +212,7 @@ class RecipientContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cache = recipient_voice_cache(directory)
             self.assertEqual(
-                (cache.max_entries, cache.max_bytes), (150, 64 * 1024 * 1024)
+                (cache.max_entries, cache.max_bytes), (300, 128 * 1024 * 1024)
             )
             fields = dict(
                 scope="a" * 64,
@@ -225,12 +226,12 @@ class RecipientContractTests(unittest.TestCase):
             client = mock.Mock()
             client.media.return_value = audio
             payload = ready(fields, audio)
-            for index in range(151):
+            for index in range(301):
                 key = recipient_voice_key(**{**fields, "subject": str(index)})
                 self.assertTrue(cache.download(client, payload, key=key))
-            self.assertEqual(len(list(Path(directory).glob("*.wav"))), 150)
+            self.assertEqual(len(list(Path(directory).glob("*.wav"))), 300)
             self.assertEqual(
-                client.media.call_count, 151
+                client.media.call_count, 301
             )  # Even a shared clip_id has separate scoped files.
             for field, value in [
                 ("scope", "e" * 64),
@@ -280,7 +281,7 @@ class RecipientPrefetchTests(unittest.TestCase):
         self.client.api_url = API
         self.client.media = mock.Mock(return_value=wav())
 
-        def response(template, **reference):
+        def response(template, *, deadline=None, **reference):
             if template not in RECIPIENT_TEMPLATES:
                 return {"use_fallback": True}
             box = "link_id" in reference
@@ -294,12 +295,11 @@ class RecipientPrefetchTests(unittest.TestCase):
         )
         patch.start()
         self.addCleanup(patch.stop)
-        self.runtime._preload_recipient_lines()
-        self.runtime._preload_recipient_lines()
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
 
     def test_both_routes_lines_restart_corruption_missing_and_offline(self):
         self.enable()
-        self.assertEqual(self.client.voice_line.call_count, 4)
+        self.assertEqual(sum(call.args[0] in RECIPIENT_TEMPLATES for call in self.client.voice_line.call_args_list), 4)
         for jid in (JID, "box:" + BOX["id"]):
             for template in RECIPIENT_TEMPLATES:
                 clip = self.runtime.recipient_voice_clip(
@@ -368,6 +368,7 @@ class RecipientPrefetchTests(unittest.TestCase):
             self.client.voice_line.side_effect = invalid
             before = self.client.media.call_count
             self.runtime.heartbeat()
+            runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
             self.assertEqual(self.client.media.call_count, before)
             self.assertEqual(
                 self.runtime.recipient_voice_clip(
@@ -378,6 +379,7 @@ class RecipientPrefetchTests(unittest.TestCase):
         self.client.voice_line.side_effect = lambda *args, **kwargs: []
         self.runtime.state["recipient_voice_cache"] = {}
         self.runtime.heartbeat()
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
         self.assertEqual(self.runtime._snapshot()["account_scope"], "a" * 64)
 
     def test_prune_rename_removal_scope_pack_and_download_races(self):
@@ -386,7 +388,9 @@ class RecipientPrefetchTests(unittest.TestCase):
         self.client.people[0]["display_name"] = "Changed Full Name"
         self.runtime.heartbeat()
         self.assertFalse(Path(old).exists())
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
         old = self.runtime.recipient_voice_clip(JID, "jessica", "recording_recipient")
+        self.assertTrue(old)
         self.client.people = []
         self.runtime.heartbeat()
         self.assertFalse(Path(old).exists())
@@ -396,36 +400,186 @@ class RecipientPrefetchTests(unittest.TestCase):
         old_files = list((self.root / "recipient-voice").glob("*.wav"))
         self.client.voice_line.side_effect = CloudDeviceError("offline")
         self.runtime.state["snapshot"]["account_scope"] = "b" * 64
-        self.runtime._preload_recipient_lines()
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
         self.assertTrue(all(not path.exists() for path in old_files))
         runtime_tests.CloudRuntimeTests.update_settings(self, voice_pack="pirate")
-        self.runtime._preload_recipient_lines()
+        runtime_tests.finish_voice_preloads(self.runtime, cycles=3)
         self.assertEqual(list((self.root / "recipient-voice").glob("*.wav")), [])
 
     def test_rename_or_pack_switch_during_download_discards_result(self):
         self.enable()
-        self.runtime.state["recipient_voice_cache"] = {}
+        for change in ("rename", "pack"):
+            started, release = threading.Event(), threading.Event()
+            self.runtime.state["recipient_voice_cache"] = {}
+            self.runtime.state.pop("voice_preload_cursor", None)
+            for path in (self.root / "recipient-voice").glob("*.wav"):
+                path.unlink()
 
-        def download(*args, **kwargs):
-            self.runtime.state["snapshot"]["people"][0]["display_name"] = "New name"
+            def download(*args, **kwargs):
+                started.set()
+                release.wait(2)
+                return wav()
+
+            self.client.media.side_effect = download
+            with mock.patch.object(self.runtime, "_card_voice_wanted", return_value={}):
+                self.runtime._preload_voice_lines(new_cycle=True)
+                self.assertTrue(started.wait(1))
+                try:
+                    if change == "rename":
+                        self.runtime.state["snapshot"]["people"][0]["display_name"] = "New name"
+                    else:
+                        runtime_tests.CloudRuntimeTests.update_settings(self, voice_pack="pirate")
+                finally:
+                    release.set()
+                    self.runtime._voice_thread.join(2)
+                self.runtime._preload_voice_lines(start=False)
+            self.assertEqual(self.runtime.state["recipient_voice_cache"], {})
+            self.assertEqual(list((self.root / "recipient-voice").glob("*.wav")), [])
+
+    def test_polling_does_not_remove_the_workers_active_temporary_file(self):
+        self.enable()
+        self.runtime.state["recipient_voice_cache"] = {}
+        self.runtime.state.pop("voice_preload_cursor", None)
+        directory = self.root / "recipient-voice"
+        for path in directory.glob("*.wav"):
+            path.unlink()
+        started, release = threading.Event(), threading.Event()
+        replace = os.replace
+
+        def finish_file(source, target):
+            if Path(target).parent == directory:
+                started.set()
+                release.wait(2)
+            return replace(source, target)
+
+        with (mock.patch.object(self.runtime, "_card_voice_wanted", return_value={}),
+              mock.patch("messagebox.cloud_voice.os.replace", side_effect=finish_file)):
+            self.runtime._preload_voice_lines(new_cycle=True)
+            self.assertTrue(started.wait(1))
+            try:
+                temporary = next(directory.glob("*.part"))
+                self.runtime.heartbeat()
+                self.runtime.poll_once()
+                self.assertTrue(temporary.exists())
+            finally:
+                release.set()
+                self.runtime._voice_thread.join(2)
+            self.runtime._preload_voice_lines(start=False)
+        self.assertTrue(self.runtime.recipient_voice_clip(JID, "jessica", "recording_recipient"))
+        self.assertFalse(list(directory.glob("*.part")))
+
+    def test_total_budget_covers_metadata_and_media_and_yields_between_jobs(self):
+        self.enable()
+        self.runtime.state["recipient_voice_cache"] = {}
+        self.runtime.state["voice_line_cache"] = {}
+        calls = []
+        response = self.client.voice_line.side_effect
+
+        def metadata(template, *, deadline, **reference):
+            calls.append(("metadata", deadline - self.mono[0]))
+            self.mono[0] += 2
+            return response(template, **reference)
+
+        def media(*args, deadline, **kwargs):
+            calls.append(("media", deadline - self.mono[0]))
+            self.mono[0] += 2
             return wav()
 
-        self.client.media.side_effect = download
-        for path in (self.root / "recipient-voice").glob("*.wav"):
-            path.unlink()
-        self.runtime._preload_recipient_lines()
-        self.assertEqual(
-            self.runtime.recipient_voice_clip(JID, "jessica", "recording_recipient"), ""
-        )
-        self.client.media.side_effect = lambda *args, **kwargs: (
-            runtime_tests.CloudRuntimeTests.update_settings(self, voice_pack="pirate")
-            or wav()
-        )
+        self.client.voice_line.side_effect = metadata
+        self.client.media.side_effect = media
+        self.runtime._preload_voice_lines(start=False, new_cycle=True)
+        # No optional request starts within heartbeat/reconciliation.
+        self.assertEqual(calls, [])
+        self.runtime.poll_once()
+        self.runtime._voice_thread.join(2)
+        self.assertEqual(calls, [("metadata", 5), ("media", 3)])
+        # Completion does not start a second job until the next inbox poll.
+        inbox = mock.Mock(wraps=self.client.inbox)
+        self.client.inbox = inbox
+        self.runtime.poll_once()
+        self.runtime._voice_thread.join(2)
+        self.runtime._preload_voice_lines(start=False)
+        self.assertEqual(calls[-1], ("metadata", 1))
+        self.assertEqual(len(calls), 3)  # No media after metadata uses the last second.
+        self.assertEqual(inbox.call_count, 1)
+        self.assertEqual(self.runtime._voice_remaining, 0)
+        self.runtime.poll_once()
+        self.assertEqual(len(calls), 3)
+
+    def test_blocked_optional_request_cannot_block_heartbeat_inbox_or_mute(self):
+        self.enable()
         self.runtime.state["recipient_voice_cache"] = {}
-        self.runtime._preload_recipient_lines()
-        self.assertEqual(
-            self.runtime.recipient_voice_clip(JID, "jessica", "sent_recipient"), ""
-        )
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked(*args, **kwargs):
+            started.set()
+            release.wait(2)
+            return {"use_fallback": True}
+
+        self.client.voice_line.side_effect = blocked
+        self.runtime._preload_voice_lines(start=False, new_cycle=True)
+        self.runtime.poll_once()
+        self.assertTrue(started.wait(1))
+        try:
+            self.runtime.heartbeat()
+            self.client.items = [{"operation_id": runtime_tests.OP, "sequence": 1,
+                "kind": "mute", "created_at": runtime_tests.NOW,
+                "expires_at": runtime_tests.NOW + 60, "payload": {"muted": True}}]
+            self.runtime.poll_once()
+            self.assertTrue(self.runtime.silence.load()["muted"])
+            self.assertTrue(self.runtime._voice_thread.is_alive())
+            self.assertTrue(self.runtime._snapshot())
+            self.assertEqual(self.client.acks[-1]["state"], "applied")
+        finally:
+            release.set()
+            self.runtime._voice_thread.join(2)
+            self.runtime._preload_voice_lines(start=False)
+
+    def test_full_150_contacts_both_templates_and_eviction_respects_retry(self):
+        self.client.people = [{**PERSON, "id": "person%03d" % index,
+            "wa_id": "1202555%04d" % index, "display_name": "Person %d" % index}
+            for index in range(150)]
+        all_people = self.client.people
+        self.client.people = all_people[:100]
+        self.client.connected_boxes = [{"id": person["id"], "box_name": person["display_name"]}
+                                       for person in all_people[100:]]
+        self.runtime.heartbeat()
+        self.client.api_url = API
+        self.client.media = mock.Mock(return_value=wav())
+        requested = []
+
+        fields_by_subject = {}
+
+        def response(template, *, deadline=None, **reference):
+            subject = reference.get("identity_id", reference.get("link_id"))
+            requested.append((subject, template))
+            return ready(fields_by_subject[(subject, template)], wav())
+
+        self.client.voice_line = mock.Mock(side_effect=response)
+        with (mock.patch.object(sound_pack, "recipient_fallbacks_ready", return_value=True),
+              mock.patch.object(self.runtime, "_card_voice_wanted", return_value={})):
+            fields_by_subject.update(((fields["subject"], fields["template"]), fields)
+                for fields in self.runtime._recipient_voice_wanted().values())
+            runtime_tests.finish_voice_preloads(self.runtime, cycles=100)
+            self.assertEqual(len(requested), 300)
+            self.assertEqual(len(set(requested)), 300)
+            self.assertEqual(requested[:4], [(self.client.people[index]["id"], template)
+                for index in range(2) for template in RECIPIENT_TEMPLATES])
+            jids = [person["wa_id"] + "@s.whatsapp.net" for person in self.client.people]
+            jids += ["box:" + box["id"] for box in self.client.connected_boxes]
+            for jid in jids:
+                for template in RECIPIENT_TEMPLATES:
+                    self.assertTrue(self.runtime.recipient_voice_clip(jid, "jessica", template))
+            self.assertEqual(len(list((self.root / "recipient-voice").glob("*.wav"))), 300)
+            # A missing early file must not consume the allowance again before retry.
+            next((self.root / "recipient-voice").glob("*.wav")).unlink()
+            runtime_tests.finish_voice_preloads(self.runtime, cycles=2)
+            self.assertEqual(len(requested), 300)
+            self.runtime.state["recipient_voice_cache"][next(iter(self.runtime._recipient_voice_wanted()))]["retry_at"] = 0
+            runtime_tests.finish_voice_preloads(self.runtime)
+            self.assertEqual(len(requested), 301)
+
 
 
 class RecipientButtonTests(unittest.TestCase):
@@ -591,6 +745,80 @@ class RecipientButtonTests(unittest.TestCase):
             result = button_send.capture_guided_recording(JID, talk_mode="hold")
             self.assertFalse(result.meaningful)
             microphone.assert_not_called()
+
+    def test_tap_held_through_recording_line_opens_mic_and_capture_is_bounded(self):
+        process = mock.Mock(poll=mock.Mock(return_value=None))
+        process.communicate.return_value = (b"", b"")
+        vad = mock.Mock(trim_bounds=mock.Mock(return_value=None))
+        self.switch.is_pressed = True
+
+        def microphone(*args, **kwargs):
+            self.assertTrue(self.switch.is_pressed)
+            self.assertAlmostEqual(self.clock.monotonic(), 4, delta=0.02)
+            return process
+
+        def capture_tick(*args):
+            self.clock.sleep(0.1)
+            return [], [], []
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            for name, value in [("TEMP_DIR", directory), ("require_permit", mock.Mock()),
+                ("recipient_announcement", mock.Mock(return_value=Path("named.wav"))),
+                ("play_sound", mock.Mock()), ("open_microphone", microphone),
+                ("EnergyVAD", mock.Mock(return_value=vad)), ("led", mock.Mock()),
+                ("presence", mock.Mock()), ("RecordingLimitCue", mock.Mock()),
+                ("wait_for_stable_open", mock.Mock(side_effect=AssertionError("no release wait")))]:
+                stack.enter_context(mock.patch.object(button_send, name, value, create=True))
+            stack.enter_context(mock.patch.object(button_send.select, "select", side_effect=capture_tick))
+            result = button_send.capture_guided_recording(JID, max_seconds=0.3)
+            self.assertTrue(result.timed_out)
+            self.assertLess(self.clock.monotonic(), 5)
+            process.send_signal.assert_called_once()
+
+    def test_sent_line_press_interrupts_without_consuming_next_recording_press(self):
+        from messagebox.audio_requests import AudioRequests
+
+        sleep = self.clock.sleep
+
+        def press(seconds):
+            sleep(seconds)
+            self.switch.is_pressed = True
+
+        self.clock.sleep = press
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            requests = AudioRequests(directory)
+            for name, value in [("cloud_audio_requests", requests),
+                ("play_send_success_cue", mock.Mock(return_value=False)),
+                ("recipient_announcement", mock.Mock(return_value=Path("named-sent.wav"))),
+                ("discard_held_playback_press", mock.Mock(side_effect=AssertionError("preserve press")))]:
+                stack.enter_context(mock.patch.object(button_send, name, value))
+            stack.enter_context(mock.patch.object(cloud_runtime, "account_scope", return_value="a" * 64))
+            requests.enqueue_for("sent", "success", "a" * 64, 30, recipient=JID)
+            button_send.maybe_play_cloud_sound()
+            self.assertEqual(self.paths, ["named-sent.wav"])
+            self.assertTrue(self.switch.is_pressed)
+            self.assertLess(self.clock.monotonic(), 0.1)
+            # The main-loop boundary sees the very same press, with no release wait.
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            self.assertTrue(self.switch.is_pressed)
+
+    def test_press_during_sent_cue_skips_sent_line(self):
+        from messagebox.audio_requests import AudioRequests
+
+        def press():
+            self.switch.is_pressed = True
+            return False
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            requests = AudioRequests(directory)
+            stack.enter_context(mock.patch.object(button_send, "cloud_audio_requests", requests))
+            stack.enter_context(mock.patch.object(cloud_runtime, "account_scope", return_value="a" * 64))
+            stack.enter_context(mock.patch.object(button_send, "play_send_success_cue", side_effect=press))
+            stack.enter_context(mock.patch.object(button_send, "recipient_announcement", return_value=Path("named.wav")))
+            requests.enqueue_for("sent", "success", "a" * 64, 30, recipient=JID)
+            button_send.maybe_play_cloud_sound()
+            self.assertEqual(self.paths, [])
+            self.assertTrue(self.switch.is_pressed)
 
     def test_sent_swoosh_then_named_or_generic_with_swoosh_off_and_mute(self):
         from messagebox.audio_requests import AudioRequests

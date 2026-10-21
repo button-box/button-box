@@ -5,6 +5,9 @@ This feature applies to Cloud mode only. The strict boolean setting
 recording, routing, playback, cards, quiet hours and listened notices do not
 use this feature.
 
+Field updates enable the setting by default. This is the product decision
+from Dan on 21 October 2026. No fresh-provisioning marker is required.
+
 The box reports `announce_recipient_v1: true` only when both local fallback
 lines are valid for the selected voice pack. It also reports `voice_lines: 1`.
 A missing fallback prevents this capability report and recipient speech.
@@ -21,7 +24,10 @@ the recipient stored in the outbox job. A missing or revoked subject uses the
 generic line. An account change invalidates the old sound request.
 
 Mute, volume zero and quiet controls suppress these voice lines. Taps during
-a line have no action. A held tap must be released before capture can start.
+the recording line have no action. A tap held through that line enters
+capture. It must be released before a later press can stop capture. A press
+during an idle sent line stops playback and returns to the button loop. The
+same press can start recording.
 Releasing hold mode during the recording line or start cue cancels capture.
 Target a two-second line. Both downloaded and bundled lines have a four-second
 limit. No request, download or synthesis runs at button-press time.
@@ -40,11 +46,17 @@ media path. The declared byte count and SHA-256 must match the downloaded
 bytes. The cache checks the hash and audio format again before playback.
 
 The separate cache is `/var/lib/messagebox-cloud/recipient-voice/`. It uses
-`VoiceCache` with 150 files and a 64 MiB limit. Its key contains account scope,
+`VoiceCache` with 300 files and a 128 MiB limit. This holds both templates
+for all 150 contacts, including four-second clips. Its key contains account scope,
 subject kind and ID, template, voice pack and name hash. The runtime state
-stores retry times and audio hashes. The poller makes at most three recipient
-line requests per preload pass. A failed request retries after 60 seconds; a
-valid line refreshes after one hour. The default recipient has first priority.
+stores retry times and audio hashes. One background worker handles optional
+recipient and card preload. Each heartbeat cycle allows at most three jobs
+and five seconds of total network time. Metadata and media use the same
+absolute deadline. Late results are discarded. Heartbeat and inbox processing
+do not wait for the worker. The poller checks the inbox before each next job.
+Jobs rotate across contacts, templates and card lines. The default recipient
+starts first. A failed request retries after 60 seconds; a valid line refreshes
+after one hour. Eviction does not bypass these retry times.
 The poller removes stale mappings and files after a name, contact, account or
 pack change. It rechecks the snapshot after each download. Local lookup also
 checks the current snapshot and pack, so stale audio cannot play before pruning.

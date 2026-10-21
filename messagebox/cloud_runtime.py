@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import io
+import itertools
 import json
 import os
+import queue
 import random
 import re
 import shutil
@@ -216,6 +218,11 @@ class CloudRuntime:
         self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
+        self._voice_thread = None
+        self._voice_results = queue.SimpleQueue()
+        self._voice_wake = None
+        self._voice_remaining = 0
+        self._voice_requests_left = 0
         self._status_schedule = {}
         self._status_backoff_until = float("-inf")
 
@@ -577,7 +584,7 @@ class CloudRuntime:
         cloud_update.heartbeat_succeeded()
         self._finish_updates()
         self._prune_listened_clips()
-        self._preload_voice_lines()
+        self._preload_voice_lines(start=False, new_cycle=True)
         return response
 
     def _ack_paths(self, operation_id):
@@ -1131,6 +1138,9 @@ class CloudRuntime:
                                                 if key in wanted and isinstance(row, dict)}
         directory = self.state_path.parent / "recipient-voice"
         for path in directory.glob("*"):
+            # The worker owns its temporary file until the atomic rename.
+            if path.suffix == ".part" and self._voice_thread is not None and self._voice_thread.is_alive():
+                continue
             if path.suffix != ".wav" or path.stem not in wanted:
                 path.unlink(missing_ok=True)
 
@@ -1151,41 +1161,109 @@ class CloudRuntime:
         except (OSError, ValueError, EOFError, wave.Error):
             return ""
 
-    def _preload_recipient_lines(self):
-        # This optional feature must never turn a bad voice response into a lost heartbeat.
+    def _download_voice_preload(self, job, deadline, started):
+        """Worker: only immutable request fields and audio files; never runtime state."""
+        category, key, fields = job
+        clip = ""
+        digest = ""
         try:
+            reference = {"link_id" if fields["kind"] == "box" else "identity_id": fields["subject"]}
+            payload = self.client.voice_line(fields["template"], deadline=deadline, **reference)
+            if self.monotonic() >= deadline:
+                raise CloudDeviceError("voice preload budget expired")
+            if category == "recipient":
+                if recipient_voice_valid(payload, **fields, api_url=self.client.api_url):
+                    clip = recipient_voice_cache(self.state_path.parent / "recipient-voice").download(
+                        self.client, payload, key=key, deadline=deadline)
+            elif payload.get("voice_pack") in {None, fields["pack"]}:
+                clip = VoiceCache(self.state_path.parent / "voice-lines").download(
+                    self.client, payload, deadline=deadline)
+            if self.monotonic() >= deadline:
+                clip = ""
+            if clip:
+                digest = payload["sha256"]
+        except (CloudDeviceError, OSError, ValueError, TypeError, AttributeError, KeyError):
+            clip = ""
+        finally:
+            self._voice_results.put((job, clip, digest, max(0, self.monotonic() - started)))
+            if self._voice_wake is not None:
+                self._voice_wake.set()
+
+    def _card_voice_wanted(self):
+        settings, warning = self.settings.load()
+        if warning:
+            return {}
+        snapshot = self._snapshot()
+        pack = settings["voice_pack"]
+        subjects = [(False, person) for person in self._people().values()]
+        subjects += [(True, box) for box in self._boxes().values()]
+        subjects.sort(key=lambda row: row[1]["id"] != snapshot["default_recipient_id"])
+        wanted = {}
+        for box, person in subjects:
+            name = self._card_prompt_name(person, box=box)
+            for template in ("card_prompt", "card_saved"):
+                key = self._voice_reference_key(template, person["id"], name, pack)
+                wanted[key] = dict(scope=snapshot["account_scope"], kind="box" if box else "identity",
+                    subject=person["id"], template=template, pack=pack,
+                    name_hash=hashlib.sha256(name.encode()).hexdigest())
+        return wanted
+
+    def _preload_voice_lines(self, *, start=True, new_cycle=False):
+        # Only the poller mutates state. Heartbeat performs local reconciliation;
+        # optional HTTP starts after inbox work, one job before yielding again.
+        try:
+            if new_cycle:
+                self._voice_remaining = 5.0
+                self._voice_requests_left = 3
             wanted = self._recipient_voice_wanted()
             self._prune_recipient_voice(wanted)
-            mapping = self.state["recipient_voice_cache"]
-            calls = 0
-            for key, fields in wanted.items():
-                cached = mapping.get(key, {})
-                if (cached.get("retry_at", 0) > self.server_now()
-                        and (not cached.get("sha256") or self._recipient_voice_file(key, cached))):
-                    continue
-                if calls >= 3 or not hasattr(self.client, "voice_line"):
-                    continue
-                calls += 1
-                clip = ""
-                payload = {}
+            cards = self._card_voice_wanted()
+            self.state["voice_line_cache"] = {key: row for key, row in self.state.get("voice_line_cache", {}).items()
+                                              if key in cards and isinstance(row, dict)}
+            while True:
                 try:
-                    reference = {"link_id" if fields["kind"] == "box" else "identity_id": fields["subject"]}
-                    payload = self.client.voice_line(fields["template"], **reference)
-                    if recipient_voice_valid(payload, **fields, api_url=self.client.api_url):
-                        if not self._recipient_voice_file(key, cached):
-                            (self.state_path.parent / "recipient-voice" / (key + ".wav")).unlink(missing_ok=True)
-                        clip = recipient_voice_cache(self.state_path.parent / "recipient-voice").download(
-                            self.client, payload, key=key)
-                    # Recheck after the network boundary. A stale response cannot acquire a new subject.
-                    current = self._recipient_voice_wanted()
-                    if key not in current:
-                        self._prune_recipient_voice(current)
-                        continue
-                except (CloudDeviceError, CloudRuntimeError, OSError, ValueError, TypeError, AttributeError):
-                    clip = ""
-                mapping = self.state["recipient_voice_cache"]
-                mapping[key] = {"sha256": payload["sha256"] if clip else "",
-                                "retry_at": self.server_now() + (3600 if clip else 60)}
+                    job, clip, digest, elapsed = self._voice_results.get_nowait()
+                except queue.Empty:
+                    break
+                self._voice_remaining = max(0, self._voice_remaining - elapsed)
+                category, key, fields = job
+                current = wanted if category == "recipient" else cards
+                if current.get(key) == fields:
+                    mapping = self.state["recipient_voice_cache" if category == "recipient" else "voice_line_cache"]
+                    mapping[key] = {"clip": clip, "sha256": digest if clip else "",
+                                    "retry_at": self.server_now() + (3600 if clip else 60)}
+                self._prune_recipient_voice(wanted)
+            if self._voice_thread is not None and not self._voice_thread.is_alive():
+                self._voice_thread = None
+            if (not start or self._voice_thread is not None or self._voice_requests_left <= 0
+                    or self._voice_remaining <= 0 or not hasattr(self.client, "voice_line")):
+                self._save()
+                return
+            # Interleave templates/categories and rotate past every attempted job.
+            recipients = [("recipient", key, fields) for key, fields in wanted.items()]
+            prompts = [("card", key, fields) for key, fields in cards.items()]
+            jobs = [job for pair in itertools.zip_longest(recipients, prompts) for job in pair if job]
+            keys = [job[1] for job in jobs]
+            previous = self.state.get("voice_preload_cursor")
+            offset = (keys.index(previous) + 1) % len(jobs) if previous in keys else 0
+            for index in range(len(jobs)):
+                job = jobs[(offset + index) % len(jobs)]
+                category, key, fields = job
+                mapping = self.state["recipient_voice_cache" if category == "recipient" else "voice_line_cache"]
+                cached = mapping.get(key, {})
+                # Eviction, corruption or a restart must not bypass backoff.
+                if cached.get("retry_at", 0) > self.server_now():
+                    continue
+                if category == "recipient" and not self._recipient_voice_file(key, cached):
+                    (self.state_path.parent / "recipient-voice" / (key + ".wav")).unlink(missing_ok=True)
+                self.state["voice_preload_cursor"] = key
+                self._voice_requests_left -= 1
+                started = self.monotonic()
+                deadline = started + self._voice_remaining
+                self._voice_thread = threading.Thread(target=self._download_voice_preload,
+                    args=(job, deadline, started), daemon=True)
+                self._voice_thread.start()
+                break
             self._save()
         except (CloudDeviceError, CloudRuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
             return
@@ -1198,32 +1276,6 @@ class CloudRuntime:
             return self._recipient_voice_file(key, self.state.get("recipient_voice_cache", {}).get(key, {}))
         except (CloudRuntimeError, OSError, ValueError, KeyError, TypeError, AttributeError):
             return ""
-
-    def _preload_voice_lines(self):
-        self._preload_recipient_lines()
-        if not hasattr(self.client, "voice_line"):
-            return
-        settings, warning = self.settings.load()
-        if warning:
-            return
-        pack = settings.get("voice_pack")
-        mapping = self.state.setdefault("voice_line_cache", {})
-        wanted = {}
-        calls = 0
-        for box, people in ((False, self._people()), (True, self._boxes())):
-            for recipient, person in people.items():
-                name = self._card_prompt_name(person, box=box)
-                for template in ("card_prompt", "card_saved"):
-                    key = self._voice_reference_key(template, recipient, name, pack)
-                    cached = mapping.get(key, {})
-                    if cached.get("retry_at", 0) <= self.server_now() and calls < 3:
-                        clip = self.fetch_voice_line(template, **{"link_id" if box else "identity_id": recipient})
-                        cached = {"clip": clip, "sha256": hashlib.sha256(Path(clip).read_bytes()).hexdigest() if clip else "",
-                                  "retry_at": self.server_now() + (3600 if clip else 60)}
-                        calls += 1
-                    wanted[key] = cached
-        self.state["voice_line_cache"] = wanted
-        self._save()
 
     def named_card_clip(self, jid, pack, template="card_prompt"):
         try:
@@ -1807,6 +1859,7 @@ class CloudRuntime:
         if self.state.get("snapshot") is not None:
             self.expire_local()
         self.recover_outbox()
+        self._preload_voice_lines()
 
     def _maintain_local(self):
         # Cross-process playback receipts and local completions need no inbox hint.
@@ -1824,6 +1877,7 @@ class CloudRuntime:
         if events is None and os.environ.get("MSGBOX_CLOUD_EVENTS", "1") == "1":
             events = CloudWorkEvents(self.client)
         wake = events.wake if events is not None else threading.Event()
+        self._voice_wake = wake
         failures = 0
         last_heartbeat = float("-inf")
         next_poll = 0
@@ -1898,6 +1952,7 @@ class CloudRuntime:
                 else:
                     wake.wait(timeout)
         finally:
+            self._voice_wake = None
             if events is not None:
                 events.stop()
 

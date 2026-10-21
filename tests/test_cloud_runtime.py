@@ -72,6 +72,19 @@ class FakeClient:
         return {"operation_id": ack["operation_id"], "accepted": True}
 
 
+def finish_voice_preloads(runtime, cycles=1):
+    """Run bounded worker turns without real network, sleeps or polling threads."""
+    for _ in range(cycles):
+        runtime._preload_voice_lines(start=False, new_cycle=True)
+        for _ in range(3):
+            runtime._preload_voice_lines()
+            if runtime._voice_thread is not None:
+                runtime._voice_thread.join(timeout=2)
+                if runtime._voice_thread.is_alive():
+                    raise AssertionError("voice worker did not finish")
+            runtime._preload_voice_lines(start=False)
+
+
 def queued_audio(message, source, *, queue_dir):
     path = Path(queue_dir) / message["QueueFilename"]
     path.parent.mkdir(parents=True, exist_ok=True)

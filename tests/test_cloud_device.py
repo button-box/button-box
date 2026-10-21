@@ -44,6 +44,68 @@ class _Response:
         return self.payload[:limit]
 
 
+class CloudPreloadDeadlineTests(unittest.TestCase):
+    def test_metadata_and_media_share_one_absolute_deadline(self):
+        clock = [100.0]
+        timeouts, read_timeouts = [], []
+        socket = mock.Mock()
+        socket.settimeout.side_effect = read_timeouts.append
+
+        class Response(_Response):
+            fp = mock.Mock()
+            fp.raw._sock = socket
+
+            def read1(self, limit):
+                clock[0] += 1
+                return self.payload[:limit]
+
+            def isclosed(self):
+                return True
+
+        def opener(request, *, timeout):
+            timeouts.append(timeout)
+            clock[0] += 1
+            return Response({"status": "fallback"})
+
+        client = CloudDeviceClient("https://example.invalid/cloud-api/v1",
+            {"device_id": "synthetic-device-001", "credential": "x" * 43}, opener=opener)
+        with mock.patch("messagebox.cloud_device.time.monotonic", side_effect=lambda: clock[0]):
+            self.assertEqual(client.voice_line("recording_recipient", identity_id="subject", deadline=105),
+                             {"status": "fallback"})
+            self.assertEqual(client.media("https://example.invalid/cloud-api/v1/device/voice-lines/clip", deadline=105),
+                             b'{"status": "fallback"}')
+            with self.assertRaises(CloudDeviceError):
+                client.voice_line("sent_recipient", identity_id="subject", deadline=105)
+            self.assertEqual(clock[0], 105)
+            with self.assertRaises(CloudDeviceError):
+                client.voice_line("sent_recipient", identity_id="subject", deadline=105)
+        self.assertEqual(timeouts, [5, 3, 1])
+        self.assertEqual(read_timeouts, [4, 2])
+
+    def test_trickle_reads_cannot_reset_the_budget(self):
+        clock = [100.0]
+        socket = mock.Mock()
+
+        class Response(_Response):
+            fp = mock.Mock()
+            fp.raw._sock = socket
+
+            def read1(self, limit):
+                clock[0] += 2
+                return b"x"
+
+            def isclosed(self):
+                return False
+
+        client = CloudDeviceClient("https://example.invalid/cloud-api/v1",
+            {"device_id": "synthetic-device-001", "credential": "x" * 43},
+            opener=lambda *args, **kwargs: Response({}))
+        with mock.patch("messagebox.cloud_device.time.monotonic", side_effect=lambda: clock[0]):
+            with self.assertRaises(CloudDeviceError):
+                client.media("https://example.invalid/cloud-api/v1/device/voice-lines/clip", deadline=105)
+        self.assertEqual([call.args[0] for call in socket.settimeout.call_args_list], [5, 3, 1])
+
+
 class CloudIdentityTests(unittest.TestCase):
     def test_registration_and_heartbeat_use_only_installed_release_identity(self):
         identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}

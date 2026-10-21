@@ -298,8 +298,6 @@ def prepare_cloud_capture(recipient, talk_mode, scope):
             return False
     except (OSError, subprocess.SubprocessError):
         pass  # Optional speech never prevents an otherwise valid recording.
-    if talk_mode == "tap" and path is not None:
-        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
     return play_recipient_line(sound_pack.cue_path("rec_go"), talk_mode=talk_mode, timeout=5)
 
 
@@ -1867,10 +1865,8 @@ def maybe_play_cloud_sound():
                 if request["kind"] == "success":
                     played = play_send_success_cue()
                     path = recipient_announcement(request.get("recipient"), "sent_recipient", scope=scope)
-                    if path is not None:
-                        play_recipient_line(path)
-                        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-                        played = True
+                    if path is not None and not button.is_pressed:
+                        played = play_idle_sound(path, 4) or played
                 elif request["kind"] == "settings_saved":
                     # Voice switches sample the new pack at the newly applied volume.
                     played = False

@@ -36,7 +36,7 @@ class VoiceCache:
         self.clip_limit = clip_limit
         self.max_seconds = max_seconds
 
-    def download(self, client, payload, *, key=None):
+    def download(self, client, payload, *, key=None, deadline=None):
         if payload.get("use_fallback"):
             return ""
         clip_id = payload.get("clip_id")
@@ -54,7 +54,8 @@ class VoiceCache:
             if path.is_symlink():
                 return ""
             audio = (path.read_bytes() if path.exists() and path.stat().st_size <= self.clip_limit
-                     else client.media(payload.get("media_url"), limit=self.clip_limit))
+                     else client.media(payload.get("media_url"), limit=self.clip_limit,
+                                       **({"deadline": deadline} if deadline is not None else {})))
             if not audio or len(audio) > self.clip_limit or hashlib.sha256(audio).hexdigest() != payload["sha256"]:
                 return ""
             with wave.open(io.BytesIO(audio), "rb") as sound:
@@ -120,7 +121,7 @@ def recipient_voice_valid(payload, *, scope, kind, subject, template, pack, name
 
 
 def recipient_voice_cache(directory):
-    return VoiceCache(directory, max_entries=150, max_bytes=64 * 1024 * 1024,
+    return VoiceCache(directory, max_entries=300, max_bytes=128 * 1024 * 1024,
                       clip_limit=MAX_RECIPIENT_BYTES, max_seconds=4)
 
 
