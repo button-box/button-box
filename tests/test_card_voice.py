@@ -145,12 +145,13 @@ class CardVoiceTests(unittest.TestCase):
                 # Stop at the microphone boundary: neither hold classification
                 # nor a press cue may delay the same immediate legacy path.
                 self.button.is_pressed = True
-                with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
-                     mock.patch.object(runtime, "play_sound"), \
-                     mock.patch.object(runtime, "start_player", return_value=mock.Mock(poll=lambda: 0)), \
-                     mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")), \
-                     mock.patch.object(runtime, "capture_guided_recording", side_effect=real_capture), \
-                     mock.patch.object(runtime.subprocess, "Popen", side_effect=RuntimeError("microphone boundary")) as open_mic:
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(mock.patch.object(runtime, "TEMP_DIR", str(self.root)))
+                    stack.enter_context(mock.patch.object(runtime, "play_sound"))
+                    stack.enter_context(mock.patch.object(runtime, "start_player", return_value=mock.Mock(poll=lambda: 0)))
+                    stack.enter_context(mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")))
+                    stack.enter_context(mock.patch.object(runtime, "capture_guided_recording", side_effect=real_capture))
+                    open_mic = stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", side_effect=RuntimeError("microphone boundary")))
                     with self.assertRaisesRegex(RuntimeError, "microphone boundary"):
                         runtime.record_and_send_legacy(self.settings, card_prompt_uid=CARD)
                     self.assertEqual(open_mic.call_args.args[0][0], "arecord")
