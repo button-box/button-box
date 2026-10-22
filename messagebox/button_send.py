@@ -245,6 +245,10 @@ def play_moment(cue=None, voice=None):
         play_audio_ordinary(path)
 
 
+def buttonbox_voice():
+    return transport_mode() == "cloud" and sound_pack.current_voice_pack() == "buttonbox"
+
+
 def message_intro_voice(settings=None):
     """Cloud option: the pack's "A message for you!" line after the sparkle cue.
 
@@ -1610,6 +1614,8 @@ def play_pending_listened(limit=4):
                     if getattr(notice, "cloud", None)
                     or LISTENED_FALLBACK_WAV == str(sound_pack.voice_path("listened", "jessica"))
                     else LISTENED_FALLBACK_WAV)
+        if getattr(notice, "cloud", None) and buttonbox_voice():
+            fallback = str(sound_pack.voice_path("listened-noname"))
         clip = notice.clip or fallback
         if getattr(notice, "cloud", None) and notice.cloud.get("voice_pack") != sound_pack.current_voice_pack():
             clip = fallback
@@ -1638,7 +1644,15 @@ def play_pending_listened(limit=4):
             break
         try:
             play_moment("listened")
-            play_audio_ordinary(clip)
+            try:
+                play_audio_ordinary(clip)
+            except cloud_quiet.AudioSilenced:
+                raise  # Quiet controls must also suppress the fallback.
+            except (OSError, subprocess.SubprocessError, CloudRuntimeError) as exc:
+                if not getattr(notice, "cloud", None) or clip == fallback:
+                    raise
+                log_event("cloud_voice_fallback", error=type(exc).__name__)
+                play_audio_ordinary(fallback)
             receipt_store.complete(notice)
             if setup_notice:
                 cloud_setup.SetupGuide().advance({"await_listened"}, "done")
@@ -1731,9 +1745,12 @@ def play_idle_sound(path, timeout, lamp_ringtone=None):
 
 
 def play_send_success_cue():
-    if not caregiver_settings().get("swoosh_sound_enabled", True):
-        return False
-    return play_idle_sound(SEND_SUCCESS_WAV, 5)
+    played = False
+    if caregiver_settings().get("swoosh_sound_enabled", True):
+        played = play_idle_sound(SEND_SUCCESS_WAV, 5)
+    if buttonbox_voice():
+        played = play_idle_sound(sound_pack.voice_path("setup-sent"), 20) or played
+    return played
 
 
 unavailable_events = UnavailableEvents()
@@ -1831,13 +1848,13 @@ def maybe_play_cloud_sound():
                 requests.finish(request, "played" if played else "rejected")
                 unavailable_events.available("cloud_playback")
                 return played
-            except (OSError, subprocess.SubprocessError, CloudRuntimeError):
+            except (OSError, subprocess.SubprocessError, CloudRuntimeError) as exc:
                 requests.finish(request, "rejected")
                 if unavailable_events.unavailable("cloud_playback"):
-                    log_event("cloud_sound_unavailable")
-    except (OSError, ValueError, CloudRuntimeError):
+                    log_event("cloud_sound_unavailable", error=type(exc).__name__)
+    except (OSError, ValueError, CloudRuntimeError) as exc:
         if unavailable_events.unavailable("cloud_scope"):
-            log_event("cloud_sound_unavailable")
+            log_event("cloud_sound_unavailable", error=type(exc).__name__)
     return False
 
 
@@ -2114,6 +2131,21 @@ class PiGuidedIO:
     def play_after_cue(self, path):
         play_audio_after_cue(path)
 
+    def play_review(self, path):
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="review")
+        self.play_ordinary(path)
+
+    def play_deleted(self, path):
+        self.play_ordinary(path)
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="not-sent")
+
+    def play_empty(self, path):
+        self.play_ordinary(path)
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="empty")
+
     def record(self):
         result = capture_guided_recording(
             self.recipient, self.session_id, self.max_seconds,
@@ -2129,6 +2161,8 @@ class PiGuidedIO:
             cloud_setup.SetupGuide().advance({"recording"}, "review")
             play_setup_line("setup-ask-send")
             discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        elif buttonbox_voice():
+            play_audio_ordinary(sound_pack.next_send_prompt())
         approved = wait_for_approval(timeout, self.session_id)
         return approved
 

@@ -611,7 +611,7 @@ class CloudRuntimeTests(unittest.TestCase):
             with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
                  mock.patch.object(button_send, "play_audio_ordinary") as play:
                 self.assertEqual(button_send.play_pending_listened(), 1)
-            play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
+            play.assert_called_once_with(str(self.root / "voices/buttonbox/voice-listened-noname.wav"))
             self.runtime._finish_listened()
 
     def listened_item(self, *, clip=True, operation_id="listened:" + "b" * 64):
@@ -640,6 +640,9 @@ class CloudRuntimeTests(unittest.TestCase):
         fallback = self.root / "voice/voice-listened.wav"
         fallback.parent.mkdir(exist_ok=True)
         fallback.write_bytes(b"synthetic fallback")
+        buttonbox = self.root / "voices/buttonbox/voice-listened-noname.wav"
+        buttonbox.parent.mkdir(parents=True, exist_ok=True)
+        buttonbox.write_bytes(b"synthetic Button Box fallback")
         stack.enter_context(mock.patch.object(button_send.sound_pack, "SOUND_DIR", self.root))
         stack.enter_context(mock.patch.object(button_send.cloud_runtime, "listened_status", side_effect=self.runtime.listened_status))
         stack.enter_context(mock.patch.object(button_send, "log"))
@@ -736,7 +739,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
                      mock.patch.object(button_send, "play_audio_ordinary") as play:
                     self.assertEqual(button_send.play_pending_listened(), 1)
-                    play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
+                    play.assert_called_once_with(str(self.root / "voices/buttonbox/voice-listened-noname.wav"))
                 self.runtime._maintain_local()
                 self.assertEqual(self.client.acks[-1]["state"], "applied")
 
@@ -810,7 +813,7 @@ class CloudRuntimeTests(unittest.TestCase):
         with self.listened_playback(), mock.patch.object(button_send, "play_moment"), \
              mock.patch.object(button_send, "play_audio_ordinary") as play:
             self.assertEqual(button_send.play_pending_listened(), 1)
-            play.assert_called_once_with(str(self.root / "voice/voice-listened.wav"))
+            play.assert_called_once_with(str(self.root / "voices/buttonbox/voice-listened-noname.wav"))
 
     def test_listened_capability_is_reported_by_heartbeat(self):
         with mock.patch.object(self.client, "heartbeat", wraps=self.client.heartbeat) as send:

@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import io
 import json
+import logging
 import os
 import queue
 import random
@@ -1208,7 +1209,8 @@ class CloudRuntime:
             if warning or payload.get("voice_pack") not in {None, settings.get("voice_pack")} :
                 return ""
             return VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload)
-        except (CloudDeviceError, OSError, ValueError, AttributeError):
+        except (CloudDeviceError, OSError, ValueError, AttributeError) as exc:
+            logging.getLogger(__name__).warning("Cloud voice unavailable: %s", type(exc).__name__)
             return ""
 
     def _reaction(self, item):

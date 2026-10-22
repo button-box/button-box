@@ -602,19 +602,19 @@ class GuidedSession:
         if recording.timed_out:
             if recording.path:
                 self.io.delete(recording.path)
-            self.io.play_ordinary(deleted_cue_path)
+            getattr(self.io, "play_deleted", self.io.play_ordinary)(deleted_cue_path)
             self.event("guided_deleted", session_id=session_id, flow=flow_kind, reason="recording_timeout")
             return "deleted"
         recorded_seconds = recording.duration if recording.recorded_seconds is None else recording.recorded_seconds
         if not recording.meaningful or not recording.path or recorded_seconds < 1.5:
             if recording.path:
                 self.io.delete(recording.path)
-            self.io.play_ordinary(deleted_cue_path)
+            getattr(self.io, "play_empty", self.io.play_ordinary)(deleted_cue_path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
         approved = not review_before_send
         if review_before_send:
-            self.io.play_ordinary(recording.path)
+            getattr(self.io, "play_review", self.io.play_ordinary)(recording.path)
             self.event("guided_review_played", session_id=session_id, duration=recording.duration)
             approved = self.io.wait_for_approval(10.0)
         if approved:
@@ -636,6 +636,6 @@ class GuidedSession:
             self.io.delete(recording.path)
             return "approved"
         self.io.delete(recording.path)
-        self.io.play_ordinary(deleted_cue_path)
+        getattr(self.io, "play_deleted", self.io.play_ordinary)(deleted_cue_path)
         self.event("guided_deleted", session_id=session_id, flow=flow_kind)
         return "deleted"

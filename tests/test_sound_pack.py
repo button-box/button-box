@@ -381,6 +381,91 @@ class SoundPackTests(unittest.TestCase):
             self.assertEqual(order, ["listened", expected])
             receipts.complete.assert_called_once_with(notice)
 
+    def test_buttonbox_normal_recording_voices_and_unchanged_wacli(self):
+        for mode in ('cloud', 'wacli'):
+            for outcome in ('approved', 'deleted', 'empty'):
+                with self.subTest(mode=mode, outcome=outcome):
+                    child = self.root / 'child.wav'
+                    child.write_bytes(b'child recording')
+                    store = OutboxStore(self.root / (mode + outcome), transport=mode)
+                    recording = RecordingResult(str(child), 2, outcome != 'empty')
+                    played = []
+                    with mock.patch.object(runtime, 'transport_mode', return_value=mode), \
+                         mock.patch.object(sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+                         mock.patch.object(sound_pack, 'SOUND_DIR', ROOT / 'sounds'), \
+                         mock.patch.object(sound_pack, 'next_send_prompt', return_value=sound_pack.voice_path('ask-send-1')), \
+                         mock.patch.object(runtime, 'capture_guided_recording', return_value=recording), \
+                         mock.patch.object(runtime, 'wait_for_approval', return_value=outcome == 'approved'), \
+                         mock.patch.object(runtime, 'play_audio_ordinary', side_effect=lambda p: played.append(Path(p).name)):
+                        io = runtime.PiGuidedIO('person', 'session', 60)
+                        result = GuidedSession(io, store, mock.Mock()).run(recipient='person',
+                            flow_kind='standalone', deleted_cue_path=str(sound_pack.cue_path('deleted')),
+                            account_scope='a' * 64 if mode == 'cloud' else None)
+                    self.assertEqual(result, outcome)
+                    expected = (['voice-review.wav', 'child.wav', 'voice-ask-send-1.wav']
+                                if mode == 'cloud' else ['child.wav'])
+                    if outcome == 'empty':
+                        expected = ['cue-deleted.wav'] + (['voice-empty.wav'] if mode == 'cloud' else [])
+                    elif outcome == 'deleted':
+                        expected += ['cue-deleted.wav'] + (['voice-not-sent.wav'] if mode == 'cloud' else [])
+                    self.assertEqual(played, expected)
+                    jobs = store.jobs()
+                    self.assertEqual(len(jobs), int(outcome == 'approved'))
+                    if jobs:
+                        self.assertEqual(jobs[0].recipient, 'person')
+
+    def test_buttonbox_accepted_send_speaks_with_optional_swoosh_and_wacli_stays_cue_only(self):
+        for mode in ('cloud', 'wacli'):
+            for swoosh in (False, True):
+                with self.subTest(mode=mode, swoosh=swoosh), \
+                     mock.patch.object(runtime, 'transport_mode', return_value=mode), \
+                     mock.patch.object(sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+                     mock.patch.object(runtime, 'caregiver_settings', return_value={'swoosh_sound_enabled': swoosh}), \
+                     mock.patch.object(runtime, 'play_idle_sound', return_value=True) as play:
+                    runtime.play_send_success_cue()
+                expected = [mock.call(runtime.SEND_SUCCESS_WAV, 5)] if swoosh else []
+                if mode == 'cloud':
+                    expected.append(mock.call(sound_pack.voice_path('setup-sent'), 20))
+                self.assertEqual(play.call_args_list, expected)
+
+    def test_failed_cloud_listened_player_uses_bundled_noname_and_logs_type_only(self):
+        for error in (OSError('private server text'), subprocess.CalledProcessError(1, 'private command')):
+            with self.subTest(error=type(error).__name__):
+                notice = types.SimpleNamespace(clip='/synthetic/rendered.wav',
+                    cloud={'voice_pack': 'buttonbox'})
+                receipts = mock.Mock()
+                receipts.claim_next.side_effect = [notice, None]
+                with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+                     mock.patch.object(sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+                     mock.patch.object(runtime.cloud_runtime, 'listened_status', return_value='ready'), \
+                     mock.patch.object(runtime, 'receipt_store', receipts, create=True), \
+                     mock.patch.object(runtime.os.path, 'exists', return_value=True), \
+                     mock.patch.object(runtime.os.path, 'isfile', return_value=True), \
+                     mock.patch.object(runtime, 'play_moment'), \
+                     mock.patch.object(runtime, 'play_audio_ordinary', side_effect=[error, None]) as play:
+                    self.assertEqual(runtime.play_pending_listened(), 1)
+                self.assertEqual(play.call_args_list, [mock.call(notice.clip),
+                    mock.call(str(sound_pack.voice_path('listened-noname')))])
+                runtime.log_event.assert_any_call('cloud_voice_fallback', error=type(error).__name__)
+                receipts.complete.assert_called_once_with(notice)
+
+    def test_cloud_listened_fallback_never_bypasses_audio_silence(self):
+        notice = types.SimpleNamespace(clip='/synthetic/rendered.wav', cloud={'voice_pack': 'buttonbox'})
+        receipts = mock.Mock()
+        receipts.claim_next.return_value = notice
+        with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+             mock.patch.object(runtime.cloud_runtime, 'listened_status', return_value='ready'), \
+             mock.patch.object(runtime, 'receipt_store', receipts, create=True), \
+             mock.patch.object(runtime.os.path, 'exists', return_value=True), \
+             mock.patch.object(runtime.os.path, 'isfile', return_value=True), \
+             mock.patch.object(runtime, 'play_moment'), \
+             mock.patch.object(runtime, 'play_audio_ordinary', side_effect=runtime.cloud_quiet.AudioSilenced('quiet')) as play:
+            self.assertEqual(runtime.play_pending_listened(), 0)
+        play.assert_called_once_with(notice.clip)
+        receipts.complete.assert_not_called()
+        receipts.release.assert_called_once_with(notice)
+
     def test_limit_warning_at_five_seconds_for_all_limits_stays_in_the_recording(self):
         # Dan, 2026-10-07: keep the warning in the recording so no words are lost.
         self.assertFalse(hasattr(sound_pack, "mute_pcm"))

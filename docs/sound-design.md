@@ -3,8 +3,11 @@
 The sound pack has 16 motif cues, 21 Jessica lines and 20 lines in each other
 pack. The setup handoff line is Jessica-only. All output uses the saved
 master volume. "Swoosh sound", "Family confirmation beep" and every setting ID
-retain their existing names and meanings. Both talk modes use a start cue and optional playback review, without
-countdown, review, approval or deletion voices.
+retain their existing names and meanings. Cloud boxes with the Button Box voice
+use spoken review, approval, empty and deletion lines in normal use. Other packs
+and wacli keep their existing cue and review behavior. No Cloud voice request is
+needed for these bundled lines. Ordinary speech discards held presses; approval
+requires a fresh press after the prompt.
 
 | Brief moment | Implementation |
 | --- | --- |
@@ -15,17 +18,17 @@ countdown, review, approval or deletion voices.
 | Runtime awake | `announce_runtime_ready`: `cue-ready.wav`. |
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
 | Online | Cloud `play_setup_online`: connected cue then Jessica setup handoff once. Claimed `maybe_play_connectivity`: connected cue then current pack's online-ready line after boot or after an outage of at least ten minutes, at most once per hour. Shorter heartbeat gaps stay silent. Durable receipts precede playback. Legacy online voice stays bundled for wacli. |
-| Accepted send | `play_send_success_cue`: `cue-sent.wav`; independent sender, interruptible on press, unchanged setting and no delivery claim. |
+| Accepted send | `play_send_success_cue`: optional `cue-sent.wav`, then Cloud Button Box `voice-setup-sent.wav` ("Sent!"). The voice is independent of the swoosh setting. It confirms Cloud acceptance, not delivery. Quiet controls and a press suppress idle playback. |
 | Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
 | Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then the current pack's card-unknown voice, resolved on each tap so a voice pack change applies at once (or explicit operator override), acknowledged once per presentation. |
-| Listened / listener announcement test | `play_pending_listened`: listened cue then saved family clip or `voice-listened.wav`; dashboard receipt ingestion uses the new default. All receipt playback shares this path. |
+| Listened / listener announcement test | Listened cue, then cached family/Cloud voice. Missing, evicted, wrong-pack or failed Cloud clips use the bundled voice: Button Box `voice-listened-noname.wav` ("Your message was heard!"), otherwise `voice-listened.wav`. Failures log only the exception type. Mute still suppresses fallback. wacli family clips and fallback stay unchanged. |
 | Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. With the Cloud setting `announce_messages_voice` on and outside quiet controls, the current pack's `voice-msg-start.wav` plays between the cue and the message. It is also used for voice previews. Then, on Cloud boxes, the message age phrase (`voice-age-<key>.wav`, for example "This one's from last night!") plays when the message is old enough; see `docs/architecture.md`. wacli plays the cue only. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply. |
 | Microphone opens after start cue | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
 | Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; it stays in the recording (Dan, 7 Oct: no words are cut). |
-| Review starts | `GuidedSession` plays the child recording, discarding presses during playback, then waits for a fresh tap. |
-| Short or silent capture in either mode | `guided_recording_empty`: delete and play the deletion cue. No outgoing job is created. |
+| Review starts | Cloud Button Box plays `voice-review.wav` ("Listen!"), the recording, then a rotating `voice-ask-send-1/2/3.wav` (for example "Love it! Press to send."). Other modes play the recording only. All require a fresh approval tap. |
+| Short or silent capture in either mode | Delete and play the deletion cue. Cloud Button Box adds `voice-empty.wav`; declined or timed-out recordings add `voice-not-sent.wav`. No outgoing job is created. |
 | Three send failures | `sender_loop` counts by current message in both modes, queues a notice; idle `maybe_play_still_trying` checks job still pending, then still_trying + stuck voice once durably per job. |
 | Recipient unavailable | `block_unavailable_recipient`: oops + fail voice when no default/family is available; card-selection asks for a card, and unknown-card routing stays fail-closed. |
 | Setup finishes | Root `onboarding.completion` queues a sound request after successful handoff; idle `announce_all_set` plays all_set + all-set voice once per box. |
@@ -111,3 +114,8 @@ checking that no start cue is captured and the deletion cue is clear. Verify a m
 name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
 lines. Confirm that volume and ringtone changes each say "Setting saved!" once.
 Offline checks do not establish speaker quality or physical microphone timing.
+
+With `announce_messages_voice=false`, arrival has a ringtone/lamp and playback
+has the message cues; no new-message voice is expected. With `after_listening=play_only`,
+normal playback ends without recording. The first setup note still speaks
+`setup-your-turn` and waits for a separate press.

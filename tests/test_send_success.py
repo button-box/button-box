@@ -128,7 +128,7 @@ class SendSuccessTests(unittest.TestCase):
             scope.side_effect = ValueError("private")
             button_send.maybe_play_cloud_sound()
             self.assertEqual(event.call_count, 3)
-            event.assert_called_with("cloud_sound_unavailable")
+            event.assert_called_with("cloud_sound_unavailable", error="ValueError")
 
     def test_missing_receipt_clip_failure_is_throttled_and_resets_after_success(self):
         limiter = button_send.UnavailableEvents(clock=lambda: 100)
@@ -176,7 +176,7 @@ class SendSuccessTests(unittest.TestCase):
             play.assert_called_once_with()
         self.assertEqual(store.outcome(key), "played")
 
-    def test_cloud_swoosh_off_consumes_success_cue_without_audio(self):
+    def test_cloud_jessica_swoosh_off_consumes_success_cue_without_audio(self):
         store = button_send.AudioRequests(Path(self.directory.name) / "audio-off", clock=lambda: 100)
         key = button_send.success_key("a" * 64, "local-test")
         store.enqueue(key, "success", "a" * 64, 130)
@@ -184,6 +184,7 @@ class SendSuccessTests(unittest.TestCase):
              mock.patch.object(button_send, "cloud_audio_requests", store), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send, "caregiver_settings", return_value={"swoosh_sound_enabled": False}), \
+             mock.patch.object(button_send.sound_pack, "current_voice_pack", return_value="jessica"), \
              mock.patch.object(button_send, "play_idle_sound") as play:
             self.assertFalse(button_send.maybe_play_cloud_sound())
         play.assert_not_called()
