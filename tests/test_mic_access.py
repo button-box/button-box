@@ -106,7 +106,7 @@ class MicAccessTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(runtime, "led", led, create=True))
             stack.enter_context(mock.patch.object(runtime, "play_sound"))
             stack.enter_context(mock.patch.object(runtime, "presence", side_effect=OSError("synthetic presence failure")))
-            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue"))
+            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[], played=False)))
             stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", return_value=process))
             with self.assertRaises(OSError):
                 runtime.capture_guided_recording("synthetic", press_token=permit)

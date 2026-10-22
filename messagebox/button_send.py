@@ -2031,6 +2031,7 @@ class RecordingLimitCue:
         self.maximum = maximum
         self.process = None
         self.intervals = []
+        self.played = False
 
     def update(self, now):
         if not self.intervals and now - self.started >= self.maximum - 5:
@@ -2039,6 +2040,7 @@ class RecordingLimitCue:
                 if not box_muted() and not (hasattr(self, "path") and quiet_hours()):
                     self.process = start_player(["aplay", "-q", "-D", SPK_DEV,
                                                      str(getattr(self, "path", sound_pack.cue_path("rec_limit")))])
+                    self.played = True
                 else:
                     self.intervals[-1][1] = now - self.started
             except (OSError, cloud_quiet.AudioSilenced):
@@ -2136,9 +2138,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                         chunk = os.read(process.stdout.fileno(), 4096)
                         if chunk:
                             raw.write(chunk)
-                            # Keep the microphone samples, including overlapping
-                            # words, but the reminder cannot establish speech.
-                            vad.feed(b"\0" * len(chunk) if warning.process is not None else chunk, now=now)
+                            vad.feed(chunk, now=now)
                     if now - started >= max_seconds:
                         timed_out = True
                         break
@@ -2174,8 +2174,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                     remainder, _ = process.communicate(timeout=3)
                 if remainder:
                     raw.write(remainder)
-                    vad.feed(b"\0" * len(remainder) if warning.process is not None else remainder,
-                             now=time.monotonic())
+                    vad.feed(remainder, now=time.monotonic())
                 raw.flush()
                 os.fsync(raw.fileno())
         except BaseException:
@@ -2206,8 +2205,11 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                 wait_for_stable_open()
 
         recorded_seconds = raw_path.stat().st_size / (16000 * 2)
+        # Playback can mask speech or resemble it. With no echo reference we
+        # cannot prove this window empty: preserve it for a deliberate review.
+        review_required = warning.played and recorded_seconds > 0
         bounds = vad.trim_bounds()
-        if bounds is not None and (setup_reply or buttonbox_voice() or warning.intervals):
+        if review_required or (bounds is not None and (setup_reply or buttonbox_voice() or warning.intervals)):
             # VAD is only the empty-recording gate here. Never trim away words
             # spoken during the reminder or the drained microphone tail.
             bounds = (0, raw_path.stat().st_size // 2)
@@ -2216,7 +2218,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
             return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
         duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
         raw_path.unlink(missing_ok=True)
-        return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds)
+        return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds,
+                               review_required=review_required)
 
 
 class PiGuidedIO:
@@ -2263,7 +2266,8 @@ class PiGuidedIO:
         )
         self.limit_reached = result.timed_out
         if self.setup_reply and result.timed_out:
-            return RecordingResult(result.path, result.duration, result.meaningful, False, result.recorded_seconds)
+            return RecordingResult(result.path, result.duration, result.meaningful, False, result.recorded_seconds,
+                                   review_required=result.review_required)
         return result
 
     def wait_for_approval(self, timeout):

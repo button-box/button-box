@@ -118,15 +118,44 @@ class RecordingModesTests(unittest.TestCase):
             self.assertGreaterEqual(observed['mic_at'], observed['start_end'])
             self.assertEqual(set(pcm), {0})
 
-    def test_reminder_alone_including_drained_audio_does_not_count_as_speech(self):
+    def test_reminder_only_audio_including_drain_is_kept_for_review(self):
         for stop_at in (40.5, 42.5):
             with self.subTest(stop_at=stop_at), tempfile.TemporaryDirectory() as directory:
                 result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=stop_at,
                                                                 speech_windows=[])
                 self.assertGreater(observed['reminder_end'], 40)
                 self.assertIn(struct.pack('<h', 6000), pcm)
-                self.assertFalse(result.meaningful)
-                self.assertIsNone(result.path)
+                self.assertTrue(result.meaningful)
+                self.assertTrue(result.review_required)
+                with wave.open(result.path) as audio:
+                    self.assertEqual(audio.readframes(audio.getnframes()), pcm)
+
+    def test_speech_only_inside_reminder_is_kept_and_requires_review_in_both_modes(self):
+        from test_guided_reply import FakeIO
+        for transport in ('cloud', 'wacli'):
+            for approved in (False, True):
+                with self.subTest(transport=transport, approved=approved), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    offset = 0 if transport == 'cloud' else 15
+                    result, pcm, _ = self.capture_cue_overlap(root, stop_at=42.5 + offset,
+                        speech_windows=[(40.02 + offset, 42.25 + offset)], transport=transport)
+                    self.assertTrue(result.meaningful)
+                    self.assertTrue(result.review_required)
+                    self.assertAlmostEqual(result.duration, 42.58 + offset, delta=.04)
+                    with wave.open(result.path) as audio:
+                        self.assertEqual(audio.readframes(audio.getnframes()), pcm)
+                    io = FakeIO([result], approve_initial=approved)
+                    store = OutboxStore(root / 'outbox', transport=transport)
+                    events = []
+                    outcome = GuidedSession(io, store, lambda kind, **data: events.append(kind)).run(
+                        recipient='person@example.invalid', flow_kind='standalone',
+                        deleted_cue_path='cue-deleted.wav', review_before_send=False,
+                        account_scope='a' * 64 if transport == 'cloud' else None)
+                    self.assertEqual(outcome, 'approved' if approved else 'deleted')
+                    self.assertIn(('wait', 10.0), io.calls)
+                    self.assertIn('guided_review_played', events)
+                    self.assertNotIn('guided_recording_empty', events)
+                    self.assertEqual(len(store.jobs()), int(approved))
 
     def test_speech_during_forty_second_reminder_keeps_the_recorded_tail(self):
         for transport in ('cloud', 'wacli'):
@@ -181,7 +210,7 @@ class RecordingModesTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(runtime.select, "select", side_effect=tick))
             stack.enter_context(mock.patch.object(runtime.subprocess, "run", side_effect=cue))
             stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", side_effect=microphone))
-            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[])))
+            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[], played=False)))
             stack.enter_context(mock.patch.object(runtime, "presence"))
             stack.enter_context(mock.patch.object(runtime, "acknowledge_guided_press"))
             stack.enter_context(mock.patch.object(runtime, "wait_for_stable_open"))
@@ -298,7 +327,7 @@ class RecordingModesTests(unittest.TestCase):
                  mock.patch.object(runtime, 'play_sound') as blocking_sound, \
                  mock.patch.object(runtime, 'open_microphone', side_effect=microphone), \
                  mock.patch.object(runtime, 'EnergyVAD', return_value=vad), \
-                 mock.patch.object(runtime, 'RecordingLimitCue'), \
+                 mock.patch.object(runtime, 'RecordingLimitCue', return_value=mock.Mock(process=None, intervals=[], played=False)), \
                  mock.patch.object(runtime, 'presence'), \
                  mock.patch.object(runtime.select, 'select', return_value=([], [], [])), \
                  mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 60, 60]):

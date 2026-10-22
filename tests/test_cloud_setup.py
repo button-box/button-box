@@ -237,7 +237,7 @@ class SetupTests(unittest.TestCase):
         with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
              mock.patch.object(runtime, "play_sound"), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
-             mock.patch.object(runtime, "RecordingLimitCue"), \
+             mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[], played=False)), \
              mock.patch.object(runtime, "presence"), \
              mock.patch.object(runtime, "led", mock.Mock(), create=True), \
              mock.patch.object(runtime, "button", types.SimpleNamespace(is_pressed=False), create=True), \

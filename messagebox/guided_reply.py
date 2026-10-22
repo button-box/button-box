@@ -154,6 +154,7 @@ class RecordingResult:
     meaningful: bool
     timed_out: bool = False
     recorded_seconds: float | None = None
+    review_required: bool = False
 
 
 class EnergyVAD:
@@ -606,9 +607,9 @@ class GuidedSession:
             getattr(self.io, "play_empty", self.io.play_ordinary)(deleted_cue_path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
-        # Hitting the capture limit stops the mic, not the child's message.
-        # Always offer review and a fresh approval, even with review disabled.
-        review_before_send = review_before_send or recording.timed_out
+        # A limit stop or uncertain reminder overlap must reach review and a
+        # fresh approval, even when automatic sending is otherwise selected.
+        review_before_send = review_before_send or recording.timed_out or recording.review_required
         approved = not review_before_send
         if review_before_send:
             getattr(self.io, "play_review", self.io.play_ordinary)(recording.path)

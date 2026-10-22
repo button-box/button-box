@@ -247,9 +247,11 @@ For a Button Box recording, require one short cue and an immediate lamp signal.
 The runtime plays a 120 ms temporary cue copy before it opens the microphone.
 The source sound files stay unchanged. Check the first word after the cue.
 Speak before and during the 40-second reminder, then stop. Review the complete
-recording, including the final words. The reminder stays in the saved audio but
-cannot make an otherwise empty recording count as speech. Also test silence
-through the reminder. Measure the start delay on the real USB devices; the
+recording, including the final words. Also test speech only during the reminder
+and silence through it. Playback can mask speech, so the runtime preserves
+reminder overlap and requires review and fresh approval, even with automatic
+sending selected. A reminder-only recording can therefore reach review; it
+must not send without approval. Measure the start delay on the real USB devices; the
 tap-recording model gives 120 ms and excludes device startup and scheduling
 time. Hold-to-record keeps its normal hold threshold.
 Use `sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh`.

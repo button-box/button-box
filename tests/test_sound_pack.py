@@ -140,7 +140,7 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime.subprocess, "Popen", side_effect=capture), \
              mock.patch.object(runtime.time, "monotonic", side_effect=[0, 60, 60]), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad), \
-             mock.patch.object(runtime, "RecordingLimitCue"), \
+             mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[], played=False)), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])):
             io = runtime.PiGuidedIO("synthetic", "session", 60)
             io.record = lambda: physical_capture(runtime, "synthetic", "session", 60)
@@ -502,7 +502,7 @@ class SoundPackTests(unittest.TestCase):
         vad.trim_bounds.return_value = None
         with mock.patch.object(runtime, "TEMP_DIR", str(self.root)), \
              mock.patch.object(runtime.time, "monotonic", side_effect=[0, 60, 60]), \
-             mock.patch.object(runtime, "RecordingLimitCue"), \
+             mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[], played=False)), \
              mock.patch.object(runtime.subprocess, "run", side_effect=run), \
              mock.patch.object(runtime.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
