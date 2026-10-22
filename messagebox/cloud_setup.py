@@ -4,6 +4,7 @@ import fcntl
 import json
 import logging
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -26,7 +27,8 @@ class SetupGuide:
                     or state["stage"] not in STAGES or not isinstance(state.get("spoken"), list)
                     or any(not isinstance(value, str) for value in state["spoken"])
                     or any(key in state and not isinstance(state[key], str)
-                           for key in ("scope", "local_id", "message_id", "recipient"))
+                           for key in ("scope", "local_id", "message_id", "recipient", "pending_claim_id"))
+                    or "pending_claim_expires_at" in state and type(state["pending_claim_expires_at"]) is not int
                     or any(key in state and type(state[key]) is not bool
                            for key in ("greeting_spoken", "listened_started", "sent_ready"))):
                 raise ValueError("invalid guide state")
@@ -54,6 +56,24 @@ class SetupGuide:
                 state = {"stage": "scan", "spoken": []}
             elif state is None:
                 return None
+            elif action == "pending_claim":
+                if state["stage"] not in {"scan", "press"}:
+                    return None
+                before = dict(state)
+                claim_id = fields.get("claim_id")
+                if claim_id:
+                    if state.get("pending_claim_id") != claim_id:
+                        # Repair an early prompt receipt from older releases,
+                        # and give a replacement claim its own fresh prompt.
+                        state["spoken"] = [stage for stage in state["spoken"] if stage != "press"]
+                    state.update(stage="press", pending_claim_id=claim_id,
+                                 pending_claim_expires_at=fields["expires_at"])
+                else:
+                    state["stage"] = "scan"
+                    state.pop("pending_claim_id", None)
+                    state.pop("pending_claim_expires_at", None)
+                if state == before:
+                    return state
             elif action == "advance":
                 before = fields.pop("before")
                 if state["stage"] not in before:
@@ -77,9 +97,15 @@ class SetupGuide:
             return None
         return self.change("advance", before=before, stage=after, **fields)
 
+    def pending_claim(self, claim_id=None, expires_at=None):
+        return self.change("pending_claim", claim_id=claim_id, expires_at=expires_at)
+
     def speak(self, play, *, quiet=False, replay=False):
         state = self.load()
         if not state or quiet or state["stage"] not in LINES:
+            return False
+        if state["stage"] == "press" and (not state.get("pending_claim_id")
+                or state.get("pending_claim_expires_at", 0) <= time.time()):
             return False
         if state["stage"] == "await_listened" and not state.get("sent_ready"):
             return False

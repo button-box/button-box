@@ -128,6 +128,12 @@ speaker/microphone remains the fallback. The runtime detects again at boot, so
 card numbers can change. At the bench, check `/run/messagebox-audio/audio.env`
 against `arecord -l` and `aplay -l`, then record and play a spoken sample.
 
+Setup speech must follow this order: online/scan, parent sends WhatsApp, Cloud
+reports a pending claim, press prompt, physical press, names. Registration alone
+must not play the press prompt. Expired or cancelled claims cannot arm it. The
+first setup note must then play `setup-your-turn`, including with `play_only`,
+and wait for a separate press before recording.
+
 ## 3. Commit the signed application, then activate A/B
 
 ```sh

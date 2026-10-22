@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox import cloud_setup, speaker
+from messagebox.cloud_claim import CloudClaim
+from test_cloud_claim import FakeClient, ID, NOW
 from messagebox.guided_reply import RecordingResult, OutboxStore
 from messagebox.settings import defaults, SettingsStore
 from speaker_helpers import isolate_audio
@@ -24,10 +26,90 @@ with mock.patch.dict(sys.modules, {"gpiozero": types.SimpleNamespace(Button=obje
 class SetupTests(unittest.TestCase):
     def setUp(self):
         isolate_audio(self)
+        clock = mock.patch.object(cloud_setup, "time", types.SimpleNamespace(time=lambda: NOW))
+        clock.start()
+        self.addCleanup(clock.stop)
         self.guide = cloud_setup.SetupGuide()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_online_scan_waits_for_remote_pending_claim_before_press_then_names(self):
+        client = FakeClient()
+        claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
+        pending = {'claimed': False, 'pending_claim': None}
+        client.setup_checkin = lambda: pending
+        cue = [True]
+        def online(**kwargs):
+            return cue.pop() if cue else False
+        played = []
+        with mock.patch.object(runtime, 'quiet_hours', return_value=False), \
+             mock.patch.object(runtime.cloud_claim, 'CLAIM_FILE', claim.path), \
+             mock.patch.object(runtime.cloud_claim, 'setup_online_cue', side_effect=online), \
+             mock.patch.object(runtime, 'play_setup_line', side_effect=played.append):
+            claim.start()  # Registration creates a file before WhatsApp is sent.
+            claim.setup_checkin()
+            runtime.play_setup_online({})
+            for _ in range(3):
+                claim.setup_checkin()
+                runtime.play_setup_online({})
+            self.assertEqual(played, ['setup-scan'])
+            self.assertEqual(self.guide.load()['stage'], 'scan')
+            pending['pending_claim'] = {'claim_id': ID, 'expires_at': NOW + 600}
+            claim.setup_checkin()
+            runtime.play_setup_online({})
+            claim.setup_checkin()
+            runtime.play_setup_online({})
+            self.assertEqual(played, ['setup-scan', 'setup-press'])
+            self.assertTrue(claim.consume_press())
+            pending['claimed'] = True
+            claim.setup_checkin()
+            runtime.play_setup_online({})
+        self.assertEqual(played, ['setup-scan', 'setup-press', 'setup-names'])
+
+    def test_remote_pending_claim_repairs_an_early_press_receipt_without_repeating(self):
+        self.guide.change('start')
+        self.guide.change('stage', stage='press', spoken=['scan', 'press'])
+        client = FakeClient()
+        claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
+        claim.start()
+        play = mock.Mock()
+        self.assertFalse(self.guide.speak(play))  # Old receipt has no Cloud proof.
+        client.setup_checkin = lambda: {'claimed': False,
+            'pending_claim': {'claim_id': ID, 'expires_at': NOW + 600}}
+        claim.setup_checkin()
+        self.assertTrue(self.guide.speak(play))
+        claim.setup_checkin()
+        self.assertFalse(self.guide.speak(play))
+        play.assert_called_once_with('setup-press')
+
+    def test_missing_expired_or_cancelled_remote_claim_cannot_arm_press_speech(self):
+        client = FakeClient()
+        claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
+        claim.start()
+        self.guide.change('start')
+        self.guide.change('spoken')  # Scan was already heard.
+        self.guide.pending_claim(ID, NOW + 600)
+        for pending in (None, {'claim_id': ID, 'expires_at': NOW}):
+            with self.subTest(pending=pending):
+                client.setup_checkin = lambda: {'claimed': False, 'pending_claim': pending}
+                claim.setup_checkin()
+                self.assertEqual(self.guide.load()['stage'], 'scan')
+                self.assertFalse(self.guide.speak(mock.Mock()))
+        self.guide.pending_claim(ID, NOW + 600)
+        with mock.patch.object(cloud_setup.time, 'time', return_value=NOW + 600):
+            self.assertFalse(self.guide.speak(mock.Mock()))
+        state = claim._read()
+        state['cancel_pending'] = True
+        runtime.cloud_claim.atomic_json(claim.path, state)
+        client.setup_checkin = lambda: {'claimed': False,
+            'pending_claim': {'claim_id': ID, 'expires_at': NOW + 600}}
+        claim.setup_checkin()
+        self.assertEqual(self.guide.load()['stage'], 'scan')
+        self.assertFalse(self.guide.speak(mock.Mock()))
+
+    def test_first_setup_note_still_invites_a_reply_with_play_only(self):
+        self.test_first_note_invites_separate_press_and_reply_keeps_exact_recipient(after_listening='play_only')
 
     def test_receipts_survive_restart_hotspot_return_quiet_and_audio_failure(self):
         self.guide.change("start")
@@ -39,7 +121,7 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(restarted.speak(play))
         self.assertTrue(restarted.speak(play, replay=True))
         self.assertEqual(play.call_count, 2)
-        restarted.advance({"scan"}, "press")
+        restarted.pending_claim(ID, NOW + 600)
         self.assertTrue(restarted.speak(mock.Mock()))
         self.assertIsNone(restarted.advance({"scan"}, "names"))
         self.guide.path.write_text("invalid")
@@ -58,7 +140,7 @@ class SetupTests(unittest.TestCase):
         saved = store.update({**candidate, "voice_pack": "jessica"}, 0)
         self.assertEqual(SettingsStore(path, environ={"MSGBOX_TRANSPORT": "wacli"}).load(), (saved, False))
 
-    def test_first_note_invites_separate_press_and_reply_keeps_exact_recipient(self):
+    def test_first_note_invites_separate_press_and_reply_keeps_exact_recipient(self, after_listening='invite_reply'):
         self.guide.change("start")
         self.guide.advance({"scan"}, "names")
         incoming = self.root / "incoming.wav"
@@ -66,7 +148,7 @@ class SetupTests(unittest.TestCase):
         recording = self.root / "reply.wav"
         recording.write_bytes(b"synthetic")
         claim = {"path": incoming, "meta": {"chat": "person", "cloud": True}}
-        settings = {**defaults({}), "after_listening": "invite_reply", "talk_mode": "hold",
+        settings = {**defaults({}), "after_listening": after_listening, "talk_mode": "hold",
                     "max_recording_seconds": 30, "review_before_send": False}
         store = OutboxStore(self.root / "outbox", transport="cloud")
         with contextlib.ExitStack() as stack:

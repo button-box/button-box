@@ -2479,9 +2479,6 @@ def play_setup_online(cues):
             guide.change("start")
             if guide.speak(play_setup_line):
                 return True
-        state = guide.load()
-        if state and state["stage"] in {"scan", "press"} and cloud_claim.CLAIM_FILE.is_file():
-            guide.advance({"scan"}, "press")
         return guide.speak(play_setup_line)
     except (OSError, ValueError, CloudDeviceError):
         return False

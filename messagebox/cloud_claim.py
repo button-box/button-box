@@ -137,17 +137,23 @@ class CloudClaim:
         with self._locked():
             current = self._read()
             if current != prior:
+                cloud_setup.SetupGuide().pending_claim()
                 return result
             if result["claimed"]:
                 cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
                 self.path.unlink(missing_ok=True)
             elif pending and pending["expires_at"] > self.clock():
-                if current and (current["claim_id"] == pending["claim_id"]
-                                or current.get("cancel_pending")
-                                or current["expires_at"] >= pending["expires_at"]):
+                if current and (current.get("cancel_pending")
+                                or current["claim_id"] != pending["claim_id"]
+                                and current["expires_at"] >= pending["expires_at"]):
+                    cloud_setup.SetupGuide().pending_claim()
                     return result
                 # No token or prefilled URL reaches the Pi through this endpoint.
-                atomic_json(self.path, {**pending, "whatsapp_url": "", "physical_confirmed": False})
+                if not current or current["claim_id"] != pending["claim_id"]:
+                    atomic_json(self.path, {**pending, "whatsapp_url": "", "physical_confirmed": False})
+                cloud_setup.SetupGuide().pending_claim(pending["claim_id"], pending["expires_at"])
+            else:
+                cloud_setup.SetupGuide().pending_claim()
         return result
 
     def _public(self, document):
