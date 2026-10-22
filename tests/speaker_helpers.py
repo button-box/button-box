@@ -8,12 +8,12 @@ from unittest.mock import patch
 from messagebox import speaker, cloud_setup
 
 
-def assert_padded_playback(test, played, source):
+def assert_padded_playback(test, played, source, *, lead_in_s=None):
     played, source = Path(played), Path(source)
     test.assertNotEqual(played, source)
     with wave.open(str(played), 'rb') as actual, wave.open(str(source), 'rb') as original:
         test.assertEqual(actual.getparams()[:3], original.getparams()[:3])
-        lead = int(original.getframerate() * speaker.LEAD_IN_S)
+        lead = int(original.getframerate() * (speaker.LEAD_IN_S if lead_in_s is None else lead_in_s))
         silence = b'\x80' if original.getsampwidth() == 1 else b'\0'
         test.assertEqual(actual.getnframes(), original.getnframes() + lead)
         test.assertEqual(actual.readframes(lead),

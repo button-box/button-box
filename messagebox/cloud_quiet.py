@@ -14,6 +14,8 @@ from messagebox import speaker
 
 
 SILENCE_FILE = CLOUD_DIR / "silence.json"
+# Extra USB wake-up margin after a rendered line still clipped at 300 ms.
+VOICE_LINE_LEAD_IN_S = 0.6
 
 
 class AudioSilenced(subprocess.SubprocessError):
@@ -102,7 +104,11 @@ def start_player(args, *, allow_muted=False, **kwargs):
         return subprocess.Popen(command, **options)
 
     try:
-        process = speaker.start_player(args, popen=launch, **kwargs)
+        # Greeting, modern name lines, and the two older name-line caches all
+        # use the same pad/copy/lock path. Keep press-cue timing unchanged.
+        voice_line = args and Path(args[-1]).parent.name in {"voice-lines", "listened-clips", "card-prompts"}
+        process = speaker.start_player(args, popen=launch,
+            lead_in_s=VOICE_LINE_LEAD_IN_S if voice_line else None, **kwargs)
     except BaseException:
         reservation.__exit__(None, None, None)
         raise

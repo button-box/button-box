@@ -1,11 +1,14 @@
 """Review regressions: rollback, malformed input, priority, and local cache scope."""
 import hashlib
 import importlib.util
+import io
 import json
 import threading
 import time
 import types
 import unittest
+import wave
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +18,7 @@ from messagebox.cloud_voice import VoiceCache
 import test_cloud_runtime as runtime_tests
 from test_cloud_runtime import NOW, OP, button_send
 from test_cloud_voice import wav
+from speaker_helpers import assert_padded_playback
 
 FIXTURES = Path(__file__).parent / 'fixtures/pi-v0.3.12'
 
@@ -88,6 +92,48 @@ class VoiceReviewTests(unittest.TestCase):
 
     def test_greeting_queued_under_the_current_voice_plays(self):
         self.assert_queued_greeting_voice('buttonbox', played=True)
+
+    def test_cloud_greeting_reaches_aplay_with_shared_pre_roll(self):
+        self.runtime.heartbeat()
+        greeting = self.greeting()
+        stream = io.BytesIO()
+        with wave.open(stream, 'wb') as audio:
+            audio.setparams((1, 2, 48000, 0, 'NONE', ''))
+            audio.writeframes(b'\x01\x02' * 134400)  # 2.8 seconds of non-silent PCM.
+        self.client.audio = stream.getvalue()
+        greeting['payload']['sha256'] = hashlib.sha256(self.client.audio).hexdigest()
+        self.runtime._command(greeting, NOW)
+        runtime_tests.finish_greeting(self.runtime)
+        request = json.loads(next(self.runtime.optional_audio_requests.directory.glob('*.json')).read_text())
+        source = Path(request['clip'])
+        guide = cloud_setup.SetupGuide()
+        guide.change('start')
+        guide.advance({'scan'}, 'names')
+        played = []
+
+        def launch(command, **options):
+            assert_padded_playback(self, command[-1], source, lead_in_s=0.6)
+            played.append(Path(command[-1]))
+            return types.SimpleNamespace(poll=lambda: 0, returncode=0)
+
+        from messagebox import maintenance
+        with mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
+            cloud_optional_audio_requests=self.runtime.optional_audio_requests, _recording=False, _guided_active=False,
+            button=types.SimpleNamespace(is_pressed=False), create=True), \
+             mock.patch.object(button_send, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(button_send.cloud_runtime, 'account_scope', return_value='a' * 64), \
+             mock.patch.object(button_send.cloud_runtime, 'STATE_FILE', self.runtime.state_path), \
+             mock.patch.object(button_send, 'caregiver_settings', return_value={**defaults({}), 'voice_pack': 'buttonbox'}), \
+             mock.patch.object(button_send, 'quiet_hours', return_value=False), \
+             mock.patch.object(button_send, 'queued', return_value=[]), \
+             mock.patch.object(button_send.cloud_quiet, 'silence_store', self.runtime.silence), \
+             mock.patch.object(maintenance, 'interaction', side_effect=lambda: nullcontext(True)), \
+             mock.patch.object(button_send.subprocess, 'Popen', side_effect=launch):
+            self.assertTrue(button_send.maybe_play_cloud_sound())
+        self.assertEqual(len(played), 1)
+        self.assertEqual(source.read_bytes(), self.client.audio)
+        self.assertFalse(played[0].exists())
+        self.assertEqual(self.runtime.optional_audio_requests.outcome('setup_greeting:' + OP), 'played')
 
     def assert_queued_greeting_voice(self, current_voice, *, played):
         self.runtime.heartbeat()

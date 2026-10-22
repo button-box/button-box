@@ -1,14 +1,16 @@
 """Every shared WAV playback starts with silence while the USB speaker wakes."""
 
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 import wave
 from pathlib import Path
 from unittest import mock
+from contextlib import nullcontext
 
 from messagebox import speaker
 from messagebox.guided_reply import GuidedSession, OutboxStore
@@ -74,6 +76,40 @@ class LeadInTests(unittest.TestCase):
             player.wait(timeout=2)
             self.assertFalse(padded.exists())
             self.assertFalse(speaker.is_busy())
+
+    def test_cloud_cached_lines_have_600_ms_and_other_paths_keep_300_ms(self):
+        from messagebox import maintenance
+        with tempfile.TemporaryDirectory() as directory:
+            for cache in ('voice-lines', 'listened-clips', 'card-prompts', 'bundled'):
+                source = Path(directory) / cache / 'voice.wav'
+                source.parent.mkdir()
+                write_wav(source, b'\x01\x02' * 4800)
+                original = source.read_bytes()
+                for mode in ('cloud', 'wacli'):
+                    for asynchronous in (False, True):
+                        with self.subTest(cache=cache, mode=mode, asynchronous=asynchronous):
+                            played = []
+                            def launch(command, **options):
+                                lead = 0.6 if mode == 'cloud' and cache != 'bundled' else 0.3
+                                assert_padded_playback(self, command[-1], source, lead_in_s=lead)
+                                self.assertNotIn('lead_in_s', options)
+                                played.append(Path(command[-1]))
+                                return types.SimpleNamespace(poll=lambda: 0, returncode=0,
+                                    communicate=lambda **kwargs: (b'', b''))
+                            with mock.patch.object(runtime, 'transport_mode', return_value=mode), \
+                                 mock.patch.object(runtime.cloud_quiet.silence_store, 'load',
+                                     return_value={'muted': False, 'stop_sequence': -1}), \
+                                 mock.patch.object(maintenance, 'interaction', side_effect=lambda: nullcontext(True)), \
+                                 mock.patch.object(runtime.subprocess, 'Popen', side_effect=launch), \
+                                 mock.patch.object(runtime.subprocess, 'run', side_effect=launch):
+                                if asynchronous:
+                                    player = runtime.start_player(['aplay', '-q', str(source)])
+                                    self.assertEqual(player.poll(), 0)
+                                else:
+                                    runtime.play_sound(source, timeout=10)
+                            self.assertEqual(len(played), 1)
+                            self.assertFalse(played[0].exists())
+                            self.assertEqual(source.read_bytes(), original)
 
     def test_unreadable_or_non_wav_input_keeps_the_original_command(self):
         with tempfile.TemporaryDirectory() as directory:

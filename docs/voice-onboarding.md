@@ -240,13 +240,20 @@ The main loop checks the button before starting any further idle speech.
 
 All application PCM WAV playback through `speaker.run` and `start_player`
 adds leading silence in the same `aplay` stream. `messagebox/speaker.py` has
-one tuning constant, `LEAD_IN_S = 0.3`. This covers voices, cues, notes and
-previews in both transports. The temporary copy preserves the format and
+the default tuning constant, `LEAD_IN_S = 0.3`. This covers voices, cues, notes
+and previews in both transports. Cloud playback uses the same path with
+`cloud_quiet.VOICE_LINE_LEAD_IN_S = 0.6` for cached rendered lines in
+`voice-lines`, `listened-clips`, and `card-prompts`. This adds USB wake-up
+margin for the 48 kHz name lines. Bundled voices, button cues, and wacli
+keep the 300 ms default. The temporary copy preserves the format and
 every original PCM byte. Files in the sound pack stay unchanged. Copying uses
 small blocks for low-memory boxes. The copy is removed after playback or
 failure; asynchronous playback retains it until the player is reaped.
 Non-WAV inputs retain their existing player behavior. Check the first word
-on the actual USB speaker after a cold start before the handout.
+on the actual USB speaker after a cold start before the handout. The Cloud
+setup greeting, listened name line, and card name line must each keep their
+first word. The bench failure occurred with the existing 300 ms shared pad;
+the longer Cloud margin still needs confirmation on BOX-10.
 
 `/run/messagebox-speaker/speaker.lock` is shared by the button service,
 Cloud playback, local dashboard previews, and onboarding card/preview playback.

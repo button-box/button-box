@@ -56,9 +56,10 @@ def busy(error):
 
 
 @contextmanager
-def _playback(args):
+def _playback(args, *, lead_in_s=None):
     """Feed silence and the unchanged PCM through the same ALSA stream."""
-    if not args or Path(args[0]).name != 'aplay' or not Path(args[-1]).is_file() or LEAD_IN_S <= 0:
+    lead_in_s = LEAD_IN_S if lead_in_s is None else lead_in_s
+    if not args or Path(args[0]).name != 'aplay' or not Path(args[-1]).is_file() or lead_in_s <= 0:
         yield args
         return
     try:
@@ -77,7 +78,7 @@ def _playback(args):
             path = Path(directory) / Path(args[-1]).name
             with wave.open(str(path), 'wb') as target:
                 target.setparams(params)
-                frames = int(params.framerate * LEAD_IN_S)
+                frames = int(params.framerate * lead_in_s)
                 silence = b'\x80' if params.sampwidth == 1 else b'\0'
                 target.writeframesraw(silence * frames * params.sampwidth * params.nchannels)
                 while block := source.readframes(16384):
@@ -85,9 +86,9 @@ def _playback(args):
             yield [*args[:-1], str(path)]
 
 
-def run(args, *, runner=None, **kwargs):
+def run(args, *, runner=None, lead_in_s=None, **kwargs):
     runner = subprocess.run if runner is None else runner
-    with reservation(), _playback(args) as command:
+    with reservation(), _playback(args, lead_in_s=lead_in_s) as command:
         for attempt in range(2):
             try:
                 return runner(command, **{**kwargs, "stderr": subprocess.PIPE})
@@ -132,12 +133,12 @@ class SpeakerPlayer:
         return result
 
 
-def start_player(args, *, popen=None, cancel=None, wait=True, **kwargs):
+def start_player(args, *, popen=None, cancel=None, wait=True, lead_in_s=None, **kwargs):
     """Keep the cross-process lock until the caller reaps this player."""
     context = ExitStack()
     try:
         context.enter_context(reservation(cancel=cancel, wait=wait))
-        command = context.enter_context(_playback(args))
+        command = context.enter_context(_playback(args, lead_in_s=lead_in_s))
         if cancel is not None and cancel():
             raise SpeakerBusy("speaker playback cancelled")
         process = (subprocess.Popen if popen is None else popen)(command, **kwargs)
