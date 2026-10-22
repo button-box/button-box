@@ -1,0 +1,18 @@
+[Unit]
+Description=Recover interrupted Button Box software transaction before applications
+After=local-fs.target
+Before=messagebox.target comitup.service messagebox-update-controller.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /usr/lib/messagebox-update/bounded_update.py recover --boot
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

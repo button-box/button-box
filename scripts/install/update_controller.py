@@ -24,8 +24,9 @@ from zoneinfo import ZoneInfo
 
 import bounded_update as update
 import trust_update as trust
-from release_verify import MAX_ARCHIVE, TAG, ReleaseError, digest, extract_bundle, local_platform, verify_bundle
+from release_verify import MAX_ARCHIVE, TAG, ReleaseError, digest, extract_bundle, local_platform, verify_bundle, promotion_inhibited
 
+ROOT = Path('/')
 STATE = Path(update.UPDATE_STATE)
 CACHE = Path('/var/cache/button-box-update')
 KEYS = Path('/etc/button-box-update/release-keys')
@@ -47,6 +48,8 @@ REJECTION_CODES = frozenset({
 
 def rejection_code(exc):
     code = str(exc) if isinstance(exc, ValueError) else ''
+    if code == 'promotion_inhibited':
+        return 'update_busy'
     return code if code in REJECTION_CODES else 'request_rejected'
 
 
@@ -302,6 +305,12 @@ class Controller:
 
     def dispatch(self, data, peer):
         pid, uid, _gid = peer
+        if data.get('command') == 'controller_handshake':
+            if uid != 0:
+                raise ValueError('unauthorized_peer')
+            return controller_identity()
+        if promotion_inhibited(ROOT) and data.get('command') not in {'status', 'result', 'heartbeat', 'button', 'local'}:
+            raise ValueError('promotion_inhibited')
         runtime_uid = pwd.getpwnam('messagebox').pw_uid
         discovery_uid = pwd.getpwnam('messagebox-update').pw_uid
         command = data.get('command')
@@ -310,7 +319,7 @@ class Controller:
                 raise ValueError('unauthorized_peer')
         if command in {'button', 'arm', 'confirm'} and (uid != runtime_uid or pid != unit_pid('messagebox-button.service')):
             raise ValueError('not_button_owner')
-        if command == 'heartbeat' and (uid != runtime_uid or pid != unit_pid('messagebox-poller.service')):
+        if command in {'heartbeat', 'local'} and (uid != runtime_uid or pid != unit_pid('messagebox-poller.service')):
             raise ValueError('not_heartbeat_owner')
         if command in {'downloaded', 'download_failed', 'trust_downloaded'} and uid != discovery_uid:
             raise ValueError('not_downloader')
@@ -393,7 +402,7 @@ class Controller:
                 if operation and operation['state'] == 'downloading' and operation['version'] == available['version']:
                     bind_approval(operation, available)
                 return {'accepted': True}
-            if command in {'button', 'heartbeat'}:
+            if command in {'button', 'heartbeat', 'local'}:
                 self.evidence(command, data, pid)
                 operation = active_operation()
                 if command == 'button':
@@ -552,13 +561,16 @@ class Controller:
         if (data.get('software_version') != transaction.get('software_version')
                 or data.get('software_commit') != transaction.get('software_commit')):
             return
-        name = 'button' if command == 'button' else 'heartbeat'
-        update.durable_json(RUN / (name + '.json'), {
-            **transaction, 'pid': pid, 'monotonic': time.monotonic(), 'ready': True,
-        }, 0o644)
+        for name in (('heartbeat', 'local') if command == 'heartbeat' else (command,)):
+            update.durable_json(RUN / (name + '.json'), {
+                **transaction, 'pid': pid, 'process_token': update._process_token(pid),
+                'monotonic': time.monotonic(), 'ready': True,
+            }, 0o644)
 
 
 def worker():
+    if promotion_inhibited(ROOT):
+        raise ValueError('promotion_inhibited')
     # Serialize the signature check through transaction completion with trust
     # replacement. A queued candidate is always checked against current pins.
     with trust.trust_lock(STATE, blocking=True):
@@ -567,6 +579,8 @@ def worker():
 
 
 def _worker():
+    if promotion_inhibited(ROOT):
+        raise ValueError('promotion_inhibited')
     ticket = read('ticket.json')
     operation = read(operation_name(ticket['operation_id']))
     bundle = Path(ticket['bundle'])
@@ -626,6 +640,8 @@ def attended_install(directory, version):
     and convert its tree first, then let this controller own the first B72
     application transaction. Never fall back to legacy in-place apply.
     """
+    if promotion_inhibited(ROOT):
+        raise ValueError('promotion_inhibited')
     if os.geteuid() != 0 or not INSTALLED.is_file():
         raise ValueError('attended_bootstrap_required')
     directory = Path(directory).absolute()
@@ -698,14 +714,61 @@ def serve():
                     pass
 
 
+def controller_identity():
+    from release_verify import CONTROLLER_MODULES, UPDATER_VERSION
+    directory = Path(__file__).resolve().parent
+    return {'protocol': 1, 'version': '.'.join(map(str, UPDATER_VERSION)),
+            'hashes': {name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                       for name in CONTROLLER_MODULES}}
+
+
+def controller_self_test():
+    import importlib
+    import importlib.util
+    for name in ('bounded_update', 'release_verify', 'trust_update', 'update_discovery'):
+        importlib.import_module(name)
+    path = Path(__file__).resolve().parent / 'health-probe.py'
+    spec = importlib.util.spec_from_file_location('controller_health_probe', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # Exercise the same manifest/path/hash validation used by the worker,
+    # without an install or application mutation. Both failures must occur
+    # before the unrelated complete-sound-pack requirement.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='controller-validation-') as directory:
+        root = Path(directory).resolve()
+        source = root / 'source'
+        (source / 'scripts/dev').mkdir(parents=True)
+        (source / 'scripts/dev/release-manifest.py').write_text('# validation fixture\n')
+        (source / 'messagebox').mkdir()
+        (source / 'messagebox/probe.py').write_text('# probe\n')
+        for target, digest, reason in (
+                ('/opt/messagebox/messagebox/probe.py', '0' * 64, 'hash does not match'),
+                ('/etc/shadow', hashlib.sha256(b'# probe\n').hexdigest(), 'outside the install allowlist')):
+            manifest = {'version': 'v0.3.0', 'commit': 'a' * 40,
+                        'files': [{'source': 'messagebox/probe.py', 'installed': target, 'sha256': digest}]}
+            path = source / 'release-manifest.json'
+            path.write_text(json.dumps(manifest))
+            try:
+                update.load_candidate(source, path, root)
+            except update.UpdateError as exc:
+                if reason not in str(exc):
+                    raise ValueError('controller_validation_self_test') from exc
+            else:
+                raise ValueError('controller_validation_accepted_invalid')
+    return controller_identity()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('serve', 'install', 'attended-install'))
+    parser.add_argument('command', choices=('serve', 'install', 'attended-install', 'self-test'))
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--version')
     args = parser.parse_args()
     try:
-        if args.command == 'attended-install':
+        if args.command == 'self-test':
+            print(json.dumps(controller_self_test(), sort_keys=True))
+        elif args.command == 'attended-install':
             if not args.bundle or not args.version:
                 raise ValueError('bootstrap_bundle_required')
             attended_install(args.bundle, args.version)

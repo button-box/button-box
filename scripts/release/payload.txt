@@ -16,6 +16,8 @@ messagebox/cloud_runtime.py
 messagebox/cloud_update.py
 messagebox/cloud_voice.py
 messagebox/contacts.py
+messagebox/controller_selector.py
+messagebox/controller_slots.py
 messagebox/dashboard/__init__.py
 messagebox/dashboard/app.py
 messagebox/device_http.py
@@ -603,12 +605,16 @@ systemd/messagebox-mode-reconcile.service
 systemd/messagebox-nfc.service
 systemd/messagebox-poller.service
 systemd/messagebox-sync.service
+systemd/messagebox-update-bootstrap.service
 systemd/messagebox-update-controller.service
 systemd/messagebox-update-discovery.service
 systemd/messagebox-update-discovery.timer
 systemd/messagebox-update-install.service
 systemd/messagebox-update-recovery.service
+systemd/messagebox-update-selector.service
+systemd/messagebox-update-selector.timer
 systemd/messagebox-update-supervisor.service
+systemd/messagebox-update-supervisor.service.d/messagebox.conf
 systemd/messagebox-update-supervisor.timer
 systemd/messagebox-wifi-change.path
 systemd/messagebox-wifi-change.service

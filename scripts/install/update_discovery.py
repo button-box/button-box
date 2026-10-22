@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from release_verify import MAX_ARCHIVE, TAG, ReleaseError, local_platform, verify_bundle
+from release_verify import MAX_ARCHIVE, TAG, ReleaseError, local_platform, verify_bundle, promotion_inhibited
 from trust_update import MAX_TRUST, TRUST_TAG, verify_trust
 
 API = 'https://api.github.com/repos/button-box/button-box/releases'
@@ -74,11 +74,12 @@ def backoff(headers, now, failures):
 
 
 class Discovery:
-    def __init__(self, directory=CACHE, *, opener=OPEN, clock=time.time, jitter=random.uniform):
+    def __init__(self, directory=CACHE, *, opener=OPEN, clock=time.time, jitter=random.uniform, keys=None):
         self.directory = Path(directory)
         self.directory.mkdir(mode=0o750, parents=True, exist_ok=True)
         self.opener, self.clock, self.jitter = opener, clock, jitter
         self.archive_urls = {}
+        self.keys = Path(keys) if keys is not None else None
         try:
             self.state = json.loads((self.directory / 'discovery.json').read_bytes())
         except FileNotFoundError:
@@ -168,7 +169,7 @@ class Discovery:
                 if type(asset.get('size')) is not int or not 0 < asset['size'] <= limit:
                     raise DownloadError('download_limit')
                 self.download(asset.get('browser_download_url', ''), directory / asset['name'], limit)
-            manifest = verify_bundle(directory, KEYS, version=version, channel=channel, floor=floor, platform=platform, verify_archive=False)
+            manifest = verify_bundle(directory, self.keys or KEYS, version=version, channel=channel, floor=floor, platform=platform, verify_archive=False)
             return manifest
         except BaseException:
             shutil.rmtree(directory)
@@ -178,7 +179,7 @@ class Discovery:
         version = manifest["version"]
         directory = self.directory / version
         self.download(self.archive_urls[version], directory / f"button-box-{version}.tar.gz", MAX_ARCHIVE)
-        verify_bundle(directory, KEYS, version=version, channel=channel, floor=floor, platform=platform)
+        verify_bundle(directory, self.keys or KEYS, version=version, channel=channel, floor=floor, platform=platform)
 
     def trust_candidate(self, release):
         if not isinstance(release, dict) or release.get('draft') is not False:
@@ -199,7 +200,7 @@ class Discovery:
                 if type(asset.get('size')) is not int or not 0 < asset['size'] <= limit:
                     raise DownloadError('download_limit')
                 self.download(asset.get('browser_download_url', ''), directory / asset['name'], limit)
-            value = verify_trust(directory, KEYS.parent / 'emergency-keys')
+            value = verify_trust(directory, (self.keys or KEYS).parent / 'emergency-keys')
             target = self.directory / ('trust-v' + str(value['trust_sequence']))
             shutil.rmtree(target, ignore_errors=True)
             os.replace(directory, target)
@@ -303,7 +304,70 @@ class Discovery:
                 child.unlink()
 
 
+# Public, disposable self-test key. It is never used for release admission.
+SELF_TEST_PUBLIC = b'untrusted comment: minisign public key D717769C40C9112C\nRWQsEclAnHYX1w41kQ3iuQj9S1/NxVKsozFYO5CA8o555uL/esvn1Wkv\n'
+SELF_TEST_SIGNATURE = b'untrusted comment: signature from minisign secret key\nRUQsEclAnHYX16w+y2eibGS99gBwZduzWZMnLkrq6/PiUEizybZETygPYluhw7XewzA3CXLU/94zrl8codTitLaYcDuVfgff8gQ=\ntrusted comment: timestamp:1792615751\tfile:sums\thashed\nV0rHnDZPR5lvhvvRqnHRL1j8eWaBUoAlcWq9UJ0cxiQKTj9uA+6jfGdqeuyueUzMdJ2/djghhPekmGXBuFrTDw==\n'
+SELF_TEST_SUMS = b'e2803f6d08a5682d25e92a9032ecc31e980ac9dfaa1eed1d3b066cfa5271de1e  button-box-v0.3.0.tar.gz\n9ef32e6ef0eb2375597ccd4029ee1f1c5ef5db26d726ea9aac66c7d7017b226d  release-manifest.json\n'
+SELF_TEST_MANIFEST = b'{"channel": "stable", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "files": [], "min_updater_version": "1.0.0", "product": "button-box", "release_sequence": 1, "schema": 1, "supported_arch": ["aarch64"], "supported_models": ["Raspberry Pi 4 Model B"], "supported_os": ["raspios-trixie"], "tag": "v0.3.0", "version": "v0.3.0"}'
+SELF_TEST_ARCHIVE = 'H4sIAAAAAAAC/+3PTQrCMBAG0BylJwgJBj1BF91UUHDvFfzp+Zu4ku4rSN7bfMM3i2Fu4+U6neewp1QdS/lktc22/Zpbf0o5hyGFH3g/X/dHPRn6tKR4iL0+DwAAAAAAAAAA8MdW01AYoAAoAAA='
+
+
+def self_test():
+    """Exercise normal poll, download, signature/hash checks and extraction offline."""
+    import base64
+    import io
+    import tempfile
+    from release_verify import extract_bundle
+    class Response(io.BytesIO):
+        headers = {}
+    assets = {'release-manifest.json': SELF_TEST_MANIFEST, 'SHA256SUMS': SELF_TEST_SUMS,
+              'SHA256SUMS.minisig': SELF_TEST_SIGNATURE,
+              'button-box-v0.3.0.tar.gz': base64.b64decode(SELF_TEST_ARCHIVE)}
+    url = 'https://github.com/button-box/button-box/releases/download/v0.3.0/'
+    release = {'tag_name': 'v0.3.0', 'draft': False, 'prerelease': False,
+               'assets': [{'name': name, 'size': len(raw), 'browser_download_url': url + name}
+                          for name, raw in assets.items()]}
+    def offline(request, *, timeout):
+        if timeout != 30:
+            raise DownloadError('dry_run_timeout')
+        if request.full_url == API + '/latest':
+            return Response(json.dumps(release).encode())
+        if not request.full_url.startswith(url):
+            raise DownloadError('dry_run_url')
+        return Response(assets[request.full_url.removeprefix(url)])
+    with tempfile.TemporaryDirectory(prefix='messagebox-discovery-test-') as directory:
+        path = Path(directory)
+        keys = path / 'keys'
+        keys.mkdir()
+        (keys / 'self-test.pub').write_bytes(SELF_TEST_PUBLIC)
+        platform = {'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'}
+        seen = []
+        def notify(version):
+            extract_bundle(path / ('good/' + version), path / 'extracted', version)
+            seen.append(version)
+        result = Discovery(path / 'good', keys=keys, opener=offline, clock=lambda: 1000, jitter=lambda a,b: 0).poll(
+            'stable', 0, platform, notify=notify, hint=True)
+        if result is None or result['version'] != 'v0.3.0' or seen != ['v0.3.0']:
+            raise DownloadError('dry_run_discovery')
+        if (path / 'extracted/VERSION').read_bytes() != b'v0.3.0':
+            raise DownloadError('dry_run_extraction')
+        assets['button-box-v0.3.0.tar.gz'] += b'corrupt'
+        try:
+            Discovery(path / 'bad', keys=keys, opener=offline, clock=lambda: 1000, jitter=lambda a,b: 0).poll(
+                'stable', 0, platform, hint=True)
+        except DownloadError:
+            pass
+        else:
+            raise DownloadError('dry_run_accepted_corruption')
+    return {'protocol': 1, 'dry_run': True}
+
+
 def main():
+    if sys.argv[1:] == ['--self-test']:
+        print(json.dumps(self_test(), sort_keys=True))
+        return 0
+    if promotion_inhibited(journal=False):
+        return 0
     # Import the pinned bootstrap client, not the candidate application.
     import socket
 

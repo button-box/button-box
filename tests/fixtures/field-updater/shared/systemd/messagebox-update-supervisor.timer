@@ -1,0 +1,10 @@
+[Unit]
+Description=Independent software transaction supervision
+
+[Timer]
+OnBootSec=15
+OnUnitInactiveSec=5
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target

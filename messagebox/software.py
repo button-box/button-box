@@ -6,6 +6,8 @@ import json
 import os
 import re
 import stat
+import socket
+import time
 from functools import cache
 from pathlib import Path
 
@@ -13,6 +15,24 @@ from pathlib import Path
 RELEASE_FILE = Path("/opt/messagebox/release.json")
 _VERSION = re.compile(r"[0-9A-Za-z.+_-]{1,64}")
 _COMMIT = re.compile(r"[0-9a-f]{7,40}")
+CONTROL_SOCKET = '/run/messagebox-update/control.sock'
+_ready_at = {}
+
+
+def local_ready(command, **fields):
+    """Local producer liveness in either transport; no network or Cloud calls."""
+    now = time.monotonic()
+    if now - _ready_at.get(command, float('-inf')) < 1:
+        return
+    _ready_at[command] = now
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.2)
+            connection.connect(CONTROL_SOCKET)
+            connection.sendall(json.dumps({'command': command, **software_fields(), **fields}).encode() + b'\n')
+            connection.recv(16384)
+    except OSError:
+        pass  # Optional before the updater is installed or while it restarts.
 
 
 @cache

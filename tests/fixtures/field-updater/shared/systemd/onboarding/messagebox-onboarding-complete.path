@@ -1,0 +1,10 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Watch for Button Box setup completion
+
+[Path]
+PathChanged=/var/lib/messagebox-onboarding/completion-request.json
+Unit=messagebox-onboarding-complete.service
+
+[Install]
+WantedBy=multi-user.target

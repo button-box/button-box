@@ -1074,6 +1074,8 @@ def _restore_record(record, path, backup_dir):
             raise UpdateError("rollback destination is an unexpected directory")
         path.unlink()
     if record["kind"] == "absent":
+        if path.parent.exists():
+            _fsync_directory(path.parent)  # Also settle a removal from a failed attempt.
         return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     if record["kind"] == "symlink":
@@ -1260,6 +1262,7 @@ FIXED_UNITS = {
     'messagebox-update-install.service', 'messagebox-update-supervisor.service',
     'messagebox-update-supervisor.timer', 'messagebox-update-discovery.service',
     'messagebox-update-discovery.timer',
+    'messagebox-update-selector.service', 'messagebox-update-selector.timer',
 }
 
 
@@ -1684,7 +1687,8 @@ def health_checks(root, journal, run=subprocess.run):
                      and recorded.get('enabled') not in ENABLED_STATES | {'enabled-runtime'}):
             continue
         try:
-            evidence = json.loads(_rooted(root, '/run/messagebox-update/' + name + '.json').read_bytes())
+            source = 'local' if name == 'heartbeat' and journal.get('local_readiness') else name
+            evidence = json.loads(_rooted(root, '/run/messagebox-update/' + source + '.json').read_bytes())
             if not isinstance(evidence, dict):
                 raise ValueError('invalid evidence')
         except (OSError, ValueError):
@@ -1790,8 +1794,14 @@ def sustain_health(root, journal, run=subprocess.run, *, sample=health_sample,
 def install_transaction(source_root, manifest_path, *, operation_id=None, root=Path('/'),
                         run=subprocess.run, health=sustain_health, sequence=None, allow_setup=False):
     import uuid
+    from release_verify import promotion_inhibited
     root = Path(root).resolve()
     with transaction_locks(root) as locks:
+        selector_path = _rooted(root, '/usr/lib/messagebox-selector/selector.py')
+        protected = (_load_module('fixed_controller_admission', selector_path).admit(root, source_root)
+                     if selector_path.exists() else set())
+        if promotion_inhibited(root):
+            raise UpdateError('promotion_inhibited')
         pending = read_state(root, 'journal.json')
         if pending and pending['phase'] not in {'committed', 'rolled_back'}:
             raise UpdateError('recovery_required')
@@ -1856,7 +1866,8 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                 # Setup readiness could never be proven; refuse before mutation.
                 raise UpdateError('setup_not_ready')
             backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
-            create_backup(_rooted(root, backup), root, external, states, auxiliary, external_only=True)
+            create_backup(_rooted(root, backup), root, [e for e in external if e['target'] not in protected],
+                          states, auxiliary, external_only=True)
         except Exception:
             shutil.rmtree(candidate)
             raise
@@ -1880,7 +1891,7 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
             _stop_active(states, run, auxiliary_units=auxiliary)
             _journal(root, journal, 'quiesced')
             for entry in external:
-                if Path(entry['target']).name not in FIXED_UNITS:
+                if entry['target'] not in protected and Path(entry['target']).name not in FIXED_UNITS:
                     _atomic_install(entry['source_path'], entry['destination'], entry['mode'])
             switch_release(root, new)
             _journal(root, journal, 'switched')
@@ -1961,6 +1972,9 @@ def prune_releases(root):
         directory = _rooted(root, UPDATE_STATE + '/' + name)
         if directory.exists():
             for child in directory.iterdir():
+                if (name == 'snapshots' and journal and journal['phase'] == 'rolled_back'
+                        and child == _rooted(root, journal['backup'])):
+                    continue  # Keep the proof until the next application commit.
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child)
             _fsync_directory(directory)
@@ -1968,7 +1982,7 @@ def prune_releases(root):
 
 def supervise_transaction(*, root=Path('/'), run=subprocess.run):
     journal = read_state(root, 'journal.json')
-    if not journal or journal['phase'] in {'committed', 'rolled_back', 'rollback_failed'}:
+    if not journal or journal['phase'] in {'committed', 'rolled_back'}:
         ticket = read_state(root, 'ticket.json')
         if ticket and isinstance(ticket.get('operation_id'), str):
             name = 'operations/' + hashlib.sha256(ticket['operation_id'].encode()).hexdigest() + '.json'
@@ -1991,7 +2005,7 @@ def supervise_transaction(*, root=Path('/'), run=subprocess.run):
                         save_state(root, name, operation)
         return
     _validate_journal(root, journal)
-    reason = None
+    reason = 'restoration_failed' if journal['phase'] == 'rollback_failed' else None
     if (journal.get('boot') != _boot() or _process_token(journal.get('pid')) is None
             or _process_token(journal.get('pid')) != journal.get('process_token')):
         reason = 'updater_died'

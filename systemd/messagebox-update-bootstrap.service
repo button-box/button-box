@@ -1,0 +1,12 @@
+[Unit]
+Description=Install frozen controller selector after committed bridge
+After=messagebox-update-supervisor.service messagebox-update-install.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+UMask=0022
+ExecStart=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py bootstrap
+TimeoutStartSec=60
+TimeoutStopSec=10
+KillMode=control-group
