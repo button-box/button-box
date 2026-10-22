@@ -1,5 +1,10 @@
 # Voice release verification · 21 October 2026
 
+For the integrated fresh-box candidate, use [the bench procedure](rita-bench-install.md).
+It includes the reviewed bridge and voice runtime in one candidate and requires
+controller 1.3.0. The step-1 promotion procedure and separate release order below
+are historical. Existing field boxes still need an A/B bridge before this payload.
+
 Step 1 is committed at `04d53cd8b4968ff435b21f5fa72e3d1c6ba3ff7c` on
 `feat/updater-voice-ready`, based on `origin/release-v0.3.12`. The voice branch
 already contains that commit. Its reviewed step-2 source is
@@ -64,7 +69,7 @@ wacli, and fleet-contract tests passed. `git diff --check` passed. No commit,
 push, deployment, or hardware test was done. Physical voice behavior remains
 unverified.
 
-**Current release order**
+**Historical release order (superseded for the fresh bench candidate)**
 
 Release A is the self-upgrade bridge being built on `feat/updater-self-upgrade`.
 It MUST ship before this Voice Release. The Voice Release MUST require the

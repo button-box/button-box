@@ -100,11 +100,11 @@ The limits are 2 MiB per sound file, 160 MiB total including sound metadata, and
 release owns its sounds, including original ringtones at their existing path,
 so rollback restores the previous pack's bytes.
 
-Set `--min-updater-version 1.1.0` for releases using additional sounds. Previously
-bootstrapped boxes need [attended fixed-controller maintenance](on-box-updates.md#health-diagnostics-and-attended-fixed-controller-maintenance)
-first; an ordinary signed release only stages controller copies and cannot
-replace the fixed running controller. Bootstrap copies the fixed modules from
-its source tree, so new boxes get this support immediately.
+Set `--min-updater-version 1.3.0` for this integrated voice candidate. The fresh
+bench path installs that controller before the first application transaction.
+Older field boxes need the reviewed A/B bridge first, then signed inactive-slot
+publication. Do not use the replaced attended fixed-controller promotion.
+See [the bench procedure](rita-bench-install.md).
 
 The tar archive has sorted file entries, uid/gid zero, empty owner/group names,
 0644/0755 modes determined from tracked Git modes, and the commit timestamp for

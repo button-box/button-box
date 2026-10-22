@@ -132,8 +132,9 @@ The schema matches the release tooling: `schema: 1`, `product: "button-box"`,
 `release_sequence`, `channel: "stable" | "canary"`, `supported_os`,
 `supported_arch`, `supported_models`, `min_updater_version` as `major.minor.patch`,
 and the existing complete installed-file mapping/hashes. This controller is
-`1.2.0`. The voice release requires `min_updater_version: "1.2.0"`. The updater
-preparation release remains installable with `min_updater_version: "1.1.0"`.
+`1.3.0`. This integrated voice release requires
+`min_updater_version: "1.3.0"`. Older boxes must receive the reviewed A/B bridge
+first. The fresh bench path installs controller 1.3.0 before the first release.
 Sequence ordering is global across channels; version strings are never
 sorted to decide eligibility. Stable boxes reject canaries; canary boxes may
 accept a stable release with a higher signed sequence. Recovery permits only

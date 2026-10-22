@@ -21,3 +21,7 @@ under its own build identity. Generate another fixture after the round-2 fixes
 are committed; these files describe the two named historical commits exactly.
 A fixture records supported features. Actual greeting delivery must use the
 current heartbeat, including removal of a capability after rollback.
+
+The integrated fresh-box candidate contract is `rita-candidate-484b1dd.json`.
+It describes source commit `484b1dd`. The later documentation commit does not
+change the runtime contract. This file has not been installed in the Cloud repo.
