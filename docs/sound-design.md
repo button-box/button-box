@@ -19,6 +19,7 @@ requires a fresh press after the prompt.
 | Failure beep | All `beep("fail")` / claim failure paths: `cue-oops.wav`. |
 | Online | Cloud `play_setup_online`: connected cue then Jessica setup handoff once. Claimed `maybe_play_connectivity`: connected cue then current pack's online-ready line after boot or after an outage of at least ten minutes, at most once per hour. Shorter heartbeat gaps stay silent. Durable receipts precede playback. Legacy online voice stays bundled for wacli. |
 | Accepted send | `play_send_success_cue`: optional `cue-sent.wav`, then Cloud Button Box `voice-setup-sent.wav` ("Sent!"). The voice is independent of the swoosh setting. It confirms Cloud acceptance, not delivery. Quiet controls and a press suppress idle playback. |
+| Send starts | Cloud Button Box approval wakes the existing sender. The approval beep is nonblocking. After preflight, a live upload gets `voice-sending.wav` after a 150 ms immediate-failure check. The released-press guard can play it before its normal 500 ms settle ends. A rejection, already completed upload, quiet state, changed account, old approval, or background retry does not play it. Normal hold release without review uses the same durable approval event. |
 | Recording cancellation / too short / silent | `GuidedSession`: delete the recording and play `cue-deleted.wav`. Review allows one fresh tap in the 10 s window after playback. |
 | Card needed | `prompt_for_token`: `voice-card-needed.wav`. |
 | Unknown card | `nfc.Announcer`, `_play_nfc_prompt`: oops then the current pack's card-unknown voice, resolved on each tap so a voice pack change applies at once (or explicit operator override), acknowledged once per presentation. |
@@ -35,6 +36,10 @@ requires a fresh press after the prompt.
 | Cloud unreachable | `maybe_play_connectivity` reads existing current-boot snapshot verification age; offline once after 10 minutes without a good heartbeat, resets on freshness, durable outage receipt. No additional network probes. |
 
 ## Recording rules
+
+The new `sounds/voices/buttonbox/voice-sending.wav` is a temporary local-TTS
+placeholder. Replace it before final voice acceptance; see the generation and
+manifest instructions in [Sending voice asset](sound-design/voices/PTh0NF64AaTAIDPGzj0O/README.md).
 
 Cloud Button Box opens the microphone while its single start tick plays.
 The start tick cannot make an otherwise silent recording meaningful. Keep the

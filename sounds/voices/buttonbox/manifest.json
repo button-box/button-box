@@ -380,6 +380,20 @@
    "text": "All done! I'm updated and ready.",
    "seconds": 2.64,
    "sha256": "db5f7ab0f96fbb356477e693937f1c3ef7de31a8e8ac285b0c617abb9f2f3826"
+  },
+  {
+   "file": "voice-sending.wav",
+   "text": "Sending!",
+   "seconds": 0.722688,
+   "sha256": "cc5667583f01370ead354369fabbe23466a6f20bccf6ec51f9bd186282b10e2c",
+   "temporary_placeholder": true,
+   "source": "local macOS say, Samantha; NOT ElevenLabs",
+   "replacement": {
+    "voice_id": "PTh0NF64AaTAIDPGzj0O",
+    "model": "eleven_v3",
+    "seed": 7,
+    "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11"
+   }
   }
  ]
 }

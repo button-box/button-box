@@ -358,6 +358,7 @@ sounds/voices/buttonbox/voice-not-sent.wav
 sounds/voices/buttonbox/voice-online-ready.wav
 sounds/voices/buttonbox/voice-online.wav
 sounds/voices/buttonbox/voice-review.wav
+sounds/voices/buttonbox/voice-sending.wav
 sounds/voices/buttonbox/voice-sent-applause.wav
 sounds/voices/buttonbox/voice-sent-big-laugh.wav
 sounds/voices/buttonbox/voice-sent-celebration.wav

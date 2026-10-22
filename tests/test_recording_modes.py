@@ -202,3 +202,45 @@ class RecordingModesTests(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(Path(start.call_args.args[0][-1]).name, 'cue-press.wav')
         self.assertEqual(start.call_args.kwargs['lead_in_s'], 0)
+
+    def test_approval_arms_sending_for_tap_review_and_hold_release_only_in_cloud(self):
+        for transport in ('cloud', 'wacli'):
+            for talk, review in (('tap', True), ('hold', False)):
+                with self.subTest(transport=transport, talk=talk), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source = root / 'child.wav'
+                    source.write_bytes(b'synthetic recording')
+                    store = OutboxStore(root / 'outbox', transport=transport)
+                    io = runtime.PiGuidedIO('person@example.invalid', 'session', 60, talk_mode=talk)
+                    with mock.patch.object(runtime, 'transport_mode', return_value=transport), \
+                         mock.patch.object(runtime.sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+                         mock.patch.object(runtime, '_sending_feedback', None), \
+                         mock.patch.object(runtime, 'sender_wake') as wake, \
+                         mock.patch.object(runtime, 'log_event'), \
+                         mock.patch.object(io, 'record', return_value=runtime.RecordingResult(str(source), 2, True)), \
+                         mock.patch.object(io, 'play_review'), \
+                         mock.patch.object(io, 'wait_for_approval', return_value=True):
+                        result = GuidedSession(io, store, lambda kind, **data: runtime.recording_session_event(None, kind, **data)).run(
+                            recipient=io.recipient, flow_kind='standalone', deleted_cue_path='deleted',
+                            review_before_send=review, account_scope='a' * 64 if transport == 'cloud' else None)
+                        self.assertEqual(result, 'approved')
+                        if transport == 'cloud':
+                            self.assertEqual(runtime._sending_feedback['message_id'], store.jobs()[0].message_id)
+                            wake.set.assert_called_once()
+                        else:
+                            self.assertIsNone(runtime._sending_feedback)
+                            wake.set.assert_not_called()
+
+    def test_buttonbox_send_approval_beeps_without_blocking_queue_on_release(self):
+        with mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
+             mock.patch.object(runtime, 'wait_for_confirmed_press', return_value=True), \
+             mock.patch.object(runtime, 'start_player', return_value=mock.Mock()) as start, \
+             mock.patch.object(runtime, 'acknowledge_guided_press') as blocking_ack, \
+             mock.patch.object(runtime, 'wait_for_stable_open') as release, \
+             mock.patch.object(runtime, 'log_event'):
+            self.assertTrue(runtime.wait_for_approval(10, 'session'))
+        start.assert_called_once()
+        self.assertEqual(Path(start.call_args.args[0][-1]).name, 'cue-press.wav')
+        self.assertEqual(start.call_args.kwargs['lead_in_s'], 0)
+        blocking_ack.assert_not_called()
+        release.assert_not_called()

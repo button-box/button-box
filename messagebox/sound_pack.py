@@ -28,6 +28,7 @@ GUIDE_VOICE_NAMES = (
     "setup-ask-send", "setup-sent", "setup-deleted", "listened-noname", "setting-saved",
     "auto-updates-on", "update-reminder", "update-installing",
 )
+BUTTONBOX_EXTRA_NAMES = ("sending",)
 # This pack also includes every optional Jessica age and reaction line.
 BUTTONBOX_NAMES = ('last-chance',
  'all-set',
@@ -90,7 +91,8 @@ BUTTONBOX_NAMES = ('last-chance',
  'age-a-while-ago',
  'update-ready',
  'auto-updates',
- 'update-done')
+ 'update-done',
+ 'sending')
 # Reaction-card emoji (variation selectors and skin tones removed) to its
 # bundled "You just sent ..." line. Words follow Cloud's emoji words and card
 # names. Any other emoji uses the generic "You just sent a reaction!" line.
@@ -119,11 +121,11 @@ def current_voice_pack():
 
 
 def voice_path(name, pack=None):
-    if name not in VOICE_NAMES + SETUP_VOICE_NAMES + GUIDE_VOICE_NAMES:
+    if name not in VOICE_NAMES + SETUP_VOICE_NAMES + GUIDE_VOICE_NAMES + BUTTONBOX_EXTRA_NAMES:
         raise ValueError("unknown voice line")
     pack = current_voice_pack() if pack is None else normalize_voice_pack(pack)
     fallback = SOUND_DIR / "voice" / f"voice-{name}.wav"
-    if name in GUIDE_VOICE_NAMES:
+    if name in GUIDE_VOICE_NAMES + BUTTONBOX_EXTRA_NAMES:
         path = SOUND_DIR / "voices" / "buttonbox" / fallback.name
         return path
     if pack == "jessica":

@@ -88,6 +88,10 @@ LISTENED_FALLBACK_WAV = os.environ.get(
 )
 SEND_SUCCESS_WAV = str(sound_pack.cue_path("sent"))
 send_success_notices = queue.SimpleQueue()
+sending_notices = queue.SimpleQueue()
+sender_wake = threading.Event()
+_sending_feedback = None
+SENDING_FAILURE_GRACE_S = 0.15
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -498,10 +502,14 @@ def reconcile_card_selections():
 
 
 def recording_session_event(context, kind, **data):
+    global _sending_feedback
     # GuidedSession emits approval only after the outbox job is durable, before
     # review-audio cleanup. Unsent attempts and crashes leave the choice intact.
     if kind == "guided_approved" and context and context["via_card"]:
         SelectionStore(NFC_SELECTION_FILE).consume(context["selection"])
+    if kind == "guided_approved" and buttonbox_voice() and data.get("message_id"):
+        _sending_feedback = {"message_id": data["message_id"], "approved": time.monotonic(), "queued": False}
+        sender_wake.set()
     log_event(kind, **data)
 
 
@@ -1113,6 +1121,10 @@ def _send_cloud_upload(job):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata["cloud_send_started_at"] = int(cloud_runtime.outbox_now())
         atomic_json(metadata_path, metadata)
+        feedback = _sending_feedback
+        if feedback and feedback["message_id"] == job.message_id and not feedback["queued"]:
+            feedback["queued"] = True
+            sending_notices.put((job, time.monotonic()))
         try:
             result = client.send_voice(ogg, upload["recipient_id"], upload["idempotency_key"],
                                        upload["duration"], account_scope=upload["account_scope"])
@@ -1184,7 +1196,11 @@ def sender_loop():
         if key != current:
             current, failures = key, 0
         if job is None:
-            time.sleep(0.5)
+            if transport_mode() == "cloud":
+                sender_wake.wait(0.5)
+                sender_wake.clear()
+            else:
+                time.sleep(0.5)
             continue
         sent = send_guided_job(job) if guided else send_legacy_outbox_file(job)
         if sent:
@@ -1542,6 +1558,9 @@ def wait_for_stable_open():
         time.sleep(0.05)
         if not _guided_active:
             refresh_led()
+            # Feedback can follow a released approval without waiting for the
+            # idle-loop release-settle interval. This never opens the mic.
+            maybe_play_sending()
         if not button.is_pressed:
             since = since or time.monotonic()
             if time.monotonic() - since >= SETTLE_OPEN_S:
@@ -1768,6 +1787,38 @@ def play_send_success_cue():
 unavailable_events = UnavailableEvents()
 
 
+def maybe_play_sending():
+    """Speak only for this approval's live upload, never a background retry."""
+    global _sending_feedback
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
+        return False
+    try:
+        job, started = sending_notices.get_nowait()
+    except queue.Empty:
+        return False
+    feedback = _sending_feedback
+    now = time.monotonic()
+    if not feedback or feedback["message_id"] != job.message_id or not 0 <= now - feedback["approved"] < 30:
+        return False
+    # A rejected preflight never queues a notice. Give an immediate HTTP
+    # rejection time to settle before saying anything about an in-flight send.
+    if now - started < SENDING_FAILURE_GRACE_S:
+        sending_notices.put((job, started))
+        return False
+    _sending_feedback = None
+    try:
+        current = outbox_store.load(job.path)
+        if (current.state != "sending" or not buttonbox_voice() or quiet_hours()
+                or current.account_scope != cloud_runtime.account_scope(fresh=True)):
+            return False
+        play_audio_ordinary(sound_pack.voice_path("sending"))
+    except (OSError, ValueError, CloudRuntimeError, subprocess.SubprocessError) as exc:
+        log_event("sending_cue_unavailable", error=type(exc).__name__)
+        return False
+    log_event("sending_cue")
+    return True
+
+
 def play_optional_greeting(path):
     """A real note or press always preempts this optional setup line."""
     def cancelled():
@@ -1803,6 +1854,8 @@ def maybe_play_cloud_sound():
     if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
         return False
     try:
+        if maybe_play_sending():
+            return True
         scope = cloud_runtime.account_scope(fresh=True)
         optional_owner = (cloud_optional_audio_requests.owner()
                           if cloud_optional_audio_requests.directory.exists() else nullcontext(True))
@@ -1907,6 +1960,12 @@ def maybe_play_pending_listened():
 def wait_for_approval(timeout, session_id=None):
     if not wait_for_confirmed_press(timeout):
         return False
+    if buttonbox_voice():
+        start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("press"))], lead_in_s=0)
+        log_event("guided_press", action="approve", session_id=session_id)
+        # The normal main-loop release guard consumes this held press. Queue
+        # the approved audio now so conversion and upload do not wait for it.
+        return True
     acknowledge_guided_press("approve", session_id)
     wait_for_stable_open()
     return True

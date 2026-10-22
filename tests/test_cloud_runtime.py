@@ -4,6 +4,7 @@ import io
 import contextlib
 import json
 import os
+import queue
 import subprocess
 import tempfile
 import threading
@@ -2617,6 +2618,79 @@ class CloudRuntimeTests(unittest.TestCase):
         store.set_state(job, "sending", increment_attempts=True)
         self.client.voice_status = mock.Mock(side_effect=CloudVoiceNotFound("not found"))
         return store, job
+
+    @contextlib.contextmanager
+    def sending_feedback_upload(self):
+        store, job = self.staged_upload()
+        metadata = json.loads((job.path / 'job.json').read_text())
+        atomic_json(job.path / 'job.json', {**metadata, 'state': 'pending', 'attempts': 0})
+        with mock.patch.multiple(button_send, outbox_store=store, cloud_audio_requests=self.runtime.audio_requests,
+                _recording=False, _guided_active=False, button=types.SimpleNamespace(is_pressed=False),
+                _sending_feedback=None, sending_notices=queue.SimpleQueue(),
+                sender_wake=threading.Event(), create=True), \
+             mock.patch.object(button_send, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(button_send, 'buttonbox_voice', return_value=True), \
+             mock.patch.object(button_send, 'quiet_hours', return_value=False), \
+             mock.patch.object(button_send.cloud_runtime, 'CloudRuntime', return_value=self.runtime), \
+             mock.patch.object(button_send.cloud_runtime, 'STATE_FILE', self.runtime.state_path), \
+             mock.patch.object(button_send.CloudDeviceClient, 'from_environment', return_value=self.client), \
+             mock.patch.object(button_send.time, 'monotonic', side_effect=lambda: self.mono[0]), \
+             mock.patch.object(button_send, 'log_event'), \
+             mock.patch.object(button_send, 'play_audio_ordinary') as play:
+            button_send.recording_session_event(None, 'guided_approved', message_id=job.message_id)
+            yield store, job, play
+
+    def test_sending_voice_plays_during_upload_before_confirmed_sent_cue(self):
+        with self.sending_feedback_upload() as (store, job, play):
+            entered, release = threading.Event(), threading.Event()
+            errors = []
+            def send(*args, **kwargs):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError('synthetic upload was not released')
+                return {'message_id': MID, 'state': 'queued', 'server_time': NOW, 'expires_at': NOW + 3600}
+            self.client.send_voice = send
+            def upload():
+                try:
+                    button_send._send_cloud_upload(store.load(job.path))
+                except Exception as exc:
+                    errors.append(exc)
+            worker = threading.Thread(target=upload)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(button_send.maybe_play_cloud_sound())  # Instant-failure grace.
+                spoken_at = []
+                play.side_effect = lambda path: spoken_at.append(self.mono[0])
+                def tick(seconds):
+                    self.mono[0] += seconds
+                with mock.patch.object(button_send.time, 'sleep', side_effect=tick), \
+                     mock.patch.object(button_send, 'refresh_led'):
+                    button_send.wait_for_stable_open()
+                self.assertEqual(len(spoken_at), 1)
+                self.assertLess(spoken_at[0], 100.5)  # Do not wait for the idle-loop settle.
+                self.assertEqual(Path(play.call_args.args[0]).name, 'voice-sending.wav')
+                self.assertFalse(button_send.maybe_play_cloud_sound())
+                play.assert_called_once()
+                self.assertEqual(store.load(job.path).state, 'sending')
+            finally:
+                release.set()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            with mock.patch.object(button_send, 'play_send_success_cue', return_value=True) as sent:
+                self.assertTrue(button_send.maybe_play_cloud_sound())
+                sent.assert_called_once()
+
+    def test_instant_upload_failure_does_not_say_sending(self):
+        from messagebox.cloud_device import CloudSendRejected
+        with self.sending_feedback_upload() as (store, job, play):
+            self.client.send_voice = mock.Mock(side_effect=CloudSendRejected('synthetic rejection'))
+            self.assertTrue(button_send._send_cloud_upload(store.load(job.path)))
+            self.mono[0] += .2
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+            play.assert_not_called()
+            self.assertEqual(store.load(job.path).state, 'failed')
 
     def test_missing_upload_requeues_same_payload_after_interruption_and_restart(self):
         store, job = self.staged_upload()

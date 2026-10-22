@@ -21,20 +21,20 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
         payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
-        self.assertEqual(len(payload), 702)
+        self.assertEqual(len(payload), 703)
         for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
                      'config/emergency-keys/README.md', 'scripts/install/health-probe.py',
                      'messagebox/controller_selector.py', 'messagebox/controller_slots.py'):
             self.assertIn(name, payload)
-        # The installed program mapping remains 687 files. Fixed trust code is
+        # The installed program mapping now has 688 files. Fixed trust code is
         # staged separately in updater/, and public pins are bootstrap-only.
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 687)
+        self.assertEqual(len(paths), 688)
         self.assertFalse(any('/etc/button-box-update/' in target for target in paths.values()))
 
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 687)
+        self.assertEqual(len(paths), 688)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
@@ -67,6 +67,8 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertIn("sounds/cues/cue-press.wav", paths)
         self.assertEqual(paths["sounds/cues/cue-deleted.wav"], "/opt/messagebox/sounds/cues/cue-deleted.wav")
         self.assertEqual(paths["sounds/cues/cue-card_saved.wav"], "/opt/messagebox/sounds/cues/cue-card_saved.wav")
+        self.assertEqual(paths["sounds/voices/buttonbox/voice-sending.wav"],
+                         "/opt/messagebox/sounds/voices/buttonbox/voice-sending.wav")
         self.assertIn("sounds/voice/voice-online.wav", paths)
         self.assertIn("sounds/voice/voice-setup-online.wav", paths)
         for pack in ("voice", *(f"voices/{pack}" for pack in ("pirate", "alien", "dj", "robot", "french", "charlie", "tata", "buttonbox"))):
@@ -129,7 +131,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 687)
+            self.assertEqual(len(entries), 688)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(
