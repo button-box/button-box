@@ -42,6 +42,9 @@ class TrustTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        root_patch = mock.patch.object(controller, 'ROOT', self.root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
         self.source = self.root / 'source'
         self.config = self.root / 'config'
         self.state = self.root / 'state'

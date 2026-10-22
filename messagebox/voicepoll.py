@@ -360,6 +360,8 @@ def main():
             # A normal listing initializes wacli.db even before an account is
             # linked, making the empty pairing destination look occupied.
             poll_once(seen, authorizations)
+            from messagebox.software import local_ready
+            local_ready('heartbeat')
         except Exception:
             print("poll error: processing failed", flush=True)
         time.sleep(POLL_S)

@@ -1,9 +1,11 @@
 import hashlib
+import io
 import contextlib
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import sys
 import types
 import unittest
@@ -136,6 +138,65 @@ class CloudRuntimeTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         document, _ = SettingsStore(self.root / "settings.json").load()
         applied.write_text(json.dumps({"revision": document["revision"], "settings": document}))
+
+    def test_local_readiness_cannot_pass_probation_when_every_cloud_heartbeat_fails(self):
+        from test_update_approval import PolicyTests, controller
+        from test_cloud_events import ClockEvent
+        import importlib
+        software = importlib.import_module('messagebox.software')
+        policy = PolicyTests()
+        policy.setUp()
+        self.addCleanup(policy.doCleanups)
+        root, update = policy.root, controller.update
+        clock = [policy.clock.now]
+        new = '/opt/messagebox-releases/v0.2.0-' + 'b' * 40
+        (root / new.lstrip('/')).mkdir(parents=True)
+        update.switch_release(root, new)
+        journal = {'kind': 'application', 'phase': 'probation', 'transaction': 'cloud-probation',
+                   'boot': 'boot-one', 'version': 'v0.2.0', 'commit': 'b' * 40, 'new': new,
+                   'started_mono': clock[0], 'deadline_mono': clock[0] + 300, 'hashes': [],
+                   'units': {n: {'active': 'active'} for n in ('messagebox-button.service', 'messagebox-poller.service')}}
+        update.durable_json(controller.RUN / 'transaction.json', journal | {
+            'software_version': journal['version'], 'software_commit': journal['commit']}, 0o644)
+        policy.send('button', software_version=journal['version'], software_commit=journal['commit'], released=True)
+        audio = root / 'run/messagebox-audio/audio.env'
+        audio.parent.mkdir(parents=True)
+        audio.write_text('MSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\nMSGBOX_SPK_DEV=plughw:CARD=Device,DEV=0\n')
+        def run(command, **kwargs):
+            output = 'ActiveState=active\nMainPID=700\nNRestarts=0\n'
+            if command[0] == 'runuser':
+                output = ('card 2: mic [USB Audio], device 0: test\n' if 'arecord' in command
+                          else 'card 3: Device [USB Audio], device 0: test\n')
+            return subprocess.CompletedProcess(command, 0, output)
+        def advance(seconds):
+            clock[0] += seconds
+            policy.clock.now = clock[0]
+        def sample(root, journal, run):
+            stop = ClockEvent(clock)
+            limit = clock[0] + 1
+            def tick(now):
+                policy.clock.now = now
+                if now >= limit:
+                    stop.set()
+            events = mock.Mock(wake=ClockEvent(clock, advance=tick), connected=threading.Event())
+            self.runtime.run(stop=stop, events=events)
+            checks, pids = update.health_checks(root, journal, run)
+            self.assertTrue((controller.RUN / 'local.json').exists())
+            self.assertFalse((controller.RUN / 'heartbeat.json').exists())
+            self.assertTrue(all(passed for name, passed in checks if not name.startswith('evidence:heartbeat:')))
+            return all(passed for _, passed in checks), pids
+        fields = {'software_version': journal['version'], 'software_commit': journal['commit']}
+        with mock.patch.object(self.runtime, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(self.runtime, 'poll_once'), \
+                mock.patch.object(self.client, 'heartbeat', side_effect=CloudDeviceError('injected Cloud failure')) as heartbeat, \
+                mock.patch.object(cloud_runtime.cloud_update, 'status', return_value={}), \
+                mock.patch.object(cloud_runtime, 'remote_access', return_value={}), \
+                mock.patch.object(software, 'local_ready', side_effect=lambda command: policy.send(command, **fields)) as local, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(update.UpdateError, 'health_timeout'):
+            update.sustain_health(root, journal, run, sample=sample, monotonic=lambda: clock[0], sleep=advance)
+        self.assertGreater(heartbeat.call_count, 2)
+        self.assertGreater(local.call_count, 2)
 
     def test_software_update_progress_and_terminal_receipt_replay_preserve_version(self):
         from messagebox import cloud_update

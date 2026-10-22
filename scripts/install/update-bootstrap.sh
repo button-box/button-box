@@ -49,8 +49,13 @@ from trust_update import bootstrap_keys
 bootstrap_keys(Path(sys.argv[1]) / 'config', Path('/etc/button-box-update'))
 PY
 # The files/units installed during this attended step are frozen for B72.
-for unit in "$REPO_DIR"/systemd/messagebox-update-*; do
+for unit in "$REPO_DIR"/systemd/messagebox-update-*.service "$REPO_DIR"/systemd/messagebox-update-*.timer; do
   install -o root -g root -m 0644 "$unit" /etc/systemd/system/
+done
+for dropin in "$REPO_DIR"/systemd/messagebox-update-*.service.d/*.conf; do
+  directory="/etc/systemd/system/$(basename "$(dirname "$dropin")")"
+  install -d -o root -g root -m 0755 "$directory"
+  install -o root -g root -m 0644 "$dropin" "$directory/"
 done
 install -o root -g root -m 0644 /dev/null /run/messagebox-update/maintenance.lock
 # Add ordering to existing units, including activators and ComItUp. Dependencies

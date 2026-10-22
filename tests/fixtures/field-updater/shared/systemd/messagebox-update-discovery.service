@@ -1,0 +1,24 @@
+[Unit]
+Description=Unprivileged signed GitHub software release discovery
+Wants=network-online.target
+After=network-online.target messagebox-update-controller.service
+Requires=messagebox-update-controller.service
+
+[Service]
+Type=oneshot
+User=messagebox-update
+Group=messagebox-update
+SupplementaryGroups=messagebox-settings
+CacheDirectory=button-box-update
+CacheDirectoryMode=0750
+ExecStart=/usr/bin/python3 /usr/lib/messagebox-update/update_discovery.py
+TimeoutStartSec=900
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/cache/button-box-update
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0027

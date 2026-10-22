@@ -1,0 +1,897 @@
+{
+  "schema": 1,
+  "source": "shared/scripts/install/update-bootstrap.sh",
+  "source_lines": "33-89",
+  "profile": "successful auto/stable Cloud bootstrap; runtime mode; idle between discovery polls",
+  "inferred": [
+    "No device or host bootstrap was run. This record is derived from frozen source.",
+    "Application identity, key bytes, key-generation and snapshot IDs, policy timezone and jitter are synthetic.",
+    "Existing application bytes, NFC environment, environment file, onboarding directory and runtime active states are inferred preconditions, not bootstrap output.",
+    "systemctl enable symlink paths and active states are inferred from frozen unit Install sections and successful enable --now. Timer services are idle between runs.",
+    "Root and messagebox-update owners are recorded symbolically; all test entries use the current test user. Symlink modes are platform-defined.",
+    "Generated software-update.conf bytes follow the shell heredoc. Mode 0644 assumes the bootstrap root shell umask 0022; the script does not set this mode.",
+    "The completed bootstrap journal remains; snapshots and staging are empty after prune_releases. Runtime sockets and ephemeral broker evidence are omitted.",
+    "The pre-existing NFC requirements bytes come from config/requirements-nfc.txt at 3fb1c2a3a4e25fccee6a2454f02f0675579a11dc; bootstrap preserves this dependency file. They are not synthetic."
+  ],
+  "old_release": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entries": [
+    {
+      "path": "/etc",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update/emergency-keys",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update/emergency-keys/6565656565656565.pub",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "untrusted comment: Button Box emergency public key\nRWRlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl\n"
+    },
+    {
+      "path": "/etc/button-box-update/installed",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": ""
+    },
+    {
+      "path": "/etc/button-box-update/release-keys",
+      "kind": "symlink",
+      "target": "release-keysets/00000000000000000000000000000000",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update/release-keysets",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update/release-keysets/00000000000000000000000000000000",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/button-box-update/release-keysets/00000000000000000000000000000000/6B6B6B6B6B6B6B6B.pub",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "untrusted comment: Button Box release public key\nRWRra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tr\n"
+    },
+    {
+      "path": "/etc/messagebox",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/messagebox-onboarding",
+      "kind": "directory",
+      "mode": "0750",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/messagebox/env",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "MSGBOX_TRANSPORT=cloud\n"
+    },
+    {
+      "path": "/etc/systemd",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/comitup-web.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/comitup-web.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/comitup.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/comitup.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-audio-detect.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-audio-detect.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-button.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-button.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-dash.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-dash.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-mode-reconcile.path.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-mode-reconcile.path.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-mode-reconcile.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-mode-reconcile.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-nfc.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-nfc.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-button.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-button.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-complete.path.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-complete.path.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-complete.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-complete.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-home.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-home.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-nfc.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-nfc.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice-gate.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice-gate.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice.path.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice.path.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice.target.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-onboarding-voice.target.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-poller.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-poller.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-sync.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-sync.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-controller.service",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-controller.service"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-discovery.service",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-discovery.service"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-discovery.timer",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-discovery.timer"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-install.service",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-install.service"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-recovery.service",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-recovery.service"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-supervisor.service",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-supervisor.service"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-update-supervisor.timer",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "systemd/messagebox-update-supervisor.timer"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-whatsapp-pairing.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-whatsapp-pairing.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-change.path.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-change.path.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-change.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-change.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-reset.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-reset.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-watchdog.service.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-watchdog.service.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-watchdog.timer.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox-wifi-watchdog.timer.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox.target.d",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/messagebox.target.d/software-update.conf",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "[Unit]\nRequires=messagebox-update-recovery.service\nAfter=messagebox-update-recovery.service\nConditionPathExists=!/var/lib/button-box-update/install-inhibit\n"
+    },
+    {
+      "path": "/etc/systemd/system/multi-user.target.wants",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/multi-user.target.wants/messagebox-update-controller.service",
+      "kind": "symlink",
+      "target": "/etc/systemd/system/messagebox-update-controller.service",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/multi-user.target.wants/messagebox-update-recovery.service",
+      "kind": "symlink",
+      "target": "/etc/systemd/system/messagebox-update-recovery.service",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/timers.target.wants",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/timers.target.wants/messagebox-update-discovery.timer",
+      "kind": "symlink",
+      "target": "/etc/systemd/system/messagebox-update-discovery.timer",
+      "owner": "root"
+    },
+    {
+      "path": "/etc/systemd/system/timers.target.wants/messagebox-update-supervisor.timer",
+      "kind": "symlink",
+      "target": "/etc/systemd/system/messagebox-update-supervisor.timer",
+      "owner": "root"
+    },
+    {
+      "path": "/opt",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox",
+      "kind": "symlink",
+      "target": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-deps",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-deps/venv-nfc",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-deps/venv-nfc/pyvenv.cfg",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "# synthetic stable dependency\n"
+    },
+    {
+      "path": "/opt/messagebox-releases",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/config",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/config/requirements-nfc.txt",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "adafruit-circuitpython-pn532==2.4.9\nAdafruit-Blinka==9.2.0\nlgpio==0.2.2.0\n"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/messagebox",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/messagebox/example.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "VALUE = 'old'\n"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/release.json",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": "{\"commit\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"version\": \"v0.3.8\"}\n"
+    },
+    {
+      "path": "/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/venv-nfc",
+      "kind": "symlink",
+      "target": "/opt/messagebox-deps/venv-nfc",
+      "owner": "root"
+    },
+    {
+      "path": "/run",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/run/lock",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/run/lock/messagebox-bounded-update.lock",
+      "kind": "file",
+      "mode": "0600",
+      "owner": "root",
+      "text": ""
+    },
+    {
+      "path": "/run/lock/messagebox-mode-transition.lock",
+      "kind": "file",
+      "mode": "0600",
+      "owner": "root",
+      "text": ""
+    },
+    {
+      "path": "/run/messagebox-update",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/run/messagebox-update/maintenance.lock",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "text": ""
+    },
+    {
+      "path": "/usr",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/usr/lib",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/usr/lib/messagebox-update",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/bounded_update.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/bounded_update.py"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/health-probe.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/health-probe.py"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/release_verify.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/release_verify.py"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/trust_update.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/trust_update.py"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/update_controller.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/update_controller.py"
+    },
+    {
+      "path": "/usr/lib/messagebox-update/update_discovery.py",
+      "kind": "file",
+      "mode": "0644",
+      "owner": "root",
+      "source": "scripts/install/update_discovery.py"
+    },
+    {
+      "path": "/var",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/var/cache",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/var/cache/button-box-update",
+      "kind": "directory",
+      "mode": "0750",
+      "owner": "messagebox-update"
+    },
+    {
+      "path": "/var/lib",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/var/lib/button-box-update",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": "root"
+    },
+    {
+      "path": "/var/lib/button-box-update/downloads",
+      "kind": "directory",
+      "mode": "0700",
+      "owner": "root"
+    },
+    {
+      "path": "/var/lib/button-box-update/journal.json",
+      "kind": "file",
+      "mode": "0600",
+      "owner": "root",
+      "text": "{\"backup\": \"/var/lib/button-box-update/snapshots/00000000000000000000000000000000\", \"format\": 1, \"kind\": \"bootstrap\", \"new\": \"/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"old\": \"/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"operation_id\": null, \"phase\": \"committed\", \"version\": \"v0.3.8\"}\n"
+    },
+    {
+      "path": "/var/lib/button-box-update/known-good.json",
+      "kind": "file",
+      "mode": "0600",
+      "owner": "root",
+      "text": "{\"current\": \"/opt/messagebox-releases/v0.3.8-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"previous\": null}\n"
+    },
+    {
+      "path": "/var/lib/button-box-update/policy.json",
+      "kind": "file",
+      "mode": "0600",
+      "owner": "root",
+      "text": "{\"channel\": \"stable\", \"jitter_minutes\": 0, \"mode\": \"auto\", \"timezone\": \"Etc/UTC\"}\n"
+    },
+    {
+      "path": "/var/lib/button-box-update/snapshots",
+      "kind": "directory",
+      "mode": "0700",
+      "owner": "root"
+    },
+    {
+      "path": "/var/lib/button-box-update/staging",
+      "kind": "directory",
+      "mode": "0700",
+      "owner": "root"
+    }
+  ],
+  "services": {
+    "messagebox.target": {
+      "active": "active",
+      "enabled": "enabled"
+    },
+    "messagebox-audio-detect.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-button.service": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-sync.service": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-poller.service": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-dash.service": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-nfc.service": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-wifi-change.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-wifi-change.path": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-wifi-watchdog.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-wifi-watchdog.timer": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "messagebox-mode-reconcile.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-mode-reconcile.path": {
+      "active": "active",
+      "enabled": "static"
+    },
+    "comitup.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "comitup-web.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-home.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-nfc.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-complete.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-complete.path": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-button.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-voice-gate.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-voice.path": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-onboarding-voice.target": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-whatsapp-pairing.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-wifi-reset.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-update-recovery.service": {
+      "active": "active",
+      "enabled": "enabled"
+    },
+    "messagebox-update-controller.service": {
+      "active": "active",
+      "enabled": "enabled"
+    },
+    "messagebox-update-supervisor.timer": {
+      "active": "active",
+      "enabled": "enabled"
+    },
+    "messagebox-update-discovery.timer": {
+      "active": "active",
+      "enabled": "enabled"
+    },
+    "messagebox-update-install.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-update-supervisor.service": {
+      "active": "inactive",
+      "enabled": "static"
+    },
+    "messagebox-update-discovery.service": {
+      "active": "inactive",
+      "enabled": "static"
+    }
+  }
+}

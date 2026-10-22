@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Emit content hashes for installed code; never read device configuration/data."""
+import argparse
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def installed_paths(root):
+    paths = {}
+    for source in sorted((root / "messagebox").rglob("*")):
+        if not source.is_file() or source.suffix not in {".py", ".sh", ".html", ".js", ".css"}:
+            continue
+        if "__pycache__" in source.parts or source.name == "midi_ringtone.py":
+            continue
+        paths[source.relative_to(root).as_posix()] = "/opt/messagebox/" + source.relative_to(root).as_posix()
+    for source in sorted((root / "systemd").rglob("*")):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(root).as_posix()
+        if source.suffix in {".service", ".target", ".path", ".timer"}:
+            paths[relative] = "/etc/systemd/system/" + source.name
+        elif source.name == "messagebox.tmpfiles.conf":
+            paths[relative] = "/etc/tmpfiles.d/messagebox.conf"
+        elif source.name == "messagebox-mode-generator":
+            paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
+        elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
+            paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
+    for pack in ("cloud", "cues", "voice", "voices", "voices/pirate", "voices/alien",
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata"):
+        # The Cloud-only fallbacks were introduced after the legacy release layout.
+        if pack == "cloud" and not (root / "sounds" / pack).exists():
+            continue
+        for source in sorted((root / "sounds" / pack).iterdir()):
+            if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
+                relative = source.relative_to(root).as_posix()
+                paths[relative] = "/opt/messagebox/" + relative
+    for source in sorted((root / "sounds/ringtones").iterdir()):
+        if not source.is_file() or source.suffix not in {".wav", ".json"}:
+            continue
+        relative = source.relative_to(root).as_posix()
+        legacy = {"manifest.json"} | {
+            name + suffix
+            for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele")
+            for suffix in (".wav", ".lamp.json")
+        }
+        paths[relative] = ("/opt/messagebox/ringtones/" + source.name if source.name in legacy
+                           else "/opt/messagebox/" + relative)
+    paths.update({
+        "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
+        "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
+        "scripts/install/messagebox-mode-migrate.py": "/usr/lib/messagebox/messagebox-mode-migrate.py",
+        "scripts/messageboxctl": "/usr/local/bin/messageboxctl",
+        "scripts/commands/messagebox-contact": "/usr/local/bin/messagebox-contact",
+        "scripts/commands/messagebox-comitup-state": "/usr/local/sbin/messagebox-comitup-state",
+        "scripts/commands/messagebox-init-wifi-onboarding": "/usr/local/sbin/messagebox-init-wifi-onboarding",
+        "scripts/dev/onboard.sh": "/usr/local/bin/messagebox-dev-onboard",
+        "scripts/dev/hardware-test.sh": "/opt/messagebox/dev/hardware-test.sh",
+        "config/requirements-nfc.txt": "/opt/messagebox/config/requirements-nfc.txt",
+    })
+    return paths
+
+
+def manifest(root=ROOT):
+    revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    return {
+        "version": (root / "VERSION").read_text().strip(),
+        "commit": revision,
+        "scope": "Installed program files and bundled sounds only; excludes user state, generated audio, OS packages and private configuration.",
+        "files": [{"source": source, "installed": target,
+                   "sha256": hashlib.sha256((root / source).read_bytes()).hexdigest()}
+                  for source, target in sorted(installed_paths(root).items())],
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--format", choices=("json", "sha256sum"), default="json")
+    args = parser.parse_args()
+    result = manifest()
+    if args.format == "sha256sum":
+        for item in result["files"]:
+            print(f"{item['sha256']}  {item['installed']}")
+    else:
+        print(json.dumps(result, indent=2))
