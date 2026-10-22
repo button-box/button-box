@@ -1345,7 +1345,9 @@ def create_app(
             state = reconcile_home()
         if state["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
             raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
-        result = claim_client().setup_checkin()
+        client = claim_client()
+        client.start()  # Locked and idempotent; a phone must not be needed to register.
+        result = client.setup_checkin()
         # A Wi-Fi change or completion can race the bounded Cloud request.
         if not setup_pending() or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
             return False

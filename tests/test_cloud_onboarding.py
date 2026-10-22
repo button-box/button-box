@@ -105,6 +105,64 @@ class CloudOnboardingTests(unittest.TestCase):
             args["target"](**args["kwargs"])
         return write, path, thread
 
+    def unregistered_claim(self, clock=None):
+        from test_cloud_claim import FakeClient, NOW
+        from messagebox.cloud_claim import setup_online_cue
+        client = FakeClient()
+        def checkin():
+            if not client.register_calls:
+                raise CloudDeviceError('HTTP 401: synthetic private server data')
+            return {'claimed': False, 'pending_claim': None}
+        client.setup_checkin = mock.Mock(side_effect=checkin)
+        root = Path(self.temp.name)
+        claim = CloudClaim(client, path=root / 'claim.json', clock=clock or (lambda: NOW))
+        def online():
+            return setup_online_cue(directory=root, session='bench-setup')
+        return client, claim, online
+
+    def test_home_watcher_registers_and_queues_online_without_a_phone(self):
+        client, claim, online = self.unregistered_claim()
+        waits = []
+        write, _, _ = self.run_watcher(claim=claim, online_cue=online,
+            setup_pending=lambda: not waits, sleep=waits.append)
+        self.assertEqual(client.register_calls, 1)
+        client.setup_checkin.assert_called_once_with()
+        cue = claim.path.with_name('setup-online.json')
+        self.assertEqual(json.loads(cue.read_text()), {'session': 'bench-setup', 'played': False})
+        write.assert_not_called()
+        self.whatsapp.assert_not_called()
+
+    def test_home_watcher_reuses_claim_across_polls_restart_and_phone_start(self):
+        client, claim, online = self.unregistered_claim()
+        for _ in range(2):
+            waits = []
+            restarted = CloudClaim(client, path=claim.path, clock=claim.clock)
+            self.run_watcher(claim=restarted, online_cue=online,
+                setup_pending=lambda: len(waits) < 3, sleep=waits.append)
+        self.assertEqual(client.setup_checkin.call_count, 6)
+        self.assertEqual(client.register_calls, 1)
+        self.assertEqual(claim.start()['status'], 'awaiting_button')
+        self.assertEqual(client.register_calls, 1)
+
+    def test_home_watcher_retries_clock_not_ready_with_type_only_log(self):
+        from test_cloud_claim import NOW, TOKEN, URL
+        now = [NOW - 223]
+        client, claim, online = self.unregistered_claim(clock=lambda: now[0])
+        waits = []
+        def sleep(seconds):
+            waits.append(seconds)
+            now[0] = NOW
+        with self.assertLogs('messagebox.onboarding.app', level='WARNING') as logs:
+            self.run_watcher(claim=claim, online_cue=online,
+                setup_pending=lambda: len(waits) < 3, sleep=sleep)
+        self.assertEqual(waits, [10, 5, 5])
+        self.assertEqual(client.register_calls, 2)
+        self.assertEqual(client.setup_checkin.call_count, 2)
+        self.assertEqual(logs.output, ['WARNING:messagebox.onboarding.app:Cloud setup completion unavailable: CloudClaimClockError'])
+        self.assertNotIn(TOKEN, ''.join(logs.output))
+        self.assertNotIn(URL, ''.join(logs.output))
+        self.assertTrue(claim.path.with_name('setup-online.json').exists())
+
     def test_watcher_claimed_without_local_claim_or_browser_writes_once(self):
         from test_cloud_claim import FakeClient, NOW
         client = FakeClient()
@@ -200,6 +258,7 @@ class CloudOnboardingTests(unittest.TestCase):
                 args = thread.call_args.kwargs
                 args["target"](**args["kwargs"])
                 self.assertEqual(cloud.setup_checkin.call_count, int(phase != "WIFI_SELECT"))
+                self.assertEqual(cloud.start.call_count, int(phase != "WIFI_SELECT"))
                 self.assertEqual(online.call_count, int(phase != "WIFI_SELECT"))
 
         pending = [True]
