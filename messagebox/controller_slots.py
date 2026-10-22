@@ -21,6 +21,12 @@ import trust_update as trust  # noqa: E402
 STATE = 'var/lib/button-box-controller'
 SELECTOR = 'usr/lib/messagebox-selector/selector.py'
 ROUTE = '90-controller-slot.conf'
+TRIGGER = 'etc/systemd/system/messagebox-update-supervisor.service.d/zz-bootstrap-trigger.conf'
+COMPLETE = STATE + '/bootstrap-complete'
+RECEIPT = STATE + '/bootstrap.json'
+TRIGGER_COMMAND = ('/bin/sh -c "/usr/bin/test /opt/messagebox -ef /' + COMPLETE
+                   + ' || exec /usr/bin/systemctl --no-block start messagebox-update-bootstrap.service"')
+TRIGGER_BYTES = ('[Service]\nExecStartPost=\nExecStartPost=' + TRIGGER_COMMAND + '\n').encode()
 LEGACY = {'bounded_update.py': '49c285b51f745a6894ee2533df516d681e9e9992fb72c84d5017b0cb799b8425', 'health-probe.py': 'e9079c51a8c92e495012b516ba84357a8a221d759dcedeb94d58c970a29b324a', 'release_verify.py': 'e1aa79e5564230e0503850f6a5c1540f71a70ef17910c83a253fcddc0781a9b2', 'trust_update.py': '99502b79d0663c3d07e2a549c3c21d18cbaa31b28363b51f2f58de2d4878ca62', 'update_controller.py': 'd9aac78e61ba538f847ff3145443dcae2b752fc3ba1b9693d51fbfafa6321a3f', 'update_discovery.py': 'f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540'}
 
 
@@ -48,6 +54,48 @@ def effective_routes(root, api, run):
         result = api.call(run, ['systemctl', 'show', unit, '--property=ExecStart'], output=True).stdout
         if re.findall(r'argv\[\]=(.*?)\s*;', result) != [expected]:
             raise ValueError('effective routing differs')
+    if api.read(root, TRIGGER) != TRIGGER_BYTES:
+        raise ValueError('bootstrap trigger differs')
+    result = api.call(run, ['systemctl', 'show', 'messagebox-update-supervisor.service',
+                           '--property=ExecStartPost'], output=True).stdout
+    if re.findall(r'argv\[\]=(.*?)\s*;', result) != [TRIGGER_COMMAND.replace('"', '')]:
+        raise ValueError('effective bootstrap trigger differs')
+
+
+def bootstrap_receipt(root, api, source):
+    release, app = application(root, api)
+    files = {SELECTOR: source.read_bytes(), **routes(), TRIGGER: TRIGGER_BYTES}
+    if any(api.read(root, path, 65536) != raw for path, raw in files.items()):
+        raise ValueError('bootstrap files differ')
+    return api.envelope({'format': 1, 'application': release, 'identity': app,
+                         'files': {path: api.digest(raw) for path, raw in files.items()}})
+
+
+def bootstrapped(root, api, source):
+    try:
+        return (api.read(root, RECEIPT, mode=0o600) == bootstrap_receipt(root, api, source)
+                and bool(api.valid(root)))
+    except (OSError, ValueError):
+        return False
+
+
+def complete_bootstrap(root=Path('/'), *, step=lambda event, path: None):
+    """Acknowledge only a successful service, including future promotion work."""
+    root = Path(root)
+    api = selector(root / SELECTOR)
+    source = Path(__file__).with_name('controller_selector.py')
+    with api.lock(root, 'operation', blocking=False), admission_lock(root):
+        if not bootstrapped(root, api, source):
+            raise ValueError('bootstrap completion has no current receipt')
+        receipt = api.document(api.read(root, RECEIPT, mode=0o600))['value']
+        target = '/' + receipt['application']
+        path = root / COMPLETE
+        temporary = path.with_name(path.name + '.tmp')
+        temporary.unlink(missing_ok=True)
+        os.symlink(target, temporary)
+        os.replace(temporary, path)
+        step('completion_rename', str(path))
+        api.flush(path.parent, step)
 
 
 @contextlib.contextmanager
@@ -89,6 +137,10 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda 
     root = Path(root)
     source = Path(__file__).with_name('controller_selector.py')
     initial = selector(source)
+    # This receipt follows all prerequisite fsyncs. It is scheduling evidence,
+    # never authority to select or admit a controller.
+    if bootstrapped(root, initial, source):
+        return
     # No command entry point changes before the exact selector and A's GOOD
     # have reached stable storage. Re-entry never replaces frozen bytes.
     initial.mkdir(root / STATE, step)
@@ -125,17 +177,28 @@ def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda 
             if (not any((root / p).exists() for p in routes())
                     and len(api.valid(root)) == 1):
                 api.choose(root, *api.valid(root)[0])
-        for path, content in routes().items():
+        changed = False
+        for path, content in {**routes(), TRIGGER: TRIGGER_BYTES}.items():
             try:
                 old = api.read(root, path)
             except FileNotFoundError:
                 old = None
             if old != content:
                 api.write(root / path, content, step=step)
+                changed = True
             api.settle(root, str(Path(path).parent), (Path(path).name,), step)
-        api.call(run, ['systemctl', 'daemon-reload'])
+        if changed:
+            api.call(run, ['systemctl', 'daemon-reload'])
+        else:
+            # A prior process may have died after renaming a unit and before
+            # reloading systemd. Check its loaded view before retrying reload.
+            try:
+                effective_routes(root, api, run)
+            except ValueError:
+                api.call(run, ['systemctl', 'daemon-reload'])
         effective_routes(root, api, run)
         api.call(run, ['systemctl', 'enable', '--now', 'messagebox-update-selector.timer'])
+        api.write(root / RECEIPT, bootstrap_receipt(root, api, source), mode=0o600, step=step)
 
 
 def compatible(root, slot, api, *, run=subprocess.run):
@@ -236,8 +299,11 @@ def main():
     if command == 'bootstrap':
         try:
             bootstrap()
-        except BlockingIOError:
-            pass  # Supervisor queues another attempt after the worker exits.
+        except BlockingIOError as exc:
+            # Do not run service completion (or future promotion) on contention.
+            raise SystemExit(75) from exc
+    elif command == 'complete':
+        complete_bootstrap()
     elif command == 'promote':
         subprocess.run(['systemd-run', '--quiet', '--wait', '--collect', '--service-type=oneshot',
             '--unit=messagebox-update-slot', '-p', 'TimeoutStartSec=180', '-p', 'TimeoutStopSec=10',

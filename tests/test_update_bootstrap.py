@@ -300,7 +300,7 @@ exec /usr/bin/install "${args[@]}"
             self.assertEqual(controller.read('journal.json')['phase'], 'committed')
         return os.readlink(self.root / 'opt/messagebox')
 
-    def automatic_supervisor(self, *, slow_trial=False):
+    def automatic_supervisor(self, *, slow_trial=False, fail_promotion=False, contended=False):
         """Run the installed supervisor and its real ExecStartPost/ExecStart chain.
 
         Only systemd job dispatch, elapsed time and hardware remain host edges.
@@ -320,6 +320,11 @@ exec /usr/bin/install "${args[@]}"
         post = next(line.split('=', 1)[1].split() for line in dropin.read_text().splitlines()
                     if line.startswith('ExecStartPost='))
         self.assertEqual(post, ['/usr/bin/systemctl', '--no-block', 'start', 'messagebox-update-bootstrap.service'])
+        trigger = (self.root / slots.TRIGGER).read_bytes()
+        self.assertEqual(trigger, slots.TRIGGER_BYTES)
+        marker = self.root / slots.COMPLETE
+        if marker.is_symlink() and os.readlink(marker) == os.readlink(self.root / 'opt/messagebox'):
+            return False
         unit = (self.root / 'etc/systemd/system/messagebox-update-bootstrap.service').read_text()
         entry = next(line.split('=', 1)[1].split() for line in unit.splitlines() if line.startswith('ExecStart='))
         budget = int(next(line.split('=', 1)[1] for line in unit.splitlines() if line.startswith('TimeoutStartSec=')))
@@ -337,11 +342,17 @@ exec /usr/bin/install "${args[@]}"
         finally:
             sys.path[:] = saved_path
         bootstrap, publish = future.bootstrap, future.publish
-        future.bootstrap = lambda: bootstrap(self.root, platform=PLATFORM, run=self.host)
+        def begin():
+            if contended:
+                raise BlockingIOError
+            bootstrap(self.root, platform=PLATFORM, run=self.host)
+        future.bootstrap = begin
         # The real publication acquires these exact locks again. This fails if
         # the future trigger runs inside bootstrap's critical section.
         def run(command, **kwargs):
             if command[0] == sys.executable and command[-1] == 'promote':
+                if fail_promotion:
+                    raise subprocess.CalledProcessError(1, 'promotion')
                 self.assertEqual(kwargs['timeout'], 200)
                 with mock.patch.object(sys, 'argv', [entry[2], 'promote']):
                     future.main()
@@ -374,6 +385,12 @@ exec /usr/bin/install "${args[@]}"
             self.assertLess(elapsed, budget)
             if slow_trial:
                 self.assertGreater(elapsed, 60)  # Would exceed the original unit's limit.
+        # Native systemd runs this only after the whole ExecStart succeeds.
+        post = next(line.split('=', 1)[1].split() for line in unit.splitlines()
+                    if line.startswith('ExecStartPost='))
+        self.assertEqual(post[-1], 'complete')
+        future.complete_bootstrap(self.root)
+        return True
 
     def test_signed_future_ota_automatically_replaces_controller_and_survives_failed_trial(self):
         result = self.run_bootstrap('cloud')
@@ -387,6 +404,7 @@ exec /usr/bin/install "${args[@]}"
         self.install_signed_application(future)  # Still installed by controller 1.3.0.
         self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
         self.automatic_supervisor(slow_trial=True)
+        self.assertFalse(self.automatic_supervisor())
         good = selector.inspect(self.root, selector.SLOTS[1])
         self.assertEqual((good['version'], good['generation']), ('1.3.1', 8))
         self.assertNotEqual(good['files'], first['files'])
@@ -414,6 +432,28 @@ exec /usr/bin/install "${args[@]}"
         self.automatic_supervisor()
         self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
         self.assertEqual(selector.inspect(self.root, selector.SLOTS[0])['generation'], 10)
+
+    def test_failed_promotion_and_contended_retry_do_not_complete_application_trigger(self):
+        result = self.run_bootstrap('cloud')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit_application()
+        slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+        slots.complete_bootstrap(self.root)
+        previous = os.readlink(self.root / slots.COMPLETE)
+        self.application_health = lambda *a: None
+        future = self.signed_application('v0.3.14', 'c' * 40, 2,
+            controller_version='1.3.1', controller_sequence=8, automatic=True)
+        self.install_signed_application(future)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.automatic_supervisor(fail_promotion=True)
+        self.assertEqual(os.readlink(self.root / slots.COMPLETE), previous)
+        with self.assertRaises(SystemExit) as error:
+            self.automatic_supervisor(contended=True)
+        self.assertEqual(error.exception.code, 75)
+        self.assertEqual(os.readlink(self.root / slots.COMPLETE), previous)
+        self.assertTrue(self.automatic_supervisor())
+        self.assertEqual(selector.inspect(self.root, selector.SLOTS[1])['version'], '1.3.1')
+        self.assertFalse(self.automatic_supervisor())
 
     def voice_runtime(self):
         """Import only the installed application in a separate interpreter."""

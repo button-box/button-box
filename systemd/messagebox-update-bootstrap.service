@@ -7,6 +7,7 @@ StartLimitIntervalSec=0
 Type=oneshot
 UMask=0022
 ExecStart=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py bootstrap
+ExecStartPost=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py complete
 TimeoutStartSec=60
 TimeoutStopSec=10
 KillMode=control-group

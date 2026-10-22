@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import shutil
+import shlex
 import stat
 import struct
 import subprocess
@@ -150,6 +151,8 @@ class Host:
                     path = 'etc/systemd/system/' + command[2] + '.d/' + slots.ROUTE
                     argument = slots.routes()[path].decode().split('ExecStart=')[-1].splitlines()[0]
                     text = 'ExecStart={ path=/usr/bin/python3 ; argv[]=' + argument + ' ; ignore_errors=no ; }'
+                elif '--property=ExecStartPost' in command:
+                    text = 'ExecStartPost={ argv[]=' + slots.TRIGGER_COMMAND.replace('"', '') + ' ; }'
                 elif '--value' in command:
                     text = self.install_active if isinstance(self.install_active, str) else ('active' if self.install_active else 'inactive')
                 elif '--property=MainPID' in command:
@@ -1245,10 +1248,13 @@ class SlotTests(unittest.TestCase):
             if any((self.root / p).exists() for p in slots.routes()):
                 self.assertTrue((self.root / selector.HOME).exists())
                 self.assertEqual(selector.valid(self.root)[0][0], selector.SLOTS[0])
-            slots.bootstrap(self.root, run=self.host)
-            # A killed process is retried against the live view. Retry must
-            # finish all durability work before a later power loss.
             slots.bootstrap(self.root, run=self.host, step=disk.step)
+            # A killed process is retried against the live view. Retry must
+            # finish all durability work before a later power loss. Observe
+            # that first retry's fsyncs: its receipt makes later retries read-only.
+            retry_events = []
+            slots.bootstrap(self.root, run=self.host, step=lambda e,p: retry_events.append((e,p)))
+            self.assertEqual(retry_events, [])
             disk.power_loss()
             self.host = Host(self.root)
             self.host.recovery_run = self.box.run
@@ -1403,6 +1409,104 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(stale['version'], '0.0.0')
         result = json.loads(selector.execute(self.root, selector.SLOTS[1], ('update_controller.py', 'self-test'), output=True))
         self.assertEqual(result['version'], '1.3.0')
+
+    def test_bootstrap_retry_is_read_only_without_daemon_reload(self):
+        self.host.commands.clear()
+        events = []
+        before = {str(p.relative_to(self.root)): (p.stat().st_mtime_ns, p.read_bytes())
+                  for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
+        for _ in range(8):
+            slots.bootstrap(self.root, run=self.host, step=lambda e,p: events.append((e,p)))
+        after = {str(p.relative_to(self.root)): (p.stat().st_mtime_ns, p.read_bytes())
+                 for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
+        self.assertEqual(events, [])
+        self.assertEqual(self.host.commands, [])
+        self.assertEqual(after, before)
+
+    def test_steady_supervisor_ticks_do_not_start_bootstrap_or_write(self):
+        slots.complete_bootstrap(self.root)
+        before = {str(p.relative_to(self.root)): (p.lstat().st_mtime_ns,
+                  os.readlink(p) if p.is_symlink() else p.read_bytes())
+                  for p in self.root.rglob('*') if p.is_symlink() or p.is_file()}
+        self.host.commands.clear()
+        posts = []
+        directory = self.root / 'etc/systemd/system/messagebox-update-supervisor.service.d'
+        for path in sorted(directory.glob('*.conf')):
+            for line in path.read_text().splitlines():
+                if line == 'ExecStartPost=':
+                    posts.clear()
+                elif line.startswith('ExecStartPost='):
+                    posts.append(shlex.split(line.split('=', 1)[1]))
+        self.assertEqual(len(posts), 1)
+        post = posts[0]
+        self.assertEqual(post[:2], ['/bin/sh', '-c'])
+        # Translate absolute symlink destinations at the synthetic root boundary.
+        script = post[2].replace('/usr/bin/test', '/bin/test').replace('/opt/messagebox',
+            str(self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')))
+        script = script.replace('/' + slots.COMPLETE,
+            str(self.root / os.readlink(self.root / slots.COMPLETE).lstrip('/')))
+        for _ in range(12):
+            self.box.worker.supervise_transaction(root=self.root, run=self.host)
+            subprocess.run(post[:2] + [script], check=True, timeout=5)
+        after = {str(p.relative_to(self.root)): (p.lstat().st_mtime_ns,
+                 os.readlink(p) if p.is_symlink() else p.read_bytes())
+                 for p in self.root.rglob('*') if p.is_symlink() or p.is_file()}
+        self.assertEqual(after, before)
+        self.assertEqual(self.host.commands, [])
+
+    def test_bootstrap_receipt_requires_current_application_and_exact_routes(self):
+        receipt = self.root / slots.RECEIPT
+        source = ROOT / 'messagebox/controller_selector.py'
+        for damage in ('missing', 'malformed', 'application', 'route'):
+            with self.subTest(damage=damage):
+                original = receipt.read_bytes()
+                if damage == 'missing':
+                    receipt.unlink()
+                elif damage == 'malformed':
+                    receipt.write_bytes(b'{}')
+                elif damage == 'application':
+                    value = selector.document(original)['value']
+                    value['application'] += '-other'
+                    receipt.write_bytes(selector.envelope(value))
+                else:
+                    (self.root / slots.TRIGGER).write_bytes(b'[Service]\n')
+                self.assertFalse(slots.bootstrapped(self.root, selector, source))
+                with self.assertRaisesRegex(ValueError, 'no current receipt'):
+                    slots.complete_bootstrap(self.root)
+                slots.bootstrap(self.root, run=self.host)
+                self.assertTrue(slots.bootstrapped(self.root, selector, source))
+
+    def test_contended_bootstrap_does_not_acknowledge_service_completion(self):
+        with mock.patch.object(sys, 'argv', ['controller_slots.py', 'bootstrap']), \
+                mock.patch.object(slots, 'bootstrap', side_effect=BlockingIOError):
+            with self.assertRaises(SystemExit) as error:
+                slots.main()
+        self.assertEqual(error.exception.code, 75)
+        self.assertFalse((self.root / slots.COMPLETE).is_symlink())
+
+    def test_completion_power_cut_leaves_retry_or_exact_committed_application(self):
+        baseline = self.base / 'before-completion'
+        shutil.copytree(self.root, baseline, symlinks=True)
+        for retry in (False, True):
+            with self.subTest(retry_before_loss=retry):
+                shutil.rmtree(self.root)
+                shutil.copytree(baseline, self.root, symlinks=True)
+                disk = DurableView(self.root)
+                def cut(event, path):
+                    disk.step(event, path)
+                    if event == 'completion_rename':
+                        raise KeyboardInterrupt('completion cut')
+                with self.assertRaises(KeyboardInterrupt):
+                    slots.complete_bootstrap(self.root, step=cut)
+                if retry:
+                    slots.complete_bootstrap(self.root, step=disk.step)
+                disk.power_loss()
+                marker = self.root / slots.COMPLETE
+                if retry:
+                    self.assertEqual(os.readlink(marker), os.readlink(self.root / 'opt/messagebox'))
+                else:
+                    self.assertFalse(marker.is_symlink())  # Next supervisor tick queues it.
+                self.assertTrue(selector.valid(self.root))
 
     def test_bootstrap_retry_cannot_change_a_mature_running_generation(self):
         self.publish()

@@ -157,6 +157,20 @@ sudo systemctl show messagebox-update-discovery.service -p TimeoutStartUSec
 Require `enabled`, `active` and `TimeoutStartUSec=30min`. The supervisor also
 requests A/B bootstrap after the first application commit. The explicit service
 start above completes or verifies that same idempotent operation after worker exit.
+After success, a durable receipt and completion link stop repeat bootstrap jobs.
+The generated `zz-bootstrap-trigger.conf` checks the application link before it
+queues another job. The protected five-second safety timers stay unchanged.
+Check the effective order on the Pi:
+
+```sh
+sudo systemctl show messagebox-update-supervisor.service -p ExecStartPost
+sudo readlink /var/lib/button-box-controller/bootstrap-complete
+sudo journalctl --since '2 minutes ago' -u messagebox-update-bootstrap.service
+```
+
+Require one `/bin/sh -c` post command with the `-ef` link check, completion at the
+current committed application, and no repeated bootstrap jobs in steady use.
+Bootstrap reloads systemd only after a unit changes or its loaded route differs.
 
 Check the GOOD record and the active slot with the frozen selector:
 
