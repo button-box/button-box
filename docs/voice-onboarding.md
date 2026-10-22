@@ -24,6 +24,8 @@ keep their existing roles.
 3. Completed claim: `voice-setup-names.wav`.
 4. Optional Cloud greeting with the children's names.
 5. First incoming note: normal ring and playback. No voice intro or age line.
+   A short press during the ring stops it and plays the waiting note. The
+   normal hold-to-record and family-card rules still apply.
 6. After playback: `voice-setup-your-turn.wav`. Wait for a new press.
 7. Record the first reply. At 40 seconds, play `voice-setup-remind-stop.wav`
    once. At 60 seconds, stop and keep the recording for review.

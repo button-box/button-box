@@ -1,7 +1,7 @@
 from speaker_helpers import isolate_audio
 import fcntl
 import json
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 import sys
 import tempfile
 import threading
@@ -19,6 +19,7 @@ with mock.patch.dict(sys.modules, {"gpiozero": gpiozero}):
 from messagebox.contacts import ContactStore  # noqa: E402
 from messagebox.guided_reply import OutboxStore, RecordingResult  # noqa: E402
 from messagebox import guided_reply  # noqa: E402
+from messagebox.settings import defaults  # noqa: E402
 from messagebox.nfc import Announcer, NfcRuntime  # noqa: E402
 from messagebox.nfc_state import AnnouncementStore, EnrollmentStore, NfcRouter, SelectionStore  # noqa: E402
 
@@ -172,6 +173,66 @@ class ButtonRoutingTests(unittest.TestCase):
 
         self.assertEqual(claim["path"].name, wav.name)
         playable.assert_called_once_with(claim["meta"])
+
+    def test_one_press_during_ring_plays_inbound_in_both_modes(self):
+        self.add_family()
+        for mode in ("cloud", "wacli"):
+            with self.subTest(mode=mode), ExitStack() as stack:
+                incoming, _ = self.queue_incoming()
+                class PhysicalButton:
+                    is_pressed = True
+                switch = PhysicalButton()
+                stack.enter_context(mock.patch.dict(button_send.capture_session.__wrapped__.__globals__, {"Button": PhysicalButton}))
+                process = mock.Mock(returncode=-15)
+                reaped = [False]
+                process.poll.side_effect = lambda: -15 if reaped[0] else None
+
+                def reap():
+                    # A short press can end while ALSA stops. It must still
+                    # reach the normal handler with its physical permit.
+                    reaped[0] = True
+                    switch.is_pressed = False
+                    return -15
+
+                process.wait.side_effect = reap
+                io = mock.Mock()
+                def play(path):
+                    self.assertTrue(reaped[0])
+                    self.assertFalse(switch.is_pressed)
+                io.play_ordinary.side_effect = play
+                io.play_after_cue.side_effect = play
+                settings = {**defaults({}), "talk_mode": "tap", "after_listening": "play_only"}
+                stack.enter_context(mock.patch.dict(button_send.os.environ, {"MSGBOX_TRANSPORT": mode}))
+                for name, value in {
+                    "button": switch, "led": mock.Mock(), "_recording": False,
+                    "_guided_active": False, "outbox_store": mock.Mock(),
+                }.items():
+                    stack.enter_context(mock.patch.object(button_send, name, value, create=True))
+                for name, value in {
+                    "start_player": process, "ringtone_path": Path(__file__),
+                    "caregiver_settings": settings, "quiet_hours": False,
+                    "PiGuidedIO": io, "box_muted": False,
+                }.items():
+                    stack.enter_context(mock.patch.object(button_send, name, return_value=value))
+                for name in ("acknowledge_guided_press", "finish_claim", "react_played", "mark_queue_known", "refresh_led"):
+                    stack.enter_context(mock.patch.object(button_send, name))
+                stack.enter_context(mock.patch.object(button_send.time, "sleep"))
+                stack.enter_context(mock.patch.object(button_send.cloud_runtime, "playable", return_value=True))
+                stack.enter_context(mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64))
+                stack.enter_context(mock.patch.object(button_send.cloud_runtime, "play_reactions"))
+                stack.enter_context(mock.patch.object(button_send.cloud_claim, "consume_claim_press", return_value=False))
+                from messagebox.cloud_update import confirmation
+                from messagebox import maintenance
+                stack.enter_context(mock.patch.object(confirmation, "intercept", return_value=False))
+                stack.enter_context(mock.patch.object(maintenance, "interaction", side_effect=lambda: nullcontext(True)))
+                button_send.log_event.reset_mock()
+
+                button_send.ring_alert(settings=settings)
+
+                self.assertIn("guided_inbound_played", [call.args[0] for call in button_send.log_event.call_args_list])
+                self.assertIn(incoming.name, [Path(call.args[0]).name for call in io.play_after_cue.call_args_list])
+                io.record.assert_not_called()
+                self.assertIsNone(button_send._capture_permit)
 
     def test_legacy_play_skips_cloud_audio_and_plays_next_standalone_message(self):
         cloud_wav, cloud_sidecar = self.queue_incoming("0001-cloud.wav")

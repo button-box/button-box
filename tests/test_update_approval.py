@@ -674,7 +674,7 @@ class ButtonBoundaryTests(unittest.TestCase):
              mock.patch.object(runtime, '_capture_confirmed_press', return_value=True) as flow, \
              mock.patch.object(cloud_update, 'request') as ipc:
             self.assertTrue(runtime.handle_confirmed_press(5, card_prompt_uid='synthetic-card'))
-            flow.assert_called_once_with(5, card_prompt_uid='synthetic-card')
+            flow.assert_called_once_with(5, card_prompt_uid='synthetic-card', before_dispatch=None)
             cloud_update.confirmation.idle(types.SimpleNamespace(is_pressed=False), mock.Mock())
             self.assertEqual(cloud_update.capability(), {})
             self.assertEqual(cloud_update.heartbeat_fields(), {})

@@ -1413,6 +1413,9 @@ def ring_alert(source="new_message", settings=None):
     log_event("ring", source=source)
     process = start_player(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
     started = time.monotonic()
+    def wait_for_ring():
+        if process is not None and process.poll() is None:
+            process.wait()
     try:
         while (process is not None and process.poll() is None) or (
             process is None and time.monotonic() - started < 9
@@ -1420,14 +1423,21 @@ def ring_alert(source="new_message", settings=None):
             elapsed = time.monotonic() - started
             (led.on if flash_lamp and ring_lamp_on(elapsed, settings["ringtone_id"]) else led.off)()
             if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
+                closed_at = time.monotonic()
+                pressed = button.is_pressed
                 if process is not None:
                     process.terminate()
                 log("ring cut by press")
+                if (pressed and source in {"new_message", "quiet_hours_end", "queued_after_unsent"}
+                        and queued() and not _recording and not _guided_active):
+                    # Capture the physical press before waiting for ALSA to
+                    # close; then use the same routing and hold/tap handler.
+                    if handle_confirmed_press(closed_at, before_dispatch=wait_for_ring):
+                        wait_for_stable_open()
                 break
             time.sleep(0.02)
     finally:
-        if process is not None and process.poll() is None:
-            process.wait()
+        wait_for_ring()
         refresh_led(force=True)
     return process is None or process.returncode == 0
 
@@ -2514,7 +2524,7 @@ def claim_only_loop():
             time.sleep(POLL_S)
 
 
-def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
+def handle_confirmed_press(closed_at, *, card_prompt_uid=None, before_dispatch=None):
     try:
         reconcile_card_selections()
     except (NfcError, OSError, ValueError):
@@ -2529,15 +2539,17 @@ def handle_confirmed_press(closed_at, *, card_prompt_uid=None):
             if not allowed:
                 wait_for_stable_open()
                 return False
-            return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
-    return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
+            return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid, before_dispatch=before_dispatch)
+    return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid, before_dispatch=before_dispatch)
 
 
-def _capture_confirmed_press(closed_at, *, card_prompt_uid=None):
+def _capture_confirmed_press(closed_at, *, card_prompt_uid=None, before_dispatch=None):
     global _capture_permit
     try:
         with capture_session(button) as permit:
             _capture_permit = permit
+            if before_dispatch is not None:
+                before_dispatch()
             return _handle_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
     except CaptureDenied:
         return False
