@@ -2450,9 +2450,15 @@ def run_guided_once(settings=None, *, card_prompt_uid=None, acknowledge_listenin
             return
     elif acknowledge_listening and buttonbox_voice():
         # An incoming note still acknowledges the listening press. A direct
-        # recording uses its single, parallel recording cue instead.
-        acknowledge_guided_press("start_session")
-        wait_for_stable_open()
+        # recording uses its single short recording cue instead.
+        try:
+            acknowledge_guided_press("start_session")
+            wait_for_stable_open()
+        except Exception:
+            # Feedback runs after the claim. Restore both files so the next
+            # press can play this note without waiting for process recovery.
+            release_claim(claim)
+            raise
     claim_recipient_allowed = False
     if claim and recipient:
         try:

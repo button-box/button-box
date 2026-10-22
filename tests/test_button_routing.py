@@ -1,6 +1,7 @@
 from speaker_helpers import isolate_audio
 import fcntl
 import json
+import subprocess
 from contextlib import ExitStack, contextmanager, nullcontext
 import sys
 import tempfile
@@ -233,6 +234,50 @@ class ButtonRoutingTests(unittest.TestCase):
                 self.assertIn(incoming.name, [Path(call.args[0]).name for call in io.play_after_cue.call_args_list])
                 io.record.assert_not_called()
                 self.assertIsNone(button_send._capture_permit)
+
+    def test_listening_cue_timeout_returns_claim_for_next_press_without_restart(self):
+        self.add_family()
+        for mode in ('cloud', 'wacli'):
+            with self.subTest(mode=mode), ExitStack() as stack:
+                incoming, sidecar = self.queue_incoming()
+                original_audio, original_meta = incoming.read_bytes(), sidecar.read_bytes()
+                inflight = self.queue_path / '.inflight' / incoming.name
+                settings = {**defaults({}), 'talk_mode': 'tap', 'after_listening': 'play_only'}
+                io = mock.Mock()
+                stack.enter_context(mock.patch.dict(button_send.os.environ, {'MSGBOX_TRANSPORT': mode}))
+                stack.enter_context(mock.patch.object(button_send, 'buttonbox_voice', return_value=mode == 'cloud'))
+                stack.enter_context(mock.patch.object(button_send, 'led', mock.Mock(), create=True))
+                stack.enter_context(mock.patch.object(button_send, 'outbox_store', mock.Mock(), create=True))
+                stack.enter_context(mock.patch.object(button_send, 'PiGuidedIO', return_value=io))
+                stack.enter_context(mock.patch.object(button_send.cloud_runtime, 'account_scope', return_value='a' * 64))
+                stack.enter_context(mock.patch.object(button_send.cloud_runtime, 'playable', return_value=True))
+                stack.enter_context(mock.patch.object(button_send, 'caregiver_settings', return_value=settings))
+                for name in ('wait_for_stable_open', 'mark_queue_known', 'refresh_led', 'react_played'):
+                    stack.enter_context(mock.patch.object(button_send, name))
+
+                def timeout(*args):
+                    self.assertTrue(inflight.is_file())
+                    self.assertFalse(incoming.exists())
+                    raise subprocess.TimeoutExpired('aplay', 5)
+
+                cue = stack.enter_context(mock.patch.object(button_send, 'acknowledge_guided_press', side_effect=timeout))
+                if mode == 'cloud':
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        button_send.run_guided_once(settings, acknowledge_listening=True)
+                    self.assertTrue(incoming.is_file(), 'cue failure must return the claimed note to the queue')
+                    self.assertEqual(incoming.read_bytes(), original_audio)
+                    self.assertEqual(sidecar.read_bytes(), original_meta)
+                    self.assertFalse(inflight.exists())
+                    self.assertFalse(Path(str(inflight) + '.json').exists())
+                    io.play_after_cue.assert_not_called()
+                    cue.side_effect = None
+                button_send.run_guided_once(settings, acknowledge_listening=True)
+                io.play_after_cue.assert_called_once_with(str(inflight))
+                io.record.assert_not_called()
+                self.assertFalse(incoming.exists())
+                self.assertFalse(inflight.exists())
+                if mode == 'wacli':
+                    cue.assert_not_called()
 
     def test_legacy_play_skips_cloud_audio_and_plays_next_standalone_message(self):
         cloud_wav, cloud_sidecar = self.queue_incoming("0001-cloud.wav")

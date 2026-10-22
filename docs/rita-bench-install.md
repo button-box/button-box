@@ -254,6 +254,8 @@ sending selected. A reminder-only recording can therefore reach review; it
 must not send without approval. Measure the start delay on the real USB devices; the
 tap-recording model gives 120 ms and excludes device startup and scheduling
 time. Hold-to-record keeps its normal hold threshold.
+A listening-cue failure returns the incoming note and its sidecar to the queue.
+The next press can play it without a service restart.
 Use `sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh`.
 Check `voice_pack` is `buttonbox` in the fresh local settings. Keep settings and
 credentials out of shared logs. On a spare box with a disposable test identity, complete a Cloud setup test
