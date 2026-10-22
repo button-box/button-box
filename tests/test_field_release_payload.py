@@ -1,4 +1,4 @@
-"""Use the release builder's full checkout payload, not the synthetic candidate.
+"""Keep the reviewed bridge compatible with all four field controllers.
 
 This integration uses real packaging and disposable signing keys. Clean-tag,
 repeat-build and production key-policy gates remain build.py's responsibility.
@@ -14,7 +14,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from field_updater import CONTROLLER, PROVENANCE, FieldBox, digest, write
 
@@ -22,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BuiltFieldPayload(unittest.TestCase):
-    def test_actual_checkout_package_installs_with_all_four_frozen_workers(self):
+    def test_reviewed_bridge_package_installs_with_all_four_frozen_workers(self):
         self.exercise_built_payload()
 
     def test_real_built_payload_publication_cut_matrix(self):
@@ -47,6 +46,11 @@ class BuiltFieldPayload(unittest.TestCase):
             root = Path(directory).resolve()
             checkout = root / 'checkout'
             subprocess.run(['git', 'clone', '--quiet', '--no-hardlinks', str(ROOT), str(checkout)], check=True)
+            # The integrated voice payload requires controller 1.3.0. Older
+            # boxes must receive the reviewed A/B bridge first. Keep that
+            # transition covered with its exact source, not the voice payload.
+            subprocess.run(['git', '-C', str(checkout), 'checkout', '--quiet', '--detach',
+                            '72aa00f3f2c7dc9718568f69a3353f7010a890b5'], check=True)
             # Git uses the caller's umask for checkout directories. Record the
             # test source tree's modes explicitly before the safe-file reader.
             for path in (checkout, *checkout.rglob('*')):
@@ -55,28 +59,7 @@ class BuiltFieldPayload(unittest.TestCase):
             spec = importlib.util.spec_from_file_location('field_release_build', ROOT / 'scripts/release/build.py')
             build = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(build)
-            # Prepare an actual temporary index for uncommitted new payload
-            # files. No commit/tag is created; production build uses HEAD.
-            for folder in ('messagebox', 'systemd'):
-                for path in (checkout / folder).rglob('*'):
-                    if path.is_file() and not (ROOT / path.relative_to(checkout)).exists():
-                        path.unlink()
-            listing = (ROOT / 'scripts/release/payload.txt').read_text()
-            write(checkout / 'scripts/release/payload.txt', listing.encode())
-            for name in listing.splitlines():
-                if name and not name.startswith('#') and not (checkout / name).exists():
-                    write(checkout / name, (ROOT / name).read_bytes())
-            subprocess.run(['git', '-C', str(checkout), 'add', '--all'], check=True)
-            tree = build.git(checkout, 'write-tree')
-            real_git = build.git
-            def candidate_git(repo, *args):
-                return real_git(repo, 'ls-tree', '-r', tree) if args == ('ls-tree', '-r', 'HEAD') else real_git(repo, *args)
-            with mock.patch.object(build, 'git', side_effect=candidate_git):
-                payload = build.payload_paths(checkout)
-            # Include current uncommitted candidate bytes. No commits or tags are
-            # created. A production build instead enforces a clean stationary tag.
-            for name, mode in payload.items():
-                write(checkout / name, (ROOT / name).read_bytes(), mode)
+            payload = build.payload_paths(checkout)
             raw = build.controller_descriptor(checkout, 7, 'v0.3.13')
             write(checkout / build.CONTROLLER_DESCRIPTOR, raw)
             public, secret = root / 'test.pub', root / 'test.key'

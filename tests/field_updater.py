@@ -348,7 +348,14 @@ class FieldBox:
             write(bundle / "SHA256SUMS.minisig", b"synthetic host signature")
             self.queue_bundle(controller, bundle, version)
             before = self.fixed_bytes()
-            controller.worker()
+            # A deployed fixed worker has not imported the test runner's
+            # current application. Let its staged validator import the staged
+            # settings too, including when testing the older bridge payload.
+            with mock.patch.dict(sys.modules):
+                for name in list(sys.modules):
+                    if name == 'messagebox' or name.startswith('messagebox.'):
+                        del sys.modules[name]
+                controller.worker()
             result = controller.read("result.json")
             journal = controller.read("journal.json")
             if (result["state"] != "installed" or journal["phase"] != "committed"

@@ -218,8 +218,9 @@ class Host:
         # Real application producers -> AF_UNIX IPC -> broker dispatch/evidence.
         # Peer credentials/MainPID and hardware remain host boundaries.
         from test_mic_access import runtime as button_send
-        software, voicepoll, cloud_runtime = (importlib.import_module('messagebox.' + name)
-                                             for name in ('software', 'voicepoll', 'cloud_runtime'))
+        software, voicepoll = (importlib.import_module('messagebox.' + name)
+                               for name in ('software', 'voicepoll'))
+        cloud_runtime = button_send.cloud_runtime
         slot = selector.selected(root)['slot']
         with mock.patch.dict(sys.modules):
             for name in ('release_verify', 'trust_update', 'bounded_update', 'update_controller'):

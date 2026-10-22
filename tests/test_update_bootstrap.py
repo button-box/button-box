@@ -4,6 +4,7 @@ The shell, globs, install(1), Python key/policy code, and layout conversion are
 real. Root ownership, Pi identity, accounts, and systemd are host substitutes.
 """
 import importlib.util
+import contextlib
 import json
 import os
 import shutil
@@ -12,13 +13,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from field_updater import FieldBox, mkdir, write
+from field_updater import FieldBox, load_frozen, mkdir, write
 from messagebox import controller_selector as selector, controller_slots as slots
 import test_controller_descriptor as descriptors
 from test_controller_slots import DurableView, Host
 from test_release_tooling import build
 from test_update_discovery import PLATFORM
+from test_bounded_update import release_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +49,7 @@ class BootstrapCommandTests(unittest.TestCase):
         for name in ('usr/lib/messagebox-update', 'etc/button-box-update', 'var/lib/button-box-update'):
             shutil.rmtree(self.root / name)
         self.repo = self.base / 'checkout'
-        for name in ('systemd', 'config/release-keys', 'config/emergency-keys'):
+        for name in ('systemd', 'config'):
             shutil.copytree(ROOT / name, self.repo / name)
         shutil.rmtree(self.repo / 'config/release-keys')
         write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
@@ -110,6 +113,243 @@ elif name not in ('systemctl','getent','minisign','espeak-ng'):
         write(self.root / 'etc/messagebox/env', ('MSGBOX_TRANSPORT=' + transport + '\n').encode())
         return subprocess.run(['/bin/sh', str(self.script), 'auto', 'stable'], env=self.env,
                               capture_output=True, text=True, timeout=30)
+
+    def fresh_setup(self):
+        """Run setup's real allowlists/install commands, with OS edges replaced.
+
+        Package installation, accounts, hardware and systemd are host boundaries.
+        The shell, source checks, installed bytes and sound validation are real.
+        """
+        shutil.rmtree(self.root)
+        self.root.mkdir(mode=0o755)
+        # Model membership in the shared service group on non-root test hosts.
+        os.chown(self.root, -1, os.getegid())
+        for name in ('etc/systemd/system', 'etc/tmpfiles.d', 'usr/local/bin', 'usr/local/sbin', 'run/lock'):
+            mkdir(self.root / name)
+        for name in ('messagebox', 'sounds', 'scripts', 'config', 'systemd'):
+            shutil.copytree(ROOT / name, self.repo / name, dirs_exist_ok=True)
+        # Restore the bootstrap script's redirected fixed paths after copying.
+        script = (ROOT / 'scripts/install/update-bootstrap.sh').read_text()
+        setup = (ROOT / 'scripts/setup.sh').read_text()
+        for prefix in ('/etc/', '/usr/', '/var/', '/run/', '/opt/'):
+            script = script.replace(prefix, str(self.root) + prefix)
+            setup = setup.replace(prefix, str(self.root) + prefix)
+        setup = setup.replace(str(self.root) + '/usr/bin/python3', 'python3')
+        self.script.write_text(script)
+        setup_path = write(self.repo / 'scripts/setup.sh', setup.encode(), 0o755)
+        # These helpers install OS dependencies, not application source files.
+        for name in ('wacli', 'comitup', 'nfc'):
+            write(self.repo / ('scripts/install/' + name + '.sh'),
+                  ('#!/bin/sh\nexec bench-os-helper ' + name + '\n').encode(), 0o755)
+        shim = write(self.base / 'setup-bin/shim', ('#!' + sys.executable + '\n' + r'''
+import json,os,subprocess,sys
+from pathlib import Path
+name=Path(sys.argv[0]).name
+args=sys.argv[1:]
+root=Path(os.environ['BOOTSTRAP_TEST_ROOT'])
+repo=Path(os.environ['BOOTSTRAP_TEST_REPO'])
+with open(os.environ['BOOTSTRAP_TEST_LOG'],'a') as log: log.write(json.dumps([name,*args])+'\n')
+if name=='id': print('501')
+elif name=='getent': raise SystemExit(2)
+elif name=='ln': os.link(args[-2],args[-1])
+elif name=='sed':
+    import re
+    expression=args[1].split('/')
+    path=Path(args[2])
+    path.write_text(re.sub(expression[1],expression[2],path.read_text(),flags=re.M))
+elif name=='systemctl': raise SystemExit(3 if args[0]=='is-active' else 0)
+elif name=='bench-os-helper':
+    if args==['nfc']:
+        (root/'opt/messagebox/venv-nfc').mkdir()
+        target=root/'etc/systemd/system/messagebox-nfc.service'
+        target.write_bytes((repo/'systemd/messagebox-nfc.service').read_bytes())
+elif name=='python3':
+    if args[0].endswith('audio_config.py'):
+        sys.path.insert(0,str(repo/'scripts/install'))
+        from audio_config import render_environment
+        print(render_environment(Path(args[1]).read_text(),'mic','plughw:CARD=mic,DEV=0',
+                                 'Device','plughw:CARD=Device,DEV=0'),end='')
+    elif args[0].endswith('messagebox-mode-migrate.py') or args[:2]==['-m','messagebox.wifi_watchdog']:
+        pass
+    else: os.execv(sys.executable,[sys.executable,*args])
+elif name not in ('apt-get','groupadd','useradd','usermod','systemd-tmpfiles','systemd-analyze','journalctl'):
+    raise SystemExit('unexpected setup boundary: '+name)
+''').encode(), 0o755)
+        for name in ('id', 'getent', 'ln', 'sed', 'systemctl', 'bench-os-helper', 'python3',
+                     'apt-get', 'groupadd', 'useradd', 'usermod', 'systemd-tmpfiles',
+                     'systemd-analyze', 'journalctl'):
+            (shim.parent / name).symlink_to(shim.name)
+        write(shim.parent / 'sudo', b'#!/bin/sh\nexec "$@"\n', 0o755)
+        write(shim.parent / 'install', b'''#!/bin/bash
+args=()
+while (( $# )); do
+  if [[ $1 = -o || $1 = -g ]]; then shift 2
+  else args+=("$1"); shift; fi
+done
+exec /usr/bin/install "${args[@]}"
+''', 0o755)
+        env = dict(self.env, PATH=str(shim.parent) + os.pathsep + os.environ['PATH'])
+        result = subprocess.run(['/bin/sh', str(setup_path)], env=env,
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ('controller_slots.py', 'cloud_setup.py', 'speaker.py', 'remote_access.py'):
+            self.assertEqual((self.root / 'opt/messagebox/messagebox' / name).read_bytes(),
+                             (ROOT / 'messagebox' / name).read_bytes())
+        # A fresh box has no enabled messaging components or saved household.
+        for state in self.box.states.values():
+            state.update(active='inactive', enabled='static')
+        for unit in ('messagebox-mode-reconcile.path', 'messagebox-wifi-change.path'):
+            self.box.states[unit].update(active='active', enabled='enabled')
+        for unit in ('messagebox-wifi-watchdog.timer', 'messagebox-onboarding-voice.path',
+                     'messagebox-onboarding-complete.path'):
+            self.box.states[unit]['enabled'] = 'enabled'
+        self.states.write_text(json.dumps(self.box.states))
+        # setup deliberately does not claim an updater-managed identity. The
+        # bench records the exact source as a distinct, local bootstrap tree.
+        write(self.root / 'opt/messagebox/release.json',
+              json.dumps({'version': 'bench-install', 'commit': 'b' * 40}).encode())
+        # Restore release trust; bootstrap must verify the real disposable pin.
+        shutil.rmtree(self.repo / 'config/release-keys')
+        write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
+
+    @contextlib.contextmanager
+    def installed_controller(self, slot):
+        """Real installed broker, minisign, extraction, guard and transaction."""
+        with mock.patch.dict(sys.modules):
+            for name in ('release_verify', 'bounded_update', 'trust_update', 'update_controller'):
+                spec = importlib.util.spec_from_file_location(name, self.root / slot / (name + '.py'))
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                spec.loader.exec_module(module)
+            controller = module
+            worker = controller.update
+            worker.time, worker.shutil, worker._boot = self.box.worker.time, self.box.worker.shutil, self.box.worker._boot
+            controller.ROOT = self.root
+            controller.STATE = self.root / 'var/lib/button-box-update'
+            controller.KEYS = self.root / 'etc/button-box-update/release-keys'
+            controller.RUN = self.root / 'run/messagebox-update'
+            controller.time = worker.time
+            controller.local_platform = lambda: PLATFORM
+            controller.read = lambda n,d=None: worker.read_state(self.root,n,d)
+            controller.save = lambda n,v,mode=0o600: worker.save_state(self.root,n,v,mode)
+            self.box.worker = worker
+            transaction = worker.install_transaction
+            with mock.patch.object(worker, 'install_transaction',
+                    side_effect=lambda *a,**k: transaction(*a,root=self.root,run=self.box.run,
+                                                         health=self.application_health,**k)):
+                yield controller
+
+    def signed_application(self, version, commit, sequence):
+        source = self.box.source
+        for name in (ROOT / 'scripts/release/payload.txt').read_text().splitlines():
+            if name and not name.startswith('#'):
+                write(source / name, (ROOT / name).read_bytes(),
+                      0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644)
+        descriptor = build.controller_descriptor(ROOT, 7, 'v0.3.13')
+        proof = write(self.base / 'descriptor', descriptor)
+        signature = self.base / 'signature'
+        subprocess.run(['minisign','-S','-m',str(proof),'-s',str(self.keys[0][1]),'-x',str(signature)],
+                       check=True,capture_output=True)
+        write(source / slots.verify.CONTROLLER_DESCRIPTOR, descriptor)
+        write(source / slots.verify.CONTROLLER_SIGNATURE, (repr(signature.read_text()) + '\n').encode())
+        # A later application changes one harmless file, not controller bytes.
+        if sequence > 1:
+            write(source / 'messagebox/example.py', b"VALUE = 'later OTA'\n")
+        manifest = {'schema':1,'product':'button-box','version':version,'tag':version,'commit':commit,
+                    'release_sequence':sequence,'channel':'stable','min_updater_version':'1.3.0',
+                    **build.SUPPORTED,
+                    'files':[{'source':name,'installed':target,'sha256':build.digest(source/name)}
+                             for name,target in sorted(release_manifest.installed_paths(source).items())]}
+        payload = {p.relative_to(source).as_posix(): 0o755 if p.stat().st_mode & 0o111 else 0o644
+                   for p in source.rglob('*') if p.is_file() and p.name != 'release-manifest.json'}
+        assets = self.base / ('assets-' + str(sequence))
+        build.package(source,assets,manifest,payload,0)
+        subprocess.run(['minisign','-S','-m',str(assets/'SHA256SUMS'),'-s',str(self.keys[0][1]),
+                        '-x',str(assets/'SHA256SUMS.minisig')],check=True,capture_output=True)
+        return assets
+
+    def voice_runtime(self):
+        """Import only the installed application in a separate interpreter."""
+        release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+        program = r'''
+import sys,types
+from pathlib import Path
+sys.modules['gpiozero']=types.SimpleNamespace(Button=object,LED=object)
+from messagebox import button_send,cloud_runtime,cloud_setup,sound_pack,speaker
+from messagebox.settings import SettingsStore
+root=Path(sys.argv[1]); sounds=Path(sys.argv[2])/'sounds'
+settings=SettingsStore(root/'var/lib/messagebox-settings/settings.json',environ={'MSGBOX_TRANSPORT':'cloud'})
+assert settings.load()[0]['voice_pack']=='buttonbox'
+sound_pack.validate_sounds(sounds)
+speaker.LOCK_FILE=root/'run/messagebox-speaker/speaker.lock'
+guide=cloud_setup.SetupGuide(root/'var/lib/messagebox-cloud/guided-setup.json')
+fresh=guide.load() is None
+guide.change('start'); played=[]
+def play(name):
+    with speaker.reservation():
+        assert (sounds/'voices/buttonbox'/('voice-'+name+'.wav')).is_file()
+        played.append(name)
+assert guide.speak(play)==fresh
+assert played==(['setup-scan'] if fresh else [])
+assert not cloud_setup.SetupGuide(guide.path).speak(play)
+'''
+        env = dict(os.environ, PYTHONPATH=str(release), PYTHONDONTWRITEBYTECODE='1', MSGBOX_TRANSPORT='cloud')
+        result = subprocess.run([sys.executable,'-c',program,str(self.root),str(release)],
+                                cwd=self.base,env=env,capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_bench_setup_to_voice_runtime_later_signed_ota_and_rollback(self):
+        self.fresh_setup()
+        result = self.run_bootstrap('cloud')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.host = Host(self.root)
+        self.host.recovery_run = self.box.run
+        first = self.signed_application('v0.3.13','a'*40,1)
+        old_verifier = load_frozen('v0.3.12', 'scripts/install/release_verify.py')
+        with self.assertRaisesRegex(ValueError, 'incompatible'):
+            old_verifier.verify_bundle(first, self.root/'etc/button-box-update/release-keys',
+                                       version='v0.3.13', channel='stable', floor=0, platform=PLATFORM)
+        self.application_health = lambda *a: None  # Pi health is a host boundary.
+        with self.installed_controller(selector.SLOTS[0]) as controller:
+            bundle = mkdir(controller.STATE / 'downloads' / ('c'*32),0o700)
+            for path in first.iterdir():
+                write(bundle/path.name,path.read_bytes(),0o600)
+            self.box.queue_bundle(controller,bundle,'v0.3.13')
+            controller.worker()
+            self.assertEqual(controller.read('journal.json')['phase'],'committed')
+        slots.bootstrap(self.root,platform=PLATFORM,run=self.host)
+        self.assertEqual(selector.selected(self.root)['slot'],selector.SLOTS[0])
+        self.assertEqual(selector.inspect(self.root,selector.SLOTS[0])['version'],'1.3.0')
+        self.assertIn(['systemctl','enable','--now','messagebox-update-selector.timer'],self.host.commands)
+        self.voice_runtime()
+        before = os.readlink(self.root/'opt/messagebox')
+        routes = {p:(self.root/p).read_bytes() for p in slots.routes()}
+        later = self.signed_application('v0.3.14','c'*40,2)
+        # Drive a later OTA through the permanent A/B install route. Kill it
+        # after pointer switch; selector recovery must restore the first app.
+        def interrupted(root,journal,run):
+            self.assertNotEqual(os.readlink(root/'opt/messagebox'),before)
+            raise KeyboardInterrupt('power loss during application probation')
+        self.application_health = interrupted
+        with self.installed_controller(selector.selected(self.root)['slot']) as controller:
+            bundle = mkdir(controller.STATE/'downloads'/('d'*32),0o700)
+            for path in later.iterdir():
+                write(bundle/path.name,path.read_bytes(),0o600)
+            self.box.queue_bundle(controller,bundle,'v0.3.14')
+            with mock.patch.object(sys,'argv',sys.argv[:]), self.assertRaises(KeyboardInterrupt):
+                exec(selector.install_program(self.root,selector.SLOTS[0]),{})
+            self.assertEqual(controller.read('journal.json')['phase'],'probation')
+        shutil.rmtree(self.root/selector.RUN)
+        self.assertEqual(selector.recover(self.root,self.host,execute=self.host.execute),selector.SLOTS[0])
+        self.assertEqual(os.readlink(self.root/'opt/messagebox'),before)
+        result = self.box.worker.read_state(self.root,'result.json')
+        self.assertEqual((result['state'],result['software_version']),('rolled_back','v0.3.13'))
+        self.assertFalse((self.root/'var/lib/button-box-update/install-inhibit').exists())
+        self.assertEqual(self.box.worker.read_state(self.root,'sequence.json'),2)
+        self.assertIn('/opt/messagebox-releases/v0.3.14-'+'c'*40,
+                      self.box.worker.read_state(self.root,'quarantine.json'))
+        self.assertEqual({p:(self.root/p).read_bytes() for p in routes},routes)
+        self.voice_runtime()
 
     def commit_application(self):
         # Use the current worker actually installed by the complete shell, not

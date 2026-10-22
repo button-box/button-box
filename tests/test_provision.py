@@ -98,6 +98,9 @@ esac
         self.assertIn("messagebox/onboarding/nfc.py", staged_paths)
         self.assertIn("messagebox/onboarding/completion.py", staged_paths)
         self.assertIn("messagebox/settings.py", staged_paths)
+        for name in ("remote_access.py", "cloud_setup.py", "speaker.py",
+                     "controller_selector.py", "controller_slots.py"):
+            self.assertIn("messagebox/" + name, staged_paths)
         self.assertIn("messagebox/identity.py", staged_paths)
         self.assertNotIn("scripts/dev/dashboard-preview.py", staged_paths)
         self.assertIn("messagebox/wifi_change.py", staged_paths)

@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox import cloud_setup, speaker, cloud_runtime
+from messagebox import cloud_setup, speaker
 from messagebox.guided_reply import RecordingResult, OutboxStore
 from messagebox.settings import defaults, SettingsStore
 from speaker_helpers import isolate_audio
@@ -82,7 +82,7 @@ class SetupTests(unittest.TestCase):
                                 ("log_event", mock.Mock()), ("led", mock.Mock()),
                                 ("button", types.SimpleNamespace(is_pressed=False)), ("outbox_store", store)):
                 stack.enter_context(mock.patch.object(runtime, name, value, create=True))
-            stack.enter_context(mock.patch.object(cloud_runtime, "account_scope", return_value="a" * 64))
+            stack.enter_context(mock.patch.object(runtime.cloud_runtime, "account_scope", return_value="a" * 64))
             stack.enter_context(mock.patch.object(runtime, "ContactStore", return_value=types.SimpleNamespace(allowed_jids=lambda: {"person"})))
             capture = stack.enter_context(mock.patch.object(runtime, "capture_guided_recording",
                 return_value=RecordingResult(str(recording), 2, True, True, 60)))
@@ -200,7 +200,7 @@ class SetupTests(unittest.TestCase):
                      mock.patch.object(runtime, "_guided_active", False), \
                      mock.patch.object(runtime, "button", types.SimpleNamespace(is_pressed=False), create=True), \
                      mock.patch.object(runtime, "receipt_store", receipts, create=True), \
-                     mock.patch.object(cloud_runtime, "listened_status", return_value="ready"), \
+                     mock.patch.object(runtime.cloud_runtime, "listened_status", return_value="ready"), \
                      mock.patch.object(runtime.sound_pack, "SOUND_DIR", Path(__file__).resolve().parents[1] / "sounds"), \
                      mock.patch.object(runtime.sound_pack, "current_voice_pack", return_value="buttonbox"), \
                      mock.patch.object(runtime, "play_moment"), \

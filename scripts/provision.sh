@@ -87,6 +87,7 @@ rsync -azR \
   "$REPO_DIR/./messagebox/nfc.py" \
   "$REPO_DIR/./messagebox/nfc_state.py" \
   "$REPO_DIR/./messagebox/runtime_paths.py" \
+  "$REPO_DIR/./messagebox/remote_access.py" \
   "$REPO_DIR/./messagebox/settings.py" \
   "$REPO_DIR/./messagebox/tailnet.py" \
   "$REPO_DIR/./messagebox/syncloop.sh" \
