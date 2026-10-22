@@ -118,18 +118,21 @@ _QR_WIFI_NEXT = b"""        <aside class="notice">
           <span>When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</span>
         </aside>
 """
+_CONNECTING_STATUS = "This usually takes 1–2 minutes. Keep the box plugged in. It talks when it's ready.".encode("utf-8")
 _QR_HANDOFF_CONTENT = """<div class="wifi-handoff" role="status" aria-live="polite">
 <h1 id="handoff-title">Connecting…</h1>
-<p id="handoff-status" class="lede">Your box is joining your Wi-Fi. This page may lose its connection.</p>
+<p id="handoff-status" class="lede">__CONNECTING_STATUS__</p>
 <p id="handoff-next" class="lede">When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</p>
 </div>
 <p class="field-help">If the connection fails, rejoin the setup hotspot and try again.</p>
 <p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>
 <script nonce="messagebox-handoff">__HANDOFF_SCRIPT__</script>""".encode("utf-8")
 
-_LOCAL_HANDOFF_CONTENT = b"""<h1 id="handoff-title">Join the same Wi-Fi</h1>
+_LOCAL_HANDOFF_CONTENT = """<h1 id="handoff-title">Connecting…</h1>
+<p id="handoff-status" class="lede">__CONNECTING_STATUS__</p>
+<h2>Join the same Wi-Fi</h2>
 <p class="lede">Join the Wi-Fi you chose for your Button Box, then open this link to continue:</p>
-<p><a class="button" href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a></p>"""
+<p><a class="button" href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a></p>""".encode("utf-8")
 
 _CHANGE_HTML = b"""<!doctype html>
 <html lang="en">
@@ -780,6 +783,7 @@ def create_app(
                 body = body.replace(b"__MESSAGEBOX_URL__", (canonical_url + "cloud-connect").encode("ascii"))
                 body = body.replace(b"__HANDOFF_SCRIPT__", static_files["wifi-handoff.js"][0])
         # Embed the shared styles before the hotspot can disappear.
+        body = body.replace(b"__CONNECTING_STATUS__", _CONNECTING_STATUS)
         body = body.replace(b"__MESSAGEBOX_URL__", canonical_url.encode("ascii"))
         body = body.replace(b"__STYLES__", static_files["styles.css"][0])
         body = body.replace(b'<html lang="en">',

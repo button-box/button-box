@@ -563,6 +563,8 @@ class OnboardingAPITests(unittest.TestCase):
                     "ssid": "Home", "security": "protected", "password": "synthetic-password",
                 }, close=False)
                 handoff["iterable"].close()
+                self.assertIn("Connecting…".encode(), handoff["body"])
+                self.assertIn("This usually takes 1–2 minutes. Keep the box plugged in. It talks when it's ready.".encode(), handoff["body"])
                 if transport == "cloud":
                     for body in (page, handoff["body"]):
                         self.assertIn(b"Connected!", body)
