@@ -43,11 +43,17 @@ This checksum detects damage; it is not a substitute for release admission.
 7. Kill its process group after failure or timeout, then try the other valid slot.
 8. Independently check the terminal application journal, exact application and
    known-good pointers, absence of install inhibit, and restored integration
-   contents, modes, ownership, links, and required removals. A zero exit alone fails
+   contents, modes, ownership, links, required removals, and saved service states.
+   Capture those requirements before running either slot. At boot, check restored
+   enablement and stopped services; application startup follows the recovery gate.
+   At runtime, also require saved active services and auxiliary units to run.
+   A zero exit alone fails
    this gate. Only then write the exact selection into `/run` and clear the trial flag.
 9. Release the boot gate. All controller consumers use that selection.
 10. Each consumer resolves once under the start lock, then executes that slot's command.
 11. The independent timer checks broker readiness and its live PID and hash handshake.
+    Each complete handshake has one two-second monotonic deadline, capped by the
+    readiness deadline. Every receive uses only the remaining time.
 12. On failure, stop consumers, prefer the other valid slot, then retry the current
     slot if needed. Recovery has one 380-second deadline. Start the broker only
     after recovery passes. Every timer run checks recovery before the handshake;
@@ -88,7 +94,7 @@ The trial selects the candidate only in `/run`. It stops consumers first. It
 creates fresh boot-, application-, and controller-bound evidence context, removes
 old readiness evidence, runs normal controller validation and offline discovery,
 and runs the candidate's actual recovery CLI against a staged interrupted
-application journal and nonempty snapshot with a file to restore and an extra
+application journal and nonempty snapshot with active services, a file to restore and an extra
 drop-in to remove. The selector captures required restoration before the command
 and checks it after the command, as well as the pointer, journal, and inhibit.
 Recovery, install, and supervisor routes retain the existing rollback snapshot
@@ -103,7 +109,8 @@ and leaves recovery pending. Retry repeats the barrier and final directory
 flush, even if the record is already absent. A
 completed rollback therefore cannot undo a later setup-mode request. Remaining
 backup data is pruned at the next application commit. A terminal but incomplete rollback is retried.
-The staged test substitutes only systemctl; it cannot stop
+The staged test runs non-boot runtime recovery and checks both files and observed
+service activity and enablement. It substitutes only systemctl; it cannot stop
 live services. It then starts the broker. Readiness retries within the trial deadline. Root Unix
 peer credentials, stable systemd PID, exact version and hashes must match.
 Fresh button and local poller evidence from the selected application processes
@@ -115,8 +122,12 @@ cannot authorize `GOOD`.
 
 Recovery and probe output is discarded. Required trial and systemctl results
 are read in chunks, with a 64 KiB limit and an independent deadline. Exceeding
-either limit kills the command's process group before fallback. Transient trial
-units also retain their systemd runtime limit.
+either limit kills the command's process group. Controller and discovery trials
+use fixed transient unit names in `system.slice`, with a 20-second runtime limit,
+five-second stop limit, and control-group kill. Cleanup stops the unit on success
+and failure. Before fallback, verify that no start job remains and the cgroup is
+empty or gone. Recovery repeats this barrier after a killed publisher. A missing
+cgroup alone cannot discharge a pending start job.
 
 Only the frozen selector publishes `GOOD`, after rechecking module bytes. It
 flushes the record and directory before returning success. A cut before this
@@ -171,6 +182,10 @@ filesystem recovery. Readiness uses the real button and wacli producer paths,
 AF_UNIX IPC, and broker dispatch with Cloud construction blocked. The kernel
 peer identity and service PID remain synthetic. The staged recovery trial also
 substitutes service state; it does not validate native service recovery.
+The complete bootstrap shell test uses real current source, globs, file installs,
+key and policy code, and layout conversion in a redirected root. Pi identity,
+root ownership, accounts, and systemd remain host substitutes. A wacli first
+install is rejected before controller mutation.
 Tests do not prove native
 service ordering, cgroup termination, timer recovery after repeated errors,
 full ext4 blocks/inodes, or Pi SD flush behavior.
@@ -179,6 +194,13 @@ Before first installation, native Linux/systemd and real Pi power-cut acceptance
 remain required. Physical Cloud and wacli send/play/reply, NFC, quiet hours,
 listened notices, audio, GPIO, Wi-Fi and WhatsApp checks remain separate.
 No Cloud request is part of local selection or publication.
+
+On an isolated Linux system with systemd and cgroup v2, run the native forcing
+case as root with `MSGBOX_NATIVE_SYSTEMD_TESTS=1` and
+`python3 -m unittest discover -s tests -p test_controller_selector_systemd.py -v`.
+It uses real `systemd-run`, exceeds the output limit, and checks that the
+transient cgroup and a descendant that ignores SIGTERM stop before fallback.
+This case skips on macOS; host checks do not establish that result.
 
 BOX-10 bench list: verify native systemd ordering and sandbox restrictions;
 verify cgroup termination of hung and killed trials; run the real timer through

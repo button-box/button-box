@@ -24,6 +24,8 @@ MODULES = ('bounded_update.py', 'health-probe.py', 'release_verify.py', 'trust_u
 CONSUMERS = tuple('messagebox-update-' + n + '.service' for n in ('discovery', 'install', 'controller', 'supervisor'))
 COMMANDS = {'controller': ('update_controller.py', 'serve'), 'discovery': ('update_discovery.py',),
             'install': ('update_controller.py', 'install'), 'supervisor': ('bounded_update.py', 'supervise')}
+TRIAL_UNITS = {'update_controller.py': 'messagebox-controller-trial.service',
+               'update_discovery.py': 'messagebox-discovery-trial.service'}
 
 
 def canonical(value):
@@ -233,11 +235,11 @@ def bounded_run(command, *, timeout, stdout=subprocess.DEVNULL, **kwargs):
                     if len(output) > 65536:
                         raise ValueError('controller output limit')
             process.wait(timeout=max(0, deadline - time.monotonic()))
-        if process.returncode:
+        if process.returncode and kwargs.get('check') is not False:
             if kwargs.get('check'):
                 raise subprocess.CalledProcessError(process.returncode, command)
             raise ValueError('controller command failed')
-        return subprocess.CompletedProcess(command, 0, bytes(output).decode() if kwargs.get('text') else bytes(output))
+        return subprocess.CompletedProcess(command, process.returncode, bytes(output).decode() if kwargs.get('text') else bytes(output))
     finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -248,8 +250,8 @@ def bounded_run(command, *, timeout, stdout=subprocess.DEVNULL, **kwargs):
             process.stdout.close()
 
 
-def call(run, command, timeout=15, *, output=False):
-    return (bounded_run if run is subprocess.run else run)(command, check=True,
+def call(run, command, timeout=15, *, output=False, check=True):
+    return (bounded_run if run is subprocess.run else run)(command, check=check,
         stdout=subprocess.PIPE if output else subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True, timeout=timeout)
 
 
@@ -290,6 +292,43 @@ def restoration(root):
         if record['kind'] == 'file' and digest(read(root, backup + '/files/' + record['backup'], 2 * 1024 * 1024, 0o600, minimum=0)) != record['sha256']:
             raise ValueError('damaged restoration proof')
     return records
+
+
+def service_restoration(root):
+    journal = document(read(root, 'var/lib/button-box-update/journal.json', 1024 * 1024, 0o600))
+    if journal['phase'] == 'committed':
+        return None
+    try:
+        return document(read(root, journal['backup'].lstrip('/') + '/state.json', 2 * 1024 * 1024, 0o600))
+    except FileNotFoundError:
+        if journal['phase'] != 'rolled_back':
+            raise
+
+
+def recovered_services(root, required, run, *, boot=False, deadline=None):
+    if required is None:
+        return
+    deadline = min(deadline or float('inf'), time.monotonic() + 15)
+    states = required['units']
+    generated = 'comitup.service' if (Path(root) / 'etc/messagebox-onboarding/enabled').exists() else 'messagebox.target'
+    for unit in (*states, *required.get('auxiliary_units', ())):
+        if not re.fullmatch(r'[A-Za-z0-9_.:@-]+\.(service|target|timer|path)', unit):
+            raise ValueError('unsafe restoration unit')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('service restoration deadline')
+        actual = dict(line.split('=', 1) for line in call(run, ['systemctl', 'show', unit,
+            '--property=ActiveState,UnitFileState'], remaining, output=True).stdout.splitlines() if '=' in line)
+        expected = states.get(unit, {'active': 'active'})
+        enabled = actual.get('UnitFileState')
+        if 'enabled' in expected and enabled != expected['enabled'] and not (unit == generated and enabled == 'enabled-runtime'):
+            raise ValueError('service enablement not restored')
+        active = actual.get('ActiveState')
+        allowed = {'inactive', 'failed'} if boot or expected['active'] == 'failed' else {expected['active']}
+        if not boot and unit == 'comitup-web.service' and states['comitup.service']['active'] == 'active':
+            allowed = {'active', 'inactive', 'failed'}  # ComItUp owns its optional portal.
+        if active not in allowed:
+            raise ValueError('service activity not restored')
 
 
 def recovered(root, required=None):
@@ -377,8 +416,11 @@ def finish_recovery(root, *, step=checkpoint):
 def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True, deadline=None):
     deadline = deadline or time.monotonic() + 380
     with lock(root, 'gate'):
+        for unit in TRIAL_UNITS.values():
+            stop_trial(root, unit, run)
         stop(root, run)
         required = restoration(root)
+        services = service_restoration(root)
         choices = sorted(valid(root), key=lambda item: item[0] not in preferred)
         for slot, value in choices:
             if slot in excluded:
@@ -389,6 +431,7 @@ def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True,
                     break
                 execute(root, slot, ('bounded_update.py', 'recover', *(('--boot',) if boot else ())), min(180, remaining))
                 recovered(root, required)
+                recovered_services(root, services, run, boot=boot, deadline=deadline)
                 finish_recovery(root)
                 choose(root, slot, value)
                 (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
@@ -398,18 +441,26 @@ def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True,
     raise ValueError('no working accepted controller')
 
 
-def probe(root, value, run):
-    before = call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], output=True).stdout
+def probe(root, value, run, *, deadline=None):
+    deadline = min(deadline or float('inf'), time.monotonic() + 2)
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError('broker handshake deadline')
+        return value
+    before = call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], remaining(), output=True).stdout
     pid = int(before.strip().split('=')[1])
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(2)
+        connection.settimeout(remaining())
         connection.connect(str(Path(root) / 'run/messagebox-update/control.sock'))
         peer, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if uid != 0 or peer != pid or pid <= 0:
             raise ValueError('wrong broker process')
+        connection.settimeout(remaining())
         connection.sendall(b'{"command":"controller_handshake"}\n')
         raw = bytearray()
         while b'\n' not in raw and len(raw) <= 16384:
+            connection.settimeout(remaining())
             chunk = connection.recv(4096)
             if not chunk:
                 break
@@ -418,7 +469,7 @@ def probe(root, value, run):
     if not value['legacy'] and answer != {'protocol': 1, 'version': value['version'],
                                          'hashes': {n: v[1] for n, v in value['files'].items()}}:
         raise ValueError('wrong broker identity')
-    if before != call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], output=True).stdout:
+    if before != call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], remaining(), output=True).stdout:
         raise ValueError('broker changed')
 
 
@@ -430,11 +481,12 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
                 if current['trial']:
                     raise ValueError('interrupted trial')
                 recovered(root)  # A healthy broker cannot discharge recovery.
+                recovered_services(root, service_restoration(root), run)
                 finish_recovery(root)
                 deadline = time.monotonic() + 5
                 while True:
                     try:
-                        probe(root, current['identity'], run)
+                        probe(root, current['identity'], run, deadline=deadline)
                         return
                     except (OSError, ValueError, subprocess.SubprocessError):
                         if time.monotonic() >= deadline:
@@ -455,9 +507,50 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
         return  # The bounded publication service owns a live trial.
 
 
+def stop_trial(root, unit, run):
+    # systemd-run is only a client. Recovery must wait for the actual cgroup.
+    if Path(root) == Path('/') and not Path('/sys/fs/cgroup/cgroup.controllers').exists():
+        raise ValueError('trial cleanup requires cgroup v2')
+    try:
+        call(run, ['systemctl', 'stop', unit], 10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        try:
+            call(run, ['systemctl', 'kill', '--kill-whom=all', '--signal=KILL', unit], 5)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass  # An unloaded unit is safe only if its cgroup is empty/gone.
+    events = Path(root) / 'sys/fs/cgroup/system.slice' / unit / 'cgroup.events'
+    deadline = time.monotonic() + 5
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('trial cgroup still populated or unit still pending')
+        state = dict(line.split('=', 1) for line in call(run, ['systemctl', 'show', unit,
+            '--all', '--property=LoadState,ActiveState,Job'], remaining, output=True, check=False).stdout.splitlines() if '=' in line)
+        stopped = (state.get('LoadState') in {'loaded', 'not-found'}
+                   and state.get('ActiveState') in {'inactive', 'failed'} and state.get('Job') in {'', '0'})
+        try:
+            with events.open('rb') as stream:
+                if stopped and b'populated 0' in stream.read(4096).splitlines():
+                    return
+        except FileNotFoundError:
+            if stopped:
+                return
+        time.sleep(0.1)
+
+
+def trial_command(root, slot, name, argument, run):
+    unit = TRIAL_UNITS[name]
+    stop_trial(root, unit, run)
+    try:
+        return call(run, sandbox(root, slot, name, argument), 25, output=True).stdout
+    finally:
+        stop_trial(root, unit, run)
+
+
 def sandbox(root, slot, name, argument):
     properties = ['NoNewPrivileges=yes', 'PrivateTmp=yes', 'ProtectSystem=strict',
-                  'ProtectHome=yes', 'RuntimeMaxSec=20']
+                  'ProtectHome=yes', 'RuntimeMaxSec=20', 'TimeoutStopSec=5',
+                  'KillMode=control-group', 'SendSIGKILL=yes']
     if name == 'update_discovery.py':
         properties += ['User=messagebox-update', 'Group=messagebox-update',
                        'SupplementaryGroups=messagebox-settings', 'PrivateDevices=yes', 'UMask=0027',
@@ -467,7 +560,8 @@ def sandbox(root, slot, name, argument):
         properties += ['SupplementaryGroups=messagebox-update', 'UMask=0022',
                        'ReadWritePaths=/var/lib/button-box-update /run/messagebox-update /etc/button-box-update',
                        'CapabilityBoundingSet=CAP_CHOWN', 'RestrictAddressFamilies=AF_UNIX']
-    command = ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec']
+    command = ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec',
+               '--unit=' + TRIAL_UNITS[name], '--slice=system.slice']
     for prop in properties:
         command += ['-p', prop]
     return [*command, '--', *python_command(root, slot, (name, argument), '/usr/bin/python3')]
@@ -491,17 +585,17 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
     for name in ('button', 'local'):
         (Path(root) / ('run/messagebox-update/' + name + '.json')).unlink(missing_ok=True)
         step('unlink_evidence', name)
-    output = document(call(run, sandbox(root, slot, 'update_controller.py', 'self-test'), 25, output=True).stdout)
+    output = document(trial_command(root, slot, 'update_controller.py', 'self-test', run))
     if output != {'protocol': 1, 'version': value['version'], 'hashes': {n: v[1] for n, v in value['files'].items()}}:
         raise ValueError('trial self-test identity')
-    discovery = document(call(run, sandbox(root, slot, 'update_discovery.py', '--self-test'), 25, output=True).stdout)
+    discovery = document(trial_command(root, slot, 'update_discovery.py', '--self-test', run))
     if discovery != {'protocol': 1, 'dry_run': True}:
         raise ValueError('discovery trial result')
     recovery_trial(root, slot, execute)
     call(run, ['systemctl', 'start', 'messagebox-update-controller.service'])
     while time.monotonic() < deadline:
         try:
-            probe(root, value, run)
+            probe(root, value, run, deadline=deadline)
             for name, unit in (('button', 'messagebox-button.service'), ('local', 'messagebox-poller.service')):
                 evidence = document(read(root, 'run/messagebox-update/' + name + '.json'))
                 pid = call(run, ['systemctl', 'show', unit, '--property=MainPID'], output=True).stdout.strip().split('=')[1]
@@ -540,6 +634,8 @@ def recovery_trial(root, slot, execute):
         mkdir(snapshot / 'files')
         (snapshot / 'files').chmod(0o700)
         units = {n: {'active': 'inactive', 'enabled': 'disabled'} for n in journal['units']}
+        units['messagebox-button.service'] = {'active': 'active', 'enabled': 'enabled'}
+        units['messagebox-poller.service']['active'] = 'active'
         content = b'[Service]\nExecStart=/usr/bin/true\n'
         write(snapshot / 'files/unit', content, mode=0o600, durable=False)
         write(snapshot / 'files/empty', b'', mode=0o600, durable=False)
@@ -554,13 +650,27 @@ def recovery_trial(root, slot, execute):
                 record['gid'] = (stage / record['path'].lstrip('/')).stat().st_gid
         write(snapshot / 'state.json', canonical({'format': 1, 'files': records, 'units': units}), mode=0o600, durable=False)
         required = restoration(stage)
-        program = ("import sys,subprocess;sys.path.insert(0,sys.argv[1]);import bounded_update as u;"
-                   "service=lambda c,**k:subprocess.CompletedProcess(c,0,"
-                   "'inactive\\n' if c[1]=='is-active' else 'disabled\\n' if c[1]=='is-enabled' else '');"
+        services = service_restoration(stage)
+        observed = stage / 'run/services.json'
+        mkdir(observed.parent)
+        program = ("import sys,subprocess,json;from pathlib import Path;sys.path.insert(0,sys.argv[1]);import bounded_update as u;"
+                   "states=json.loads(" + repr(canonical(units).decode()) + ");"
+                   "\ndef service(c,**k):\n"
+                   " op=c[1];text=''\n"
+                   " if op in ('is-active','is-enabled'): text=states[c[2]]['active' if op=='is-active' else 'enabled']+'\\n'\n"
+                   " elif op=='stop':\n  for n in c[2:]: states[n]['active']='inactive'\n"
+                   " elif op=='--job-mode=ignore-dependencies': states[c[3]]['active']='active'\n"
+                   " elif op in ('enable','disable'):\n  for n in c[2:]: states[n]['enabled']='enabled' if op=='enable' else 'disabled'\n"
+                   " elif op not in ('daemon-reload','reset-failed','show'): raise ValueError('trial service command')\n"
+                   " return subprocess.CompletedProcess(c,0,text)\n"
                    "original=u.recover_transaction;u.recover_transaction=lambda **k:original(run=service,**k);"
-                   "u.main(['--root',sys.argv[2],'recover','--boot'])")
+                   "u.main(['--root',sys.argv[2],'recover']);"
+                   "result=Path(" + repr(str(observed)) + ");result.write_text(json.dumps(states));result.chmod(0o644)")
         execute(root, slot, ('-c', program, str(Path(root) / slot), str(stage)), 25)
         recovered(stage, required)
+        actual = document(read(stage, 'run/services.json'))
+        recovered_services(stage, services, lambda c,**k: subprocess.CompletedProcess(c,0,
+            'ActiveState=' + actual[c[2]]['active'] + '\nUnitFileState=' + actual[c[2]]['enabled']))
 
 
 def admit(root, source):

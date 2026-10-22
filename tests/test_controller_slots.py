@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import socket
@@ -30,6 +31,14 @@ from test_release_tooling import build
 from test_update_discovery import PLATFORM, verify
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextlib.contextmanager
+def fast_clock():
+    elapsed = [0.0]
+    with mock.patch.object(selector.time, 'monotonic', side_effect=lambda: elapsed[0]), \
+            mock.patch.object(selector.time, 'sleep', side_effect=lambda n: elapsed.__setitem__(0,elapsed[0]+n)):
+        yield
 
 
 class DurableView:
@@ -129,7 +138,12 @@ class Host:
         self.commands.append(command)
         if command[0] == 'systemctl':
             if command[1] == 'show':
-                if '--property=ExecStart' in command:
+                if '--property=LoadState,ActiveState,Job' in command:
+                    text = 'LoadState=not-found\nActiveState=inactive\nJob='
+                elif '--property=ActiveState,UnitFileState' in command:
+                    state = self.recovery_run.__self__.states[command[2]]
+                    text = 'ActiveState=' + state['active'] + '\nUnitFileState=' + state['enabled']
+                elif '--property=ExecStart' in command:
                     path = 'etc/systemd/system/' + command[2] + '.d/' + slots.ROUTE
                     argument = slots.routes()[path].decode().split('ExecStart=')[-1].splitlines()[0]
                     text = 'ExecStart={ path=/usr/bin/python3 ; argv[]=' + argument + ' ; ignore_errors=no ; }'
@@ -191,7 +205,7 @@ class Host:
             return self.health_observed.encode()
         return selector.execute(root, slot, arguments, timeout)
 
-    def probe(self, root, value, run):
+    def probe(self, root, value, run, **kwargs):
         self.probes += 1
         if self.probes <= self.not_ready:
             raise OSError('stale or delayed broker')
@@ -298,7 +312,7 @@ class SlotTests(unittest.TestCase):
         slots.bootstrap(self.root, run=self.host)
         self.old = self.slot_bytes(selector.SLOTS[0])
 
-    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False, restore_defect=None, flood=None):
+    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False, restore_defect=None, flood=None, no_start=False):
         release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
         source = self.base / 'candidate'
         for name in selector.MODULES:
@@ -312,6 +326,9 @@ class SlotTests(unittest.TestCase):
             if no_recovery and name == 'bounded_update.py':
                 raw = raw.replace(b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):',
                                   b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):\n    return None')
+            if no_start and name == 'bounded_update.py':
+                raw = raw.replace(b'_external_restore(root, journal, run, start=start)',
+                                  b'_external_restore(root, journal, run, start=False)')
             if restore_defect and name == 'bounded_update.py':
                 raw += ("\noriginal_restore=_restore_record\ndef _restore_record(record,path,backup):\n"
                         + ("    return\n" if restore_defect == 'noop' else
@@ -344,7 +361,7 @@ class SlotTests(unittest.TestCase):
 
     def publish(self, **kwargs):
         return slots.publish(self.root, run=self.host, platform=PLATFORM,
-                             trial_options={'execute': self.host.execute, 'probe': self.host.probe, 'duration': 2}, **kwargs)
+                             trial_options={'execute': self.host.execute, 'probe': self.host.probe, 'duration': 5}, **kwargs)
 
     def boot(self, *, excluded=()):
         shutil.rmtree(self.root / selector.RUN, ignore_errors=True)
@@ -451,7 +468,7 @@ class SlotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'trial failed'):
             self.publish()
         self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
-        selector.check(self.root, self.host, probe=lambda *a: None, execute=self.host.execute)
+        selector.check(self.root, self.host, probe=lambda *a,**k: None, execute=self.host.execute)
         self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
         with self.assertRaisesRegex(ValueError, 'consumed'):
             self.publish()
@@ -507,6 +524,114 @@ class SlotTests(unittest.TestCase):
             self.publish()
         self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
         self.assertEqual(self.boot(), selector.SLOTS[0])
+
+    def test_signed_no_start_recovery_fails_runtime_trial_and_uses_other_slot(self):
+        release = self.stage(no_start=True)
+        with self.assertRaisesRegex(ValueError, 'service activity not restored'):
+            self.publish()
+        previous = os.umask(0o002)
+        try:
+            with self.assertRaisesRegex(ValueError, 'service activity not restored'):
+                selector.recovery_trial(self.root, selector.SLOTS[1], self.host.execute)
+        finally:
+            os.umask(previous)
+        self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
+        proof = verify.verify_retained_controller(release, self.root / 'etc/button-box-update/release-keys',
+            application_version='v0.3.13', platform=PLATFORM)
+        identity = slots.identity(selector, self.root, selector.SLOTS[1], generation=7, version='1.3.0',
+                                  descriptor=proof['descriptor_sha256'], legacy=False)
+        # Model a previously accepted defect. Its signature and every hash are real.
+        selector.write(self.root / selector.SLOTS[1] / 'GOOD', selector.envelope(identity))
+        self.interrupted_application()
+        services = selector.service_restoration(self.root)
+        self.assertEqual(services['units']['messagebox-button.service']['active'], 'active')
+        snapshot = self.root / self.box.worker.read_state(self.root, 'journal.json')['backup'].lstrip('/') / 'state.json'
+        attempts = []
+        def execute(root, slot, arguments, timeout):
+            if attempts:
+                self.assertTrue(snapshot.exists(), 'failed service restoration must retain proof')
+            attempts.append(slot)
+            return self.host.execute(root, slot, arguments, timeout)
+        self.assertEqual(selector.recover(self.root, self.host, boot=False, execute=execute), selector.SLOTS[0])
+        self.assertEqual(attempts, list(reversed(selector.SLOTS)))
+        selector.recovered_services(self.root, services, self.host)
+        self.assertFalse(snapshot.exists())
+
+    def test_boot_rejects_wrong_enablement_before_retiring_proof(self):
+        self.publish()
+        self.interrupted_application()
+        services = selector.service_restoration(self.root)
+        attempts = []
+        def execute(root, slot, arguments, timeout):
+            attempts.append(slot)
+            answer = self.host.execute(root, slot, arguments, timeout)
+            if slot == selector.SLOTS[1]:
+                state = self.box.states['messagebox.target']
+                state['enabled'] = 'disabled' if state['enabled'] == 'enabled' else 'enabled'
+            return answer
+        self.assertEqual(selector.recover(self.root, self.host, execute=execute), selector.SLOTS[0])
+        self.assertEqual(attempts, list(reversed(selector.SLOTS)))
+        selector.recovered_services(self.root, services, self.host, boot=True)
+
+    def test_populated_transient_cgroup_blocks_recovery_before_any_worker_runs(self):
+        unit = selector.TRIAL_UNITS['update_controller.py']
+        events = write(self.root / 'sys/fs/cgroup/system.slice' / unit / 'cgroup.events', b'populated 1\n')
+        for pending in (False, True):
+            with self.subTest(pending=pending):
+                clock = [0.0]
+                if pending:
+                    events.unlink()
+                def run(c, **k):
+                    if pending and '--property=LoadState,ActiveState,Job' in c:
+                        return subprocess.CompletedProcess(c,0,'LoadState=loaded\nActiveState=inactive\nJob=9')
+                    return self.host(c, **k)
+                with mock.patch.object(selector.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        mock.patch.object(selector.time, 'sleep', side_effect=lambda n: clock.__setitem__(0,clock[0]+n)), \
+                        self.assertRaisesRegex(ValueError, 'trial cgroup still populated'):
+                    selector.recover(self.root, run, execute=self.host.execute)
+                self.assertEqual(self.host.recoveries, [])
+
+    def test_slow_authenticated_broker_without_newline_falls_back_within_deadline(self):
+        self.publish()
+        path = self.root / 'run/messagebox-update/control.sock'
+        path.parent.mkdir(exist_ok=True)
+        socket_type = socket.socket
+        stop = threading.Event()
+        class PeerSocket:
+            def __init__(self, *args, **kwargs):
+                self.connection = socket_type(*args, **kwargs)
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+            def getsockopt(self, *args):
+                return struct.pack('3i', os.getpid(), 0, 0)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.connection.close()
+        with socket_type(socket.AF_UNIX) as server:
+            server.bind(str(path))
+            server.listen(4)
+            server.settimeout(0.1)
+            def trickle():
+                while not stop.is_set():
+                    try:
+                        with server.accept()[0] as connection:
+                            while not stop.wait(0.1):
+                                connection.sendall(b'x')
+                    except (OSError, TimeoutError):
+                        pass
+            thread = threading.Thread(target=trickle)
+            thread.start()
+            try:
+                started = time.monotonic()
+                with mock.patch.object(socket, 'socket', PeerSocket), \
+                        mock.patch.object(socket, 'SO_PEERCRED', 17, create=True):
+                    selector.check(self.root, self.host, execute=self.host.execute)
+                self.assertLess(time.monotonic() - started, 6)
+                self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
+            finally:
+                stop.set()
+                thread.join(2)
 
     def interrupted_application(self):
         self.box.data.update(version='v0.3.14', commit='d' * 40)
@@ -826,7 +951,7 @@ class SlotTests(unittest.TestCase):
             attempted.append((slot, timeout))
             return self.host.execute(root, slot, arguments, timeout)
         for _ in range(3):
-            with mock.patch.object(selector.time, 'monotonic', side_effect=range(0, 1000, 10)):
+            with fast_clock():
                 selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('broker dead')),
                                execute=execute)
             self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[1])
@@ -1008,7 +1133,7 @@ class SlotTests(unittest.TestCase):
         os.close(ready_w)
         try:
             self.assertEqual(os.read(ready_r, 5), b'ready')
-            self.assertIsNone(selector.check(self.root, self.host, probe=lambda *a: self.fail('overlapping check'), execute=self.host.execute))
+            self.assertIsNone(selector.check(self.root, self.host, probe=lambda *a,**k: self.fail('overlapping check'), execute=self.host.execute))
             with self.assertRaises(BlockingIOError):
                 self.publish()
         finally:
@@ -1030,7 +1155,7 @@ class SlotTests(unittest.TestCase):
             observed.append(arguments)
             self.box.worker.recover_transaction(root=root, run=self.box.run, start='--boot' not in arguments)
             return b''
-        with mock.patch.object(selector.time, 'monotonic', side_effect=range(0, 1000, 10)):
+        with fast_clock():
             selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('dead broker')), execute=execute)
         self.assertEqual(observed, [('bounded_update.py', 'recover')])
         self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'rolled_back')
@@ -1098,20 +1223,20 @@ class SlotTests(unittest.TestCase):
         for state in ('active', 'activating', 'deactivating', 'reloading'):
             self.host.install_active = state
             self.host.commands.clear()
-            with slots.admission_lock(self.root), mock.patch.object(selector.time, 'monotonic', side_effect=range(0, 1000, 10)):
+            with slots.admission_lock(self.root), fast_clock():
                 selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('busy broker')), execute=self.host.execute)
             self.assertFalse([c for c in self.host.commands if c[:2] == ['systemctl', 'stop']])
             self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
 
     def test_timer_retries_readiness_and_restarts_the_only_valid_slot(self):
         attempts = []
-        def delayed(*a):
+        def delayed(*a,**k):
             attempts.append(1)
             if len(attempts) < 3:
                 raise OSError('socket not bound yet')
         selector.check(self.root, self.host, probe=delayed, execute=self.host.execute)
         self.assertEqual(len(attempts), 3)
-        with mock.patch.object(selector.time, 'monotonic', side_effect=range(0, 1000, 10)):
+        with fast_clock():
             selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('dead broker')), execute=self.host.execute)
         self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
         self.assertIn(['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'], self.host.commands)
@@ -1194,7 +1319,7 @@ class SlotTests(unittest.TestCase):
             self.publish()
         self.assertTrue((self.root / 'run/hung-trial').exists())
         self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
-        selector.check(self.root, self.host, probe=lambda *a: None, execute=self.host.execute)
+        selector.check(self.root, self.host, probe=lambda *a,**k: None, execute=self.host.execute)
         self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
         with self.assertRaisesRegex(ValueError, 'consumed'):
             self.publish()
@@ -1249,18 +1374,18 @@ class SlotTests(unittest.TestCase):
                 "from messagebox import controller_slots as s\nfrom test_controller_slots import Host\n"
                 "from test_update_discovery import PLATFORM\nroot=Path(" + repr(str(self.root)) + ")\n"
                 "host=Host(root)\n"
-                "def hang(*a):\n os.write(" + str(ready_w) + ",b'ready')\n time.sleep(60)\n"
+                "def hang(*a,**k):\n os.write(" + str(ready_w) + ",b'ready')\n time.sleep(60)\n"
                 "s.publish(root,run=host,platform=PLATFORM,trial_options={'probe':hang,'execute':host.execute})\n")
         child = subprocess.Popen([sys.executable, '-I', '-B', '-c', code], pass_fds=(ready_w,))
         os.close(ready_w)
         try:
             self.assertEqual(os.read(ready_r, 5), b'ready')
-            selector.check(self.root, self.host, probe=lambda *a: self.fail('timer overlapped live trial'), execute=self.host.execute)
+            selector.check(self.root, self.host, probe=lambda *a,**k: self.fail('timer overlapped live trial'), execute=self.host.execute)
             with self.assertRaises(BlockingIOError):
                 self.publish()
             child.kill()
             child.wait(timeout=5)
-            selector.check(self.root, self.host, probe=lambda *a: None, execute=self.host.execute)
+            selector.check(self.root, self.host, probe=lambda *a,**k: None, execute=self.host.execute)
             self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
             self.assertEqual(self.slot_bytes(selector.SLOTS[0]), self.old)
         finally:
