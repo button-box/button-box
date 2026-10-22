@@ -30,7 +30,7 @@ class VoiceCache:
     def __init__(self, directory):
         self.directory = Path(directory)
 
-    def download(self, client, payload, *, voice_pack=None, text_hash=None):
+    def download(self, client, payload, *, voice_pack=None, text_hash=None, deadline=None):
         if payload.get("use_fallback"):
             return ""
         clip_id = payload.get("clip_id")
@@ -54,8 +54,11 @@ class VoiceCache:
         try:
             if path.is_symlink():
                 return ""
+            options = {} if deadline is None else {"deadline": deadline}
             audio = (path.read_bytes() if path.exists() and path.stat().st_size <= MAX_CLIP_BYTES
-                     else client.media(payload.get("media_url"), limit=MAX_CLIP_BYTES))
+                     else client.media(payload.get("media_url"), limit=MAX_CLIP_BYTES, **options))
+            if deadline is not None and time.monotonic() >= deadline:
+                return ""
             if not audio or len(audio) > MAX_CLIP_BYTES or hashlib.sha256(audio).hexdigest() != payload["sha256"]:
                 return ""
             with wave.open(io.BytesIO(audio), "rb") as sound:

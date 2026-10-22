@@ -10,6 +10,7 @@ import re
 import secrets
 import stat
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -194,7 +195,7 @@ class CloudDeviceClient:
         return cls(api_url, (identity_store or DeviceIdentityStore()).load_or_create())
 
     def request(self, path: str, *, method="GET", body=None, limit=128 * 1024,
-                ack_gone=False, voice_not_found=False) -> bytes:
+                ack_gone=False, voice_not_found=False, deadline=None) -> bytes:
         if not path.startswith("/device/") or ".." in path or "#" in path:
             raise CloudDeviceError("device request path is invalid")
         headers = {
@@ -211,10 +212,32 @@ class CloudDeviceClient:
             self.api_url + path, data=data, headers=headers, method=method
         )
         try:
-            with self.open_request(request, timeout=30) as response:
+            timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+            if timeout <= 0:
+                raise CloudDeviceError("optional media deadline expired")
+            with self.open_request(request, timeout=timeout) as response:
                 if response.status != 200:
                     raise CloudDeviceError("cloud request was rejected")
-                payload = response.read(limit + 1)
+                if deadline is None:
+                    payload = response.read(limit + 1)
+                else:
+                    payload = bytearray()
+                    while len(payload) <= limit:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise CloudDeviceError("optional media deadline expired")
+                        # HTTPResponse.read1 performs at most one buffered/network
+                        # read. Bound each socket wait by the remaining budget.
+                        sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+                        if sock is not None:
+                            sock.settimeout(remaining)
+                        block = getattr(response, 'read1', response.read)(min(65536, limit + 1 - len(payload)))
+                        if time.monotonic() >= deadline:
+                            raise CloudDeviceError("optional media deadline expired")
+                        if not block:
+                            break
+                        payload.extend(block)
+                    payload = bytes(payload)
         except urllib.error.HTTPError as exc:
             try:
                 if exc.code == 429:
@@ -334,7 +357,7 @@ class CloudDeviceClient:
             raise CloudDeviceError("voice status is invalid")
         return result
 
-    def media(self, media_url: str, *, limit=10 * 1024 * 1024) -> bytes:
+    def media(self, media_url: str, *, limit=10 * 1024 * 1024, deadline=None) -> bytes:
         """Fetch only an authenticated media path on this exact API origin."""
         if not isinstance(media_url, str) or not media_url or len(media_url) > 2048:
             raise CloudDeviceError("media URL is invalid")
@@ -351,7 +374,8 @@ class CloudDeviceClient:
             or parsed.fragment
         ):
             raise CloudDeviceError("media URL is invalid")
-        return self.request(parsed.path.removeprefix("/cloud-api/v1"), limit=limit)
+        options = {} if deadline is None else {"deadline": deadline}
+        return self.request(parsed.path.removeprefix("/cloud-api/v1"), limit=limit, **options)
 
     def send_voice(
         self, ogg_path: str | Path, recipient_id: str, idempotency_key: str,

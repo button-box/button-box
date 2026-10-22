@@ -180,6 +180,7 @@ class VoiceRoundTwoTests(unittest.TestCase):
         with mock.patch.object(self.runtime, '_ack', side_effect=PowerLoss):
             with self.assertRaises(PowerLoss):
                 self.runtime._command(offered[0], NOW)
+                runtime_tests.finish_greeting(self.runtime)
         self.assertIn(OP, json.loads(self.runtime.state_path.read_text())['pending_optional_audio'])
         self.assertEqual(server.acks, [])
         # A still-fresh old capability cannot cause a second offer, even after restart.
@@ -318,6 +319,7 @@ class VoiceRoundTwoTests(unittest.TestCase):
         server.ack({'operation_id': 'unknown-operation', 'state': 'played'})
         self.assertEqual(server.row()[0], 'offered')
         self.runtime._command(offered, NOW)
+        runtime_tests.finish_greeting(self.runtime)
         self.runtime.flush_acks()
         self.assertEqual(server.row()[0], 'received')
         for unknown in ('played', 'failed'):

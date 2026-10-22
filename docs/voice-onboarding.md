@@ -65,6 +65,21 @@ Quiet hours defer setup instructions. Settings confirmations keep their short
 lifetime and are discarded during quiet hours. Missing or failed guide audio is
 silent. It does not prevent claim completion through WhatsApp.
 
+## Optional greeting download and voice
+
+The poller handles real notes before greeting commands. A greeting download runs
+in one background worker, with a three-second monotonic deadline. The poll thread
+never waits for it. Transfer reads use the remaining time budget. Late results
+are rejected. A stalled system resolver can keep that single worker occupied;
+no further greeting workers start until it exits. Real-note polling continues.
+
+Only the poll thread writes playback requests and ACKs. Before accepting a
+finished clip, it checks the deadline, current account, voice and expiry again.
+The queue record includes `voice_pack`. The button owner checks that field
+against the current voice before playback. Missing or different voices are
+rejected, including old queue records without a voice. Real notes and presses
+still cancel optional playback.
+
 ## Cloud greeting contract
 
 Cloud **MUST** implement all of these rules for `setup_greeting`. They are a

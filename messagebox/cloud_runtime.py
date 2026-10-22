@@ -7,6 +7,7 @@ import fcntl
 import io
 import json
 import os
+import queue
 import random
 import re
 import shutil
@@ -48,6 +49,7 @@ _ID = re.compile(r"^[A-Za-z0-9:._-]{1,240}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _PHONE = re.compile(r"^[1-9][0-9]{6,14}$")
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
+GREETING_DOWNLOAD_SECONDS = 3
 MAX_LISTENED_CLIP_BYTES = 1024 * 1024
 MAX_LISTENED_CLIPS = 32
 LISTENED_DIR = STATE_DIR / "listened-receipts"
@@ -221,6 +223,67 @@ class CloudRuntime:
         self.state.setdefault("pending_optional_audio", {})
         self._status_schedule = {}
         self._status_backoff_until = float("-inf")
+        self._greeting_download = None
+
+    def _start_greeting(self, item, scope, pack):
+        self._finish_greeting()
+        if self._greeting_download is not None:
+            if self._greeting_download["item"]["operation_id"] != item["operation_id"]:
+                self._ack(item["operation_id"], "rejected")
+            return
+        job = {"item": item, "scope": scope, "pack": pack,
+               "deadline": time.monotonic() + GREETING_DOWNLOAD_SECONDS,
+               "result": queue.Queue(maxsize=1), "finished": False}
+        client = self.client
+        # Only this worker fetches bytes. State, authorization and ACK writes
+        # stay on the poll thread. One occupied worker also bounds a stuck DNS
+        # resolver; no further optional workers start until it exits.
+        def fetch():
+            clip = ""
+            try:
+                clip = VoiceCache(self.state_path.parent / "voice-lines").download(
+                    client, item["payload"], voice_pack=pack,
+                    text_hash=item["payload"]["text_hash"], deadline=job["deadline"])
+            finally:
+                job["result"].put(clip)
+        job["thread"] = threading.Thread(target=fetch, name="setup-greeting", daemon=True)
+        self._greeting_download = job
+        job["thread"].start()
+
+    def _finish_greeting(self):
+        job = self._greeting_download
+        if job is None:
+            return
+        expired = time.monotonic() >= job["deadline"]
+        if "clip" not in job:
+            try:
+                job["clip"] = job["result"].get_nowait()
+            except queue.Empty:
+                if not expired:
+                    return
+                job["clip"] = ""
+        if not job["finished"]:
+            clip = "" if expired else job["clip"]
+            item = job["item"]
+            settings, warning = self.settings.load()
+            try:
+                scope = self._snapshot()["account_scope"]
+            except (CloudRuntimeError, OSError, ValueError):
+                scope = None
+            if (clip and not warning and settings["voice_pack"] == job["pack"]
+                    and scope == job["scope"]
+                    and self.server_now() < item["expires_at"]):
+                key = "setup_greeting:" + item["operation_id"]
+                self.optional_audio_requests.enqueue_for(key, "setup_greeting", job["scope"],
+                    item["expires_at"] - self.server_now(), clip=clip, voice_pack=job["pack"])
+                self.state["pending_optional_audio"][item["operation_id"]] = key
+                self._save()
+                self._ack(item["operation_id"], "received")
+            else:
+                self._ack(item["operation_id"], "rejected")
+            job["finished"] = True
+        if not job["thread"].is_alive():
+            self._greeting_download = None
 
     def quiet_state(self):
         state = self.silence.load()
@@ -1450,17 +1513,7 @@ class CloudRuntime:
                     or payload.get("content_type") != "audio/wav"):
                 self._ack(item["operation_id"], "rejected", error_code="setup_greeting_invalid")
                 return
-            clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload,
-                voice_pack=settings["voice_pack"], text_hash=payload["text_hash"])
-            if clip:
-                key = "setup_greeting:" + item["operation_id"]
-                self.optional_audio_requests.enqueue_for(key, "setup_greeting", snapshot["account_scope"],
-                    item["expires_at"] - self.server_now(), clip=clip)
-                self.state["pending_optional_audio"][item["operation_id"]] = key
-                self._save()
-                self._ack(item["operation_id"], "received")
-            else:
-                self._ack(item["operation_id"], "rejected")
+            self._start_greeting(item, snapshot["account_scope"], settings["voice_pack"])
             return
         if kind in {"quiet_now", "mute"}:
             key = "quiet_until" if kind == "quiet_now" else "muted"
@@ -1618,6 +1671,7 @@ class CloudRuntime:
             raise CloudRuntimeError("cloud command is unsupported")
 
     def _finish_previews(self):
+        self._finish_greeting()
         for pending, requests in ((self.state["pending_previews"], self.audio_requests),
                                   (self.state["pending_optional_audio"], self.optional_audio_requests)):
             for operation_id, key in list(pending.items()):
@@ -1726,7 +1780,7 @@ class CloudRuntime:
         # Silence must not wait behind media downloads. Deletion still precedes
         # all other work; cursors remain hints until each operation is ACKed.
         for item in sorted(items, key=lambda entry: (
-                {"mute": 0, "quiet_now": 0, "delete_message": 1}.get(entry.get("kind"), 2),
+                {"mute": 0, "quiet_now": 0, "delete_message": 1, "setup_greeting": 3}.get(entry.get("kind"), 2),
                 entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0

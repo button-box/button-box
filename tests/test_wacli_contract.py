@@ -17,6 +17,7 @@ from unittest import mock
 from test_button_settings_behavior import FakeLed, button_send
 from test_cloud_runtime import write_pcm_wav
 from messagebox import nfc, voicepoll
+from messagebox.audio_requests import OptionalAudioRequests
 from messagebox.contacts import ContactStore
 from messagebox.listened_receipts import ReceiptStore, load_listener_profiles
 from messagebox.nfc_state import AnnouncementStore, SelectionStore
@@ -149,6 +150,12 @@ class WacliContractTests(unittest.TestCase):
         self.send_to(context["contact"]["jid"])
 
     def test_receive_authorized_person_play_and_preserve_reply_route(self):
+        optional = OptionalAudioRequests(self.root / 'optional-audio', clock=lambda: 0)
+        optional.enqueue_for('setup_greeting:cloud-only', 'setup_greeting', 'a' * 64, 30,
+                             clip='cloud-only.wav', voice_pack='buttonbox')
+        with mock.patch.object(button_send, 'cloud_optional_audio_requests', optional, create=True):
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(optional.outcome('setup_greeting:cloud-only'), 'pending')
         message = {"MsgID": "synthetic-incoming", "ChatJID": PERSON, "SenderJID": PERSON,
                    "Timestamp": 101, "MediaType": "audio", "FromMe": False}
         denied = {**message, "MsgID": "synthetic-denied", "ChatJID": "15550000000@s.whatsapp.net"}

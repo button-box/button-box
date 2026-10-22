@@ -65,7 +65,7 @@ class FakeClient:
         return {"box_id": "box1234567890123456", "server_time": self.server_time,
                 "cursor": len(self.items), "items": self.items, "deleted": self.deleted}
 
-    def media(self, url, *, limit):
+    def media(self, url, *, limit, deadline=None):
         assert url.startswith(("https://button.box/cloud-api/v1/device/media/",
                                "https://button.box/cloud-api/v1/device/listened-media/"))
         return self.audio
@@ -73,6 +73,14 @@ class FakeClient:
     def ack(self, ack):
         self.acks.append(ack)
         return {"operation_id": ack["operation_id"], "accepted": True}
+
+
+def finish_greeting(runtime):
+    job = runtime._greeting_download
+    if job is not None:
+        job["thread"].join(2)
+        assert not job["thread"].is_alive(), "synthetic greeting fetch did not finish"
+        runtime._finish_greeting()
 
 
 def queued_audio(message, source, *, queue_dir):
@@ -1348,6 +1356,7 @@ class CloudRuntimeTests(unittest.TestCase):
             with self.assertRaises(CloudRuntimeError):
                 self.runtime._command(item, NOW)
         self.runtime._command(item, NOW)
+        finish_greeting(self.runtime)
         self.runtime.flush_acks()
         self.assertEqual(self.client.acks[-1]["state"], "received")
         with self.runtime.optional_audio_requests.owner():

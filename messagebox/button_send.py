@@ -1855,7 +1855,8 @@ def maybe_play_cloud_sound():
                     guide = cloud_setup.SetupGuide()
                     state = guide.load()
                     played = False
-                    if (not queued() and state and state["stage"] in {"names", "waiting_note"}
+                    if (request.get("voice_pack") == caregiver_settings()["voice_pack"]
+                            and not queued() and state and state["stage"] in {"names", "waiting_note"}
                             and not state.get("greeting_spoken") and not quiet_hours() and path.parent == cloud_runtime.STATE_FILE.parent / "voice-lines"
                             and sound_pack._playable_wav(path)):
                         guide.change("fields", greeting_spoken=True)

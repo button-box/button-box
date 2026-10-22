@@ -46,6 +46,22 @@ class _Response:
 
 
 class CloudIdentityTests(unittest.TestCase):
+    def test_optional_media_has_a_total_deadline_even_with_regular_bytes(self):
+        now = [0.0]
+        class SlowResponse(io.BytesIO):
+            status = 200
+            def read1(self, size):
+                now[0] += 1.1
+                return super().read(1)
+        opener = mock.Mock(return_value=SlowResponse(b'abcdef'))
+        client = CloudDeviceClient('https://example.invalid/cloud-api/v1',
+            {'device_id': 'synthetic-device-001', 'credential': 'x' * 43}, opener=opener)
+        with mock.patch('messagebox.cloud_device.time.monotonic', side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(CloudDeviceError, 'deadline expired'):
+                client.media('https://example.invalid/cloud-api/v1/device/media/greeting', deadline=3)
+        self.assertEqual(opener.call_args.kwargs['timeout'], 3)
+        self.assertLess(now[0], 4)
+
     def test_registration_and_heartbeat_use_only_installed_release_identity(self):
         identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(

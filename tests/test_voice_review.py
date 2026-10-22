@@ -2,12 +2,14 @@
 import hashlib
 import importlib.util
 import json
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox import cloud_setup
+from messagebox import cloud_setup, cloud_runtime
 from messagebox.settings import SettingsStore, defaults
 from messagebox.cloud_voice import VoiceCache
 import test_cloud_runtime as runtime_tests
@@ -27,9 +29,88 @@ class VoiceReviewTests(unittest.TestCase):
                             'sha256': hashlib.sha256(self.client.audio).hexdigest(),
                             'content_type': 'audio/wav', 'media_url': 'https://button.box/cloud-api/v1/device/media/greeting'}}
 
+    def test_stalled_greeting_never_blocks_a_real_note_or_another_poll(self):
+        self.runtime.heartbeat()
+        greeting = dict(self.greeting(), sequence=1, created_at=NOW)
+        entered, release = threading.Event(), threading.Event()
+        def media(url, *, limit, deadline=None):
+            if url.endswith('/greeting'):
+                self.assertIsNotNone(deadline)
+                entered.set()
+                release.wait(5)
+                return wav()
+            return b'OggS real note'
+        self.client.media = media
+        try:
+            self.client.items = [greeting]
+            started = time.monotonic()
+            self.runtime.poll_once()
+            self.assertLess(time.monotonic() - started, .5)
+            self.assertTrue(entered.wait(1))
+            job = self.runtime._greeting_download
+            real = runtime_tests.CloudRuntimeTests.audio_item(self)
+            real['operation_id'] = 'real-note-operation'
+            real['sequence'] = 2
+            real['payload']['sha256'] = hashlib.sha256(b'OggS real note').hexdigest()
+            self.client.items = [greeting, real]
+            started = time.monotonic()
+            self.runtime.poll_once()
+            self.assertLess(time.monotonic() - started, .5)
+            self.assertTrue(list(self.runtime.queue_dir.glob('*.wav')))
+            self.assertTrue(job['thread'].is_alive())
+            # Total deadline wins even while the synthetic network stays stuck.
+            with mock.patch.object(cloud_runtime.time, 'monotonic', return_value=job['deadline'] + 1):
+                self.runtime._finish_previews()
+            self.runtime.flush_acks()
+            self.assertEqual(next(a['state'] for a in self.client.acks if a['operation_id'] == OP), 'rejected')
+            self.assertFalse(list(self.runtime.optional_audio_requests.directory.glob('*.json')))
+            self.runtime.poll_once()
+            self.assertIs(self.runtime._greeting_download, job)  # No extra stuck workers.
+        finally:
+            release.set()
+            if self.runtime._greeting_download:
+                self.runtime._greeting_download['thread'].join(2)
+        self.runtime._finish_previews()
+        self.assertFalse(list(self.runtime.optional_audio_requests.directory.glob('*.json')))
+
+    def test_real_notes_run_before_a_greeting_in_the_same_poll(self):
+        self.runtime.heartbeat()
+        greeting = dict(self.greeting(), sequence=1, created_at=NOW)
+        real = runtime_tests.CloudRuntimeTests.audio_item(self)
+        real['operation_id'], real['sequence'] = 'real-note-operation', 2
+        self.client.items = [greeting, real]
+        with mock.patch.object(self.runtime, '_command') as command:
+            self.runtime.poll_once()
+        self.assertEqual([call.args[0]['kind'] for call in command.call_args_list], ['audio', 'setup_greeting'])
+
+    def test_greeting_queued_under_an_old_voice_is_skipped(self):
+        self.runtime.heartbeat()
+        self.runtime._command(self.greeting(), NOW)
+        runtime_tests.finish_greeting(self.runtime)
+        request_path = next(self.runtime.optional_audio_requests.directory.glob('*.json'))
+        self.assertEqual(json.loads(request_path.read_text())['voice_pack'], 'buttonbox')
+        guide = cloud_setup.SetupGuide()
+        guide.change('start')
+        guide.advance({'scan'}, 'names')
+        settings = {**defaults({}), 'voice_pack': 'jessica'}
+        with mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
+            cloud_optional_audio_requests=self.runtime.optional_audio_requests, _recording=False, _guided_active=False,
+            button=types.SimpleNamespace(is_pressed=False), create=True), \
+             mock.patch.object(button_send, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(button_send.cloud_runtime, 'account_scope', return_value='a' * 64), \
+             mock.patch.object(button_send, 'caregiver_settings', return_value=settings), \
+             mock.patch.object(button_send, 'quiet_hours', return_value=False), \
+             mock.patch.object(button_send, 'queued', return_value=[]), \
+             mock.patch.object(button_send, 'play_optional_greeting') as play:
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        play.assert_not_called()
+        self.assertFalse(guide.load().get('greeting_spoken'))
+        self.assertEqual(self.runtime.optional_audio_requests.outcome('setup_greeting:' + OP), 'rejected')
+
     def test_v0312_reader_finishes_legacy_audio_with_new_greeting_pending(self):
         self.runtime.heartbeat()
         self.runtime._command(self.greeting(), NOW)
+        runtime_tests.finish_greeting(self.runtime)
         self.runtime._command({'operation_id': 'voice-preview', 'kind': 'voice_preview',
             'expires_at': NOW + 60, 'payload': {'voice_pack': 'buttonbox'}}, NOW)
         self.runtime.audio_requests.enqueue_for('legacy', 'preview', 'a' * 64, 60, ringtone_id='hello_piano')
@@ -120,6 +201,7 @@ class VoiceReviewTests(unittest.TestCase):
     def test_idle_greeting_plays_through_button_owner_then_acknowledges(self):
         self.runtime.heartbeat()
         self.runtime._command(self.greeting(), NOW)
+        runtime_tests.finish_greeting(self.runtime)
         guide = cloud_setup.SetupGuide()
         guide.change('start')
         guide.advance({'scan'}, 'names')
@@ -144,6 +226,7 @@ class VoiceReviewTests(unittest.TestCase):
     def test_waiting_real_note_skips_greeting_without_consuming_a_press(self):
         self.runtime.heartbeat()
         self.runtime._command(self.greeting(), NOW)
+        runtime_tests.finish_greeting(self.runtime)
         guide = cloud_setup.SetupGuide()
         guide.change('start')
         guide.advance({'scan'}, 'names')
