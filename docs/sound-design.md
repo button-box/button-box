@@ -26,9 +26,9 @@ requires a fresh press after the prompt.
 | Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. With the Cloud setting `announce_messages_voice` on and outside quiet controls, the current pack's `voice-msg-start.wav` plays between the cue and the message. It is also used for voice previews. Then, on Cloud boxes, the message age phrase (`voice-age-<key>.wav`, for example "This one's from last night!") plays when the message is old enough; see `docs/architecture.md`. wacli plays the cue only. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply. |
 | Microphone opens after start cue | `capture_guided_recording`: synchronous rec_go playback completes before `arecord` is created. Cue failure never opens capture. |
-| Recording limit approaches | `RecordingLimitCue` in both capture modes: rec_limit at limit minus 5 s, nonblocking playback; it stays in the recording (Dan, 7 Oct: no words are cut). |
+| Recording limit approaches | Cloud Button Box: the bundled stop reminder at 40 s for a 60 s capture, including normal standalone recordings. Other voices and wacli keep rec_limit at limit minus 5 s. Playback is nonblocking and stays in the recording. |
 | Review starts | Cloud Button Box plays `voice-review.wav` ("Listen!"), the recording, then a rotating `voice-ask-send-1/2/3.wav` (for example "Love it! Press to send."). Other modes play the recording only. All require a fresh approval tap. |
-| Short or silent capture in either mode | Delete and play the deletion cue. Cloud Button Box adds `voice-empty.wav`; declined or timed-out recordings add `voice-not-sent.wav`. No outgoing job is created. |
+| Short or silent capture in either mode | Delete and play the deletion cue. Cloud Button Box adds `voice-empty.wav`; declined reviews add `voice-not-sent.wav`. The capture limit always offers review of meaningful audio; Cloud Button Box then uses the full `voice-setup-ask-send.wav` instruction, including waiting to delete. Only a fresh approval creates an outgoing job. |
 | Three send failures | `sender_loop` counts by current message in both modes, queues a notice; idle `maybe_play_still_trying` checks job still pending, then still_trying + stuck voice once durably per job. |
 | Recipient unavailable | `block_unavailable_recipient`: oops + fail voice when no default/family is available; card-selection asks for a card, and unknown-card routing stays fail-closed. |
 | Setup finishes | Root `onboarding.completion` queues a sound request after successful handoff; idle `announce_all_set` plays all_set + all-set voice once per box. |
@@ -45,8 +45,10 @@ check confirms the go tick is absent from sent audio.
 A press during the card invitation stops and reaps its player before the start
 cue. It skips hold classification, while still waiting for rec_go to end before
 opening the microphone. Hold to talk ends on release; tap to talk ignores the
-starting press until release and ends on a later tap. Without that tap before
-the recording limit, tap to talk deletes the recording. Both modes reject
+starting press until release and ends on a later tap. At the recording limit,
+both talk modes stop and keep meaningful audio for review,
+even when review is normally disabled. A fresh approval sends it; ten seconds
+without approval deletes it. Both transports use this rule. Both modes reject
 recordings shorter than 1.5 seconds (measured before silence trimming) and
 recordings without detected voice. The same card mapping is revalidated before
 capture; a changed or expired selection never falls back to another person.

@@ -2019,8 +2019,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
         started = time.monotonic()
         vad.start(started)
         warning = RecordingLimitCue(started, max_seconds)
-        if setup_reply:
-            warning.maximum = 45
+        if setup_reply or buttonbox_voice():
+            warning.maximum = min(max_seconds, 45)
             warning.path = sound_pack.voice_path("setup-remind-stop")
         presence_last = started
         closed_since = None
@@ -2044,7 +2044,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                             raw.write(chunk)
                             vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
                     if now - started >= max_seconds:
-                        timed_out = talk_mode == "tap"
+                        timed_out = True
                         break
                     if talk_mode == "hold":
                         if not button.is_pressed:
@@ -2130,6 +2130,7 @@ class PiGuidedIO:
         self.card_prompt = card_prompt
         self.talk_mode = talk_mode
         self.setup_reply = False
+        self.limit_reached = False
 
     def play_ordinary(self, path):
         if self.setup_reply and Path(path) == sound_pack.cue_path("deleted"):
@@ -2162,6 +2163,7 @@ class PiGuidedIO:
             card_prompt=self.card_prompt, talk_mode=self.talk_mode, press_token=self.press_token,
             setup_reply=self.setup_reply,
         )
+        self.limit_reached = result.timed_out
         if self.setup_reply and result.timed_out:
             return RecordingResult(result.path, result.duration, result.meaningful, False, result.recorded_seconds)
         return result
@@ -2172,7 +2174,8 @@ class PiGuidedIO:
             play_setup_line("setup-ask-send")
             discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
         elif buttonbox_voice():
-            play_audio_ordinary(sound_pack.next_send_prompt())
+            path = sound_pack.voice_path("setup-ask-send") if self.limit_reached else sound_pack.next_send_prompt()
+            play_audio_ordinary(path)
         approved = wait_for_approval(timeout, self.session_id)
         return approved
 

@@ -148,7 +148,7 @@ class SoundPackTests(unittest.TestCase):
                                     OutboxStore(self.root / "outbox"), lambda *a, **kw: None)
             result = session.run(recipient="synthetic", flow_kind="standalone",
                                  deleted_cue_path=str(sound_pack.cue_path("deleted")))
-        self.assertEqual(result, "deleted")
+        self.assertEqual(result, "empty")
         self.assertEqual(order, ["cue-rec_go.wav", "mic", "cue-deleted.wav"])
         vad.start.assert_called_once_with(0)
 
@@ -601,7 +601,7 @@ class SoundPackTests(unittest.TestCase):
              mock.patch.object(runtime.select, "select", return_value=([], [], [])), \
              mock.patch.object(runtime, "EnergyVAD", return_value=vad):
             result = physical_capture(runtime, "synthetic", max_seconds=30, talk_mode="hold")
-        self.assertFalse(result.timed_out)
+        self.assertTrue(result.timed_out)
         with wave.open(result.path, "rb") as source:
             self.assertEqual(source.readframes(source.getnframes()), pcm)
 

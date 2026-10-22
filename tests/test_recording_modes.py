@@ -92,12 +92,12 @@ class RecordingModesTests(unittest.TestCase):
                         self.assertEqual(playback.call_count, int(review))
                         self.assertEqual(approval.call_count, int(review))
 
-    def test_limit_discards_tap_but_stops_and_keeps_hold(self):
+    def test_limit_stops_and_keeps_both_capture_modes_for_review(self):
         for talk in ("tap", "hold"):
             for maximum in (30, 60, 120):
                 with self.subTest(talk=talk, maximum=maximum), tempfile.TemporaryDirectory() as directory:
                     result = self.capture(Path(directory), talk, maximum=maximum, stop=False)
-                    self.assertEqual(result.timed_out, talk == "tap")
+                    self.assertTrue(result.timed_out)
                     self.assertAlmostEqual(result.recorded_seconds, maximum, delta=0.03)
 
     def test_short_and_silent_capture_in_both_modes(self):

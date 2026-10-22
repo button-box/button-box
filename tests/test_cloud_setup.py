@@ -249,6 +249,32 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(result.duration, 3)
         self.assertTrue(Path(result.path).is_file())
 
+    def test_normal_buttonbox_recording_reminds_at_forty_seconds(self):
+        recorder = mock.Mock()
+        recorder.poll.return_value = None
+        recorder.communicate.return_value = (b'\x01\x02' * 48000, None)
+        vad = mock.Mock()
+        vad.trim_bounds.return_value = (0, 48000)
+        player = mock.Mock()
+        player.poll.return_value = 0
+        with mock.patch.object(runtime, 'TEMP_DIR', str(self.root)), \
+             mock.patch.object(runtime, 'play_sound'), \
+             mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
+             mock.patch.object(runtime, 'EnergyVAD', return_value=vad), \
+             mock.patch.object(runtime, 'presence'), \
+             mock.patch.object(runtime, 'led', mock.Mock(), create=True), \
+             mock.patch.object(runtime, 'button', types.SimpleNamespace(is_pressed=False), create=True), \
+             mock.patch.object(runtime, 'open_microphone', return_value=recorder), \
+             mock.patch.object(runtime, 'start_player', return_value=player) as start, \
+             mock.patch.object(runtime, 'box_muted', return_value=False), \
+             mock.patch.object(runtime, 'quiet_hours', return_value=False), \
+             mock.patch.object(runtime.select, 'select', return_value=([], [], [])), \
+             mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 40, 60, 60, 60]):
+            result = physical_capture(runtime, 'person')
+        self.assertTrue(result.timed_out)
+        self.assertTrue(Path(result.path).is_file())
+        self.assertIn('voice-setup-remind-stop.wav', [Path(call.args[0][-1]).name for call in start.call_args_list])
+
     def test_setup_recording_timeout_goes_to_review_wacli_timeout_stays_unchanged(self):
         result = RecordingResult("synthetic.wav", 60, True, True, 60)
         with mock.patch.object(runtime, "capture_guided_recording", return_value=result):
@@ -256,6 +282,19 @@ class SetupTests(unittest.TestCase):
             self.assertTrue(io.record().timed_out)
             io.setup_reply = True
             self.assertFalse(io.record().timed_out)
+
+    def test_normal_limit_review_explains_send_and_wait_to_delete(self):
+        result = RecordingResult('synthetic.wav', 60, True, True, 60)
+        with mock.patch.object(runtime, 'capture_guided_recording', return_value=result), \
+             mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
+             mock.patch.object(runtime, 'play_audio_ordinary') as play, \
+             mock.patch.object(runtime, 'wait_for_approval', return_value=False), \
+             mock.patch.object(runtime.sound_pack, 'next_send_prompt', return_value=Path('voice-ask-send-1.wav')) as short_prompt:
+            io = runtime.PiGuidedIO('person', 'session', 60)
+            self.assertTrue(io.record().timed_out)
+            self.assertFalse(io.wait_for_approval(10))
+        self.assertEqual(Path(play.call_args.args[0]).name, 'voice-setup-ask-send.wav')
+        short_prompt.assert_not_called()
 
     def test_listened_matches_only_the_first_reply_in_the_same_account(self):
         self.guide.change("start")

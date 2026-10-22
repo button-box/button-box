@@ -384,18 +384,24 @@ class SessionTests(unittest.TestCase):
                                                ("delete", "child.wav"), ("ordinary", "cue-deleted.wav")])
                     self.assertFalse(store.jobs())
 
-    def test_tap_recording_timeout_never_reviews_or_sends(self):
+    def test_recording_limit_reviews_then_approves_or_deletes_in_both_transports(self):
         for transport in ("wacli", "cloud"):
             for review in (False, True):
-                with self.subTest(transport=transport, review=review), tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
-                    source = root / "child.wav"
-                    write_wav(source, seconds=2)
-                    result, io, store, _ = self.run_session(root,
-                        RecordingResult(str(source), 30, True, timed_out=True), transport=transport, review=review, approval=True)
-                    self.assertEqual(result, "deleted")
-                    self.assertEqual(io.calls, [("record",), ("delete", "child.wav"), ("ordinary", "cue-deleted.wav")])
-                    self.assertFalse(store.jobs())
+                for approved in (False, True):
+                    with self.subTest(transport=transport, review=review, approved=approved), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        source = root / "child.wav"
+                        write_wav(source, seconds=2)
+                        result, io, store, events = self.run_session(root,
+                            RecordingResult(str(source), 60, True, timed_out=True),
+                            transport=transport, review=review, approval=approved)
+                        self.assertEqual(result, "approved" if approved else "deleted")
+                        expected = [("record",), ("ordinary", "child.wav"), ("wait", 10.0), ("delete", "child.wav")]
+                        if not approved:
+                            expected.append(("ordinary", "cue-deleted.wav"))
+                        self.assertEqual(io.calls, expected)
+                        self.assertEqual(len(store.jobs()), int(approved))
+                        self.assertIn("guided_review_played", [kind for kind, _ in events])
 
     def test_short_or_silent_deletion_in_every_mode_review_row_and_transport(self):
         for transport in ("wacli", "cloud"):

@@ -898,7 +898,7 @@ class CardSelectionLifecycleTests(unittest.TestCase):
                                 with self.assertRaises(OSError):
                                     s.run()
                         else:
-                            s.io.wait_for_approval.return_value = failure != "cancel"
+                            s.io.wait_for_approval.return_value = failure not in {"cancel", "timeout"}
                             if failure != "cancel":
                                 result = {
                                     "short_audio": RecordingResult(str(s.audio), 0.2, True, False, 0.2),

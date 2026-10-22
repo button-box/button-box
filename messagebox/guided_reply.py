@@ -599,12 +599,6 @@ class GuidedSession:
                 self.event("guided_playback_only", session_id=session_id)
                 return "played"
         recording: RecordingResult = self.io.record()
-        if recording.timed_out:
-            if recording.path:
-                self.io.delete(recording.path)
-            getattr(self.io, "play_deleted", self.io.play_ordinary)(deleted_cue_path)
-            self.event("guided_deleted", session_id=session_id, flow=flow_kind, reason="recording_timeout")
-            return "deleted"
         recorded_seconds = recording.duration if recording.recorded_seconds is None else recording.recorded_seconds
         if not recording.meaningful or not recording.path or recorded_seconds < 1.5:
             if recording.path:
@@ -612,6 +606,9 @@ class GuidedSession:
             getattr(self.io, "play_empty", self.io.play_ordinary)(deleted_cue_path)
             self.event("guided_recording_empty", session_id=session_id)
             return "empty"
+        # Hitting the capture limit stops the mic, not the child's message.
+        # Always offer review and a fresh approval, even with review disabled.
+        review_before_send = review_before_send or recording.timed_out
         approved = not review_before_send
         if review_before_send:
             getattr(self.io, "play_review", self.io.play_ordinary)(recording.path)
