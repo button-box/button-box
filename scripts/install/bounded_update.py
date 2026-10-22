@@ -1074,6 +1074,8 @@ def _restore_record(record, path, backup_dir):
             raise UpdateError("rollback destination is an unexpected directory")
         path.unlink()
     if record["kind"] == "absent":
+        if path.parent.exists():
+            _fsync_directory(path.parent)  # Also settle a removal from a failed attempt.
         return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     if record["kind"] == "symlink":

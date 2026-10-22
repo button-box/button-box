@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import signal
 import socket
 import stat
@@ -211,8 +212,45 @@ def selected(root):
     return value
 
 
-def call(run, command, timeout=15):
-    return run(command, check=True, capture_output=True, text=True, timeout=timeout)
+def bounded_run(command, *, timeout, stdout=subprocess.DEVNULL, **kwargs):
+    """Discard logs; retain at most 64 KiB when a command result is needed."""
+    process = subprocess.Popen(command, stdout=stdout, stderr=subprocess.DEVNULL, start_new_session=True)
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    try:
+        with selectors.DefaultSelector() as reader:
+            if stdout == subprocess.PIPE:
+                reader.register(process.stdout, selectors.EVENT_READ)
+            while reader.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                for key, _ in reader.select(remaining):
+                    chunk = os.read(key.fd, min(4096, 65537 - len(output)))
+                    if not chunk:
+                        reader.unregister(key.fileobj)
+                    output.extend(chunk)
+                    if len(output) > 65536:
+                        raise ValueError('controller output limit')
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+        if process.returncode:
+            if kwargs.get('check'):
+                raise subprocess.CalledProcessError(process.returncode, command)
+            raise ValueError('controller command failed')
+        return subprocess.CompletedProcess(command, 0, bytes(output).decode() if kwargs.get('text') else bytes(output))
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        if process.stdout:
+            process.stdout.close()
+
+
+def call(run, command, timeout=15, *, output=False):
+    return (bounded_run if run is subprocess.run else run)(command, check=True,
+        stdout=subprocess.PIPE if output else subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True, timeout=timeout)
 
 
 def stop(root, run):
@@ -228,23 +266,11 @@ def python_command(root, slot, arguments, python=sys.executable):
             *(arguments if arguments[0] == '-c' else (str(Path(root) / slot / arguments[0]), *arguments[1:]))]
 
 
-def execute(root, slot, arguments, timeout=180):
+def execute(root, slot, arguments, timeout=180, *, output=False):
     if arguments[:2] == ('bounded_update.py', 'recover'):
         arguments = ('-c', recovery_program(root, slot, arguments))
-    process = subprocess.Popen(python_command(root, slot, arguments),
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
-    try:
-        output, _ = process.communicate(timeout=timeout)
-        if process.returncode or len(output) > 65536:
-            raise ValueError('controller command failed')
-        return output
-    finally:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        process.stdout.close()
+    return bounded_run(python_command(root, slot, arguments), timeout=timeout,
+                       stdout=subprocess.PIPE if output else subprocess.DEVNULL).stdout
 
 
 def restoration(root):
@@ -316,20 +342,36 @@ def recovery_program(root, slot, arguments):
             "u.main(" + repr(['--root', str(root), *arguments[1:]]) + ")")
 
 
-def finish_recovery(root, slot, execute):
+def finish_recovery(root, *, step=checkpoint):
     journal = document(read(root, 'var/lib/button-box-update/journal.json', 1024 * 1024, 0o600))
     if not re.fullmatch(r'/var/lib/button-box-update/snapshots/[0-9a-f]{32}', journal['backup']):
         raise ValueError('unsafe recovery snapshot')
     directory = Path(root) / journal['backup'].lstrip('/')
     if journal['phase'] == 'rolled_back' and directory.exists():
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError('unsafe snapshot')
+        proof = directory / 'state.json'
+        raw = read(root, str(proof.relative_to(root)), 2 * 1024 * 1024, 0o600) if proof.exists() else None
+        # The field workers do not flush removals. Settle every restored file
+        # and namespace BEFORE retiring the only proof, including on retry.
+        for record in restoration(root):
+            path = Path(root) / record['path'].lstrip('/')
+            parent = path.parent
+            while not parent.exists():
+                parent = parent.parent
+            settle(root, parent.relative_to(root), (path.name,) if record['kind'] == 'file' else (), step)
         # Retire proof only after independent checks. Flush even if a prior
         # attempt unlinked it and failed its directory flush. Later legitimate
         # mode changes must not be undone by an already completed rollback.
-        program = ("import os;fd=os.open(" + repr(str(directory)) + ",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);"
-                   "\nif os.fstat(fd).st_uid!=os.geteuid() or os.fstat(fd).st_mode&0o777!=0o700: raise ValueError('unsafe snapshot')\n"
-                   "\ntry: os.unlink('state.json',dir_fd=fd)\nexcept FileNotFoundError: pass\n"
-                   "os.fsync(fd);os.close(fd)")
-        execute(root, slot, ('-c', program), 15)
+        try:
+            proof.unlink(missing_ok=True)
+            step('unlink_proof', str(proof))
+            flush(directory, step)
+        except OSError:
+            if raw is not None:
+                write(proof, raw, mode=0o600, durable=False, step=step)
+            raise
 
 
 def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True, deadline=None):
@@ -347,7 +389,7 @@ def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True,
                     break
                 execute(root, slot, ('bounded_update.py', 'recover', *(('--boot',) if boot else ())), min(180, remaining))
                 recovered(root, required)
-                finish_recovery(root, slot, execute)
+                finish_recovery(root)
                 choose(root, slot, value)
                 (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
                 return slot
@@ -357,7 +399,7 @@ def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True,
 
 
 def probe(root, value, run):
-    before = call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID']).stdout
+    before = call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], output=True).stdout
     pid = int(before.strip().split('=')[1])
     with socket.socket(socket.AF_UNIX) as connection:
         connection.settimeout(2)
@@ -376,7 +418,7 @@ def probe(root, value, run):
     if not value['legacy'] and answer != {'protocol': 1, 'version': value['version'],
                                          'hashes': {n: v[1] for n, v in value['files'].items()}}:
         raise ValueError('wrong broker identity')
-    if before != call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID']).stdout:
+    if before != call(run, ['systemctl', 'show', 'messagebox-update-controller.service', '--property=MainPID'], output=True).stdout:
         raise ValueError('broker changed')
 
 
@@ -388,7 +430,7 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
                 if current['trial']:
                     raise ValueError('interrupted trial')
                 recovered(root)  # A healthy broker cannot discharge recovery.
-                finish_recovery(root, current['slot'], execute)
+                finish_recovery(root)
                 deadline = time.monotonic() + 5
                 while True:
                     try:
@@ -402,7 +444,7 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
                 pass
             # Do not interrupt an ordinary application install. Its independent
             # deadline above and fixed worker timeout remain effective.
-            if call(run, ['systemctl', 'show', 'messagebox-update-install.service', '--property=ActiveState', '--value']).stdout.strip() in {'active', 'activating', 'deactivating', 'reloading'}:
+            if call(run, ['systemctl', 'show', 'messagebox-update-install.service', '--property=ActiveState', '--value'], output=True).stdout.strip() in {'active', 'activating', 'deactivating', 'reloading'}:
                 return
             preferred = (tuple(s for s, _ in valid(root) if s != current['slot'])
                          if 'current' in locals() and not current['trial'] else ())
@@ -449,10 +491,10 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
     for name in ('button', 'local'):
         (Path(root) / ('run/messagebox-update/' + name + '.json')).unlink(missing_ok=True)
         step('unlink_evidence', name)
-    output = document(call(run, sandbox(root, slot, 'update_controller.py', 'self-test'), 25).stdout)
+    output = document(call(run, sandbox(root, slot, 'update_controller.py', 'self-test'), 25, output=True).stdout)
     if output != {'protocol': 1, 'version': value['version'], 'hashes': {n: v[1] for n, v in value['files'].items()}}:
         raise ValueError('trial self-test identity')
-    discovery = document(call(run, sandbox(root, slot, 'update_discovery.py', '--self-test'), 25).stdout)
+    discovery = document(call(run, sandbox(root, slot, 'update_discovery.py', '--self-test'), 25, output=True).stdout)
     if discovery != {'protocol': 1, 'dry_run': True}:
         raise ValueError('discovery trial result')
     recovery_trial(root, slot, execute)
@@ -462,7 +504,7 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
             probe(root, value, run)
             for name, unit in (('button', 'messagebox-button.service'), ('local', 'messagebox-poller.service')):
                 evidence = document(read(root, 'run/messagebox-update/' + name + '.json'))
-                pid = call(run, ['systemctl', 'show', unit, '--property=MainPID']).stdout.strip().split('=')[1]
+                pid = call(run, ['systemctl', 'show', unit, '--property=MainPID'], output=True).stdout.strip().split('=')[1]
                 if (any(evidence.get(k) != v for k, v in context.items()) or str(evidence.get('pid')) != pid
                         or evidence.get('process_token') != process_token(root, pid)
                         or not evidence.get('ready') or not started <= evidence.get('monotonic', 0) <= time.monotonic()):

@@ -45,7 +45,7 @@ def effective_routes(root, api, run):
             raise ValueError('routing incomplete')
         unit = Path(path).parent.name.removesuffix('.d')
         expected = raw.decode().split('ExecStart=')[-1].splitlines()[0]
-        result = api.call(run, ['systemctl', 'show', unit, '--property=ExecStart']).stdout
+        result = api.call(run, ['systemctl', 'show', unit, '--property=ExecStart'], output=True).stdout
         if re.findall(r'argv\[\]=(.*?)\s*;', result) != [expected]:
             raise ValueError('effective routing differs')
 
@@ -135,8 +135,7 @@ def compatible(root, slot, api, *, run=subprocess.run):
                "j=u.read_state(root,'journal.json');u._validate_journal(root,j);"
                "[u.read_state(root,n) for n in ('known-good.json','result.json','available.json','quarantine.json','active.json')];"
                "import update_controller as c;c.read=lambda n,d=None:u.read_state(root,n,d);c.policy()")
-    run([sys.executable, '-I', '-B', '-X', 'pycache_prefix=' + str(Path(root) / api.RUN / 'unused'), '-c', program, str(Path(root) / slot), str(root)],
-        check=True, capture_output=True, timeout=10)
+    api.call(run, [sys.executable, '-I', '-B', '-X', 'pycache_prefix=' + str(Path(root) / api.RUN / 'unused'), '-c', program, str(Path(root) / slot), str(root)], 10)
 
 
 def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda event, path: None,

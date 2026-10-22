@@ -14,13 +14,15 @@ import subprocess
 import sys
 import socket
 import threading
+import time
+import tracemalloc
 import types
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from field_updater import FieldBox, write
+from field_updater import FieldBox, PROVENANCE, write
 from messagebox import controller_selector as selector
 from messagebox import controller_slots as slots
 import test_controller_descriptor as descriptors
@@ -67,6 +69,21 @@ class DurableView:
         elif event == 'directory_fsync':
             self.directory(path)
 
+    def synced(self, fd):
+        """Observe actual worker/selector fsyncs, including legacy code."""
+        info = os.fstat(fd)
+        for directory, _, names in os.walk(self.root):
+            path = Path(directory)
+            if path.stat().st_ino == info.st_ino:
+                self.directory(path)
+                return
+            for name in names:
+                file = path / name
+                if not file.is_symlink() and file.stat().st_ino == info.st_ino:
+                    self.files[info.st_ino] = file.read_bytes()
+                    return
+        raise AssertionError('fsync outside modeled disk')
+
     def power_loss(self):
         shutil.rmtree(self.root)
         self.root.mkdir(mode=0o755)
@@ -104,7 +121,7 @@ class Host:
         self.health_observed = ''
         write(root / 'run/messagebox-audio/audio.env',
               b'MSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\nMSGBOX_SPK_DEV=plughw:CARD=Device,DEV=0\n')
-        self.real_run = subprocess.run
+        self.real_run = selector.bounded_run
         self.recovery_run = None
         self.recoveries = []
 
@@ -281,7 +298,7 @@ class SlotTests(unittest.TestCase):
         slots.bootstrap(self.root, run=self.host)
         self.old = self.slot_bytes(selector.SLOTS[0])
 
-    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False, restore_defect=None):
+    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False, restore_defect=None, flood=None):
         release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
         source = self.base / 'candidate'
         for name in selector.MODULES:
@@ -300,6 +317,11 @@ class SlotTests(unittest.TestCase):
                         + ("    return\n" if restore_defect == 'noop' else
                            "    if record['kind']!='absent': original_restore(record,path,backup)\n" if restore_defect == 'remove' else
                            "    original_restore(record,path,backup)\n    if record['kind']=='file': path.chmod(0o600)\n")).encode()
+            if flood and name in {'bounded_update.py', 'update_controller.py'}:
+                header = ("def _recover_locked(root, run, *, start=True, reason='interrupted'):"
+                          if name == 'bounded_update.py' else 'def controller_self_test():')
+                raw = raw.replace(header.encode(), (header + '\n' +
+                    '\n'.join('    ' + line for line in flood.splitlines())).encode())
             write(source / 'scripts/install' / name, raw)
             write(release / 'updater' / name, raw)
         with mock.patch.object(build, 'CONTROLLER_VERSION', version):
@@ -580,18 +602,82 @@ class SlotTests(unittest.TestCase):
         self.publish()
         self.interrupted_application()
         healthy = mock.Mock()
-        def execute(root, slot, arguments, timeout=180):
-            if arguments[0] == '-c' and "os.unlink('state.json'" in arguments[1]:
-                with mock.patch.object(os, 'fsync', side_effect=OSError(errno.EIO, 'proof directory flush failed')):
-                    exec(arguments[1], {})
-            else:
-                return self.host.execute(root, slot, arguments, timeout)
-        with self.assertRaises(ValueError):
-            selector.check(self.root, self.host, probe=healthy, execute=execute)
+        snapshot = self.root / self.box.worker.read_state(self.root, 'journal.json')['backup'].lstrip('/')
+        original = selector.flush
+        def flush(path, step=selector.checkpoint):
+            if path == snapshot:
+                raise OSError(errno.EIO, 'proof directory flush failed')
+            original(path, step)
+        with mock.patch.object(selector, 'flush', side_effect=flush), self.assertRaises(ValueError):
+            selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
         healthy.assert_not_called()
+        self.assertTrue((snapshot / 'state.json').exists())
         selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
         selector.recovered(self.root)
         healthy.assert_called_once()
+
+    def test_legacy_removal_is_durable_before_proof_retirement_after_failed_flush_retry(self):
+        for version in PROVENANCE['releases']:
+            for fault in (None, 'file', 'removal_directory', 'proof_directory'):
+                with self.subTest(version=version, fault=fault):
+                    box = FieldBox(self.base / (version + '-' + str(fault)), version)
+                    box.install()
+                    root, worker = box.root, box.worker
+                    host = Host(root)
+                    host.recovery_run = box.run
+                    for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer'):
+                        write(root / 'etc/systemd/system' / name, (ROOT / 'systemd' / name).read_bytes())
+                    slots.bootstrap(root, run=host)
+                    dropin = root / 'etc/systemd/system/messagebox-button.service.d/messagebox.conf'
+                    self.assertFalse(dropin.exists())
+                    box.add('systemd/messagebox-button.service.d/messagebox.conf', b'[Service]\nEnvironment=NEW_DROPIN=1\n')
+                    box.data.update(version='v0.3.14', commit='d' * 40)
+                    box.save_manifest()
+                    with self.assertRaises(KeyboardInterrupt):
+                        worker.install_transaction(box.source, box.manifest, root=root, run=box.run, sequence=2,
+                            health=mock.Mock(side_effect=KeyboardInterrupt('interrupted application')))
+                    self.assertTrue(dropin.exists())
+                    required = selector.restoration(root)
+                    journal = worker.read_state(root, 'journal.json')
+                    proof = root / journal['backup'].lstrip('/') / 'state.json'
+                    disk = DurableView(root)  # Candidate drop-in is durable at the cut baseline.
+                    original = os.fsync
+                    failure_inode = None
+                    fired = False
+                    def fsync(fd):
+                        nonlocal fired
+                        if failure_inode == os.fstat(fd).st_ino:
+                            fired = True
+                            raise OSError(errno.EIO, 'injected restoration flush failure')
+                        original(fd)
+                        disk.synced(fd)
+                    def cut(event, path):
+                        if event == 'directory_fsync' and path == str(proof.parent):
+                            raise KeyboardInterrupt('proof removal durable; power lost')
+                    with mock.patch.object(os, 'fsync', side_effect=fsync):
+                        host.execute(root, selector.SLOTS[0], ('bounded_update.py', 'recover', '--boot'))
+                        selector.recovered(root, required)
+                        self.assertFalse(dropin.exists())
+                        # Frozen _restore_record unlinks absent entries without a parent flush.
+                        self.assertIn(dropin.name, disk.dirs[dropin.parent.stat().st_ino])
+                        if fault:
+                            target = (next(root / r['path'].lstrip('/') for r in required if r['kind'] == 'file')
+                                      if fault == 'file' else dropin.parent if fault == 'removal_directory' else proof.parent)
+                            failure_inode = target.stat().st_ino
+                            with self.assertRaises(OSError):
+                                selector.finish_recovery(root)
+                            self.assertTrue(fired)
+                            self.assertTrue(proof.exists(), 'flush failure must keep the recovery proof')
+                            failure_inode = None
+                        with self.assertRaises(KeyboardInterrupt):
+                            selector.finish_recovery(root, step=cut)
+                    disk.power_loss()  # Discard all unflushed bytes AND directory entries.
+                    self.assertFalse(dropin.exists())
+                    self.assertFalse(proof.exists())
+                    selector.recovered(root, required)
+                    host = Host(root)
+                    host.recovery_run = box.run
+                    self.assertEqual(selector.recover(root, host, execute=host.execute), selector.SLOTS[0])
 
     def test_good_rename_directory_fsync_failure_then_retry_and_power_loss(self):
         disk = DurableView(self.root)
@@ -781,6 +867,66 @@ class SlotTests(unittest.TestCase):
         write(self.root / slot / 'exit.py', b'import os\nos._exit(17)\n')
         with self.assertRaises(ValueError):
             selector.execute(self.root, slot, ('exit.py',), 1)
+
+    def test_infinite_trial_output_is_stream_limited_and_noisy_accepted_recovery_falls_back(self):
+        marker = self.root / 'run/flood-pids'
+        flood = ("\nimport subprocess,sys,os\nfrom pathlib import Path\n"
+                 "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\n"
+                 "Path(" + repr(str(marker)) + ").write_text(str(os.getpid())+' '+str(child.pid))\n"
+                 "while True: os.write(1,b'x'*8192)\n")
+        self.stage(flood=flood)
+        original, reads, peaks = selector.bounded_run, [], []
+        def measured(command, **kwargs):
+            total = 0
+            read = os.read
+            def observe(fd, size):
+                nonlocal total
+                chunk = read(fd, size)
+                total += len(chunk)
+                return chunk
+            tracemalloc.start()
+            try:
+                with mock.patch.object(os, 'read', side_effect=observe):
+                    return original(command, **kwargs)
+            finally:
+                peaks.append(tracemalloc.get_traced_memory()[1])
+                tracemalloc.stop()
+                reads.append((kwargs['stdout'], total))
+        def assert_killed():
+            self.assertTrue(marker.exists(), 'the genuine controller process must reach the flood')
+            for pid in marker.read_text().split():
+                result = subprocess.run(['ps', '-o', 'stat=', '-p', pid], capture_output=True, text=True)
+                self.assertTrue(not result.stdout.strip() or result.stdout.lstrip().startswith('Z'), result.stdout)
+            marker.unlink()
+        self.host.real_run = measured
+        with self.assertRaisesRegex(ValueError, 'output limit'):
+            self.publish()
+        self.assertEqual(reads[-1], (subprocess.PIPE, 65537))
+        self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
+        assert_killed()
+        # A correctly signed, previously accepted defect can also flood during
+        # boot recovery. Logs are discarded; the independent deadline kills
+        # its whole group and the real frozen worker completes recovery.
+        release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+        proof = verify.verify_retained_controller(release, self.root / 'etc/button-box-update/release-keys',
+            application_version='v0.3.13', platform=PLATFORM)
+        value = slots.identity(selector, self.root, selector.SLOTS[1], generation=10, version='1.3.0',
+                               descriptor=proof['descriptor_sha256'], legacy=False)
+        selector.write(self.root / selector.SLOTS[1] / 'GOOD', selector.envelope(value))
+        attempts = []
+        def execute(root, slot, arguments, timeout):
+            attempts.append(slot)
+            if slot == selector.SLOTS[1]:
+                with mock.patch.object(selector, 'bounded_run', side_effect=measured):
+                    return selector.execute(root, slot, arguments, min(timeout, 1))
+            return self.host.execute(root, slot, arguments, timeout)
+        started = time.monotonic()
+        self.assertEqual(selector.recover(self.root, self.host, execute=execute), selector.SLOTS[0])
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual(attempts, list(reversed(selector.SLOTS)))
+        self.assertEqual(reads[-1], (subprocess.DEVNULL, 0))
+        self.assertLess(max(peaks), 512 * 1024, 'parent output memory must stay bounded')
+        assert_killed()
 
     def test_every_publication_and_trial_write_cut_keeps_an_accepted_slot(self):
         image = self.base / 'before'
@@ -996,7 +1142,7 @@ class SlotTests(unittest.TestCase):
                    ");import update_controller as c;print(json.dumps(c.controller_identity()))")
         stale = json.loads(subprocess.check_output([sys.executable, '-B', '-c', program]))
         self.assertEqual(stale['version'], '0.0.0')
-        result = json.loads(selector.execute(self.root, selector.SLOTS[1], ('update_controller.py', 'self-test')))
+        result = json.loads(selector.execute(self.root, selector.SLOTS[1], ('update_controller.py', 'self-test'), output=True))
         self.assertEqual(result['version'], '1.3.0')
 
     def test_bootstrap_retry_cannot_change_a_mature_running_generation(self):

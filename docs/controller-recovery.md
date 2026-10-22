@@ -93,9 +93,14 @@ drop-in to remove. The selector captures required restoration before the command
 and checks it after the command, as well as the pointer, journal, and inhibit.
 Recovery, install, and supervisor routes retain the existing rollback snapshot
 until the selector checks restoration. A failed attempt cannot erase the proof
-needed by another slot or a later boot. After the checks pass, application
-recovery removes the snapshot's state record and flushes its directory before
-selection. Retry repeats that flush even if the record is already absent. A
+needed by another slot or a later boot. After the checks pass, the selector
+flushes every restored regular file and its parent directories, including the
+directories of required removals and restored links. This barrier also covers
+retained field workers. A failed restoration flush keeps the state record.
+Only then does the selector remove the snapshot's state record and flush its
+directory before selection. If that flush fails, it restores the visible proof
+and leaves recovery pending. Retry repeats the barrier and final directory
+flush, even if the record is already absent. A
 completed rollback therefore cannot undo a later setup-mode request. Remaining
 backup data is pruned at the next application commit. A terminal but incomplete rollback is retried.
 The staged test substitutes only systemctl; it cannot stop
@@ -107,6 +112,11 @@ Cloud communication in `heartbeat.json`. Only controller trials use the local
 probe option; ordinary Cloud application probation still requires a successful
 Cloud heartbeat. A candidate success string alone
 cannot authorize `GOOD`.
+
+Recovery and probe output is discarded. Required trial and systemctl results
+are read in chunks, with a 64 KiB limit and an independent deadline. Exceeding
+either limit kills the command's process group before fallback. Transient trial
+units also retain their systemd runtime limit.
 
 Only the frozen selector publishes `GOOD`, after rechecking module bytes. It
 flushes the record and directory before returning success. A cut before this
@@ -174,5 +184,6 @@ BOX-10 bench list: verify native systemd ordering and sandbox restrictions;
 verify cgroup termination of hung and killed trials; run the real timer through
 repeated alternate-slot failures without reboot; repeat recovery with full blocks
 and full inodes; cut Pi power during file and directory flushes, including retry
-after a killed publisher. Confirm application recovery and both transports without
+after a killed publisher, restored drop-in removal, and recovery-proof retirement.
+Confirm application recovery and both transports without
 SSH repair. SD-card flush guarantees and load timing remain unverified on this host.
