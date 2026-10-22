@@ -118,7 +118,8 @@ class CardVoiceTests(unittest.TestCase):
         self.assertEqual(order, ["terminate", "kill", "record"])
 
     def test_prompt_press_skips_guided_countdown_and_legacy_hold_classification(self):
-        context = {"via_card": True, "uid": CARD, "contact": {"jid": JID, "card_uids": [CARD]}}
+        context = {"via_card": True, "uid": CARD, "contact": {"jid": JID, "card_uids": [CARD]},
+                   "selection": {"selection_id": "a" * 32, "jid": JID}}
         real_capture = partial(physical_capture, runtime, capture_function=runtime.capture_guided_recording)
         for mode in ("wacli", "cloud"):
             with self.subTest(mode=mode), \

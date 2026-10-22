@@ -63,10 +63,36 @@ and download support, and must not be claimed from poller tests alone.
 
 A fresh valid NFC selection reserves the next button interaction for a new
 outbound message before any unread incoming message is claimed. The incoming
-queue stays intact for the following ordinary press. The selection is one-shot
-and expires when that recording interaction completes or is abandoned. In
-hold-to-record mode, releasing before the hold threshold cancels the selected
-recording intent without playing the queue or saving a silent recording.
+queue stays intact until an ordinary press after the card message is queued.
+The selection is consumed only when the approved recording enters the durable
+outbox. Short presses, empty audio, cancelled or deleted recordings, recording
+timeouts, and audio errors keep the choice with its original selection time.
+The choice expires after `MSGBOX_NFC_SELECTION_TTL_S` (30 seconds by default),
+even while the card remains on the reader. A new presentation replaces it.
+A recording that starts within the window keeps its exact recipient.
+In hold-to-record mode, a short release keeps the choice without playing the
+queue or saving silent audio. A button-service crash before approval leaves
+the choice available until expiry; there is no claim to recover. Invalid card
+state blocks outbound routing rather than selecting a recent sender or default.
+
+Each card recording saves its selection ID with the durable outbox job. Button
+startup and input reconcile committed jobs before routing another recording.
+Successful-send cleanup and all Cloud job deletion paths reconcile before
+removing that receipt. A crash after the queue commit therefore cannot leave
+an old card choice armed; a later presentation has a different ID and survives
+reconciliation of an older job. Reconciliation failure keeps input blocked and
+the job available for retry. The unknown-card block and selection are read
+together under the same lock used by the NFC writer; blocked state never means
+that the default or recent sender may be used.
+
+An NFC service restart preserves unused choices, consumed markers and their
+original timestamps. A held card is resumed as the same presentation until the
+reader confirms removal for the normal grace interval. An unrelated contacts
+revision refreshes the same person's mapping without renewing the choice. A
+changed mapping blocks that presentation until removal and a new scan.
+This check also applies to a held card after expiry or a successful send has
+consumed the choice. Routing and reader refresh hold the contacts lock through
+selection processing; the lock order is contacts, then NFC selection.
 
 In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14

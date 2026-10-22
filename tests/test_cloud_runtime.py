@@ -398,7 +398,6 @@ class CloudRuntimeTests(unittest.TestCase):
             self.runtime.contacts.allowed_jids(), now=NOW), ("route", BOX_JID))
         with mock.patch.object(button_send, "CONTACTS_FILE", self.runtime.contacts.path), \
              mock.patch.object(button_send, "QUEUE_DIR", str(self.runtime.queue_dir)), \
-             mock.patch.object(button_send, "nfc_idle_routing_is_safe", return_value=True), \
              mock.patch.object(button_send, "NFC_SELECTION_FILE", self.root / "no-selection"), \
              mock.patch.object(button_send.time, "time", return_value=NOW):
             self.assertEqual(button_send.recording_recipient_context()["contact"]["jid"], BOX_JID)
@@ -2671,6 +2670,45 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertEqual(store.load(job.path).state, "sending")
         self.runtime.recover_outbox()
         self.assertEqual(store.load(job.path).state, "pending")
+
+    def test_every_cloud_job_deletion_reconciles_its_committed_card_receipt(self):
+        self.runtime.heartbeat()
+        audio = self.root / "recording.wav"
+        audio.write_bytes(b"synthetic recording")
+        selection_path = self.root / "selection.json"
+        selection = SelectionStore(selection_path, clock=lambda: NOW)
+        recipient = PERSON["wa_id"] + "@s.whatsapp.net"
+        store = OutboxStore(self.runtime.outbox_dir, transport="cloud", selection_path=selection_path)
+        self.client.voice_status = lambda _key: {
+            "message_id": MID, "state": "delivered", "deleted": True,
+            "server_time": NOW, "expires_at": NOW + 100,
+        }
+        for cleanup in ("delete", "expire", "status"):
+            with self.subTest(cleanup=cleanup):
+                selection.select("04:A1:00:FF", recipient, 1)
+                token = selection.load()["selection_id"]
+                job = store.approve(str(audio), recipient, "standalone", 2,
+                                    account_scope="a" * 64, nfc_selection_id=token)
+                metadata_path = job.path / "job.json"
+                metadata = json.loads(metadata_path.read_text())
+                metadata.update({"state": "cloud_retained", "cloud_message_id": MID, "expires_at": NOW - 1})
+                atomic_json(metadata_path, metadata)
+                action = {
+                    "delete": lambda: self.runtime._delete(MID),
+                    "expire": self.runtime.expire_local,
+                    "status": lambda: self.runtime._recover_outbox_job(job.path),
+                }[cleanup]
+                selection_type = cloud_runtime.reconcile_card_selection.__globals__["SelectionStore"]
+                with mock.patch.object(cloud_runtime, "NFC_SELECTION_FILE", selection_path):
+                    with mock.patch.object(selection_type, "consume_id", side_effect=PermissionError("synthetic reconciliation failure")):
+                        with self.assertRaises(PermissionError):
+                            action()
+                    self.assertTrue(job.path.exists(), "deletion lost the recovery receipt")
+                    self.assertIsNotNone(selection.load())
+                    action()
+                self.assertFalse(job.path.exists())
+                self.assertIsNone(selection.load())
+                self.assertTrue(selection.claimed_path.exists())
 
     def test_retained_upload_not_found_never_creates_another_request(self):
         store, job = self.staged_upload()

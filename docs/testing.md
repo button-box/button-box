@@ -39,6 +39,12 @@ press and release is the hold duration. Events must increase, leave at least
 0.8 seconds before/after the sequence, and end released with no card present.
 Plans last 1–120 seconds and contain at most 256 events. Removal/repeat retain
 the normal NFC grace, refresh, unknown-card and one-shot selection semantics.
+`test_button_routing.py` forces queue-commit/consumption crashes and both NFC
+writer/reader lock orders in wacli and Cloud. `test_nfc_daemon.py` runs actual
+daemon startup and shutdown with a simulated removed or held card, including
+consumed choices and a restart before removal is confirmed.
+`test_cloud_runtime.py` checks reconciliation before every Cloud job deletion
+path. These automated checks do not replace physical Pi and WhatsApp acceptance.
 
 ```sh
 python3 scripts/dev/simulate-inputs.py /private/path/plan.json

@@ -23,7 +23,7 @@ from messagebox.cloud_device import (CLOUD_DIR, CloudAckGone, CloudDeviceClient,
                                      CloudVoiceNotFound, RATE_LIMIT_DEFAULT_SECONDS, atomic_json, capabilities)
 from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
-from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
+from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload, reconcile_card_selection
 from messagebox.cloud_events import CloudWorkEvents
 from messagebox.cloud_voice import VoiceCache, ReactionQueue, fallback
 from messagebox.listened_receipts import ReceiptStore
@@ -702,6 +702,7 @@ class CloudRuntime:
             except (OSError, ValueError):
                 continue
             if metadata.get("transport") == "cloud" and metadata.get("cloud_message_id") == message_id:
+                reconcile_card_selection(job_dir, NFC_SELECTION_FILE)
                 shutil.rmtree(job_dir)
 
     def expire_local(self):
@@ -732,6 +733,7 @@ class CloudRuntime:
             if (metadata.get("transport") == "cloud"
                     and _valid_time(metadata.get("expires_at"))
                     and now >= metadata["expires_at"]):
+                reconcile_card_selection(job_dir, NFC_SELECTION_FILE)
                 shutil.rmtree(job_dir)
         self.state["seen"] = {key: timestamp for key, timestamp in self.state["seen"].items()
                               if _valid_time(timestamp) and now - timestamp < LEDGER_SECONDS}
@@ -881,6 +883,7 @@ class CloudRuntime:
                          "cloud_status_checked_at": status["server_time"]})
         if (status["deleted"] is True or status["message_id"] in self.state["deleted"]
                 or status["server_time"] >= status["expires_at"]):
+            reconcile_card_selection(job_dir, NFC_SELECTION_FILE)
             shutil.rmtree(job_dir)
         else:
             atomic_json(job_dir / "job.json", metadata)

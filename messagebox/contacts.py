@@ -314,6 +314,13 @@ class ContactStore:
         """Return a validated snapshot without creating a missing store."""
         return copy.deepcopy(self._read())
 
+    @contextmanager
+    def locked_snapshot(self):
+        """Keep a routing decision and its contact mappings in one snapshot."""
+        # Take this lock before the NFC selection lock, never in reverse order.
+        with self._locked():
+            yield self.load()
+
     def clear_for_whatsapp_relink(self) -> JsonObject:
         """Erase account-scoped contacts, listeners, defaults, and card mappings."""
 
