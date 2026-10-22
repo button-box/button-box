@@ -123,6 +123,11 @@ sudo ./scripts/install/update-bootstrap.sh auto canary
 For a stable tag, use `auto stable`. Do not change channels to bypass signature
 or sequence checks. Bootstrap must finish without an error.
 
+Audio detection prefers a USB capture card with no playback node. A combined
+speaker/microphone remains the fallback. The runtime detects again at boot, so
+card numbers can change. At the bench, check `/run/messagebox-audio/audio.env`
+against `arecord -l` and `aplay -l`, then record and play a spoken sample.
+
 ## 3. Commit the signed application, then activate A/B
 
 ```sh
