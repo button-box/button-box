@@ -1,21 +1,21 @@
 {
   "voice": "Button Box",
   "format": "48 kHz mono 16-bit PCM WAV, -16 LUFS",
-  "temporary_placeholder": true,
+  "temporary_placeholder": false,
   "lines": [
     {
       "file": "voice-sending.wav",
       "text": "Sending!",
-      "seconds": 0.722688,
-      "sha256": "cc5667583f01370ead354369fabbe23466a6f20bccf6ec51f9bd186282b10e2c",
-      "temporary_placeholder": true,
-      "source": "local macOS say, Samantha; NOT ElevenLabs",
+      "seconds": 1.04,
+      "sha256": "b86c86af0e188711fb1b71a8d371d070cf7f836895c46bd155b1aed2469cac41",
       "replacement": {
         "voice_id": "PTh0NF64AaTAIDPGzj0O",
         "model": "eleven_v3",
         "seed": 7,
         "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11"
-      }
+      },
+      "temporary_placeholder": false,
+      "source": "ElevenLabs"
     }
   ]
 }
