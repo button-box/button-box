@@ -85,7 +85,7 @@ def identity(api, root, slot, *, generation, version, descriptor, legacy):
                                       for raw in [api.read(root, slot + '/' + n, 2 * 1024 * 1024)]}}
 
 
-def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: None):
+def bootstrap(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda event, path: None):
     root = Path(root)
     source = Path(__file__).with_name('controller_selector.py')
     initial = selector(source)
@@ -93,7 +93,7 @@ def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: No
     # have reached stable storage. Re-entry never replaces frozen bytes.
     initial.mkdir(root / STATE, step)
     with initial.lock(root, 'operation', blocking=False), admission_lock(root):
-        application(root, initial)
+        release, app = application(root, initial)
         raw = source.read_bytes()
         try:
             if initial.read(root, SELECTOR, 65536) != raw:
@@ -103,16 +103,27 @@ def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: No
         initial.settle(root, str(Path(SELECTOR).parent), (Path(SELECTOR).name,), step)
         api = selector(root / SELECTOR)
         if not api.valid(root):
-            for name, expected in LEGACY.items():
-                if api.digest(api.read(root, api.SLOTS[0] + '/' + name, 1024 * 1024)) != expected:
-                    raise ValueError('unknown initial controller')
-            record = identity(api, root, api.SLOTS[0], generation=0, version='1.1.0', descriptor='', legacy=True)
-            api.write(root / api.SLOTS[0] / 'GOOD', api.envelope(record), step=step)
+            slot = api.SLOTS[0]
+            record = identity(api, root, slot, generation=0, version='1.1.0', descriptor='', legacy=True)
+            if {n: entry[1] for n, entry in record['files'].items()} != LEGACY:
+                value, digest = admit(root, api, release, app, platform)
+                for entry in value['modules']:
+                    if record['files'][Path(entry['path']).name] != [entry['size'], entry['sha256']]:
+                        raise ValueError('unknown initial controller')
+                compatible(root, slot, api, run=run)
+                record.update(generation=value['controller_sequence'], version=value['controller_version'],
+                              descriptor=digest, legacy=False)
+                for original in (verify.CONTROLLER_DESCRIPTOR, verify.CONTROLLER_SIGNATURE):
+                    raw, _ = verify.controller_file(root / release, original, verify.MAX_DESCRIPTOR)
+                    api.write(root / slot / Path(original).name, raw, step=step)
+                api.write(root / STATE / 'floor.json', api.envelope({'sequence': value['controller_sequence'],
+                          'digest': digest, 'version': value['controller_version']}), mode=0o600, step=step)
+            api.write(root / slot / 'GOOD', api.envelope(record), step=step)
         for slot, _ in api.valid(root):
             api.settle(root, slot, (*api.MODULES, 'GOOD'), step)
         with api.lock(root, 'gate'):
             if (not any((root / p).exists() for p in routes())
-                    and len(api.valid(root)) == 1 and api.valid(root)[0][1]['legacy']):
+                    and len(api.valid(root)) == 1):
                 api.choose(root, *api.valid(root)[0])
         for path, content in routes().items():
             try:
@@ -138,6 +149,28 @@ def compatible(root, slot, api, *, run=subprocess.run):
     api.call(run, [sys.executable, '-I', '-B', '-X', 'pycache_prefix=' + str(Path(root) / api.RUN / 'unused'), '-c', program, str(Path(root) / slot), str(root)], 10)
 
 
+def admit(root, api, release, app, platform):
+    # Both first installation and publication use current trust and the same
+    # durable replay/downgrade floor while admission_lock is held.
+    trust.recover_trust(root / 'etc/button-box-update', root / 'var/lib/button-box-update')
+    proof = verify.verify_retained_controller(root / release, root / 'etc/button-box-update/release-keys',
+            application_version=app['version'], platform=platform or verify.local_platform())
+    value, digest = proof['descriptor'], proof['descriptor_sha256']
+    try:
+        record = api.document(api.read(root, STATE + '/floor.json', mode=0o600))
+        floor = record['value']
+        if record['sha256'] != api.digest(api.canonical(floor)):
+            raise ValueError('damaged admission floor')
+        if (value['controller_sequence'] < floor['sequence']
+                or value['controller_sequence'] == floor['sequence'] and digest != floor['digest']
+                or verify._controller_version(value['controller_version']) < verify._controller_version(floor['version'])):
+            raise ValueError('controller replay or downgrade')
+    except FileNotFoundError:
+        if any(not v['legacy'] for _, v in api.valid(root)):
+            raise ValueError('admission floor missing')
+    return value, digest
+
+
 def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda event, path: None,
             trial_options=None):
     root = Path(root)
@@ -146,22 +179,7 @@ def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda ev
         release, app = application(root, api)
         effective_routes(root, api, run)
         api.call(run, ['systemctl', 'is-active', '--quiet', 'messagebox-update-selector.timer'])
-        trust.recover_trust(root / 'etc/button-box-update', root / 'var/lib/button-box-update')
-        proof = verify.verify_retained_controller(root / release, root / 'etc/button-box-update/release-keys',
-                application_version=app['version'], platform=platform or verify.local_platform())
-        value, digest = proof['descriptor'], proof['descriptor_sha256']
-        try:
-            record = api.document(api.read(root, STATE + '/floor.json', mode=0o600))
-            floor = record['value']
-            if record['sha256'] != api.digest(api.canonical(floor)):
-                raise ValueError('damaged admission floor')
-            if (value['controller_sequence'] < floor['sequence']
-                    or value['controller_sequence'] == floor['sequence'] and digest != floor['digest']
-                    or verify._controller_version(value['controller_version']) < verify._controller_version(floor['version'])):
-                raise ValueError('controller replay or downgrade')
-        except FileNotFoundError:
-            if any(not v['legacy'] for _, v in api.valid(root)):
-                raise ValueError('admission floor missing')
+        value, digest = admit(root, api, release, app, platform)
         current = api.selected(root)
         if current['trial']:
             raise ValueError('trial already active')

@@ -3,6 +3,7 @@
 The shell, globs, install(1), Python key/policy code, and layout conversion are
 real. Root ownership, Pi identity, accounts, and systemd are host substitutes.
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -12,17 +13,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from field_updater import FieldBox, write
+from field_updater import FieldBox, mkdir, write
+from messagebox import controller_selector as selector, controller_slots as slots
+import test_controller_descriptor as descriptors
+from test_controller_slots import DurableView, Host
+from test_release_tooling import build
+from test_update_discovery import PLATFORM
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(shutil.which('minisign'), 'real minisign required for initial controller proof')
 class BootstrapCommandTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        descriptors.ControllerProofTests.setUpClass()
+        cls.keys = descriptors.ControllerProofTests.key_pairs
+
+    @classmethod
+    def tearDownClass(cls):
+        descriptors.ControllerProofTests.tearDownClass()
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='first-bootstrap-', dir='/tmp')
         self.addCleanup(temp.cleanup)
         self.base = Path(temp.name).resolve()
-        box = FieldBox(self.base / 'field')
+        self.box = box = FieldBox(self.base / 'field')
         self.root = box.root
         # Reverse the recorded completed layout to an in-place first install.
         (self.root / 'opt/messagebox').unlink()
@@ -32,6 +48,8 @@ class BootstrapCommandTests(unittest.TestCase):
         self.repo = self.base / 'checkout'
         for name in ('systemd', 'config/release-keys', 'config/emergency-keys'):
             shutil.copytree(ROOT / name, self.repo / name)
+        shutil.rmtree(self.repo / 'config/release-keys')
+        write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
         for path in (ROOT / 'scripts/install').glob('*.py'):
             write(self.repo / 'scripts/install' / path.name, path.read_bytes())
         script = (ROOT / 'scripts/install/update-bootstrap.sh').read_text()
@@ -93,7 +111,37 @@ elif name not in ('systemctl','getent','minisign','espeak-ng'):
         return subprocess.run(['/bin/sh', str(self.script), 'auto', 'stable'], env=self.env,
                               capture_output=True, text=True, timeout=30)
 
-    def test_complete_first_install_copies_units_and_dropins_then_converts_layout(self):
+    def commit_application(self):
+        # Use the current worker actually installed by the complete shell, not
+        # FieldBox's frozen worker. Only systemd, disk capacity and health are
+        # host boundaries; the application transaction and retained proof are real.
+        spec = importlib.util.spec_from_file_location('first_installed_worker',
+            self.root / selector.SLOTS[0] / 'bounded_update.py')
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        worker._boot, worker.time, worker.shutil = self.box.worker._boot, self.box.worker.time, self.box.worker.shutil
+        self.box.worker = worker
+        for name in selector.MODULES:
+            write(self.box.source / 'scripts/install' / name, (self.repo / 'scripts/install' / name).read_bytes())
+        for name in ('controller_slots.py', 'controller_selector.py'):
+            write(self.box.source / 'messagebox' / name, (ROOT / 'messagebox' / name).read_bytes())
+        raw = build.controller_descriptor(self.repo, 7, 'v0.3.13')
+        write(self.box.source / slots.verify.CONTROLLER_DESCRIPTOR, raw)
+        document = write(self.base / 'descriptor', raw)
+        signature = self.base / 'signature'
+        subprocess.run(['minisign', '-S', '-m', str(document), '-s', str(self.keys[0][1]),
+                        '-x', str(signature)], check=True, capture_output=True)
+        write(self.box.source / slots.verify.CONTROLLER_SIGNATURE, (repr(signature.read_text()) + '\n').encode())
+        self.box.refresh()
+        self.box.install()
+        release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+        self.assertEqual(worker.read_state(self.root, 'journal.json')['kind'], 'application')
+        self.assertEqual(worker.read_state(self.root, 'journal.json')['phase'], 'committed')
+        self.host = Host(self.root)
+        self.host.recovery_run = self.box.run
+        return release
+
+    def test_complete_first_install_commits_application_initializes_slots_and_selects(self):
         result = self.run_bootstrap('cloud')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'etc/button-box-update/installed').exists())
@@ -109,6 +157,101 @@ elif name not in ('systemctl','getent','minisign','espeak-ng'):
         convert = next(i for i,c in enumerate(commands) if c[0]=='python3' and c[-1]=='bootstrap')
         self.assertLess(arm, convert)
         self.assertIn('messagebox-update-discovery.timer', commands[-2])
+        for name in selector.MODULES:
+            self.assertEqual((self.root / selector.SLOTS[0] / name).read_bytes(),
+                             (ROOT / 'scripts/install' / name).read_bytes())
+        self.commit_application()
+        slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+        record = selector.inspect(self.root, selector.SLOTS[0])
+        self.assertFalse(record['legacy'])
+        self.assertEqual((record['version'], record['generation']), ('1.3.0', 7))
+        floor = selector.document(selector.read(self.root, slots.STATE + '/floor.json', mode=0o600))
+        self.assertEqual(floor['value'], {'sequence': 7, 'digest': record['descriptor'], 'version': '1.3.0'})
+        for path, raw in slots.routes().items():
+            self.assertEqual((self.root / path).read_bytes(), raw)
+        self.assertIn(['systemctl','enable','--now','messagebox-update-selector.timer'], self.host.commands)
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
+        # A reboot uses only GOOD, with release trust deliberately unavailable.
+        (self.root / 'etc/button-box-update/release-keys').unlink()
+        shutil.rmtree(self.root / selector.RUN)
+        self.assertEqual(selector.recover(self.root, self.host, execute=self.host.execute), selector.SLOTS[0])
+        self.assertEqual(self.host.recoveries, [selector.SLOTS[0]])
+
+    def test_signed_initial_controller_rejects_unproved_modules_and_replays_before_routing(self):
+        result = self.run_bootstrap('cloud')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release = self.commit_application()
+        before = self.base / 'before-slots'
+        shutil.copytree(self.root, before, symlinks=True)
+        cases = ('module', 'mode', 'missing-signature', 'wrong-key', 'retained-module',
+                 'replay', 'equivocation', 'downgrade', 'damaged-floor')
+        for case in cases:
+            with self.subTest(case=case):
+                shutil.rmtree(self.root)
+                shutil.copytree(before, self.root, symlinks=True)
+                self.host.commands.clear()
+                if case == 'module':
+                    with (self.root / selector.SLOTS[0] / 'bounded_update.py').open('ab') as stream:
+                        stream.write(b'\n# changed installed controller\n')
+                elif case == 'mode':
+                    (self.root / selector.SLOTS[0] / 'bounded_update.py').chmod(0o666)
+                elif case == 'missing-signature':
+                    (release / slots.verify.CONTROLLER_SIGNATURE).unlink()
+                elif case == 'wrong-key':
+                    keys = (self.root / 'etc/button-box-update/release-keys').resolve()
+                    for key in keys.glob('*.pub'):
+                        key.unlink()
+                    write(keys / 'test.pub', self.keys[1][0].read_bytes())
+                elif case == 'retained-module':
+                    (release / 'updater/bounded_update.py').write_bytes(b'# wrong retained bytes\n')
+                else:
+                    raw = (release / slots.verify.CONTROLLER_DESCRIPTOR).read_bytes()
+                    floor = {'sequence': 8 if case == 'replay' else 7, 'digest': selector.digest(raw), 'version': '1.3.0'}
+                    if case == 'equivocation':
+                        floor['digest'] = '0' * 64
+                    if case == 'downgrade':
+                        floor.update(sequence=6, version='1.3.1')
+                    write(self.root / slots.STATE / 'floor.json',
+                          b'broken' if case == 'damaged-floor' else selector.envelope(floor), 0o600)
+                with self.assertRaises(ValueError):
+                    slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+                self.assertEqual(selector.valid(self.root), [])
+                self.assertFalse(any((self.root / p).exists() for p in slots.routes()))
+                self.assertNotIn(['systemctl','enable','--now','messagebox-update-selector.timer'], self.host.commands)
+
+    def test_signed_initialization_write_cuts_retry_with_durable_floor_and_routes(self):
+        result = self.run_bootstrap('cloud')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit_application()
+        before = self.base / 'before-slots'
+        shutil.copytree(self.root, before, symlinks=True)
+        events = []
+        slots.bootstrap(self.root, platform=PLATFORM, run=self.host, step=lambda e,p: events.append((e,p)))
+        for index in range(len(events)):
+            shutil.rmtree(self.root)
+            shutil.copytree(before, self.root, symlinks=True)
+            disk = DurableView(self.root)
+            count = 0
+            def cut(event, path):
+                nonlocal count
+                disk.step(event, path)
+                count += 1
+                if count == index + 1:
+                    raise KeyboardInterrupt('initialization cut')
+            with self.assertRaises(KeyboardInterrupt):
+                slots.bootstrap(self.root, platform=PLATFORM, run=self.host, step=cut)
+            # Retry after process death, then discard all unflushed writes.
+            slots.bootstrap(self.root, platform=PLATFORM, run=self.host, step=disk.step)
+            disk.power_loss()
+            mkdir(self.root / 'run/lock')
+            self.host = Host(self.root)
+            self.host.recovery_run = self.box.run
+            slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+            record = selector.inspect(self.root, selector.SLOTS[0])
+            floor = selector.document(selector.read(self.root, slots.STATE + '/floor.json', mode=0o600))
+            self.assertEqual((floor['value']['sequence'], floor['value']['digest']), (7, record['descriptor']))
+            self.assertEqual(selector.recover(self.root, self.host, execute=self.host.execute), selector.SLOTS[0])
+        print('Signed initial-controller cuts:', len(events))
 
     def test_wacli_first_install_refuses_before_controller_mutation(self):
         result = self.run_bootstrap('wacli')

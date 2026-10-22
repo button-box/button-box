@@ -161,9 +161,13 @@ new Python files, the new services and timer, and the supervisor `messagebox.con
 queue hook. That hook queues bounded bootstrap after the supervisor exits.
 Bootstrap waits for a committed application and the real worker locks.
 
-Bootstrap treats the existing real directory as slot A. It verifies the six
-frozen hashes, installs and flushes the selector, and publishes A's record before
-installing any route. Converted entry points still select A. A trial is permitted
+Bootstrap treats the existing real directory as slot A. It accepts either the six
+exact frozen hashes or the controller named by the committed application's signed
+descriptor. The latter path verifies current release trust, compatibility, the
+sequence/digest/version floor, and every installed module's size, mode and hash.
+It retains the proof and persists the admission floor before publishing `GOOD`.
+It installs and flushes the selector and A's record and modules before installing
+any route. Converted entry points still select A. A trial is permitted
 only after all five routes exist and the independent timer is active. The
 separate generated route filename survives later application manifest updates.
 The original seven fixed unit files are not changed by the payload.
@@ -191,7 +195,9 @@ AF_UNIX IPC, and broker dispatch with Cloud construction blocked. The kernel
 peer identity and service PID remain synthetic. The staged recovery trial also
 substitutes service state; it does not validate native service recovery.
 The complete bootstrap shell test uses real current source, globs, file installs,
-key and policy code, and layout conversion in a redirected root. Pi identity,
+key and policy code, layout conversion, application commit through the installed
+worker, signed A/B initialization, and selection in a redirected root. It also
+tests rejected proofs and initialization write cuts with durability loss. Pi identity,
 root ownership, accounts, and systemd remain host substitutes. A wacli first
 install is rejected before controller mutation.
 Tests do not prove native
