@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from unittest import mock
 from messagebox import software
 
@@ -80,6 +81,27 @@ class CloudIdentityTests(unittest.TestCase):
                     self.assertEqual(json.loads(requests[0].data)["capabilities"], {"audio": True})
                     self.assertIs(json.loads(requests[1].data)["online"], True)
                     self.assertEqual(state["software_version"], "stale")
+
+    def test_every_inbox_poll_declares_its_current_features_in_the_query(self):
+        requests = []
+        def opener(request, *, timeout):
+            requests.append(request)
+            return _Response({'items': []})
+        client = CloudDeviceClient('https://example.invalid/cloud-api/v1',
+            {'device_id': 'synthetic-device-001', 'credential': 'x' * 43}, opener=opener)
+        for cursor in (0, 7, 7):
+            self.assertEqual(client.inbox(cursor), {'items': []})
+        self.assertEqual(len(requests), 3)
+        for request, cursor in zip(requests, (0, 7, 7)):
+            parsed = urlsplit(request.full_url)
+            self.assertEqual(parsed.path, '/cloud-api/v1/device/inbox')
+            self.assertEqual(parse_qs(parsed.query),
+                             {'cursor': [str(cursor)], 'features': ['guided_setup_v1']})
+            self.assertEqual(request.get_method(), 'GET')
+        for invalid in (-1, True, '0'):
+            with self.assertRaises(CloudDeviceError):
+                client.inbox(invalid)
+        self.assertEqual(len(requests), 3)
 
     def test_identity_survives_repeat_load_and_rejects_corruption(self):
         with tempfile.TemporaryDirectory() as directory:

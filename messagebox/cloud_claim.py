@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from messagebox.cloud_device import CLAIM_FILE, CloudDeviceClient, CloudDeviceError, atomic_json, capabilities, open_private_lock
+from messagebox import cloud_setup
 from messagebox.identity import read_box_color
 from messagebox.runtime_paths import NFC_HEALTH_FILE
 from messagebox.qrcodegen import QrCode
@@ -87,6 +88,7 @@ class CloudClaim:
             except CloudDeviceError as exc:
                 raise CloudClaimError("cloud registration is unavailable") from exc
             if result.get("claimed") is True:
+                cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
                 self.path.unlink(missing_ok=True)
                 return {"status": "claimed"}
             claim_id, token = result.get("claim_id"), result.get("claim_token")
@@ -137,6 +139,7 @@ class CloudClaim:
             if current != prior:
                 return result
             if result["claimed"]:
+                cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
                 self.path.unlink(missing_ok=True)
             elif pending and pending["expires_at"] > self.clock():
                 if current and (current["claim_id"] == pending["claim_id"]
@@ -236,6 +239,7 @@ class CloudClaim:
             if not isinstance(result, dict):
                 raise CloudClaimError("cloud claim confirmation is invalid")
             if result.get("claimed") is True:
+                cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
                 self.path.unlink(missing_ok=True)
             elif result.get("claimed") is False:
                 document["physical_confirmed"] = True

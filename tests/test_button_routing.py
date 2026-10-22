@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import json
 import sys
 import tempfile
@@ -29,6 +30,7 @@ class FakeLed:
 
 class ButtonRoutingTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         moments = mock.patch.object(button_send, "play_moment")
         moments.start()
         self.addCleanup(moments.stop)

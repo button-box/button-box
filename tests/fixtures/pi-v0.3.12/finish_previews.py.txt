@@ -1,0 +1,14 @@
+def _finish_previews(self):
+    for operation_id, key in list(self.state["pending_previews"].items()):
+        outcome = self.audio_requests.outcome(key)
+        if outcome in {None, "pending", "claimed"}:
+            continue
+        if outcome == "played":
+            self._ack(operation_id, "applied")
+        elif outcome == "expired":
+            self._ack(operation_id, "expired")
+        else:
+            self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
+                      if outcome == "unknown" else "preview_failed")
+        del self.state["pending_previews"][operation_id]
+        self._save()

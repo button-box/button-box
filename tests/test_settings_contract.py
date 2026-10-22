@@ -44,10 +44,25 @@ class SettingsContractTests(unittest.TestCase):
             self.assertEqual({key: value for key, value in contract["capabilities"].items() if key != "software_update"}, capabilities(nfc=False))
             self.assertEqual(contract["capabilities"]["software_update"]["protocol"], 1)
         self.assertEqual(contract["command_kinds"], sorted([
-            "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview",
+            "audio", "listened", "card_prompt", "setup_greeting", "settings", "preview_ringtone", "voice_preview",
             "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "install_update", "set_update_mode", "delete_message",
             "quiet_now", "mute", "reaction",
         ]))
+
+    def test_exact_step_fixtures_do_not_assign_guided_setup_to_step1(self):
+        directory = REPO / 'docs/fixtures'
+        step1 = json.loads((directory / 'voice-onboarding-step1-04d53cd.json').read_text())
+        step2 = json.loads((directory / 'voice-onboarding-step2-9a3ae40.json').read_text())
+        self.assertEqual(step1['build'], '04d53cd')
+        self.assertEqual(step2['build'], '9a3ae40')
+        self.assertNotIn('guided_setup_v1', step1['capabilities'])
+        self.assertNotIn('setup_greeting', step1['command_kinds'])
+        self.assertNotIn('buttonbox', step1['capabilities']['voice_packs'])
+        self.assertIs(step2['capabilities']['guided_setup_v1'], True)
+        self.assertIn('setup_greeting', step2['command_kinds'])
+        current = json.loads(self.export().stdout)
+        self.assertEqual({**step2, 'build': current['build']}, current)
+        self.assertFalse((directory / 'voice-onboarding-fleet.json').exists())
 
     def alternate_checkout(self, directory):
         repo = Path(directory)

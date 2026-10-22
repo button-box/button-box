@@ -132,7 +132,8 @@ The schema matches the release tooling: `schema: 1`, `product: "button-box"`,
 `release_sequence`, `channel: "stable" | "canary"`, `supported_os`,
 `supported_arch`, `supported_models`, `min_updater_version` as `major.minor.patch`,
 and the existing complete installed-file mapping/hashes. This controller is
-`1.1.0`. Releases that add sounds require `min_updater_version: "1.1.0"`.
+`1.2.0`. The voice release requires `min_updater_version: "1.2.0"`. The updater
+preparation release remains installable with `min_updater_version: "1.1.0"`.
 Sequence ordering is global across channels; version strings are never
 sorted to decide eligibility. Stable boxes reject canaries; canary boxes may
 accept a stable release with a higher signed sequence. Recovery permits only
@@ -146,13 +147,13 @@ unchanged: the signature covers the manifest list and every file byte through
 the signed hashes.
 
 New files are allowed directly in `sounds/cues`, `sounds/cloud`, `sounds/voice`,
-`sounds/ringtones`, or the existing `sounds/voices/{pirate,alien,dj,robot,french,charlie,tata}`
+`sounds/ringtones`, or the existing `sounds/voices/{pirate,alien,dj,robot,french,charlie,tata,buttonbox}`
 folders. WAV basenames must match `[a-z0-9][a-z0-9._-]{0,80}\.wav`.
 `manifest.json` and `cues.json` are also permitted in those folders. Existing
 README files and ringtone lamp files retain only their exact existing mappings.
 Other folders, nested paths, traversal, links and nonregular files are rejected.
 Each WAV must be nonempty RIFF/WAVE PCM, 48 kHz, 16-bit mono, with complete frame
-data. Limits are 2 MiB per sound file, 128 MiB for all sound files (including
+data. Limits are 2 MiB per sound file, 160 MiB for all sound files (including
 metadata), and 2,000 sound files. The shipped tree already exceeds 64 MiB.
 New sounds map beneath `/opt/messagebox/sounds`; original ringtones retain
 `/opt/messagebox/ringtones` for the shared runtime. Both paths live in each
@@ -369,3 +370,12 @@ The journaled directory exchange and attended fixed-controller procedure are
 removed. No shipped box may depend on an SSH or physical repair step. The frozen
 application recovery path still writes metadata and needs separate full-disk
 acceptance. Real Pi power-cut and physical Cloud/wacli acceptance remain open.
+
+## Voice support on an A/B box
+
+This candidate uses controller 1.3.0. It includes the `buttonbox` sound paths,
+the 160 MiB total sound limit, a 1,500-second transfer budget and a 1,800-second
+discovery service limit. Bootstrap installs the discovery drop-in. Keep the
+per-file, count, hash, PCM and archive checks. Do not use the old two-step voice
+release or attended fixed-controller promotion. Use signed A/B controller
+publication. See [the fresh bench procedure](rita-bench-install.md).

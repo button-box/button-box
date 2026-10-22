@@ -4,6 +4,7 @@ Description=Detect Button Box USB microphone and speaker
 After=sound.target
 
 [Service]
+ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/run/messagebox-speaker /etc/tmpfiles.d/messagebox.conf
 Type=oneshot
 RuntimeDirectory=messagebox-audio
 RuntimeDirectoryMode=0755

@@ -746,7 +746,7 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         ):
             self.assertIn(status, script)
         # Mode-specific destinations are exercised by onboarding-ui.test.js.
-        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp,', script)
+        self.assertIn('taskStatus(cloud ? "Press the button and name your box" : "Link WhatsApp", progress.whatsapp,', script)
         self.assertIn('if (routeName === "whatsapp")', script)
         self.assertIn('routeName === "continue"', script)
         self.assertIn('location.replace("#home")', script)
@@ -848,7 +848,7 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", nfc_worker)
         self.assertIn("User=messagebox\n", nfc_worker)
-        self.assertIn("SupplementaryGroups=messagebox i2c gpio audio", nfc_worker)
+        self.assertIn("SupplementaryGroups=messagebox messagebox-settings i2c gpio audio", nfc_worker)
         self.assertIn("EnvironmentFile=/etc/messagebox/env", nfc_worker)
         self.assertIn("RestrictAddressFamilies=AF_UNIX", nfc_worker)
         self.assertIn("User=root\n", completion)

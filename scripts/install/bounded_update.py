@@ -183,11 +183,11 @@ REQUIRED_SOUND_SOURCES = frozenset(SOUND_SOURCES) | frozenset(
 for source in SOUND_SOURCES:
     EXPLICIT_TARGETS[source] = "/opt/messagebox/" + source
 SOUND_PATH = re.compile(
-    r"sounds/(?:cues|cloud|ringtones|voice|voices/(?:pirate|alien|dj|robot|french|charlie|tata))/"
+    r"sounds/(?:cues|cloud|ringtones|voice|voices/(?:pirate|alien|dj|robot|french|charlie|tata|buttonbox))/"
     r"(?:[a-z0-9][a-z0-9._-]{0,80}\.wav|manifest\.json|cues\.json)\Z"
 )
 MAX_SOUND_FILE = 2 * 1024 * 1024
-MAX_SOUND_TOTAL = 128 * 1024 * 1024
+MAX_SOUND_TOTAL = 160 * 1024 * 1024
 MAX_SOUND_FILES = 2000
 RETIRED_SOUNDS = tuple(
     "/opt/messagebox/sounds/guided-reply/" + name + ".wav"

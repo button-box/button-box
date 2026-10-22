@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 from mic_helpers import physical_capture
 import contextlib
 import struct
@@ -16,6 +17,9 @@ from messagebox.settings import defaults
 
 
 class RecordingModesTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def capture(self, root, talk, *, maximum=30, stop=True, silent=False, short=False,
                 carried_press=False):
         clock = [0.0]

@@ -30,7 +30,7 @@ class VoiceCache:
     def __init__(self, directory):
         self.directory = Path(directory)
 
-    def download(self, client, payload):
+    def download(self, client, payload, *, voice_pack=None, text_hash=None):
         if payload.get("use_fallback"):
             return ""
         clip_id = payload.get("clip_id")
@@ -38,7 +38,16 @@ class VoiceCache:
                 or not isinstance(payload.get("sha256"), str) or not SHA.fullmatch(payload["sha256"])
                 or payload.get("content_type") != "audio/wav"):
             return ""
+        if not isinstance(payload.get("media_url"), str) or not payload["media_url"] or len(payload["media_url"]) > 2048:
+            return ""
         directory = self.directory
+        if voice_pack is not None:
+            from messagebox.settings import VOICE_PACKS
+            if (not isinstance(voice_pack, str) or voice_pack not in VOICE_PACKS
+                    or not isinstance(text_hash, str) or not SHA.fullmatch(text_hash)):
+                return ""
+            # Keep the flat cache bound and the player's local-path check.
+            clip_id = hashlib.sha256((voice_pack + ":" + text_hash + ":" + clip_id).encode()).hexdigest()
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = directory / (clip_id + ".wav")
         temporary = directory / ("." + uuid.uuid4().hex + ".part")

@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import math
 import tempfile
 import struct
@@ -32,6 +33,7 @@ class FakeLed:
 
 class MorningRingTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.marker = Path(temporary.name) / "morning-ring.json"
@@ -173,6 +175,9 @@ class MorningRingTests(unittest.TestCase):
 
 
 class ButtonSettingsBehaviorTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def test_manual_ring_request_remains_in_flight_until_ring_finishes(self):
         with tempfile.TemporaryDirectory() as directory:
             request = Path(directory) / "ring-request"

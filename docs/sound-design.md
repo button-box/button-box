@@ -93,7 +93,7 @@ releases and are not current sound instructions.
 
 ## Voice pack acceptance
 
-Installation and bounded preflight require all seven voice sets to validate.
+Installation and bounded preflight require all nine voice sets to validate.
 Capabilities exclude any incomplete or corrupt optional set; missing choices
 do not prevent a runtime restart. Jessica is the
 per-file runtime fallback, and the originals remain in `sounds/voice/`.
@@ -109,5 +109,5 @@ the speaker. For each, preview and switch the setting; confirm the sample, volum
 and dark lamp. Exercise all four talk/review combinations and the go tick,
 checking that no start cue is captured and the deletion cue is clear. Verify a matched Cloud
 name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
-lines. Confirm volume-only and ringtone-only previews retain their behavior.
+lines. Confirm that volume and ringtone changes each say "Setting saved!" once.
 Offline checks do not establish speaker quality or physical microphone timing.

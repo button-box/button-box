@@ -18,9 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from messagebox import cloud_setup
 from messagebox.cloud_device import (CLOUD_DIR, CloudAckGone, CloudDeviceClient, CloudDeviceError, CloudRateLimited,
                                      CloudVoiceNotFound, RATE_LIMIT_DEFAULT_SECONDS, atomic_json, capabilities)
-from messagebox.audio_requests import AudioRequests, preview_key, success_key
+from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, preview_key, success_key
 from messagebox.contacts import ContactError, ContactStore, normalize_card_uid
 from messagebox.guided_reply import cloud_outbox_lock, cloud_upload_payload
 from messagebox.cloud_events import CloudWorkEvents
@@ -214,7 +215,10 @@ class CloudRuntime:
         self.boot_id = _current_boot_id() if boot_id is None else boot_id
         self.audio_requests = AudioRequests(self.state_path.parent / "audio-requests",
             clock=clock, monotonic=monotonic, boot_id=self.boot_id)
+        self.optional_audio_requests = OptionalAudioRequests(self.state_path.parent / "optional-audio-requests",
+            clock=clock, monotonic=monotonic, boot_id=self.boot_id)
         self.state = self._load()
+        self.state.setdefault("pending_optional_audio", {})
         self._status_schedule = {}
         self._status_backoff_until = float("-inf")
 
@@ -244,6 +248,8 @@ class CloudRuntime:
                 or state.get("outbox_status_cursor", 0) < 0
                 or type(state.get("queue_hold_sequence", -1)) is not int
                 or state.get("queue_hold_sequence", -1) < -1):
+            raise CloudRuntimeError("cloud state is invalid")
+        if not isinstance(state.setdefault("pending_optional_audio", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
         if not isinstance(state.setdefault("pending_previews", {}), dict):
             raise CloudRuntimeError("cloud state is invalid")
@@ -867,6 +873,7 @@ class CloudRuntime:
             metadata["state"] = "pending"
             atomic_json(job_dir / "job.json", metadata)
             return
+        cloud_setup.SetupGuide().sent(metadata["message_id"], metadata.get("account_scope"), status)
         self.queue_send_success(metadata, status)
         metadata.update({"state": "cloud_retained", "cloud_message_id": status["message_id"],
                          "cloud_state": status["state"], "expires_at": status["expires_at"],
@@ -899,6 +906,7 @@ class CloudRuntime:
             return
         if metadata.get("account_scope") != scope:
             return
+        cloud_setup.SetupGuide().sent(metadata["message_id"], scope, status, ready=True)
         self.audio_requests.enqueue_for(success_key(scope, metadata["message_id"]),
             "success", scope, remaining)
 
@@ -1391,6 +1399,7 @@ class CloudRuntime:
         if (item["operation_id"] in self.state["pending_settings"]
                 or item["operation_id"] in self.state["pending_nfc"]
                 or item["operation_id"] in self.state["pending_previews"]
+                or item["operation_id"] in self.state["pending_optional_audio"]
                 or item["operation_id"] in self.state["pending_listened"]):
             return
         kind, payload = item["kind"], item["payload"]
@@ -1424,6 +1433,32 @@ class CloudRuntime:
             return self._listened(item, server_time)
         if kind == "card_prompt":
             return self._card_prompt(item)
+        if kind == "setup_greeting":
+            if capabilities().get("guided_setup_v1") is not True:
+                raise CloudRuntimeError("guided setup is unavailable")
+            snapshot = self._snapshot()
+            settings, warning = self.settings.load()
+            if warning or payload.get("voice_pack") != settings["voice_pack"]:
+                raise CloudRuntimeError("setup greeting voice is invalid")
+            if (not isinstance(payload.get("media_url"), str) or not payload["media_url"]
+                    or len(payload["media_url"]) > 2048
+                    or any(not isinstance(payload.get(key), str) or not _SHA.fullmatch(payload[key])
+                           for key in ("clip_id", "sha256", "text_hash"))
+                    or payload.get("content_type") != "audio/wav"):
+                self._ack(item["operation_id"], "rejected", error_code="setup_greeting_invalid")
+                return
+            clip = VoiceCache(self.state_path.parent / "voice-lines").download(self.client, payload,
+                voice_pack=settings["voice_pack"], text_hash=payload["text_hash"])
+            if clip:
+                key = "setup_greeting:" + item["operation_id"]
+                self.optional_audio_requests.enqueue_for(key, "setup_greeting", snapshot["account_scope"],
+                    item["expires_at"] - self.server_now(), clip=clip)
+                self.state["pending_optional_audio"][item["operation_id"]] = key
+                self._save()
+                self._ack(item["operation_id"], "received")
+            else:
+                self._ack(item["operation_id"], "rejected")
+            return
         if kind in {"quiet_now", "mute"}:
             key = "quiet_until" if kind == "quiet_now" else "muted"
             if key not in payload:
@@ -1446,13 +1481,39 @@ class CloudRuntime:
                 raise CloudSettingsRejected("settings_revision_invalid")
             # Normalize pre-update commands before replay comparison and ACKs.
             ignored = ignored_settings(document)
+            intent_path = self._intent_path(item["operation_id"])
+            has_intent = True
             try:
-                document = validate_settings(document)
+                intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                intent, has_intent = {}, False
+            if not isinstance(intent, dict):
+                raise CloudSettingsRejected("settings_revision_invalid")
+            try:
+                retained_voice = current["voice_pack"]
+                if "voice_pack" not in document and "resolved_voice_pack" in intent:
+                    retained_voice = intent["resolved_voice_pack"]
+                    if not isinstance(retained_voice, str) or retained_voice not in VOICE_PACKS:
+                        raise CloudSettingsRejected("settings_revision_invalid")
+                # A pre-fix intent can use the voice already saved at this desired revision.
+                elif "voice_pack" not in document and not (has_intent and current["revision"] == desired):
+                    try:
+                        marker = json.loads(APPLIED_FILE.read_text(encoding="utf-8"))
+                    except (OSError, ValueError) as exc:
+                        raise CloudSettingsRejected("settings_revision_invalid") from exc
+                    applied = marker.get("settings") if isinstance(marker, dict) else None
+                    if (not isinstance(applied, dict) or applied.get("version") != 1
+                            or type(applied.get("revision")) is not int
+                            or not 0 <= applied["revision"] <= current["revision"]
+                            or marker.get("revision") != applied["revision"]):
+                        raise CloudSettingsRejected("settings_revision_invalid")
+                    # Old applied snapshots without this field used Jessica.
+                    retained_voice = normalize_voice_pack(applied.get("voice_pack"))
+                document = validate_settings(document, default_voice_pack=retained_voice)
             except SettingsError as exc:
                 raise CloudSettingsRejected("settings_unsupported") from exc
             candidate = {key: value for key, value in document.items()
                          if key not in {"version", "revision"}}
-            intent_path = self._intent_path(item["operation_id"])
             if current["revision"] == desired:
                 if current != {"version": 1, "revision": desired, **candidate}:
                     raise CloudSettingsRejected("settings_revision_conflict")
@@ -1466,9 +1527,9 @@ class CloudRuntime:
                 if (expected < current["revision"] < desired
                         and current["revision"] == self.state.get("cloud_settings_revision")):
                     expected = current["revision"]
-                # Persist before mutation so a command replay retains its origin
-                # and whether values changed, rather than just its revision.
-                if not intent_path.exists():
+                # Persist the resolved voice before mutation: an older revision
+                # can finish applying before this command is replayed.
+                if not has_intent:
                     atomic_json(intent_path, {"settings_changed": any(current[key] != value
                         for key, value in candidate.items()),
                         # Volume and ringtone changes preview the ringtone instead of the saved cue.
@@ -1477,9 +1538,12 @@ class CloudRuntime:
                         "ringtone_changed": ("ringtone_id" in candidate
                                              and current.get("ringtone_id") != candidate["ringtone_id"]),
                         "voice_changed": current.get("voice_pack") != candidate["voice_pack"],
+                        "resolved_voice_pack": candidate["voice_pack"],
                         "ignored_settings": ignored,
                         "boot_id": self.boot_id,
                         "account_scope": (self.state.get("snapshot") or {}).get("account_scope")})
+                elif "resolved_voice_pack" not in intent:
+                    atomic_json(intent_path, {**intent, "resolved_voice_pack": candidate["voice_pack"]})
                 try:
                     updated = self.settings.update(candidate, expected, desired_revision=desired)
                 except RevisionConflict as exc:
@@ -1526,9 +1590,9 @@ class CloudRuntime:
                 raise CloudRuntimeError("voice pack is invalid")
             scope = self._snapshot()["account_scope"]
             key = preview_key(item["operation_id"])
-            self.audio_requests.enqueue_for(key, "voice_preview", scope,
+            self.optional_audio_requests.enqueue_for(key, "voice_preview", scope,
                 min(item["expires_at"], server_time + 30) - self.server_now(), voice_pack=pack)
-            self.state["pending_previews"][item["operation_id"]] = key
+            self.state["pending_optional_audio"][item["operation_id"]] = key
             self._save()
             self._ack(item["operation_id"], "received")
         elif kind == "preview_ringtone":
@@ -1551,19 +1615,21 @@ class CloudRuntime:
             raise CloudRuntimeError("cloud command is unsupported")
 
     def _finish_previews(self):
-        for operation_id, key in list(self.state["pending_previews"].items()):
-            outcome = self.audio_requests.outcome(key)
-            if outcome in {None, "pending", "claimed"}:
-                continue
-            if outcome == "played":
-                self._ack(operation_id, "applied")
-            elif outcome == "expired":
-                self._ack(operation_id, "expired")
-            else:
-                self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
-                          if outcome == "unknown" else "preview_failed")
-            del self.state["pending_previews"][operation_id]
-            self._save()
+        for pending, requests in ((self.state["pending_previews"], self.audio_requests),
+                                  (self.state["pending_optional_audio"], self.optional_audio_requests)):
+            for operation_id, key in list(pending.items()):
+                outcome = requests.outcome(key)
+                if outcome in {None, "pending", "claimed"}:
+                    continue
+                if outcome == "played":
+                    self._ack(operation_id, "applied")
+                elif outcome == "expired":
+                    self._ack(operation_id, "expired")
+                else:
+                    self._ack(operation_id, "rejected", error_code="preview_outcome_unknown"
+                              if outcome == "unknown" else "preview_failed")
+                del pending[operation_id]
+                self._save()
 
     def _finish_settings(self):
         try:
@@ -1571,10 +1637,14 @@ class CloudRuntime:
         except (OSError, ValueError):
             return
         revision = marker.get("revision") if isinstance(marker, dict) else None
+        applied = marker.get("settings") if isinstance(marker, dict) else None
+        if not isinstance(applied, dict):
+            return
+        applied = {**applied, "voice_pack": normalize_voice_pack(applied.get("voice_pack"))}
         for operation_id, document in list(self.state["pending_settings"].items()):
             if isinstance(document, dict) and "ringtone_id" in document:
                 document = {**document, "ringtone_id": normalize_ringtone_id(document["ringtone_id"]),
-                            "voice_pack": normalize_voice_pack(document.get("voice_pack"))}
+                            "voice_pack": normalize_voice_pack(document.get("voice_pack", applied["voice_pack"]))}
             desired = document.get("revision") if isinstance(document, dict) else None
             if type(revision) is int and type(desired) is int and revision >= desired:
                 try:
@@ -1583,7 +1653,7 @@ class CloudRuntime:
                     intent = {}
                 ignored = intent.get("ignored_settings", [])
                 fields = {"ignored_settings": ignored} if ignored else {}
-                if marker.get("settings") == document:
+                if applied == document:
                     self._queue_settings_saved(operation_id, marker)
                     self._ack(operation_id, "applied", applied_revision=desired, **fields)
                 else:
@@ -1657,7 +1727,7 @@ class CloudRuntime:
                 entry.get("sequence", 0))):
             if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
                     or type(item.get("sequence")) is not int or item["sequence"] < 0
-                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
+                    or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "setup_greeting", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
                     or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
                     or not isinstance(item.get("payload"), dict)
                     or item.get("kind") == "nfc_unpair" and item["payload"] and (

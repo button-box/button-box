@@ -1,7 +1,7 @@
 # Button Box voice packs
 
 Pirate, Alien, DJ, Robot, French and Charlie each contain 19 ElevenLabs lines,
-generated on a paid plan with `eleven_v3`, seed 7. Jessica remains in `../voice/`.
+generated on a paid plan with `eleven_v3`, seed 7. Button Box is the local default. Jessica remains in `../voice/` for fallback and rollback.
 Each manifest retains the generation metadata, transcript and SHA-256 of every
 shipped recording, including DJ's music bed and Robot's post effects.
 
@@ -21,9 +21,8 @@ each missing line once. Capabilities list only complete, validated packs, with
 Jessica always included. No audio is synthesized on the box.
 
 Every pack includes `voice-online-ready.wav` for claimed Cloud reconnects.
-`voice-setup-online.wav` is only in the default Jessica directory, because setup
-always uses the default voice. Both are registered with PCM durations and
-SHA-256 checksums in their manifests.
+The old `voice-setup-online.wav` remains available. Cloud setup now uses the
+Button Box guide lines. See [voice onboarding](../../docs/voice-onboarding.md).
 
 Every pack includes the B48 generic `voice-card-prompt.wav` and pairing
 `voice-card-saved.wav`; transcripts match the source manifests by SHA-256.
@@ -57,3 +56,11 @@ Each pack says them in its own character, in English (Tata included), with
 `docs/message-age-phrase-lines.md`. Most takes use seed 7; retakes use the seed
 in the manifest. These lines are optional: a pack without them still installs,
 the box falls back to Jessica, and without a Jessica line it says nothing.
+
+## buttonbox
+
+The designed Button Box voice is the default in Cloud and wacli modes. The pack
+contains the shared Jessica filenames, guide lines, settings confirmation, and
+update lines. Its single `lines` array includes age and reaction lines as well.
+Installation checks every listed file, format, and hash. These supplied assets
+are used without new synthesis. Jessica remains a valid explicit selection.

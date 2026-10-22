@@ -1,5 +1,7 @@
 """Local policy, one-use GPIO confirmation, mic boundary and unprivileged peers."""
 
+from speaker_helpers import isolate_audio
+
 import contextlib
 import os
 import sys
@@ -57,6 +59,7 @@ class UpdateCueTests(unittest.TestCase):
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -356,6 +359,9 @@ class PolicyTests(unittest.TestCase):
 
 
 class ButtonBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+
     def test_short_long_expired_and_already_held_confirmation_never_mint_capture(self):
         for duration, expired, cue_pending in ((1, False, False), (3.2, False, False), (3.2, True, False), (3.2, False, True)):
             with self.subTest(duration=duration, expired=expired, cue_pending=cue_pending):

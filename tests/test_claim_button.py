@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio
 import contextlib
 import json
 import subprocess
@@ -22,6 +23,7 @@ CloudDeviceError = cloud_claim.CloudDeviceError
 
 class ClaimButtonTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -65,7 +67,7 @@ class ClaimButtonTests(unittest.TestCase):
         self.assertEqual(self.events, ["press", "confirm"])
         self.assertTrue(json.loads(self.claim.path.read_text())["physical_confirmed"])
         run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, str(self.cues["press"])],
-                                    check=True, timeout=5)
+                                    check=True, timeout=5, stderr=subprocess.PIPE)
 
     def test_unrecorded_claim_outcomes_play_press_and_failure(self):
         for outcome in ("missing", "expired", "corrupt", "network", "invalid"):
@@ -141,8 +143,8 @@ class ClaimButtonTests(unittest.TestCase):
              mock.patch.object(button_send.subprocess, "run", side_effect=OSError("private")) as run:
             button_send.play_setup_online(cues)
             button_send.play_setup_online(cues)
-        run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, str(cues["online"])],
-                                    check=True, timeout=5)
+        run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, str(button_send.sound_pack.voice_path("setup-scan"))],
+                                    check=True, timeout=20, stderr=subprocess.PIPE)
         self.assertNotEqual(cues["online"], self.cues["press"])
         self.assertNotEqual(cues["online"], self.cues["fail"])
 
