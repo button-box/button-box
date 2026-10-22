@@ -4,12 +4,14 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -79,6 +81,22 @@ def flush(path, step=checkpoint):
         step('directory_fsync', str(path))
     finally:
         os.close(fd)
+
+
+def settle(root, relative, names, step=checkpoint):
+    # Equality proves identity, not durability after an interrupted rename.
+    for name in names:
+        path = Path(root) / relative / name
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+            step('existing_file_fsync', str(path))
+        finally:
+            os.close(fd)
+    path = Path(root) / relative
+    while path != Path(root):
+        flush(path, step)
+        path = path.parent
 
 
 def mkdir(path, step=checkpoint):
@@ -207,7 +225,7 @@ def python_command(root, slot, arguments, python=sys.executable):
     # -B alone still reads old .pyc files. Use an unwritten volatile cache
     # prefix so accepted source hashes identify the bytes Python executes.
     return [python, '-B', '-X', 'pycache_prefix=' + str(Path(root) / RUN / 'unused'),
-            str(Path(root) / slot / arguments[0]), *arguments[1:]]
+            *(arguments if arguments[0] == '-c' else (str(Path(root) / slot / arguments[0]), *arguments[1:]))]
 
 
 def execute(root, slot, arguments, timeout=180):
@@ -227,14 +245,45 @@ def execute(root, slot, arguments, timeout=180):
         process.stdout.close()
 
 
-def recover(root, run, *, excluded=(), execute=execute, boot=True):
+def recovered(root):
+    """Read-only boot gate: terminal journal, exact pointer, no install inhibit."""
+    state = 'var/lib/button-box-update/'
+    if os.path.lexists(Path(root) / state / 'install-inhibit'):
+        raise ValueError('application still inhibited')
+    journal = document(read(root, state + 'journal.json', 1024 * 1024, 0o600))
+    if (not isinstance(journal, dict) or journal.get('format') != 1 or journal.get('kind') not in {'application', 'bootstrap'}
+            or journal.get('phase') not in {'committed', 'rolled_back'}):
+        raise ValueError('application recovery incomplete')
+    expected = journal.get('new' if journal['phase'] == 'committed' else 'old')
+    if not isinstance(expected, str) or not re.fullmatch(r'/opt/messagebox-releases/[A-Za-z0-9._-]+-[0-9a-f]{40}', expected):
+        raise ValueError('unsafe recovered pointer')
+    pointer = Path(root) / 'opt/messagebox'
+    if journal['kind'] == 'bootstrap' and journal['phase'] == 'rolled_back':
+        if pointer.is_symlink() or not pointer.is_dir():
+            raise ValueError('bootstrap restore incomplete')
+    else:
+        if os.readlink(pointer) != expected:
+            raise ValueError('application pointer mismatch')
+        read(root, expected.lstrip('/') + '/release.json')
+        known = document(read(root, state + 'known-good.json', mode=0o600))
+        if not isinstance(known, dict) or known.get('current') != expected:
+            raise ValueError('known-good pointer mismatch')
+
+
+def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True, deadline=None):
+    deadline = deadline or time.monotonic() + 380
     with lock(root, 'gate'):
         stop(root, run)
-        for slot, value in valid(root):
+        choices = sorted(valid(root), key=lambda item: item[0] not in preferred)
+        for slot, value in choices:
             if slot in excluded:
                 continue
             try:
-                execute(root, slot, ('bounded_update.py', 'recover', *(('--boot',) if boot else ())))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                execute(root, slot, ('bounded_update.py', 'recover', *(('--boot',) if boot else ())), min(180, remaining))
+                recovered(root)
                 choose(root, slot, value)
                 (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
                 return slot
@@ -289,10 +338,15 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
             # deadline above and fixed worker timeout remain effective.
             if call(run, ['systemctl', 'show', 'messagebox-update-install.service', '--property=ActiveState', '--value']).stdout.strip() in {'active', 'activating', 'deactivating', 'reloading'}:
                 return
-            excluded = (current['slot'],) if ('current' in locals() and not current['trial']
-                and any(s != current['slot'] for s, _ in valid(root))) else ()
-            recover(root, run, excluded=excluded, execute=execute, boot=False)
-            call(run, ['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'])
+            preferred = (tuple(s for s, _ in valid(root) if s != current['slot'])
+                         if 'current' in locals() and not current['trial'] else ())
+            try:
+                recover(root, run, preferred=preferred, execute=execute, boot=False,
+                        deadline=time.monotonic() + 380)
+            finally:
+                # Even a transient recovery error must not strand the selected
+                # accepted controller. The next timer run checks it again.
+                call(run, ['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'])
     except BlockingIOError:
         return  # The bounded publication service owns a live trial.
 
@@ -339,6 +393,7 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
     discovery = document(call(run, sandbox(root, slot, 'update_discovery.py', '--self-test'), 25).stdout)
     if discovery != {'protocol': 1, 'dry_run': True}:
         raise ValueError('discovery trial result')
+    recovery_trial(root, slot, execute)
     call(run, ['systemctl', 'start', 'messagebox-update-controller.service'])
     while time.monotonic() < deadline:
         try:
@@ -352,20 +407,91 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
                     raise ValueError('no fresh process evidence')
             execute(root, slot, ('health-probe.py', '--current'), 15)
             inspect(root, slot, value)
-            write(Path(root) / slot / 'GOOD', envelope(value), step=step)
-            choose(root, slot, value, step=step)
-            (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
-            step('trial_complete', slot)
-            return
         except (OSError, ValueError, subprocess.SubprocessError):
             time.sleep(0.2)
+            continue
+        write(Path(root) / slot / 'GOOD', envelope(value), step=step)
+        choose(root, slot, value, step=step)
+        (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
+        step('trial_complete', slot)
+        return
     raise ValueError('trial failed or timed out')
+
+
+def recovery_trial(root, slot, execute):
+    # Exercise the real candidate CLI and filesystem rollback on a staged
+    # format-1 interrupted journal. Only systemctl is substituted in the child;
+    # it must never operate on live services from this isolated root.
+    journal = document(read(root, 'var/lib/button-box-update/journal.json', 1024 * 1024, 0o600))
+    with tempfile.TemporaryDirectory(prefix='recovery-', dir=Path(root) / RUN) as directory:
+        stage = Path(directory)
+        journal.update(phase='switched', kind='application')
+        for name in ('old', 'new'):
+            write(stage / journal[name].lstrip('/') / 'release.json', b'{}\n', durable=False)
+        (stage / 'opt/messagebox').symlink_to(journal['new'])
+        state = stage / 'var/lib/button-box-update'
+        write(state / 'journal.json', canonical(journal), mode=0o600, durable=False)
+        write(state / 'install-inhibit', b'{}\n', durable=False)
+        snapshot = stage / journal['backup'].lstrip('/')
+        mkdir(snapshot / 'files')
+        (snapshot / 'files').chmod(0o700)
+        units = {n: {'active': 'inactive', 'enabled': 'disabled'} for n in journal['units']}
+        write(snapshot / 'state.json', canonical({'format': 1, 'files': [], 'units': units}), mode=0o600, durable=False)
+        program = ("import sys,subprocess;sys.path.insert(0,sys.argv[1]);import bounded_update as u;"
+                   "service=lambda c,**k:subprocess.CompletedProcess(c,0,"
+                   "'inactive\\n' if c[1]=='is-active' else 'disabled\\n' if c[1]=='is-enabled' else '');"
+                   "original=u.recover_transaction;u.recover_transaction=lambda **k:original(run=service,**k);"
+                   "u.main(['--root',sys.argv[2],'recover','--boot'])")
+        execute(root, slot, ('-c', program, str(Path(root) / slot), str(stage)), 25)
+        recovered(stage)
+
+
+def admit(root, source):
+    """Protect the permanent integration even when the selected worker is old."""
+    units = (*CONSUMERS, 'messagebox-update-recovery.service',
+             'messagebox-update-selector.service', 'messagebox-update-selector.timer',
+             'messagebox-update-supervisor.timer', 'messagebox-update-discovery.timer')
+    protected = {'/etc/systemd/system/' + name for name in units}
+    for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer'):
+        if (Path(source) / 'systemd' / name).read_bytes() != read(root, 'etc/systemd/system/' + name):
+            raise ValueError('fixed selector unit changed')
+    for path in (Path(source) / 'systemd').rglob('*'):
+        if path.is_file() and path.parent.name in {u + '.d' for u in units}:
+            if path.read_bytes() != read(root, 'etc/systemd/system/' + path.parent.name + '/' + path.name):
+                raise ValueError('fixed controller route changed')
+            protected.add('/etc/systemd/system/' + path.parent.name + '/' + path.name)
+    return protected
+
+
+def install(root, worker, transaction, source, *args, **kwargs):
+    protected = admit(root, source)
+    backup, atomic = worker.create_backup, worker._atomic_install
+    # Fixed bytes need neither rewriting nor rollback. In particular, legacy
+    # rollback unlinks a file before restore; keep the permanent gate out of it.
+    worker.create_backup = lambda destination,r,entries,*a,**k: backup(destination,r,
+        [e for e in entries if e['target'] not in protected],*a,**k)
+    worker._atomic_install = lambda source,destination,*a,**k: (None if '/' + str(destination.relative_to(root)) in protected
+                                                              else atomic(source,destination,*a,**k))
+    try:
+        return transaction(source, *args, **kwargs)
+    finally:
+        worker.create_backup, worker._atomic_install = backup, atomic
+
+
+def install_program(root, slot):
+    # Only the verified child imports controller code. Its signature/extraction
+    # and transaction paths remain unchanged; admission runs before mutation.
+    return ("import sys,runpy;from pathlib import Path;sys.path.insert(0," + repr(str(Path(root) / slot)) + ");"
+            "import update_controller as c;guard=runpy.run_path(" + repr(str(Path(root) / HOME)) + ")['install'];"
+            "original=c.update.install_transaction;"
+            "c.update.install_transaction=lambda source,*a,**k:guard(Path(" + repr(str(root)) + "),c.update,original,source,*a,**k);"
+            "sys.argv=['update_controller.py','install'];c.main()")
 
 
 def run_consumer(root, command):
     with lock(root, 'gate', shared=True):
         value = selected(root)
-        arguments = COMMANDS[command]
+        arguments = ('-c', install_program(root, value['slot'])) if command == 'install' else COMMANDS[command]
     # Resolve once; changes stop this service's cgroup before slot reuse.
     os.execv(sys.executable, python_command(root, value['slot'], arguments))
 

@@ -100,6 +100,7 @@ def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: No
                 raise ValueError('frozen selector changed')
         except FileNotFoundError:
             initial.write(root / SELECTOR, raw, step=step)
+        initial.settle(root, str(Path(SELECTOR).parent), (Path(SELECTOR).name,), step)
         api = selector(root / SELECTOR)
         if not api.valid(root):
             for name, expected in LEGACY.items():
@@ -107,6 +108,8 @@ def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: No
                     raise ValueError('unknown initial controller')
             record = identity(api, root, api.SLOTS[0], generation=0, version='1.1.0', descriptor='', legacy=True)
             api.write(root / api.SLOTS[0] / 'GOOD', api.envelope(record), step=step)
+        for slot, _ in api.valid(root):
+            api.settle(root, slot, (*api.MODULES, 'GOOD'), step)
         with api.lock(root, 'gate'):
             if (not any((root / p).exists() for p in routes())
                     and len(api.valid(root)) == 1 and api.valid(root)[0][1]['legacy']):
@@ -118,6 +121,7 @@ def bootstrap(root=Path('/'), *, run=subprocess.run, step=lambda event, path: No
                 old = None
             if old != content:
                 api.write(root / path, content, step=step)
+            api.settle(root, str(Path(path).parent), (Path(path).name,), step)
         api.call(run, ['systemctl', 'daemon-reload'])
         effective_routes(root, api, run)
         api.call(run, ['systemctl', 'enable', '--now', 'messagebox-update-selector.timer'])
@@ -163,6 +167,9 @@ def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda ev
         if current['trial']:
             raise ValueError('trial already active')
         working = api.inspect(root, current['slot'])
+        # A timer can observe GOOD between rename and directory fsync. Before
+        # any retry returns or consumes the spare, finish that durability work.
+        api.settle(root, current['slot'], (*api.MODULES, 'GOOD'), step)
         if verify._controller_version(value['controller_version']) < verify._controller_version(working['version']):
             raise ValueError('controller downgrade')
         if working['descriptor'] == digest:

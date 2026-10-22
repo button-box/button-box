@@ -9,8 +9,12 @@ import errno
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import socket
+import threading
+import types
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +28,62 @@ from test_release_tooling import build
 from test_update_discovery import PLATFORM, verify
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class DurableView:
+    """Discard unsynced contents AND directory entries, not just stop execution.
+
+    This models the conservative fsync contract, not ext4 writeback scheduling.
+    File data follows inode identity across rename; only directory fsync commits
+    namespace changes. Unflushed new inodes have no recoverable data.
+    """
+    def __init__(self, root):
+        self.root = root
+        self.files, self.dirs = {}, {}
+        self.root_inode = root.stat().st_ino
+        for directory, _, names in os.walk(root):
+            path = Path(directory)
+            self.directory(path)
+            for name in names:
+                file = path / name
+                if file.is_file() and not file.is_symlink():
+                    self.files[file.stat().st_ino] = file.read_bytes()
+
+    def directory(self, path):
+        entries = {}
+        for child in path.iterdir():
+            info = child.lstat()
+            kind = 'link' if child.is_symlink() else 'dir' if child.is_dir() else 'file'
+            entries[child.name] = (kind, info.st_ino, info.st_mode & 0o777,
+                                   os.readlink(child) if kind == 'link' else None)
+        self.dirs[path.stat().st_ino] = entries
+
+    def step(self, event, name):
+        path = Path(name)
+        if event in {'file_fsync', 'existing_file_fsync'}:
+            if event == 'file_fsync':
+                path = path.with_name(path.name + '.tmp')
+            self.files[path.stat().st_ino] = path.read_bytes()
+        elif event == 'directory_fsync':
+            self.directory(path)
+
+    def power_loss(self):
+        shutil.rmtree(self.root)
+        self.root.mkdir(mode=0o755)
+        def restore(path, inode):
+            for name, (kind, number, mode, target) in self.dirs.get(inode, {}).items():
+                child = path / name
+                if kind == 'link':
+                    child.symlink_to(target)
+                elif kind == 'dir':
+                    child.mkdir(mode=mode)
+                    child.chmod(mode)
+                    restore(child, number)
+                else:
+                    child.write_bytes(self.files.get(number, b''))
+                    child.chmod(mode)
+        restore(self.root, self.root_inode)
+        shutil.rmtree(self.root / 'run', ignore_errors=True)
 
 
 class Host:
@@ -45,6 +105,8 @@ class Host:
         write(root / 'run/messagebox-audio/audio.env',
               b'MSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\nMSGBOX_SPK_DEV=plughw:CARD=Device,DEV=0\n')
         self.real_run = subprocess.run
+        self.recovery_run = None
+        self.recoveries = []
 
     def __call__(self, command, **kwargs):
         self.commands.append(command)
@@ -77,6 +139,14 @@ class Host:
                 return b''
             if slot in self.fail_recovery:
                 raise ValueError('injected application recovery failure')
+            spec = importlib.util.spec_from_file_location('actual_slot_recovery', root / slot / 'bounded_update.py')
+            worker = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(worker)
+            self.recoveries.append(slot)
+            try:
+                worker.recover_transaction(root=root, run=self.recovery_run, start='--boot' not in arguments)
+            except Exception as exc:
+                raise ValueError('actual recovery command failed') from exc
             return b''
         if arguments[0] == 'health-probe.py':
             spec = importlib.util.spec_from_file_location('slot_health', root / slot / 'health-probe.py')
@@ -108,17 +178,75 @@ class Host:
         if not self.fresh:
             return  # A success result alone must not create GOOD.
         context = selector.document(selector.read(root, 'run/messagebox-update/transaction.json'))
-        # Run the actual broker evidence path after /run was cleared. Only
-        # device identity and the kernel/process boundary use synthetic values.
-        from test_update_approval import controller
+        # Real application producers -> AF_UNIX IPC -> broker dispatch/evidence.
+        # Peer credentials/MainPID and hardware remain host boundaries.
+        from test_mic_access import runtime as button_send
+        software, voicepoll, cloud_runtime = (importlib.import_module('messagebox.' + name)
+                                             for name in ('software', 'voicepoll', 'cloud_runtime'))
+        slot = selector.selected(root)['slot']
+        with mock.patch.dict(sys.modules):
+            for name in ('release_verify', 'trust_update', 'bounded_update', 'update_controller'):
+                spec = importlib.util.spec_from_file_location(name, root / slot / (name + '.py'))
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                spec.loader.exec_module(module)
+            controller = module
         app = {k: context[k] for k in ('software_version', 'software_commit')}
-        with mock.patch.object(controller, 'RUN', root / 'run/messagebox-update'), \
-                mock.patch.object(controller, 'installed_identity', return_value=app), \
+        socket_path = str(root.parent / 'readiness.sock')
+        errors = []
+        requests = []
+        with contextlib.ExitStack() as stack:
+            for module, name, replacement in (
+                (controller, 'RUN', root / 'run/messagebox-update'),
+                (controller, 'STATE', root / 'var/lib/button-box-update'),
+                (controller, 'ROOT', root),
+                (controller, 'read', lambda n,d=None: controller.update.read_state(root,n,d)),
+                (controller, 'save', lambda n,v,mode=0o600: controller.update.save_state(root,n,v,mode)),
+                (controller, 'unit_pid', lambda unit: os.getpid()),
+                (controller.pwd, 'getpwnam', lambda name: types.SimpleNamespace(pw_uid=os.geteuid())),
+                (software, 'CONTROL_SOCKET', socket_path), (software, 'software_fields', lambda: app),
+                (software, '_ready_at', {}),
+                (button_send, 'button', types.SimpleNamespace(is_pressed=False)),
+            ):
+                stack.enter_context(mock.patch.object(module, name, replacement, create=True))
+            stack.enter_context(mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'wacli'}))
+            stack.enter_context(mock.patch.object(cloud_runtime, 'CloudRuntime', side_effect=AssertionError('Cloud blocked')))
+            stack.enter_context(mock.patch.object(voicepoll, 'load_seen', return_value=set()))
+            stack.enter_context(mock.patch.object(voicepoll, 'load_contact_authorizations', return_value={}))
+            stack.enter_context(mock.patch.object(voicepoll, 'wacli', return_value=types.SimpleNamespace(stdout='{}')))
+            stack.enter_context(mock.patch.object(voicepoll.time, 'sleep', side_effect=KeyboardInterrupt))
+            with mock.patch.object(controller, 'installed_identity', return_value=app), \
                 mock.patch.object(controller.update, '_boot', return_value=context['boot']), \
                 mock.patch.object(controller.update, '_process_token', return_value='123'):
-            broker = controller.Controller()
-            for name in ('button', 'heartbeat'):
-                broker.evidence(name, app, os.getpid())
+                broker = controller.Controller()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    Path(socket_path).unlink(missing_ok=True)
+                    server.bind(socket_path)
+                    server.listen(2)
+                    server.settimeout(5)
+                    def serve():
+                        try:
+                            for _ in range(2):
+                                connection, _ = server.accept()
+                                with connection:
+                                    request = json.loads(connection.recv(16384))
+                                    requests.append(request.get('command'))
+                                    answer = broker.dispatch(request, (os.getpid(), os.geteuid(), os.getegid()))
+                                    connection.sendall(selector.canonical(answer))
+                        except BaseException as exc:
+                            errors.append(exc)
+                    thread = threading.Thread(target=serve)
+                    thread.start()
+                    button_send.runtime_readiness()
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            voicepoll.main()
+                    except KeyboardInterrupt:
+                        pass
+                    thread.join(6)
+                    if thread.is_alive() or errors:
+                        raise AssertionError((errors or 'readiness IPC hung', requests))
+        Path(socket_path).unlink(missing_ok=True)
 
 
 
@@ -142,12 +270,15 @@ class SlotTests(unittest.TestCase):
         self.root = self.box.root
         write(self.root / 'proc/sys/kernel/random/boot_id', b'synthetic-boot\n', 0o444)
         self.host = Host(self.root)
+        self.host.recovery_run = self.box.run
         self.api = selector
         self.stage()
+        for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer'):
+            write(self.root / 'etc/systemd/system' / name, (ROOT / 'systemd' / name).read_bytes())
         slots.bootstrap(self.root, run=self.host)
         self.old = self.slot_bytes(selector.SLOTS[0])
 
-    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False):
+    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False):
         release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
         source = self.base / 'candidate'
         for name in selector.MODULES:
@@ -158,6 +289,9 @@ class SlotTests(unittest.TestCase):
                 raw = raw.replace(b"return {'protocol': 1, 'dry_run': True}", b"return {'protocol': 1, 'dry_run': False}")
             if hang and name == 'update_controller.py':
                 raw = raw.replace(b'def controller_self_test():', ("def controller_self_test():\n    Path(" + repr(str(self.root / 'run/hung-trial')) + ").write_text('hung')\n    import time; time.sleep(60)").encode())
+            if no_recovery and name == 'bounded_update.py':
+                raw = raw.replace(b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):',
+                                  b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):\n    return None')
             write(source / 'scripts/install' / name, raw)
             write(release / 'updater' / name, raw)
         with mock.patch.object(build, 'CONTROLLER_VERSION', version):
@@ -202,6 +336,20 @@ class SlotTests(unittest.TestCase):
         self.host.fresh = True
         self.assertGreater(self.publish()['generation'], first['generation'])
         self.assertNotEqual(self.boot(), active)
+
+    def test_durability_model_discards_unflushed_data_and_renames(self):
+        for event in ('write', 'rename', 'directory_fsync'):
+            directory = self.base / ('disk-' + event)
+            write(directory / 'value', b'old')
+            disk = DurableView(directory)
+            def cut(e, path):
+                disk.step(e, path)
+                if e == event and (e != 'directory_fsync' or path == str(directory)):
+                    raise KeyboardInterrupt('cut before or after durability')
+            with self.assertRaises(KeyboardInterrupt):
+                selector.write(directory / 'value', b'new', step=cut)
+            disk.power_loss()
+            self.assertEqual((directory / 'value').read_bytes(), b'new' if event == 'directory_fsync' else b'old')
 
     def test_good_is_self_contained_without_retained_admission_proof_files(self):
         self.publish()
@@ -289,7 +437,7 @@ class SlotTests(unittest.TestCase):
                 raise OSError(errno.ENOSPC, 'full blocks and inodes')
             return original(path, flags, *args, **kwargs)
         with mock.patch.object(os, 'open', side_effect=full), mock.patch.object(os, 'fsync', side_effect=AssertionError('persistent fsync')):
-            self.assertEqual(self.boot(), selector.SLOTS[1])
+            self.assertEqual(selector.recover(self.root, self.host, execute=lambda *a: None), selector.SLOTS[1])
         # Application recovery was an explicit boundary: its frozen terminal
         # writes can still fail on a truly full filesystem.
 
@@ -322,6 +470,165 @@ class SlotTests(unittest.TestCase):
         self.assertGreater(self.host.probes, 1)
         self.host.fail_recovery.add(selector.SLOTS[1])
         self.assertEqual(self.boot(), selector.SLOTS[0])
+
+    def test_signed_zero_exit_recovery_cannot_publish_good(self):
+        self.stage(no_recovery=True)
+        with self.assertRaisesRegex(ValueError, 'still inhibited|incomplete'):
+            self.publish()
+        self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
+        self.assertEqual(self.boot(), selector.SLOTS[0])
+
+    def test_good_rename_directory_fsync_failure_then_retry_and_power_loss(self):
+        disk = DurableView(self.root)
+        renamed = False
+        original = os.fsync
+        def step(event, path):
+            nonlocal renamed
+            disk.step(event, path)
+            if event == 'rename' and path == str(self.root / selector.SLOTS[1] / 'GOOD'):
+                renamed = True
+        def fail(fd):
+            if renamed and stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(errno.EIO, 'failed directory flush after GOOD rename')
+            original(fd)
+        with mock.patch.object(os, 'fsync', side_effect=fail), self.assertRaises(OSError):
+            self.publish(step=step)
+        # The timer sees the live but unflushed GOOD after the publisher dies.
+        selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('interrupted trial')),
+                       execute=self.host.execute)
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[1])
+        self.stage('1.3.1', 8)
+        # Stage is a separately committed application delivery in this model.
+        # Keep the original durability map for the two controller directories.
+        def cut(event, path):
+            disk.step(event, path)
+            if event == 'directory_fsync' and path == str(self.root / selector.SLOTS[0]):
+                raise KeyboardInterrupt('spare GOOD deletion durable')
+        with self.assertRaises(KeyboardInterrupt):
+            self.publish(step=cut)
+        disk.power_loss()
+        self.host = Host(self.root)
+        self.host.recovery_run = self.box.run
+        self.assertFalse((self.root / selector.SLOTS[0] / 'GOOD').exists())
+        self.assertEqual(self.boot(), selector.SLOTS[1])
+
+    def test_install_route_guards_every_frozen_worker_before_mutation(self):
+        from field_updater import PROVENANCE
+        for version in PROVENANCE['releases']:
+            box = FieldBox(self.base / ('guard-' + version), version)
+            box.install()
+            for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer'):
+                write(box.root / 'etc/systemd/system' / name, (ROOT / 'systemd' / name).read_bytes())
+                write(box.source / 'systemd' / name, (ROOT / 'systemd' / name).read_bytes())
+            box.data.update(version='v0.3.14', commit='c' * 40)
+            write(box.root / selector.HOME, (ROOT / 'messagebox/controller_selector.py').read_bytes())
+            for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer',
+                         'messagebox-update-controller.service.d/messagebox.conf',
+                         'messagebox-update-selector.service.d/messagebox.conf',
+                         'messagebox-update-supervisor.service.d/messagebox.conf'):
+                with self.subTest(version=version, path=name):
+                    target = box.source / 'systemd' / name
+                    previous = target.read_bytes() if target.exists() else None
+                    write(target, b'[Service]\nExecStart=\nExecStart=/bin/false\n')
+                    box.refresh()
+                    box.data.update(version='v0.3.14', commit='c' * 40)
+                    box.save_manifest()
+                    journal = box.worker.read_state(box.root, 'journal.json')
+                    # Execute the actual permanent install route with the frozen
+                    # broker, verifier, archive extraction and worker. Only the
+                    # established FieldBox systemd/outer signature bounds remain.
+                    with box.controller() as controller:
+                        box.bundle(controller, sequence=2)
+                        controller.trust.recover_trust(controller.KEYS.parent, controller.STATE)
+                        before = box.tree()
+                        with mock.patch.dict(sys.modules, {'update_controller': controller}), \
+                                mock.patch.object(sys, 'argv', sys.argv[:]), \
+                                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as rejected:
+                            exec(selector.install_program(box.root, selector.SLOTS[0]), {})
+                        self.assertEqual(rejected.exception.code, 1)
+                        self.assertEqual(controller.read('result.json')['state'], 'failed')
+                        operation = controller.read(controller.operation_name(controller.read('ticket.json')['operation_id']))
+                        self.assertEqual(operation['reason'], 'verification_failed')
+                    self.assertEqual(box.tree(), before)
+                    self.assertEqual(box.worker.read_state(box.root,'journal.json'), journal)
+                    if previous is None:
+                        target.unlink()
+                    else:
+                        write(target, previous)
+            box.refresh()
+            box.data.update(version='v0.3.14', commit='c' * 40)
+            protected = selector.admit(box.root, box.source)
+            backup, atomic = box.worker.create_backup, box.worker._atomic_install
+            def snapshot(destination, root, entries, *a, **k):
+                self.assertFalse(protected & {e['target'] for e in entries})
+                return backup(destination, root, entries, *a, **k)
+            def copy(source, destination, *a, **k):
+                self.assertNotIn('/' + str(destination.relative_to(box.root)), protected)
+                return atomic(source, destination, *a, **k)
+            with box.controller() as controller, mock.patch.object(box.worker,'create_backup',side_effect=snapshot), \
+                    mock.patch.object(box.worker,'_atomic_install',side_effect=copy), \
+                    mock.patch.dict(sys.modules, {'update_controller': controller}), \
+                    mock.patch.object(sys, 'argv', sys.argv[:]):
+                box.bundle(controller, sequence=2)
+                exec(selector.install_program(box.root, selector.SLOTS[0]), {})
+                self.assertEqual(controller.read('journal.json')['phase'], 'committed')
+                self.assertEqual(controller.read('result.json')['state'], 'installed')
+        with mock.patch.object(selector.os, 'execv') as launch:
+            selector.run_consumer(self.root, 'install')
+        program = launch.call_args.args[1][-1]
+        self.assertEqual(program, selector.install_program(self.root, selector.SLOTS[0]))
+        compile(program, '<frozen install route>', 'exec')
+
+    def test_zero_exit_incomplete_recovery_tries_the_other_slot(self):
+        self.publish()
+        journal = self.box.worker.read_state(self.root, 'journal.json')
+        journal['phase'] = 'switched'
+        self.box.worker.save_state(self.root, 'journal.json', journal)
+        attempted = []
+        def execute(root, slot, arguments, timeout):
+            attempted.append(slot)
+            if slot == selector.SLOTS[0]:
+                journal['phase'] = 'committed'
+                self.box.worker.save_state(root, 'journal.json', journal)
+                return self.host.execute(root, slot, arguments, timeout)
+            return b''  # A verified command exits zero but leaves recovery pending.
+        self.assertEqual(selector.recover(self.root, self.host, execute=execute), selector.SLOTS[0])
+        self.assertEqual(attempted, list(reversed(selector.SLOTS)))
+        for damage in ('inhibit', 'pointer', 'known-good'):
+            with self.subTest(damage=damage):
+                if damage == 'inhibit':
+                    write(self.root / 'var/lib/button-box-update/install-inhibit', b'{}')
+                elif damage == 'pointer':
+                    self.box.worker.switch_release(self.root, journal['old'])
+                else:
+                    self.box.worker.save_state(self.root, 'known-good.json', {'current': journal['old']})
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    selector.recovered(self.root)
+                (self.root / 'var/lib/button-box-update/install-inhibit').unlink(missing_ok=True)
+                self.box.worker.switch_release(self.root, journal['new'])
+                self.box.worker.save_state(self.root, 'known-good.json', {'current': journal['new']})
+
+    def test_runtime_prefers_alternate_then_retries_current_each_timer_run(self):
+        self.publish()
+        # Model an accepted retained controller with a runtime recovery bug.
+        # Hashes remain valid; execute the failing function, not a Host shortcut.
+        file = self.root / selector.SLOTS[0] / 'bounded_update.py'
+        file.write_bytes(file.read_bytes() + b'\ndef _recover_locked(*a, **k): raise OSError("injected recovery I/O failure")\n')
+        value = selector.inspect(self.root, selector.SLOTS[0], slots.identity(selector, self.root, selector.SLOTS[0],
+            generation=0, version='1.1.0', descriptor='', legacy=True))
+        selector.write(self.root / selector.SLOTS[0] / 'GOOD', selector.envelope(value))
+        attempted = []
+        def execute(root, slot, arguments, timeout):
+            attempted.append((slot, timeout))
+            return self.host.execute(root, slot, arguments, timeout)
+        for _ in range(3):
+            with mock.patch.object(selector.time, 'monotonic', side_effect=range(0, 1000, 10)):
+                selector.check(self.root, self.host, probe=mock.Mock(side_effect=OSError('broker dead')),
+                               execute=execute)
+            self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[1])
+            self.assertEqual([s for s, _ in attempted[-2:]], list(selector.SLOTS))
+            self.assertTrue(all(0 < t <= 180 for _, t in attempted))
+            self.assertEqual(self.host.commands[-1], ['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'])
 
     def test_admission_capacity_preserves_spare_and_accepts_sufficient_blocks_and_inodes(self):
         from types import SimpleNamespace
@@ -365,22 +672,22 @@ class SlotTests(unittest.TestCase):
         for index in range(len(events)):
             shutil.rmtree(self.root)
             shutil.copytree(image, self.root, symlinks=True)
+            disk = DurableView(self.root)
             count = 0
             def cut(event, path):
                 nonlocal count
+                disk.step(event, path)
                 count += 1
                 if count == index + 1:
                     raise KeyboardInterrupt('power cut')
             with self.assertRaises(KeyboardInterrupt):
                 self.publish(step=cut)
+            disk.power_loss()
+            self.host = Host(self.root)
+            self.host.recovery_run = self.box.run
             chosen = self.boot()
             self.assertIn(chosen, selector.SLOTS)
             selector.inspect(self.root, chosen)
-            # Also model a lost/torn final GOOD dirent. The retained proof
-            # never changes, so its slot is usable without repair.
-            if (self.root / selector.SLOTS[1] / 'GOOD').exists():
-                (self.root / selector.SLOTS[1] / 'GOOD').write_bytes(b'{')
-                self.assertEqual(self.boot(), selector.SLOTS[0])
             self.assertEqual(self.slot_bytes(selector.SLOTS[0]), self.old)
         self.assertTrue({'write', 'file_fsync', 'rename', 'directory_fsync', 'unlink_GOOD'} <= {e for e,p in events})
         print('A/B publication cuts:', len(events))
@@ -402,9 +709,11 @@ class SlotTests(unittest.TestCase):
         for index in range(len(events)):
             shutil.rmtree(self.root)
             shutil.copytree(before, self.root, symlinks=True)
+            disk = DurableView(self.root)
             count = 0
             def cut(e,p):
                 nonlocal count
+                disk.step(e,p)
                 count += 1
                 if count == index + 1:
                     raise KeyboardInterrupt('bootstrap cut')
@@ -414,6 +723,15 @@ class SlotTests(unittest.TestCase):
                 self.assertTrue((self.root / selector.HOME).exists())
                 self.assertEqual(selector.valid(self.root)[0][0], selector.SLOTS[0])
             slots.bootstrap(self.root, run=self.host)
+            # A killed process is retried against the live view. Retry must
+            # finish all durability work before a later power loss.
+            slots.bootstrap(self.root, run=self.host, step=disk.step)
+            disk.power_loss()
+            self.host = Host(self.root)
+            self.host.recovery_run = self.box.run
+            self.assertEqual((self.root / selector.HOME).read_bytes(), (ROOT / 'messagebox/controller_selector.py').read_bytes())
+            for path, raw in slots.routes().items():
+                self.assertEqual((self.root / path).read_bytes(), raw)
             self.assertEqual(self.boot(), selector.SLOTS[0])
 
     def test_timer_during_live_trial_and_two_process_publication_exclusion(self):

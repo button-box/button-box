@@ -41,11 +41,15 @@ This checksum detects damage; it is not a substitute for release admission.
 5. Order valid slots by committed generation; use the slot name only to break ties.
 6. Try the newest slot's application recovery command, with a 180-second limit.
 7. Kill its process group after failure or timeout, then try the other valid slot.
-8. After recovery succeeds, write the exact selection into `/run` and clear the volatile trial flag.
+8. Independently check the terminal application journal, exact application and
+   known-good pointers, and absence of install inhibit. A zero exit alone fails
+   this gate. Only then write the exact selection into `/run` and clear the trial flag.
 9. Release the boot gate. All controller consumers use that selection.
 10. Each consumer resolves once under the start lock, then executes that slot's command.
 11. The independent timer checks broker readiness and its live PID and hash handshake.
-12. On failure, stop consumers, select the other valid slot, and restart the broker.
+12. On failure, stop consumers, prefer the other valid slot, then retry the current
+    slot if needed. Recovery has one 380-second deadline. Always request broker
+    restart, including after a transient recovery failure.
     If only one valid slot exists, recover and restart that slot. Runtime fallback
     uses normal application recovery, which restarts saved application services;
     only the boot gate uses `--boot`.
@@ -67,6 +71,9 @@ floor. Admission also requires candidate bytes plus 32 MiB free and at least
 controller-selection reserve. Equal sequence is allowed only for the accepted digest. Version downgrade
 is rejected. Damage to the floor stops admission, not boot.
 
+Before reuse, publication verifies and flushes the working slot's module files,
+`GOOD`, and parent directories. This also completes a prior interrupted directory
+flush; visible matching bytes alone do not prove durability.
 The working slot and its `GOOD` stay unchanged. Publication removes the inactive
 slot's `GOOD`, flushes the directory, writes and flushes candidate files and
 retained proof, and verifies them. Both controllers' real parsers must accept the
@@ -77,7 +84,10 @@ A consumed digest is never retried automatically.
 The trial selects the candidate only in `/run`. It stops consumers first. It
 creates fresh boot-, application-, and controller-bound evidence context, removes
 old readiness evidence, runs normal controller validation and offline discovery,
-and starts the broker. Readiness retries within the trial deadline. Root Unix
+and runs the candidate's actual recovery CLI against a staged interrupted
+application journal. The selector checks the resulting pointer, terminal journal,
+and cleared inhibit. The staged test substitutes only systemctl; it cannot stop
+live services. It then starts the broker. Readiness retries within the trial deadline. Root Unix
 peer credentials, stable systemd PID, exact version and hashes must match.
 Fresh button and heartbeat evidence from the selected application processes and
 the complete local health probe must pass. A candidate success string alone
@@ -113,6 +123,12 @@ installing any route. Converted entry points still select A. A trial is permitte
 only after all five routes exist and the independent timer is active. The
 separate generated route filename survives later application manifest updates.
 The original seven fixed unit files are not changed by the payload.
+On retries, bootstrap flushes verified existing selector bytes, slot records and
+modules, routes, and their parent directories before enabling the timer. The
+permanent install route wraps even a retained legacy worker's transaction call:
+it rejects selector-unit changes and controller route overrides before mutation.
+It also excludes these fixed files from application writes and rollback snapshots.
+This prevents legacy rollback from unlinking the permanent service contract.
 
 There are no helpers, verifier anchors, recovery-key copies, replicated controller
 journals, owner leases, reserve files, directory exchanges or monitor loops.
@@ -123,7 +139,14 @@ There is no two-rename fallback because there is no exchange transaction.
 Tests use real minisign, frozen v0.3.9–v0.3.12 workers and real builder output.
 They inject cuts at publication and bootstrap writes, missing/corrupt records,
 I/O failures, bounded child failure, and concurrent ownership. Host tests replace
-systemd and physical application health explicitly. They do not prove native
+systemd and hardware explicitly. A durability model discards unflushed file data
+and directory entries. It includes kill, retry, then power loss and a failed
+directory flush after rename. Host recovery executes the selected worker's real
+filesystem recovery. Readiness uses the real button and wacli producer paths,
+AF_UNIX IPC, and broker dispatch with Cloud construction blocked. The kernel
+peer identity and service PID remain synthetic. The staged recovery trial also
+substitutes service state; it does not validate native service recovery.
+Tests do not prove native
 service ordering, cgroup termination, timer recovery after repeated errors,
 full ext4 blocks/inodes, or Pi SD flush behavior.
 
@@ -131,3 +154,10 @@ Before first installation, native Linux/systemd and real Pi power-cut acceptance
 remain required. Physical Cloud and wacli send/play/reply, NFC, quiet hours,
 listened notices, audio, GPIO, Wi-Fi and WhatsApp checks remain separate.
 No Cloud request is part of local selection or publication.
+
+BOX-10 bench list: verify native systemd ordering and sandbox restrictions;
+verify cgroup termination of hung and killed trials; run the real timer through
+repeated alternate-slot failures without reboot; repeat recovery with full blocks
+and full inodes; cut Pi power during file and directory flushes, including retry
+after a killed publisher. Confirm application recovery and both transports without
+SSH repair. SD-card flush guarantees and load timing remain unverified on this host.

@@ -31,6 +31,7 @@ class BuiltFieldPayload(unittest.TestCase):
             fixture = SlotTests('test_every_publication_and_trial_write_cut_keeps_an_accepted_slot')
             fixture.root, fixture.base, fixture.box = box.root, box.root.parent, box
             fixture.host = Host(box.root)
+            fixture.host.recovery_run = box.run
             fixture.old = fixture.slot_bytes('usr/lib/messagebox-update')
             fixture.test_every_publication_and_trial_write_cut_keeps_an_accepted_slot()
         self.exercise_built_payload(after_install=cuts, versions=('v0.3.12',))

@@ -359,6 +359,11 @@ def announce_runtime_ready():
         log_event("runtime_ready_cue_unavailable", error=type(exc).__name__)
 
 
+def runtime_readiness():
+    from messagebox.software import local_ready
+    local_ready('button', released=not button.is_pressed)
+
+
 def acknowledge_guided_press(action, session_id=None):
     """Give immediate, content-free feedback for each actionable press."""
     beep("press")
@@ -2559,11 +2564,13 @@ def main():
         f"{len(outbox_store.jobs()) + len(compatible_legacy_outbox_files())} unsent)"
     )
     announce_runtime_ready()
+    runtime_readiness()
 
     while True:
         wait_for_stable_open()
         while not button.is_pressed:
             time.sleep(POLL_S)
+            runtime_readiness()
             if transport_mode() == "cloud":
                 from messagebox.cloud_update import confirmation
                 confirmation.idle(button, play_update_sound)

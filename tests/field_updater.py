@@ -288,10 +288,10 @@ class FieldBox:
                 mock.patch.object(self.worker, "install_transaction", side_effect=install), service_environment():
             yield controller
 
-    def bundle(self, controller, *, mismatched_manifest=False):
+    def bundle(self, controller, *, mismatched_manifest=False, sequence=1):
         """Build a synthetic signed-envelope candidate for controller.worker()."""
         self.data.update(schema=1, product="button-box", tag=self.data["version"],
-                         release_sequence=1, channel="stable", min_updater_version="1.1.0",
+                         release_sequence=sequence, channel="stable", min_updater_version="1.1.0",
                          supported_os=["raspios-trixie"], supported_arch=["aarch64"],
                          supported_models=["Raspberry Pi 4 Model B"])
         self.save_manifest()

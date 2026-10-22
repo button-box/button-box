@@ -1260,6 +1260,7 @@ FIXED_UNITS = {
     'messagebox-update-install.service', 'messagebox-update-supervisor.service',
     'messagebox-update-supervisor.timer', 'messagebox-update-discovery.service',
     'messagebox-update-discovery.timer',
+    'messagebox-update-selector.service', 'messagebox-update-selector.timer',
 }
 
 
@@ -1793,6 +1794,9 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
     from release_verify import promotion_inhibited
     root = Path(root).resolve()
     with transaction_locks(root) as locks:
+        selector_path = _rooted(root, '/usr/lib/messagebox-selector/selector.py')
+        protected = (_load_module('fixed_controller_admission', selector_path).admit(root, source_root)
+                     if selector_path.exists() else set())
         if promotion_inhibited(root):
             raise UpdateError('promotion_inhibited')
         pending = read_state(root, 'journal.json')
@@ -1859,7 +1863,8 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
                 # Setup readiness could never be proven; refuse before mutation.
                 raise UpdateError('setup_not_ready')
             backup = UPDATE_STATE + '/snapshots/' + uuid.uuid4().hex
-            create_backup(_rooted(root, backup), root, external, states, auxiliary, external_only=True)
+            create_backup(_rooted(root, backup), root, [e for e in external if e['target'] not in protected],
+                          states, auxiliary, external_only=True)
         except Exception:
             shutil.rmtree(candidate)
             raise
@@ -1883,7 +1888,7 @@ def install_transaction(source_root, manifest_path, *, operation_id=None, root=P
             _stop_active(states, run, auxiliary_units=auxiliary)
             _journal(root, journal, 'quiesced')
             for entry in external:
-                if Path(entry['target']).name not in FIXED_UNITS:
+                if entry['target'] not in protected and Path(entry['target']).name not in FIXED_UNITS:
                     _atomic_install(entry['source_path'], entry['destination'], entry['mode'])
             switch_release(root, new)
             _journal(root, journal, 'switched')

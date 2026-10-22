@@ -307,10 +307,26 @@ updater may restore its journal's exact previous release during a failed local
 transaction; that is separate from accepting an older network release.
 
 
-### Recovery files in controller proof
+### A/B controller payload and proof
 
-New builds require the three recovery support files in the explicit payload.
-Descriptor schema 2 signs these files as well as the six controller modules.
-Publication rejects missing or changed recovery bytes. Schema 1 proof remains
-readable for old retained releases. Recovery bootstrap and its persistent
-sequence/version floors are described in [controller recovery](controller-recovery.md).
+The payload contains `messagebox/controller_selector.py` and
+`messagebox/controller_slots.py`, the bootstrap and selector services, the
+selector timer, and the supervisor queue drop-in. The first bootstrap installs
+one permanent selector and five fixed command routes. Application releases must
+preserve the selector service, timer, and routes. Admission checks these before
+installed-file mutation, including when the selected controller is a legacy one.
+
+Descriptor schema 1 is bounded Python literal data, parsed without import. It
+signs controller version, sequence, minimum application version, capabilities,
+selector protocol 1, shared-state format 1, and the exact six controller modules
+with size, mode, and SHA-256. `unit_changes` is empty. The builder derives this
+data from the payload and requires its detached signature. The descriptor and
+signature stay with the release for offline admission checks.
+
+Publication verifies the current release keys and persistent sequence/version
+floor. It writes only the inactive slot, consumes `TRIED`, and publishes `GOOD`
+after a bounded recovery and readiness trial. Each slot's `GOOD` is independent
+of the current keys. Key rotation cannot disable a retained accepted controller.
+See [descriptor format](controller-descriptor.md) and
+[A/B recovery](controller-recovery.md). There are no promotion helpers, recovery
+key copies, directory exchanges, or two-rename fallback.
