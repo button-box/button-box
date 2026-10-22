@@ -1,7 +1,12 @@
 from speaker_helpers import isolate_audio
+import contextlib
+import fcntl
 import os
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from datetime import datetime
@@ -228,6 +233,69 @@ class SilenceTests(unittest.TestCase):
         # Quiet now remains active; deliberate audio is allowed after its start.
         result = cloud_quiet.play([sys.executable, "-c", "pass"], timeout=2)
         self.assertEqual(result.returncode, 0)
+
+    def test_stalled_approval_player_is_killed_reaped_and_releases_both_locks(self):
+        from messagebox import maintenance, speaker
+        root = self.path.parent
+        lock = root / 'maintenance.lock'
+        lock.touch()
+        ready = root / 'player-ready'
+        popen = subprocess.Popen
+        start_player = button_send.start_player
+        players = []
+        children = []
+        script = ('import pathlib,signal,sys,time; '
+                  'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                  'pathlib.Path(sys.argv[1]).touch(); time.sleep(30)')
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(maintenance, 'LOCK', lock))
+            stack.enter_context(patch.object(maintenance, 'INHIBIT', root / 'inhibit'))
+            stack.enter_context(patch.object(button_send, 'APPROVAL_CUE_TIMEOUT_S', .05, create=True))
+            stack.enter_context(patch.object(button_send, 'buttonbox_voice', return_value=True))
+            stack.enter_context(patch.object(button_send, 'wait_for_confirmed_press', return_value=True))
+            stack.enter_context(patch.object(button_send, 'log_event'))
+
+            def launch(*args, **kwargs):
+                child = popen([sys.executable, '-c', script, str(ready)])
+                children.append(child)
+                deadline = time.monotonic() + 2
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.exists())
+                stack.enter_context(patch.object(child, 'terminate', wraps=child.terminate))
+                stack.enter_context(patch.object(child, 'kill', wraps=child.kill))
+                return child
+
+            def start(*args, **kwargs):
+                player = start_player(*args, **kwargs)
+                players.append(player)
+                return player
+
+            stack.enter_context(patch.object(cloud_quiet.subprocess, 'Popen', side_effect=launch))
+            stack.enter_context(patch.object(button_send, 'start_player', side_effect=start))
+            try:
+                started = time.monotonic()
+                self.assertTrue(button_send.wait_for_approval(10, 'synthetic'))
+                self.assertLess(time.monotonic() - started, .5)
+                self.assertTrue(speaker.is_busy())
+                with lock.open('rb') as exclusive:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.assertTrue(players[0].reservation_released.wait(2), 'approval player has no cleanup deadline')
+                    self.assertTrue(players[0].speaker_released.is_set())
+                    self.assertFalse(speaker.is_busy())
+                    fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(children[0].returncode, -signal.SIGKILL)
+                children[0].terminate.assert_called_once()
+                children[0].kill.assert_called_once()
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=2)
+                for player in players:
+                    self.assertTrue(player.reservation_released.wait(2))
+        self.assertEqual(cloud_quiet.play([sys.executable, '-c', 'pass'], timeout=2).returncode, 0)
 
     def test_deliberate_press_during_quiet_now_still_starts_normal_flow(self):
         self.store.apply("quiet_now", "manual", 1)

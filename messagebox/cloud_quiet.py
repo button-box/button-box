@@ -86,7 +86,7 @@ def muted():
     return silence_store.load()["muted"]
 
 
-def start_player(args, *, allow_muted=False, lead_in_s=None, **kwargs):
+def start_player(args, *, allow_muted=False, lead_in_s=None, max_seconds=None, **kwargs):
     """Watch only this process; never kill other services' audio players."""
     before = silence_store.load()
     if before["muted"] and not allow_muted:
@@ -119,12 +119,15 @@ def start_player(args, *, allow_muted=False, lead_in_s=None, **kwargs):
     # wait for it before asking the updater for the exclusive one.
     released = threading.Event()
     process.reservation_released = released
+    deadline = None if max_seconds is None else time.monotonic() + max_seconds
 
     def watch():
         try:
             while process.poll() is None:
                 state = silence_store.load()
-                if state["muted"] and not allow_muted or state["stop_sequence"] > before["stop_sequence"]:
+                if (state["muted"] and not allow_muted
+                        or state["stop_sequence"] > before["stop_sequence"]
+                        or deadline is not None and time.monotonic() >= deadline):
                     process.terminate()
                     try:
                         process.wait(timeout=0.2)

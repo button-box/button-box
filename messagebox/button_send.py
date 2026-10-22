@@ -92,6 +92,7 @@ sending_notices = queue.SimpleQueue()
 sender_wake = threading.Event()
 _sending_feedback = None
 SENDING_FAILURE_GRACE_S = 0.15
+APPROVAL_CUE_TIMEOUT_S = 5
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -1961,7 +1962,8 @@ def wait_for_approval(timeout, session_id=None):
     if not wait_for_confirmed_press(timeout):
         return False
     if buttonbox_voice():
-        start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("press"))], lead_in_s=0)
+        start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("press"))],
+                     lead_in_s=0, max_seconds=APPROVAL_CUE_TIMEOUT_S)
         log_event("guided_press", action="approve", session_id=session_id)
         # The normal main-loop release guard consumes this held press. Queue
         # the approved audio now so conversion and upload do not wait for it.
