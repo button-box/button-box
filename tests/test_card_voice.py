@@ -148,7 +148,7 @@ class CardVoiceTests(unittest.TestCase):
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(mock.patch.object(runtime, "TEMP_DIR", str(self.root)))
                     stack.enter_context(mock.patch.object(runtime, "play_sound"))
-                    stack.enter_context(mock.patch.object(runtime, "start_player", return_value=mock.Mock(poll=lambda: 0)))
+                    stack.enter_context(mock.patch.object(runtime, "start_player", return_value=mock.Mock(poll=lambda: 0, wait=lambda **kwargs: 0)))
                     stack.enter_context(mock.patch.object(runtime, "acknowledge_and_classify_legacy_press", side_effect=AssertionError("no hold delay")))
                     stack.enter_context(mock.patch.object(runtime, "capture_guided_recording", side_effect=real_capture))
                     open_mic = stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", side_effect=RuntimeError("microphone boundary")))

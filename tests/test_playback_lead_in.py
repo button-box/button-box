@@ -126,6 +126,27 @@ class LeadInTests(unittest.TestCase):
             self.assertEqual(launch.call_args.args[0][-1], str(source))
             self.assertTrue(source.exists())
 
+    def test_short_cue_copy_has_120_ms_no_padding_and_preserves_source(self):
+        source = Path(__file__).resolve().parents[1] / 'sounds/cues/cue-rec_go.wav'
+        original = source.read_bytes()
+        copies = []
+        def launch(command, **options):
+            copies.append(Path(command[-1]))
+            self.assertNotEqual(copies[-1], source)
+            self.assertNotIn('clip_seconds', options)
+            with wave.open(str(copies[-1])) as clipped, wave.open(str(source)) as full:
+                self.assertEqual(clipped.getparams()[:3], full.getparams()[:3])
+                self.assertEqual(clipped.getnframes(), 5760)
+                self.assertEqual(clipped.getframerate(), 48000)
+                self.assertEqual(clipped.readframes(5760), full.readframes(5760))
+            return types.SimpleNamespace(wait=lambda **kwargs: 0)
+        player = speaker.start_player(['aplay', '-q', str(source)], popen=launch,
+                                      lead_in_s=0, clip_seconds=.12)
+        self.assertEqual(player.wait(timeout=1), 0)
+        self.assertFalse(copies[0].exists())
+        self.assertEqual(source.read_bytes(), original)
+        self.assertFalse(speaker.is_busy())
+
     def test_unreadable_or_non_wav_input_keeps_the_original_command(self):
         with tempfile.TemporaryDirectory() as directory:
             for name, data in (('text.wav', b'not a wav'), ('missing.wav', None)):

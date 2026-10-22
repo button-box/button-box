@@ -2,16 +2,19 @@ from speaker_helpers import isolate_audio
 from mic_helpers import physical_capture
 import contextlib
 import struct
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
 with mock.patch.dict(sys.modules, {"gpiozero": types.SimpleNamespace(Button=object, LED=object)}):
     from messagebox import button_send as runtime
 
+from messagebox import speaker
 from messagebox.guided_reply import GuidedSession, OutboxStore
 from messagebox.settings import defaults
 
@@ -19,6 +22,124 @@ from messagebox.settings import defaults
 class RecordingModesTests(unittest.TestCase):
     def setUp(self):
         isolate_audio(self)
+
+    def capture_cue_overlap(self, root, *, stop_at, speech_windows, transport='cloud'):
+        clock = [0.0]
+        button = types.SimpleNamespace(is_pressed=False)
+        recorder = mock.Mock()
+        recorder.poll.return_value = None
+        chunks = []
+        observed = {'start_end': 0, 'reminder_end': 0}
+        led = mock.Mock()
+        led.on.side_effect = lambda: observed.setdefault('lamp_at', clock[0])
+
+        def microphone(*args, **kwargs):
+            observed['mic_at'] = clock[0]
+            return recorder
+
+        def elapsed():
+            return round(clock[0] - observed['mic_at'], 6)
+
+        def tick(*args):
+            clock[0] = round(clock[0] + .02, 6)
+            button.is_pressed = elapsed() >= stop_at
+            return [recorder.stdout], [], []
+
+        def read(*args):
+            voiced = any(start <= elapsed() < end for start, end in speech_windows)
+            level = 3000 if voiced else 0
+            if clock[0] < observed['reminder_end']:
+                level += 6000
+            expected = struct.pack('<h', level) * 320
+            chunks.append(expected)
+            # Model the beep leaking into any microphone opened too early.
+            return struct.pack('<h', 9000) * 320 if clock[0] < observed['start_end'] else expected
+
+        def drain(**kwargs):
+            remainder = b''
+            if clock[0] < observed['reminder_end']:
+                remainder = struct.pack('<h', 6000) * 3200
+                chunks.append(remainder)
+            return remainder, b''
+        recorder.communicate.side_effect = drain
+
+        def player(command, **kwargs):
+            if Path(command[-1]).name in {'cue-rec_go.wav', 'cue-press.wav'}:
+                def launch(clipped, **options):
+                    with wave.open(str(clipped[-1])) as cue:
+                        observed['cue_seconds'] = cue.getnframes() / cue.getframerate()
+                    observed['start_end'] = clock[0] + observed['cue_seconds']
+                    def wait(**unused):
+                        clock[0] = max(clock[0], observed['start_end'])
+                        return 0
+                    return types.SimpleNamespace(poll=lambda: None if clock[0] < observed['start_end'] else 0,
+                        wait=wait, returncode=0, terminate=lambda: None)
+                return speaker.start_player(command, popen=launch, **kwargs)
+            observed['reminder_end'] = clock[0] + 2.3
+            return mock.Mock(poll=lambda: None if clock[0] < observed['reminder_end'] else 0)
+
+        with contextlib.ExitStack() as stack:
+            for name, value in (('TEMP_DIR', str(root)), ('button', button), ('led', led)):
+                stack.enter_context(mock.patch.object(runtime, name, value, create=True))
+            stack.enter_context(mock.patch.object(runtime.sound_pack, 'SOUND_DIR', Path(__file__).resolve().parents[1] / 'sounds'))
+            stack.enter_context(mock.patch.object(runtime, 'transport_mode', return_value=transport))
+            stack.enter_context(mock.patch.object(runtime, 'buttonbox_voice', return_value=transport == 'cloud'))
+            stack.enter_context(mock.patch.object(runtime, 'play_sound'))
+            stack.enter_context(mock.patch.object(runtime, 'box_muted', return_value=False))
+            stack.enter_context(mock.patch.object(runtime, 'quiet_hours', return_value=False))
+            stack.enter_context(mock.patch.object(runtime, 'open_microphone', side_effect=microphone))
+            stack.enter_context(mock.patch.object(runtime, 'start_player', side_effect=player))
+            stack.enter_context(mock.patch.object(runtime, 'presence'))
+            stack.enter_context(mock.patch.object(runtime, 'acknowledge_guided_press'))
+            stack.enter_context(mock.patch.object(runtime, 'wait_for_stable_open'))
+            stack.enter_context(mock.patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]))
+            stack.enter_context(mock.patch.object(runtime.select, 'select', side_effect=tick))
+            stack.enter_context(mock.patch.object(runtime.os, 'read', side_effect=read))
+            result = physical_capture(runtime, 'person@example.invalid')
+        return result, b''.join(chunks), observed
+
+    def test_speech_right_after_short_start_cue_is_kept_without_the_beep(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=2,
+                                                            speech_windows=[(0, .36)])
+            self.assertEqual(observed['lamp_at'], 0)
+            self.assertAlmostEqual(observed['cue_seconds'], .12)
+            self.assertAlmostEqual(observed['mic_at'], .12)
+            self.assertEqual(observed['mic_at'], observed['start_end'])
+            self.assertTrue(result.meaningful)
+            with wave.open(result.path) as audio:
+                self.assertEqual(audio.readframes(audio.getnframes()), pcm)
+
+    def test_start_beep_alone_does_not_count_as_speech(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=2, speech_windows=[])
+            self.assertFalse(result.meaningful)
+            self.assertIsNone(result.path)
+            self.assertGreaterEqual(observed['mic_at'], observed['start_end'])
+            self.assertEqual(set(pcm), {0})
+
+    def test_reminder_alone_including_drained_audio_does_not_count_as_speech(self):
+        for stop_at in (40.5, 42.5):
+            with self.subTest(stop_at=stop_at), tempfile.TemporaryDirectory() as directory:
+                result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=stop_at,
+                                                                speech_windows=[])
+                self.assertGreater(observed['reminder_end'], 40)
+                self.assertIn(struct.pack('<h', 6000), pcm)
+                self.assertFalse(result.meaningful)
+                self.assertIsNone(result.path)
+
+    def test_speech_during_forty_second_reminder_keeps_the_recorded_tail(self):
+        for transport in ('cloud', 'wacli'):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory() as directory:
+                # wacli keeps its five-second warning at 55 seconds.
+                offset = 0 if transport == 'cloud' else 15
+                result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=42.5 + offset,
+                    speech_windows=[(0, 1.5), (40.02 + offset, 42.25 + offset)], transport=transport)
+                self.assertTrue(result.meaningful)
+                self.assertAlmostEqual(result.recorded_seconds, 42.58 + offset, delta=.04)
+                self.assertAlmostEqual(result.duration, result.recorded_seconds, delta=.001)
+                with wave.open(result.path) as audio:
+                    self.assertEqual(audio.readframes(audio.getnframes()), pcm)
 
     def capture(self, root, talk, *, maximum=30, stop=True, silent=False, short=False,
                 carried_press=False):
@@ -60,7 +181,7 @@ class RecordingModesTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(runtime.select, "select", side_effect=tick))
             stack.enter_context(mock.patch.object(runtime.subprocess, "run", side_effect=cue))
             stack.enter_context(mock.patch.object(runtime.subprocess, "Popen", side_effect=microphone))
-            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue"))
+            stack.enter_context(mock.patch.object(runtime, "RecordingLimitCue", return_value=mock.Mock(process=None, intervals=[])))
             stack.enter_context(mock.patch.object(runtime, "presence"))
             stack.enter_context(mock.patch.object(runtime, "acknowledge_guided_press"))
             stack.enter_context(mock.patch.object(runtime, "wait_for_stable_open"))
@@ -146,12 +267,13 @@ class RecordingModesTests(unittest.TestCase):
         acknowledge.assert_not_called()
         release.assert_not_called()
 
-    def test_buttonbox_lamp_and_mic_start_while_one_cue_is_running(self):
+    def test_buttonbox_lamp_precedes_cue_and_mic_waits_for_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             led = mock.Mock()
             order = []
             cue = mock.Mock()
-            cue.poll.return_value = None
+            cue.poll.return_value = 0
+            cue.wait.side_effect = lambda **kwargs: order.append('cue_finished') or 0
             recorder = mock.Mock()
             recorder.communicate.return_value = (b'', b'')
             vad = mock.Mock()
@@ -160,11 +282,12 @@ class RecordingModesTests(unittest.TestCase):
                 led.on.assert_called_once()
                 self.assertEqual(Path(command[-1]).name, 'cue-rec_go.wav')
                 self.assertEqual(options['lead_in_s'], 0)
+                self.assertEqual(options['clip_seconds'], .12)
                 order.append('cue_started')
                 return cue
             def microphone(*args, **kwargs):
-                self.assertEqual(order, ['cue_started'])
-                cue.wait.assert_not_called()
+                self.assertEqual(order, ['cue_started', 'cue_finished'])
+                cue.wait.assert_called_once_with(timeout=5)
                 order.append('mic_open')
                 return recorder
             with mock.patch.object(runtime, 'TEMP_DIR', directory), \
@@ -180,15 +303,16 @@ class RecordingModesTests(unittest.TestCase):
                  mock.patch.object(runtime.select, 'select', return_value=([], [], [])), \
                  mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 60, 60]):
                 physical_capture(runtime, 'person')
-            self.assertEqual(order, ['cue_started', 'mic_open'])
+            self.assertEqual(order, ['cue_started', 'cue_finished', 'mic_open'])
             start.assert_called_once()
             blocking_sound.assert_not_called()
-            cue.terminate.assert_called_once()
+            cue.terminate.assert_not_called()
             cue.wait.assert_called_once()
             self.assertFalse(runtime._recording)
 
     def test_buttonbox_hold_uses_one_press_cue_and_no_second_go_cue(self):
         player = mock.Mock(poll=lambda: 0)
+        player.wait.return_value = 0
         with mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
              mock.patch.object(runtime, 'led', mock.Mock(), create=True), \
              mock.patch.object(runtime, 'start_player', return_value=player) as start, \
@@ -202,6 +326,25 @@ class RecordingModesTests(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(Path(start.call_args.args[0][-1]).name, 'cue-press.wav')
         self.assertEqual(start.call_args.kwargs['lead_in_s'], 0)
+
+    def test_stalled_start_cue_is_reaped_before_any_microphone_can_open(self):
+        cue = mock.Mock()
+        cue.poll.return_value = None
+        cue.wait.side_effect = [subprocess.TimeoutExpired('aplay', 5),
+                               subprocess.TimeoutExpired('aplay', .2), 0]
+        led = mock.Mock()
+        with mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
+             mock.patch.object(runtime, 'led', led, create=True), \
+             mock.patch.object(runtime, 'start_player', return_value=cue), \
+             mock.patch.object(runtime, 'open_microphone') as microphone:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                physical_capture(runtime, 'person@example.invalid')
+        microphone.assert_not_called()
+        cue.terminate.assert_called_once()
+        cue.kill.assert_called_once()
+        self.assertEqual(cue.wait.call_count, 3)
+        led.on.assert_called_once()
+        led.off.assert_called_once()
 
     def test_approval_arms_sending_for_tap_review_and_hold_release_only_in_cloud(self):
         for transport in ('cloud', 'wacli'):

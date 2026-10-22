@@ -56,10 +56,11 @@ def busy(error):
 
 
 @contextmanager
-def _playback(args, *, lead_in_s=None):
-    """Feed silence and the unchanged PCM through the same ALSA stream."""
+def _playback(args, *, lead_in_s=None, clip_seconds=None):
+    """Prepare a private PCM copy for speaker wake-up or a short cue."""
     lead_in_s = LEAD_IN_S if lead_in_s is None else lead_in_s
-    if not args or Path(args[0]).name != 'aplay' or not Path(args[-1]).is_file() or lead_in_s <= 0:
+    if (not args or Path(args[0]).name != 'aplay' or not Path(args[-1]).is_file()
+            or lead_in_s <= 0 and clip_seconds is None):
         yield args
         return
     try:
@@ -81,8 +82,11 @@ def _playback(args, *, lead_in_s=None):
                 frames = int(params.framerate * lead_in_s)
                 silence = b'\x80' if params.sampwidth == 1 else b'\0'
                 target.writeframesraw(silence * frames * params.sampwidth * params.nchannels)
-                while block := source.readframes(16384):
-                    target.writeframesraw(block)
+                if clip_seconds is not None:
+                    target.writeframesraw(source.readframes(int(params.framerate * clip_seconds)))
+                else:
+                    while block := source.readframes(16384):
+                        target.writeframesraw(block)
             yield [*args[:-1], str(path)]
 
 
@@ -133,12 +137,12 @@ class SpeakerPlayer:
         return result
 
 
-def start_player(args, *, popen=None, cancel=None, wait=True, lead_in_s=None, **kwargs):
+def start_player(args, *, popen=None, cancel=None, wait=True, lead_in_s=None, clip_seconds=None, **kwargs):
     """Keep the cross-process lock until the caller reaps this player."""
     context = ExitStack()
     try:
         context.enter_context(reservation(cancel=cancel, wait=wait))
-        command = context.enter_context(_playback(args, lead_in_s=lead_in_s))
+        command = context.enter_context(_playback(args, lead_in_s=lead_in_s, clip_seconds=clip_seconds))
         if cancel is not None and cancel():
             raise SpeakerBusy("speaker playback cancelled")
         process = (subprocess.Popen if popen is None else popen)(command, **kwargs)

@@ -243,6 +243,15 @@ PY
 
 Use the existing hardware test to check microphone, speaker, button, LED and NFC.
 Listen to the USB microphone recording. Listen to the buttonbox setup prompts.
+For a Button Box recording, require one short cue and an immediate lamp signal.
+The runtime plays a 120 ms temporary cue copy before it opens the microphone.
+The source sound files stay unchanged. Check the first word after the cue.
+Speak before and during the 40-second reminder, then stop. Review the complete
+recording, including the final words. The reminder stays in the saved audio but
+cannot make an otherwise empty recording count as speech. Also test silence
+through the reminder. Measure the start delay on the real USB devices; the
+tap-recording model gives 120 ms and excludes device startup and scheduling
+time. Hold-to-record keeps its normal hold threshold.
 Use `sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh`.
 Check `voice_pack` is `buttonbox` in the fresh local settings. Keep settings and
 credentials out of shared logs. On a spare box with a disposable test identity, complete a Cloud setup test

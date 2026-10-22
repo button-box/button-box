@@ -93,6 +93,7 @@ sender_wake = threading.Event()
 _sending_feedback = None
 SENDING_FAILURE_GRACE_S = 0.15
 APPROVAL_CUE_TIMEOUT_S = 5
+START_CUE_SECONDS = 0.12
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -2069,7 +2070,7 @@ class RecordingLimitCue:
 
 @contextmanager
 def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
-    """Cloud Button Box starts the lamp and cue without gating the microphone."""
+    """Light the lamp first; finish one short cue before opening the mic."""
     player = None
     fast = buttonbox_voice()
     try:
@@ -2078,7 +2079,11 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
             # Normal hold already used the press cue to classify the gesture.
             if talk_mode != "hold" or card_prompt or press_cue:
                 cue = "press" if press_cue else "rec_go"
-                player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))], lead_in_s=0)
+                player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))],
+                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS)
+                code = player.wait(timeout=5)
+                if code:
+                    raise subprocess.CalledProcessError(code, "aplay")
         else:
             play_sound(sound_pack.cue_path("rec_go"), timeout=5)
         yield player
@@ -2097,7 +2102,7 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
 def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, setup_reply=False):
     global _recording
     require_permit(press_token)
-    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt) as start_cue:
+    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt):
         if talk_mode == "hold" and not button.is_pressed:
             return RecordingResult(None, 0, False)
         capture_id = uuid.uuid4().hex
@@ -2131,8 +2136,9 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                         chunk = os.read(process.stdout.fileno(), 4096)
                         if chunk:
                             raw.write(chunk)
-                            cue_active = start_cue is not None and start_cue.poll() is None
-                            vad.feed(b"\0" * len(chunk) if warning.process or cue_active else chunk, now=now)
+                            # Keep the microphone samples, including overlapping
+                            # words, but the reminder cannot establish speech.
+                            vad.feed(b"\0" * len(chunk) if warning.process is not None else chunk, now=now)
                     if now - started >= max_seconds:
                         timed_out = True
                         break
@@ -2168,7 +2174,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                     remainder, _ = process.communicate(timeout=3)
                 if remainder:
                     raw.write(remainder)
-                    vad.feed(remainder, now=time.monotonic())
+                    vad.feed(b"\0" * len(remainder) if warning.process is not None else remainder,
+                             now=time.monotonic())
                 raw.flush()
                 os.fsync(raw.fileno())
         except BaseException:
@@ -2200,13 +2207,10 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
 
         recorded_seconds = raw_path.stat().st_size / (16000 * 2)
         bounds = vad.trim_bounds()
-        if setup_reply and bounds is not None:
-            # Keep the whole first reply, including words spoken over the reminder.
+        if bounds is not None and (setup_reply or buttonbox_voice() or warning.intervals):
+            # VAD is only the empty-recording gate here. Never trim away words
+            # spoken during the reminder or the drained microphone tail.
             bounds = (0, raw_path.stat().st_size // 2)
-        elif start_cue is not None and bounds is not None:
-            # Keep words that overlap the parallel start cue. The cue alone
-            # cannot make an otherwise silent recording meaningful.
-            bounds = (0, bounds[1])
         if bounds is None:
             raw_path.unlink(missing_ok=True)
             return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)

@@ -257,6 +257,7 @@ class SetupTests(unittest.TestCase):
         vad.trim_bounds.return_value = (0, 48000)
         player = mock.Mock()
         player.poll.return_value = 0
+        player.wait.return_value = 0
         with mock.patch.object(runtime, 'TEMP_DIR', str(self.root)), \
              mock.patch.object(runtime, 'play_sound'), \
              mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
