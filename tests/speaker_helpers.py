@@ -1,10 +1,24 @@
 """Keep speaker and setup receipts inside each test's temporary directory."""
 
 import tempfile
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
 from messagebox import speaker, cloud_setup
+
+
+def assert_padded_playback(test, played, source):
+    played, source = Path(played), Path(source)
+    test.assertNotEqual(played, source)
+    with wave.open(str(played), 'rb') as actual, wave.open(str(source), 'rb') as original:
+        test.assertEqual(actual.getparams()[:3], original.getparams()[:3])
+        lead = int(original.getframerate() * speaker.LEAD_IN_S)
+        silence = b'\x80' if original.getsampwidth() == 1 else b'\0'
+        test.assertEqual(actual.getnframes(), original.getnframes() + lead)
+        test.assertEqual(actual.readframes(lead),
+                         silence * lead * original.getnchannels() * original.getsampwidth())
+        test.assertEqual(actual.readframes(original.getnframes()), original.readframes(original.getnframes()))
 
 
 def isolate_audio(test):

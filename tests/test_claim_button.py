@@ -66,7 +66,10 @@ class ClaimButtonTests(unittest.TestCase):
                 button_send.claim_only_loop()
         self.assertEqual(self.events, ["press", "confirm"])
         self.assertTrue(json.loads(self.claim.path.read_text())["physical_confirmed"])
-        run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, str(self.cues["press"])],
+        command = run.call_args.args[0]
+        self.assertEqual(command[:-1], ["aplay", "-q", "-D", button_send.SPK_DEV])
+        self.assertEqual(Path(command[-1]).name, self.cues["press"].name)
+        run.assert_called_once_with(command,
                                     check=True, timeout=5, stderr=subprocess.PIPE)
 
     def test_unrecorded_claim_outcomes_play_press_and_failure(self):
@@ -143,7 +146,10 @@ class ClaimButtonTests(unittest.TestCase):
              mock.patch.object(button_send.subprocess, "run", side_effect=OSError("private")) as run:
             button_send.play_setup_online(cues)
             button_send.play_setup_online(cues)
-        run.assert_called_once_with(["aplay", "-q", "-D", button_send.SPK_DEV, str(button_send.sound_pack.voice_path("setup-scan"))],
+        command = run.call_args.args[0]
+        self.assertEqual(command[:-1], ["aplay", "-q", "-D", button_send.SPK_DEV])
+        self.assertEqual(Path(command[-1]).name, button_send.sound_pack.voice_path("setup-scan").name)
+        run.assert_called_once_with(command,
                                     check=True, timeout=20, stderr=subprocess.PIPE)
         self.assertNotEqual(cues["online"], self.cues["press"])
         self.assertNotEqual(cues["online"], self.cues["fail"])

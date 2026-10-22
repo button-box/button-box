@@ -1,4 +1,4 @@
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 import io
 import json
 import subprocess
@@ -382,10 +382,11 @@ class OnboardingAPITests(unittest.TestCase):
         with patch("messagebox.settings.APP_DIR", root), patch("messagebox.onboarding.app.subprocess.run") as run:
             for ringtone_id, filename in RINGTONES.items():
                 with self.subTest(ringtone_id=ringtone_id):
+                    run.side_effect = lambda command, **kwargs: assert_padded_playback(
+                        self, command[-1], root / "ringtones" / filename)
                     response = self.client.json("POST", "/api/ringtone-preview",
                         {"ringtone_id": ringtone_id}, headers={"Origin": f"http://{HOST}"})
                     self.assertEqual(response["status"], "200 OK")
-                    self.assertEqual(run.call_args.args[0][-1], str(root / "ringtones" / filename))
                     self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
 
     def test_ringtone_preview_reports_speaker_success_and_failure(self):

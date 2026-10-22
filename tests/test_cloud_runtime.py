@@ -1,4 +1,4 @@
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 import hashlib
 import io
 import contextlib
@@ -2280,15 +2280,18 @@ class CloudRuntimeTests(unittest.TestCase):
         self.runtime._command(self.preview("ding_dong"), NOW)
         process = mock.Mock()
         process.poll.return_value = 0
+        def launch(command, **kwargs):
+            self.assertEqual(command[:-1], ["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2"])
+            assert_padded_playback(self, command[-1], ringtone_dir / "hello_piano.wav")
+            return process
         with self.audio_owner(), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}), \
              mock.patch.object(button_send.cloud_runtime, "account_scope", return_value="a" * 64), \
              mock.patch.object(button_send.cloud_runtime, "RINGTONE_DIR", ringtone_dir), \
              mock.patch.object(button_send, "SPK_DEV", "plughw:CARD=ExampleSpeaker,DEV=2"), \
              mock.patch.object(button_send, "quiet_hours", return_value=False), \
-             mock.patch.object(button_send.subprocess, "Popen", return_value=process) as play:
+             mock.patch.object(button_send.subprocess, "Popen", side_effect=launch) as play:
             self.assertTrue(button_send.maybe_play_cloud_sound())
-        play.assert_called_once_with(["aplay", "-q", "-D", "plughw:CARD=ExampleSpeaker,DEV=2",
-                                     str(ringtone_dir / "hello_piano.wav")])
+        play.assert_called_once()
         from messagebox.cloud_runtime import _ringtone_preview_timeout
         self.assertAlmostEqual(_ringtone_preview_timeout(ringtone_dir / "hello_piano.wav"), 24.8)
 

@@ -1,21 +1,23 @@
-"""An inbound message after a cue starts with a short silence (USB speaker settle)."""
+"""Every shared WAV playback starts with silence while the USB speaker wakes."""
 
 from speaker_helpers import isolate_audio
 
 import os
+import subprocess
 import tempfile
 import unittest
 import wave
 from pathlib import Path
 from unittest import mock
 
+from messagebox import speaker
 from messagebox.guided_reply import GuidedSession, OutboxStore
 from test_mic_access import runtime
 
 
-def write_wav(path, frames, rate=48000, width=2):
+def write_wav(path, frames, rate=48000, width=2, channels=1):
     with wave.open(str(path), "wb") as out:
-        out.setnchannels(1)
+        out.setnchannels(channels)
         out.setsampwidth(width)
         out.setframerate(rate)
         out.writeframes(frames)
@@ -25,57 +27,82 @@ class LeadInTests(unittest.TestCase):
     def setUp(self):
         isolate_audio(self)
 
-    def test_copy_starts_with_150_ms_of_silence_then_the_exact_message(self):
-        for width, silence in ((2, b"\x00\x00"), (1, b"\x80")):
-            with self.subTest(width=width), tempfile.TemporaryDirectory() as directory:
-                source = Path(directory) / "message.wav"
-                body = bytes(range(1, 201)) * 120
-                write_wav(source, body, rate=16000, width=width)
-                with mock.patch.dict(os.environ, {"RUNTIME_DIRECTORY": directory}):
-                    padded = runtime.with_lead_in(source)
-                self.assertEqual(padded.parent, Path(directory))
-                with wave.open(str(padded), "rb") as result, wave.open(str(source), "rb") as original:
-                    self.assertEqual(result.getparams()[:3], original.getparams()[:3])
-                    lead = int(16000 * runtime.LEAD_IN_S)
-                    self.assertEqual(result.getnframes(), original.getnframes() + lead)
-                    self.assertEqual(result.readframes(lead), silence * lead)
-                    self.assertEqual(result.readframes(original.getnframes()), body)
+    def test_sync_playback_in_both_modes_has_300_ms_then_exact_pcm(self):
+        for mode in ('cloud', 'wacli'):
+            for channels, width in ((1, 1), (1, 2), (2, 2), (1, 3), (1, 4)):
+                with self.subTest(mode=mode, width=width, channels=channels), tempfile.TemporaryDirectory() as directory:
+                    source = Path(directory) / 'voice.wav'
+                    body = bytes(range(1, 201)) * 120
+                    write_wav(source, body, rate=16000, width=width, channels=channels)
+                    original = source.read_bytes()
+                    played = []
+                    def run(command, **kwargs):
+                        played.append(Path(command[-1]))
+                        self.assertTrue(speaker.is_busy())
+                        with wave.open(command[-1], 'rb') as audio:
+                            self.assertEqual(audio.getparams()[:3], (channels, width, 16000))
+                            lead = 4800
+                            self.assertEqual(audio.getnframes(), len(body) // (width * channels) + lead)
+                            self.assertEqual(audio.readframes(lead),
+                                             (b'\x80' if width == 1 else b'\0') * lead * width * channels)
+                            self.assertEqual(audio.readframes(len(body) // (width * channels)), body)
+                        return subprocess.CompletedProcess(command, 0)
+                    with mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': mode}):
+                        speaker.run(['aplay', '-q', '-D', 'synthetic', str(source)], runner=run, check=True)
+                    self.assertNotEqual(played[0], source)
+                    self.assertFalse(played[0].exists())
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(speaker.is_busy())
 
-    def test_unreadable_audio_has_no_copy(self):
+    def test_async_copy_exists_until_reaped_and_keeps_the_speaker_lock(self):
         with tempfile.TemporaryDirectory() as directory:
-            for name, data in (("text.wav", b"not a wav"), ("missing.wav", None)):
+            source = Path(directory) / 'cue.wav'
+            write_wav(source, b'\x01\x02' * 4800)
+            process = mock.Mock()
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            launch = mock.Mock(return_value=process)
+            player = speaker.start_player(['aplay', '-q', str(source)], popen=launch)
+            padded = Path(launch.call_args.args[0][-1])
+            self.assertNotEqual(padded, source)
+            self.assertTrue(padded.exists())
+            with wave.open(str(padded), 'rb') as audio:
+                self.assertEqual(audio.readframes(14400), b'\0\0' * 14400)
+                self.assertEqual(audio.readframes(4800), b'\x01\x02' * 4800)
+            self.assertIsNone(player.poll())
+            self.assertTrue(speaker.is_busy())
+            player.wait(timeout=2)
+            self.assertFalse(padded.exists())
+            self.assertFalse(speaker.is_busy())
+
+    def test_unreadable_or_non_wav_input_keeps_the_original_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, data in (('text.wav', b'not a wav'), ('missing.wav', None)):
                 path = Path(directory) / name
                 if data is not None:
                     path.write_bytes(data)
-                with mock.patch.dict(os.environ, {"RUNTIME_DIRECTORY": directory}):
-                    self.assertIsNone(runtime.with_lead_in(path))
-            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["text.wav"])
+                command = ['aplay', '-q', str(path)]
+                run = mock.Mock()
+                speaker.run(command, runner=run)
+                self.assertEqual(run.call_args.args[0], command)
+                self.assertFalse(speaker.is_busy())
 
-    def test_after_cue_plays_padded_copy_and_removes_it_or_falls_back(self):
+    def test_temporary_copy_is_removed_on_launch_and_playback_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "message.wav"
-            write_wav(source, b"\x01\x02" * 4800)
-            played = []
-            with mock.patch.dict(os.environ, {"RUNTIME_DIRECTORY": directory}), \
-                 mock.patch.object(runtime, "play_audio_ordinary", side_effect=lambda path: played.append(Path(path))):
-                runtime.play_audio_after_cue(source)
-                self.assertNotEqual(played[-1], source)
-                self.assertFalse(played[-1].exists())
-                broken = Path(directory) / "broken.wav"
-                broken.write_bytes(b"x")
-                runtime.play_audio_after_cue(broken)
-                self.assertEqual(played[-1], broken)
-            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["broken.wav", "message.wav"])
-
-    def test_padded_copy_is_removed_when_playback_fails(self):
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "message.wav"
-            write_wav(source, b"\x01\x02" * 4800)
-            with mock.patch.dict(os.environ, {"RUNTIME_DIRECTORY": directory}), \
-                 mock.patch.object(runtime, "play_audio_ordinary", side_effect=OSError("speaker")):
+            source = Path(directory) / 'voice.wav'
+            write_wav(source, b'\x01\x02' * 4800)
+            copies = []
+            def fail(command, **kwargs):
+                copies.append(Path(command[-1]))
+                self.assertNotEqual(copies[-1], source)
+                self.assertTrue(copies[-1].exists())
+                raise OSError('synthetic speaker failure')
+            for play, options in ((speaker.run, {'runner': fail}),
+                                  (speaker.start_player, {'popen': fail})):
                 with self.assertRaises(OSError):
-                    runtime.play_audio_after_cue(source)
-            self.assertEqual([p.name for p in Path(directory).iterdir()], ["message.wav"])
+                    play(['aplay', '-q', str(source)], **options)
+                self.assertFalse(copies[-1].exists())
+                self.assertFalse(speaker.is_busy())
 
 
 class IO:

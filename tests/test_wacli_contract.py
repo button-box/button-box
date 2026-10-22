@@ -4,7 +4,7 @@ Only subprocess/audio boundaries are faked; routing and durable state are real.
 These contracts always select wacli, including in the Cloud matrix job.
 """
 
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 
 import json
 import tempfile
@@ -184,10 +184,13 @@ class WacliContractTests(unittest.TestCase):
         queued = self.root / "queue" / button_send.queued()[0]
         metadata = button_send.queue_metadata(queued)
         self.assertEqual((metadata["chat"], metadata["msgid"]), (PERSON, message["MsgID"]))
-        with mock.patch.object(button_send.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as play, \
+        def play_audio(command, **kwargs):
+            assert_padded_playback(self, command[-1], queued)
+            return SimpleNamespace(returncode=0)
+        with mock.patch.object(button_send.subprocess, "run", side_effect=play_audio) as play, \
              mock.patch.object(button_send.subprocess, "Popen") as react:
             button_send.play_next_legacy()
-        self.assertEqual(Path(play.call_args.args[0][-1]), queued)
+        self.assertEqual(play.call_count, 1)
         self.assertEqual(react.call_args.args[0][4:8], [PERSON, "--id", message["MsgID"], "--reaction"])
         archived = self.root / "queue" / ".played" / queued.name
         self.assertTrue(archived.exists())
@@ -211,11 +214,13 @@ class WacliContractTests(unittest.TestCase):
         self.receipts.claim_next()  # Crash after claim, before playback.
         restarted = ReceiptStore(str(self.root / "receipts"))
         self.assertEqual(restarted.recover_inflight(), 1)
+        def play_audio(command, **kwargs):
+            assert_padded_playback(self, command[-1], clip)
+            return SimpleNamespace(returncode=0)
         with mock.patch.object(button_send, "receipt_store", restarted), \
-             mock.patch.object(button_send.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as play:
+             mock.patch.object(button_send.subprocess, "run", side_effect=play_audio) as play:
             self.assertEqual(button_send.play_pending_listened(), 1)
             self.assertEqual(button_send.play_pending_listened(), 0)
-        self.assertEqual(Path(play.call_args.args[0][-1]), clip)
         self.assertEqual(play.call_count, 1)
         self.assertEqual(restarted.ingest_played(payload, profiles, str(clip)), [])
 

@@ -12,6 +12,13 @@ rules are unchanged. Unsupported explicit values use the Jessica audio fallback.
 
 ## Speech order
 
+In Cloud HOME mode, the setup watcher registers the box before its first
+check-in once home Wi-Fi is ready. It uses the same locked, resumable claim
+start as the phone page. No phone request is needed for the online cue.
+Clock-not-ready and network errors keep the existing bounded retry backoff;
+logs contain only the error type. The phone page and physical claim press
+keep their existing roles.
+
 1. First Cloud connection before claim: `voice-setup-scan.wav`.
 2. Pending claim: `voice-setup-press.wav`.
 3. Completed claim: `voice-setup-names.wav`.
@@ -228,6 +235,16 @@ message queue, and quiet state are checked again after acquiring the lock.
 The main loop checks the button before starting any further idle speech.
 
 ## Speaker access
+
+All application PCM WAV playback through `speaker.run` and `start_player`
+adds leading silence in the same `aplay` stream. `messagebox/speaker.py` has
+one tuning constant, `LEAD_IN_S = 0.3`. This covers voices, cues, notes and
+previews in both transports. The temporary copy preserves the format and
+every original PCM byte. Files in the sound pack stay unchanged. Copying uses
+small blocks for low-memory boxes. The copy is removed after playback or
+failure; asynchronous playback retains it until the player is reaped.
+Non-WAV inputs retain their existing player behavior. Check the first word
+on the actual USB speaker after a cold start before the handout.
 
 `/run/messagebox-speaker/speaker.lock` is shared by the button service,
 Cloud playback, local dashboard previews, and onboarding card/preview playback.

@@ -1,4 +1,4 @@
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 from mic_helpers import physical_capture
 import contextlib
 import json
@@ -154,15 +154,17 @@ class SoundPackTests(unittest.TestCase):
 
     def test_setup_voice_is_buttonbox_and_once_despite_old_online_receipt(self):
         self.state.write_text('{"online":true}')
+        def play(command, **kwargs):
+            assert_padded_playback(self, command[-1], ROOT / "sounds/voices/buttonbox/voice-setup-scan.wav")
+            return types.SimpleNamespace(returncode=0)
         with mock.patch.object(runtime.cloud_claim, "setup_online_cue", return_value=True), \
              mock.patch.object(sound_pack, "SOUND_DIR", ROOT / "sounds"), \
              mock.patch.object(sound_pack, "current_voice_pack", return_value="alien"), \
-             mock.patch.object(runtime.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)) as run:
+             mock.patch.object(runtime.subprocess, "run", side_effect=play) as run:
             runtime.play_setup_online(runtime.claim_beeps())
             runtime.play_setup_online(runtime.claim_beeps())
         self.assertEqual([Path(call.args[0][-1]).name for call in run.call_args_list],
                          ["voice-setup-scan.wav"])
-        self.assertEqual(Path(run.call_args.args[0][-1]), ROOT / "sounds/voices/buttonbox/voice-setup-scan.wav")
 
     def test_online_ready_edges_survive_restart_and_rate_limit_flapping(self):
         def edge(boot, online, mono, wall, audible=True):

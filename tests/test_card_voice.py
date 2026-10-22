@@ -1,4 +1,4 @@
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 from mic_helpers import physical_capture
 from functools import partial
 import contextlib
@@ -90,10 +90,15 @@ class CardVoiceTests(unittest.TestCase):
                     runtime._play_nfc_prompt(CARD, "enrolled", "")
                     self.assertEqual([call.args[0] for call in play.call_args_list], [runtime.sound_pack.cue_path("card_saved"), runtime.sound_pack.voice_path("card-saved", pack)])
                 calls = []
-                player = TonePlayer(ROOT / "sounds/cues", run=lambda command, **kw: calls.append(command))
+                expected = [runtime.sound_pack.cue_path("card_saved"), runtime.sound_pack.voice_path("card-saved", pack)]
+                def run(command, **kwargs):
+                    if command[0] == 'aplay':
+                        assert_padded_playback(self, command[-1], expected[len(calls)])
+                        calls.append(command)
+                player = TonePlayer(ROOT / "sounds/cues", run=run)
                 with mock.patch.object(player.settings, "snapshot", return_value=self.settings):
                     player("success")
-                self.assertEqual([Path(call[-1]) for call in calls if call[0] == "aplay"], [runtime.sound_pack.cue_path("card_saved"), runtime.sound_pack.voice_path("card-saved", pack)])
+                self.assertEqual(len(calls), 2)
 
     def test_interruption_reaps_speaker_before_dispatching_immediate_recording(self):
         self.settings["nfc_confirmation_beep"] = False

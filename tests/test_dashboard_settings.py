@@ -1,4 +1,4 @@
-from speaker_helpers import isolate_audio
+from speaker_helpers import isolate_audio, assert_padded_playback
 import io
 import json
 import subprocess
@@ -104,8 +104,9 @@ class DashboardSettingsTests(unittest.TestCase):
             dashboard, "settings_store", return_value=self.store
         ), patch.object(dashboard.subprocess, "run") as run:
             for ringtone_id, filename in RINGTONES.items():
+                run.side_effect = lambda command, **kwargs: assert_padded_playback(
+                    self, command[-1], root / "ringtones" / filename)
                 dashboard.preview_ringtone(ringtone_id)
-                self.assertEqual(run.call_args.args[0][-1], str(root / "ringtones" / filename))
                 self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
 
     def test_ringtone_preview_reports_playback_failure(self):
