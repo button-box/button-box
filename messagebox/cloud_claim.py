@@ -69,11 +69,17 @@ class CloudClaim:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         return lock
 
+    def registration_needed(self):
+        with self._locked():
+            prior = self._read()
+            return not (prior and (prior.get("cancel_pending") or prior["expires_at"] > self.clock()))
+
     def start(self):
         with self._locked():
             prior = self._read()
-            if prior and (prior.get("cancel_pending") or
-                          (prior["expires_at"] > self.clock() and prior["whatsapp_url"])):
+            # Check-in claims intentionally have no URL. They must survive
+            # both watcher retries and a concurrent phone-page start request.
+            if prior and (prior.get("cancel_pending") or prior["expires_at"] > self.clock()):
                 return self._public(prior)
             # Setup cannot read the runtime user's private health directory.
             # Optional hardware discovery must not prevent claiming the box;

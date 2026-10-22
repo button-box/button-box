@@ -133,6 +133,9 @@ reports a pending claim, press prompt, physical press, names. Registration alone
 must not play the press prompt. Expired or cancelled claims cannot arm it. The
 first setup note must then play `setup-your-turn`, including with `play_only`,
 and wait for a separate press before recording.
+The watcher registers only when no valid local claim exists. A pending claim
+learned from Cloud has no WhatsApp URL; polling, restart, and the phone page must
+preserve its ID until confirmation, expiry, or completed cancellation.
 
 ## 3. Commit the signed application, then activate A/B
 

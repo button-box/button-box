@@ -130,7 +130,9 @@ class ClaimTests(unittest.TestCase):
 
     def test_expired_claim_does_not_consume_button_or_display_qr(self):
         self.claim.start()
+        self.assertFalse(self.claim.registration_needed())
         self.claim.clock = lambda: NOW + 601
+        self.assertTrue(self.claim.registration_needed())
         self.assertFalse(self.claim.consume_press())
         with self.assertRaises(CloudClaimError):
             self.claim.qr_svg()
@@ -193,6 +195,7 @@ class ClaimTests(unittest.TestCase):
         with self.assertRaises(CloudClaimError):
             self.claim.cancel(ID)
         restarted = CloudClaim(self.client, path=self.path, clock=lambda: NOW + 601)
+        self.assertFalse(restarted.registration_needed())
         self.assertEqual(restarted.status(), {"status": "cancellation_pending", "claim_id": ID})
         self.assertEqual(restarted.start(), restarted.status())
         self.assertEqual(self.client.register_calls, 1)

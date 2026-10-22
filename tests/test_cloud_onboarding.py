@@ -26,6 +26,9 @@ class FakeCloudClaim:
     def setup_checkin(self):
         return {"claimed": self.claimed, "pending_claim": None}
 
+    def registration_needed(self):
+        return not self.started
+
     def start(self):
         self.started += 1
         return {"status": "awaiting_button", "whatsapp_url": "https://wa.me/12025550101?text=claim",
@@ -144,6 +147,67 @@ class CloudOnboardingTests(unittest.TestCase):
         self.assertEqual(claim.start()['status'], 'awaiting_button')
         self.assertEqual(client.register_calls, 1)
 
+    def test_watcher_keeps_different_pending_claim_across_restart_phone_and_button(self):
+        from messagebox.cloud_device import CloudDeviceClient, DeviceIdentityStore
+        from speaker_helpers import isolate_audio
+        from test_cloud_claim import ID, NOW, TOKEN, URL
+        from test_cloud_device import _Response
+        isolate_audio(self)
+        root = Path(self.temp.name)
+        now = [NOW]
+        pending_id = 'pending-whatsapp-12345678'
+        registrations, confirmations = [], []
+        identities = []
+        def request(request, **kwargs):
+            if request.full_url.endswith('/device/register'):
+                registrations.append(now[0])
+                return _Response({'claim_id': ID, 'claim_token': TOKEN,
+                    'whatsapp_url': URL, 'expires_at': now[0] + 600})
+            if request.full_url.endswith('/device/setup-checkin'):
+                self.assertTrue(registrations)
+                return _Response({'claimed': bool(confirmations), 'pending_claim': None if confirmations else
+                    {'claim_id': pending_id, 'expires_at': NOW + 601}})
+            if request.full_url.endswith('/device/claim/confirm'):
+                confirmations.append(json.loads(request.data)['claim_id'])
+                return _Response({'claimed': False})
+            self.fail('unexpected synthetic endpoint')
+
+        # A new client and identity store model a process restart on the same disk.
+        for process in range(2):
+            identity = DeviceIdentityStore(root / 'device.json').load_or_create()
+            identities.append(identity)
+            client = CloudDeviceClient('https://example.invalid/cloud-api/v1', identity, opener=request)
+            claim = CloudClaim(client, path=root / 'claim.json', clock=lambda: now[0])
+            waits = []
+            def sleep(seconds):
+                waits.append(seconds)
+                now[0] += seconds
+                state = json.loads(claim.path.read_text())
+                self.assertEqual(state['claim_id'], pending_id)
+                self.assertEqual(state['whatsapp_url'], '')
+                self.assertEqual(state['expires_at'], NOW + 601)
+            with mock.patch.object(claim, 'start', wraps=claim.start) as start:
+                self.run_watcher(claim=claim, setup_pending=lambda: len(waits) < 3, sleep=sleep)
+            self.assertEqual(start.call_count, int(process == 0))
+        self.assertTrue(identities[0] == identities[1])
+        self.assertEqual(registrations, [NOW])
+
+        with mock.patch.dict('os.environ', {'MSGBOX_TRANSPORT': 'cloud'}):
+            self.app = create_app(mode='HOME', config={'device_id': 'A7K2'},
+                state_store=self.state, cloud_claim=claim, connectivity_checker=self.checker)
+        phone = self.request('POST', '/api/cloud-claim/start', f'http://{HOST}')
+        self.assertEqual(phone['status'], '200 OK')
+        self.assertEqual(json.loads(phone['body'])['claim_id'], pending_id)
+        self.assertEqual(registrations, [NOW])
+        self.assertTrue(claim.consume_press())
+        self.assertEqual(confirmations, [pending_id])
+        completion = root / 'completion-request.json'
+        write, _, _ = self.run_watcher(claim=claim,
+            setup_pending=lambda: not completion.exists(), sleep=lambda _: None)
+        write.assert_called_once_with(transport='cloud')
+        self.assertFalse(claim.path.exists())
+        self.assertEqual(registrations, [NOW])
+
     def test_home_watcher_retries_clock_not_ready_with_type_only_log(self):
         from test_cloud_claim import NOW, TOKEN, URL
         now = [NOW - 223]
@@ -259,6 +323,7 @@ class CloudOnboardingTests(unittest.TestCase):
                 args["target"](**args["kwargs"])
                 self.assertEqual(cloud.setup_checkin.call_count, int(phase != "WIFI_SELECT"))
                 self.assertEqual(cloud.start.call_count, int(phase != "WIFI_SELECT"))
+                self.assertEqual(cloud.registration_needed.call_count, int(phase != "WIFI_SELECT"))
                 self.assertEqual(online.call_count, int(phase != "WIFI_SELECT"))
 
         pending = [True]
@@ -449,6 +514,8 @@ class CloudOnboardingTests(unittest.TestCase):
         started = self.request("POST", "/api/cloud-claim/start", f"http://{HOST}")
         self.assertEqual(started["status"], "200 OK")
         self.assertEqual(json.loads(started["body"])["claim_id"], ID)
+        self.assertTrue(json.loads(started["body"])["whatsapp_url"])
+        self.assertEqual(self.request("GET", "/api/cloud-claim/qr")["status"], "200 OK")
         self.assertTrue(claim.consume_press())
         body = ("claim_id=" + ID).encode()
         with mock.patch.object(client, "cancel_claim", side_effect=CloudDeviceError("unavailable")):

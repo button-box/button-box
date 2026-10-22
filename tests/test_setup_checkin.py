@@ -97,10 +97,14 @@ class SetupCheckinTests(unittest.TestCase):
             self.claim.setup_checkin()
         self.assertFalse(self.claim.path.exists())
 
-    def test_claimed_removes_old_file_and_local_fallback_can_replace_qr_claim(self):
+    def test_phone_start_preserves_pending_claim_and_claimed_removes_it(self):
         self.claim.setup_checkin()
-        self.assertTrue(self.claim.start()["whatsapp_url"])
-        self.assertEqual(self.client.register_calls, 1)
+        original = self.claim.path.read_bytes()
+        self.assertFalse(self.claim.registration_needed())
+        self.assertEqual(self.claim.start()["claim_id"], ID)
+        self.assertEqual(self.claim.start()["whatsapp_url"], "")
+        self.assertEqual(self.claim.path.read_bytes(), original)
+        self.assertEqual(self.client.register_calls, 0)
         self.client.setup_checkin.return_value = {"claimed": True}
         self.assertEqual(self.claim.setup_checkin(), {"claimed": True})
         self.assertFalse(self.claim.path.exists())
