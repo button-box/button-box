@@ -1532,10 +1532,10 @@ class SlotTests(unittest.TestCase):
         import ast
         import importlib.util
         import sysconfig
-        standard = sysconfig.get_path('stdlib')
+        standard = Path(sysconfig.get_path('stdlib')).resolve()
         def standard_module(name):
             spec = importlib.util.find_spec(name)
-            return spec.origin in {'built-in', 'frozen'} or spec.origin.startswith(standard)
+            return spec.origin in {'built-in', 'frozen'} or Path(spec.origin).resolve().is_relative_to(standard)
         tree = ast.parse((ROOT / 'messagebox/controller_selector.py').read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

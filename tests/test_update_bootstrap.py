@@ -328,7 +328,14 @@ exec /usr/bin/install "${args[@]}"
         release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
         spec = importlib.util.spec_from_file_location('future_application_slots', release / 'messagebox/controller_slots.py')
         future = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(future)
+        saved_path = sys.path[:]
+        try:
+            with mock.patch.dict(sys.modules):
+                for name in ('release_verify', 'trust_update'):
+                    sys.modules.pop(name, None)
+                spec.loader.exec_module(future)
+        finally:
+            sys.path[:] = saved_path
         bootstrap, publish = future.bootstrap, future.publish
         future.bootstrap = lambda: bootstrap(self.root, platform=PLATFORM, run=self.host)
         # The real publication acquires these exact locks again. This fails if

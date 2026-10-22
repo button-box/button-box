@@ -220,8 +220,14 @@ Check `voice_pack` is `buttonbox` in the fresh local settings. Keep settings and
 credentials out of shared logs. On a spare box with a disposable test identity, complete a Cloud setup test
 with the real service: first greeting, first note, separate reply press, review, send,
 listened notice, card routing, mispress, quiet hours and Wi-Fi return. Check the
-rule-2b greeting offer and ACK contract against the live Cloud service. Source
-tests do not establish that the server contract is live.
+rule-2b greeting offer and ACK contract against the live Cloud service. Require
+both a fresh latest heartbeat and the current poll feature. Verify an atomic
+single offer and no redelivery after a lost ACK or rollback, including a failed
+rollback heartbeat. Verify the four wire ACK mappings: received → received,
+applied → played, rejected → failed, expired → expired. Stall a greeting transfer
+and send a real note; the note must still queue. Change voice while a greeting
+waits; it must not play in the old voice. Source tests do not establish that
+this server contract or the physical behavior is live.
 
 On a spare box, install a higher-sequence signed test application through the
 selected controller. Test rollback and reboot recovery. Do not induce power loss

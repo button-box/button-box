@@ -13,8 +13,11 @@ was made. `feat/announce-recipient` is excluded.
 | `3eceedc` | Merge voice onboarding `169dfb0`. Resolve six conflicts. |
 | `939e8c3` | Merge card routing `50546ee`. Resolve two conflicts. |
 | `484b1dd` | Fix the install allowlists and add the full signed bench/rollback proof. |
+| `f3a0161` | Record the initial candidate guide and test report. |
+| `fbdfd0c` | Prove unattended future controller replacement through the existing supervisor. |
+| `bc91d64` | Move greeting downloads off the poll path and bind queued greetings to a voice. |
 
-The final documentation commit follows these four commits. Use `git log --first-parent origin/release-v0.3.12..HEAD`
+Use `git log --first-parent origin/release-v0.3.12..HEAD`
 to get their exact identities.
 
 ## Conflict decisions
@@ -52,9 +55,9 @@ is not part of the bench path.
 - Correct stale release documentation. Require minimum updater 1.3.0 for the
   integrated voice candidate.
 
-## Test evidence
+## Initial candidate test evidence (f3a0161)
 
-Both final `make check` commands exited 0. Syntax and all lint checks passed.
+Both initial `make check` commands exited 0. Syntax and all lint checks passed.
 
 | Check | Result |
 | --- | --- |
@@ -112,15 +115,79 @@ speaker, recording and voice tests protect the shared changes. Both full matrix
 runs exercise these tests. No merge into `main` was made. The required physical
 wacli check is still open.
 
+## Review fixes
+
+`fbdfd0c` proves the future unattended path. No candidate activation code or
+fixed controller unit changes were needed. The test future application itself
+adds the trigger and changes its updateable bootstrap unit. The first install
+still uses controller 1.3.0 and minimum updater 1.3.0.
+
+`bc91d64` moves the optional greeting fetch into one background worker. It gives
+transfer reads and result acceptance a three-second monotonic deadline. Real
+notes run first. The poll thread owns all ACK and queue writes and checks the
+current account, voice and expiry before accepting a result. A stuck resolver
+can occupy the one worker; it cannot create more workers or block real notes.
+The queue saves `voice_pack`. Playback rejects a different or missing voice.
+
+The unattended test loads the installed future verifier without using cached
+test-runner modules. It includes a simulated readiness delay beyond 60 seconds,
+actual publication locks, real signatures, GOOD publication, runtime timer
+recovery, reboot selection and another OTA.
+The selector's standard-library test resolves paths before comparison. This
+keeps the same restriction when Homebrew exposes the library through a symlink.
+
+| Software finding | Acceptance test |
+| --- | --- |
+| Unattended controller replacement | `test_update_bootstrap.BootstrapCommandTests.test_signed_future_ota_automatically_replaces_controller_and_survives_failed_trial` |
+| Greeting must not delay real notes | `test_voice_review.VoiceReviewTests.test_stalled_greeting_never_blocks_a_real_note_or_another_poll`, `test_real_notes_run_before_a_greeting_in_the_same_poll`, and `test_cloud_device.CloudIdentityTests.test_optional_media_has_a_total_deadline_even_with_regular_bytes` |
+| Greeting must use the current voice | `test_voice_review.VoiceReviewTests.test_greeting_queued_under_an_old_voice_is_skipped` |
+
+Both complete review checks exited 0. Syntax and all lint checks passed.
+
+| Check | Result |
+| --- | --- |
+| `MSGBOX_TEST_TRANSPORT=cloud make check` | PASS. 1,293 Python tests passed; one native systemd test skipped on Mac. All 54 JavaScript tests passed. Python time: 933.876 s. |
+| `MSGBOX_TEST_TRANSPORT=wacli make check` | PASS. 1,293 Python tests passed; one native systemd test skipped on Mac. All 54 JavaScript tests passed. Python time: 934.205 s. |
+
+Each Python run reports 1,294 tests in total. The single skipped test has the
+separate Linux evidence below; it was not rerun in this fix round. All five
+acceptance tests listed above pass in both full runs. Local logs are
+`/tmp/rita-astra-pass-cloud.log` and `/tmp/rita-astra-pass-wacli.log`.
+They were not uploaded. Both bench-guide shell syntax and `git diff --check`
+also pass.
+
+The restarted Mac selected Xcode tools with a pending licence. The first runs
+failed when subprocesses launched system Python or Git (exit 69). Selecting the
+already installed Command Line Tools fixes this host issue without a licence or
+source change. The focused unattended test then passed in 37.338 seconds.
+The complete checks use Python 3.13 and this local environment:
+
+```sh
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export UV_PYTHON=/opt/homebrew/opt/python@3.13/bin/python3.13
+export PATH=/opt/homebrew/opt/python@3.13/libexec/bin:$PATH
+MSGBOX_TEST_TRANSPORT=cloud make check
+MSGBOX_TEST_TRANSPORT=wacli make check
+```
+
+Settings keys, command kinds and advertised capabilities remain unchanged.
+The settings exporter was rerun and compared with the saved fixture, excluding
+only the source build ID. No Cloud fixture or external service was changed.
+
 ## Shipment limits
 
-**The reviewed A/B branch has no automatic OTA controller-promotion trigger.**
-It has a signed local publication API. The descriptor still declares
-`self_upgrade: false`. Application OTA uses the selected controller, but an
-application commit alone does not publish a new controller. The branch's
-`on-box-updates.md` states this limit. Do not treat local publication tests as
-proof of unattended controller self-upgrade. Resolve this gap before shipment
-if unattended self-upgrade is the shipment requirement.
+A future signed application can add unattended controller activation through the
+existing supervisor → bootstrap path. No change to the candidate's activation
+code is required. The new acceptance test carries changed, signed controller
+bytes in an application installable by controller 1.3.0. It calls publication
+after bootstrap releases its locks, raises the future bootstrap unit's limit
+from 60 to 300 seconds, and retains the 180-second publication service bound.
+A trial with readiness delayed by more than 60 simulated seconds passes. The
+test checks new GOOD, reboot selection, failed-trial recovery by the independent
+selector timer, and a further application OTA through the new controller.
+The future trigger is test payload code; it is not activated in this candidate.
+`self_upgrade: false` does not prohibit a later signed release from adding it.
+This path is no longer an unresolved software capability gap.
 
 The native Linux/systemd cleanup test passed separately on local Debian 13
 aarch64, systemd 257.13 and cgroup v2 (5.329 seconds). It used the real transient
@@ -135,9 +202,22 @@ sudo env MSGBOX_NATIVE_SYSTEMD_TESTS=1 PYTHONPATH=tests \
   python3 -m unittest -v test_controller_selector_systemd
 ```
 
-Physical Pi service ordering, power-cut, audio, button, LED, NFC, Wi-Fi, live Cloud rule-2b and
-wacli checks remain open. The Astra note is a source-review pass. It does not
-close these checks. The candidate has no production signatures or reserved
+The bench operator must complete these checks on the spare Pi before ship mode:
+
+- Native signed future application/controller OTA, actual systemd ordering,
+  GOOD and slot selection, delayed trial, failed-trial timer recovery, another
+  application OTA, reboot and power-cut recovery.
+- Live Cloud current-poll features plus fresh heartbeat gating, atomic single
+  greeting offer, no redelivery after lost ACK or rollback, and all four ACK
+  mappings. The Cloud server used by the tests is a model.
+- Stalled greeting followed by a real note; voice change before queued greeting
+  playback; USB audio, setup, send/play/reply, NFC cards and mispresses, quiet
+  hours, listened notices and Wi-Fi return.
+- The physical wacli check remains required before a merge into `main`.
+
+No live Cloud or physical acceptance was performed during this local task.
+The Astra note is a source review. It does not close these checks.
+The candidate has no production signatures or reserved
 release sequences from this work. Complete signing before the bench install.
 
 Use [the bench guide](rita-bench-install.md). Keep wired Ethernet for SSH after
