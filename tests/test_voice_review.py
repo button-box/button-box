@@ -84,28 +84,40 @@ class VoiceReviewTests(unittest.TestCase):
         self.assertEqual([call.args[0]['kind'] for call in command.call_args_list], ['audio', 'setup_greeting'])
 
     def test_greeting_queued_under_an_old_voice_is_skipped(self):
+        self.assert_queued_greeting_voice('jessica', played=False)
+
+    def test_greeting_queued_under_the_current_voice_plays(self):
+        self.assert_queued_greeting_voice('buttonbox', played=True)
+
+    def assert_queued_greeting_voice(self, current_voice, *, played):
         self.runtime.heartbeat()
         self.runtime._command(self.greeting(), NOW)
         runtime_tests.finish_greeting(self.runtime)
         request_path = next(self.runtime.optional_audio_requests.directory.glob('*.json'))
-        self.assertEqual(json.loads(request_path.read_text())['voice_pack'], 'buttonbox')
+        request = json.loads(request_path.read_text())
+        self.assertEqual(request['voice_pack'], 'buttonbox')
         guide = cloud_setup.SetupGuide()
         guide.change('start')
         guide.advance({'scan'}, 'names')
-        settings = {**defaults({}), 'voice_pack': 'jessica'}
+        settings = {**defaults({}), 'voice_pack': current_voice}
         with mock.patch.multiple(button_send, cloud_audio_requests=self.runtime.audio_requests,
             cloud_optional_audio_requests=self.runtime.optional_audio_requests, _recording=False, _guided_active=False,
             button=types.SimpleNamespace(is_pressed=False), create=True), \
              mock.patch.object(button_send, 'transport_mode', return_value='cloud'), \
              mock.patch.object(button_send.cloud_runtime, 'account_scope', return_value='a' * 64), \
+             mock.patch.object(button_send.cloud_runtime, 'STATE_FILE', self.runtime.state_path), \
              mock.patch.object(button_send, 'caregiver_settings', return_value=settings), \
              mock.patch.object(button_send, 'quiet_hours', return_value=False), \
              mock.patch.object(button_send, 'queued', return_value=[]), \
-             mock.patch.object(button_send, 'play_optional_greeting') as play:
-            self.assertFalse(button_send.maybe_play_cloud_sound())
-        play.assert_not_called()
-        self.assertFalse(guide.load().get('greeting_spoken'))
-        self.assertEqual(self.runtime.optional_audio_requests.outcome('setup_greeting:' + OP), 'rejected')
+             mock.patch.object(button_send, 'play_optional_greeting', return_value=True) as play:
+            self.assertIs(button_send.maybe_play_cloud_sound(), played)
+        if played:
+            play.assert_called_once_with(Path(request['clip']))
+        else:
+            play.assert_not_called()
+        self.assertEqual(bool(guide.load().get('greeting_spoken')), played)
+        self.assertEqual(self.runtime.optional_audio_requests.outcome('setup_greeting:' + OP),
+                         'played' if played else 'rejected')
 
     def test_v0312_reader_finishes_legacy_audio_with_new_greeting_pending(self):
         self.runtime.heartbeat()
