@@ -26,6 +26,12 @@ COMMANDS = {'controller': ('update_controller.py', 'serve'), 'discovery': ('upda
             'install': ('update_controller.py', 'install'), 'supervisor': ('bounded_update.py', 'supervise')}
 TRIAL_UNITS = {'update_controller.py': 'messagebox-controller-trial.service',
                'update_discovery.py': 'messagebox-discovery-trial.service'}
+# Frozen copies of bounded_update's rule data; tests pin exact equality.
+UNIT_NAME = re.compile(
+    r"(?:[A-Za-z0-9:_.@-]|\\x[0-9a-fA-F]{2})+"
+    r"\.(?:service|socket|device|mount|automount|swap|target|path|timer|slice|scope)\Z"
+)
+LIMIT_RESULTS = {"start-limit-hit", "unit-start-limit-hit", "trigger-limit-hit"}
 
 
 def canonical(value):
@@ -312,21 +318,25 @@ def recovered_services(root, required, run, *, boot=False, deadline=None):
     states = required['units']
     generated = 'comitup.service' if (Path(root) / 'etc/messagebox-onboarding/enabled').exists() else 'messagebox.target'
     for unit in (*states, *required.get('auxiliary_units', ())):
-        if not re.fullmatch(r'[A-Za-z0-9_.:@-]+\.(service|target|timer|path)', unit):
+        if not isinstance(unit, str) or unit.startswith('-') or UNIT_NAME.fullmatch(unit) is None:
             raise ValueError('unsafe restoration unit')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('service restoration deadline')
         actual = dict(line.split('=', 1) for line in call(run, ['systemctl', 'show', unit,
-            '--property=ActiveState,UnitFileState'], remaining, output=True).stdout.splitlines() if '=' in line)
+            '--property=ActiveState,UnitFileState,Result'], remaining, output=True).stdout.splitlines() if '=' in line)
         expected = states.get(unit, {'active': 'active'})
         enabled = actual.get('UnitFileState')
         if 'enabled' in expected and enabled != expected['enabled'] and not (unit == generated and enabled == 'enabled-runtime'):
             raise ValueError('service enablement not restored')
         active = actual.get('ActiveState')
         allowed = {'inactive', 'failed'} if boot or expected['active'] == 'failed' else {expected['active']}
-        if not boot and unit == 'comitup-web.service' and states['comitup.service']['active'] == 'active':
+        if not boot and unit == 'comitup-web.service' and (states[unit]['active'] != 'active'
+                or states['comitup.service']['active'] == 'active'):
             allowed = {'active', 'inactive', 'failed'}  # ComItUp owns its optional portal.
+        if (not boot and unit in states and unit.endswith(('.path', '.timer'))
+                and expected['active'] == 'active' and actual.get('Result') in LIMIT_RESULTS):
+            allowed.add('failed')
         if active not in allowed:
             raise ValueError('service activity not restored')
 

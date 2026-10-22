@@ -3,6 +3,7 @@
 Systemd and physical application health remain explicit host boundaries.
 """
 import contextlib
+import copy
 import importlib.util
 import io
 import errno
@@ -140,9 +141,11 @@ class Host:
             if command[1] == 'show':
                 if '--property=LoadState,ActiveState,Job' in command:
                     text = 'LoadState=not-found\nActiveState=inactive\nJob='
-                elif '--property=ActiveState,UnitFileState' in command:
-                    state = self.recovery_run.__self__.states[command[2]]
-                    text = 'ActiveState=' + state['active'] + '\nUnitFileState=' + state['enabled']
+                elif '--property=ActiveState,UnitFileState,Result' in command:
+                    model = getattr(self.recovery_run, '__self__', self.recovery_run)
+                    state = model.states[command[2]]
+                    text = ('ActiveState=' + state['active'] + '\nUnitFileState=' + state['enabled']
+                            + '\nResult=' + getattr(model, 'results', {}).get(command[2], 'success'))
                 elif '--property=ExecStart' in command:
                     path = 'etc/systemd/system/' + command[2] + '.d/' + slots.ROUTE
                     argument = slots.routes()[path].decode().split('ExecStart=')[-1].splitlines()[0]
@@ -572,6 +575,136 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(selector.recover(self.root, self.host, execute=execute), selector.SLOTS[0])
         self.assertEqual(attempts, list(reversed(selector.SLOTS)))
         selector.recovered_services(self.root, services, self.host, boot=True)
+
+    def service_model(self):
+        from test_bounded_update import Fixture
+        directory = self.base / 'service-model'
+        directory.mkdir(mode=0o755)
+        model = Fixture(directory).systemctl
+        model.states = copy.deepcopy(self.box.states)
+        self.host.recovery_run = model
+        return model
+
+    def test_service_rule_data_and_supported_names_match_current_and_frozen_workers(self):
+        from field_updater import load_frozen
+        from test_bounded_update import bounded_update as worker
+        for source in [worker, *(load_frozen(v, 'scripts/install/bounded_update.py') for v in PROVENANCE['releases'])]:
+            self.assertEqual(selector.UNIT_NAME.pattern, source.UNIT_NAME.pattern)
+            self.assertEqual(selector.UNIT_NAME.flags, source.UNIT_NAME.flags)
+            self.assertEqual(selector.LIMIT_RESULTS, source.LIMIT_RESULTS)
+        model = self.service_model()
+        required = {'units': {n: copy.deepcopy(model.states[n]) for n in worker.UNITS}}
+        names = ['example.' + kind for kind in ('service','socket','device','mount','automount','swap',
+                                               'target','path','timer','slice','scope')]
+        names += [r'example\x2dchild.socket', r'example\xAFchild.service', '-unsafe.service',
+                  '../escape.socket', 'two names.service', 'bad\n.service', r'bad\xZZ.socket', None]
+        for unit in names:
+            with self.subTest(unit=unit):
+                required['auxiliary_units'] = [unit]
+                if worker._valid_auxiliary_unit(unit):
+                    model.states[unit] = {'active': 'active', 'enabled': 'static'}
+                    selector.recovered_services(self.root, required, self.host)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'unsafe restoration unit'):
+                        selector.recovered_services(self.root, required, self.host)
+
+    def test_service_acceptance_matches_worker_exceptions_and_rejects_required_failures(self):
+        from test_bounded_update import bounded_update as worker
+        model = self.service_model()
+        baseline = copy.deepcopy(model.states)
+        cases = [(u, 'active', 'failed', r, 'inactive', True) for u in ('messagebox-mode-reconcile.path', 'messagebox-wifi-watchdog.timer')
+                 for r in selector.LIMIT_RESULTS]
+        cases += [(u, 'active', 'failed', r, 'inactive', False) for u,r in (
+            ('messagebox-mode-reconcile.path','resources'), ('messagebox-wifi-watchdog.timer','success'),
+            ('messagebox-button.service','start-limit-hit'), ('example.path','trigger-limit-hit'))]
+        cases += [('messagebox-mode-reconcile.path','inactive','failed','trigger-limit-hit','inactive',False)]
+        cases += [('comitup-web.service', before, state, 'exit-code', comitup, True)
+                  for before,comitup in (('inactive','inactive'), ('failed','inactive'), ('active','active'))
+                  for state in ('active','inactive','failed')]
+        cases += [('comitup-web.service', 'active', 'failed', 'exit-code', 'inactive', False)]
+        for unit, before, active, result, comitup, accepted in cases:
+            with self.subTest(unit=unit, active=active, result=result, accepted=accepted):
+                model.states = copy.deepcopy(baseline)
+                model.states[unit] = {'active': before, 'enabled': baseline.get(unit, {}).get('enabled', 'static')}
+                model.states['comitup.service']['active'] = comitup
+                required = {'units': {n: copy.deepcopy(model.states[n]) for n in worker.UNITS}}
+                if unit not in required['units']:
+                    required['auxiliary_units'] = [unit]
+                model.states[unit]['active'] = active
+                model.results = {unit: result}
+                with fast_clock():
+                    if accepted:
+                        worker._verify_active(required['units'], model, auxiliary_units=required.get('auxiliary_units', ()))
+                        selector.recovered_services(self.root, required, self.host)
+                    else:
+                        with self.assertRaises(worker.UpdateError):
+                            worker._verify_active(required['units'], model, auxiliary_units=required.get('auxiliary_units', ()))
+                        with self.assertRaisesRegex(ValueError, 'service activity not restored'):
+                            selector.recovered_services(self.root, required, self.host)
+
+    def test_runtime_recovery_accepts_relimited_watcher_and_optional_web_in_both_slots(self):
+        self.publish()
+        model = self.service_model()
+        watcher, web = 'messagebox-mode-reconcile.path', 'comitup-web.service'
+        model.states[watcher]['active'] = 'active'
+        model.states[web]['active'] = 'inactive'
+        model.states['comitup.service']['active'] = 'inactive'
+        self.box.run = model
+        self.interrupted_application()
+        services = selector.service_restoration(self.root)
+        initial = copy.deepcopy(model.states)
+        image = self.base / 'interrupted'
+        shutil.copytree(self.root, image, symlinks=True)
+        def flap(states):
+            states[watcher]['active'] = 'failed'
+            model.results[watcher] = 'trigger-limit-hit'
+            states[web]['active'] = 'failed'
+        model.after_start[watcher] = flap
+        for slot in selector.SLOTS:
+            with self.subTest(slot=slot):
+                shutil.rmtree(self.root)
+                shutil.copytree(image, self.root, symlinks=True)
+                model.states, model.results = copy.deepcopy(initial), {}
+                self.host.commands.clear()
+                self.host.recoveries.clear()
+                other = next(s for s in selector.SLOTS if s != slot)
+                selector.choose(self.root, other, selector.inspect(self.root, other))
+                with fast_clock():
+                    selector.check(self.root, self.host, execute=self.host.execute)
+                self.assertEqual(self.host.recoveries, [slot])
+                self.assertEqual(selector.selected(self.root)['slot'], slot)
+                selector.recovered_services(self.root, services, self.host)
+                self.assertIn(['systemctl','--no-block','start','messagebox-update-controller.service'], self.host.commands)
+                self.assertFalse((self.root / self.box.worker.read_state(self.root,'journal.json')['backup'].lstrip('/') / 'state.json').exists())
+
+    def test_boot_and_runtime_recover_auxiliary_socket_and_escaped_name_in_both_slots(self):
+        self.publish()
+        model = self.service_model()
+        auxiliary = ('example.socket', r'example\x2dchild.service')
+        for unit in auxiliary:
+            model.states[unit] = {'active': 'active', 'enabled': 'static'}
+            model.part_of[unit] = 'messagebox.target'
+        self.box.run = model
+        self.interrupted_application()
+        services = selector.service_restoration(self.root)
+        self.assertEqual(set(services['auxiliary_units']), set(auxiliary))
+        initial = copy.deepcopy(model.states)
+        image = self.base / 'interrupted'
+        shutil.copytree(self.root, image, symlinks=True)
+        for boot in (True, False):
+            for slot in selector.SLOTS:
+                with self.subTest(boot=boot, slot=slot):
+                    shutil.rmtree(self.root)
+                    shutil.copytree(image, self.root, symlinks=True)
+                    model.states = copy.deepcopy(initial)
+                    self.host.recoveries.clear()
+                    with fast_clock():
+                        self.assertEqual(selector.recover(self.root, self.host, boot=boot, preferred=(slot,),
+                            execute=self.host.execute), slot)
+                    self.assertEqual(self.host.recoveries, [slot])
+                    selector.recovered_services(self.root, services, self.host, boot=boot)
+                    for unit in auxiliary:
+                        self.assertEqual(model.states[unit]['active'], 'inactive' if boot else 'active')
 
     def test_populated_transient_cgroup_blocks_recovery_before_any_worker_runs(self):
         unit = selector.TRIAL_UNITS['update_controller.py']

@@ -63,6 +63,14 @@ This checksum detects damage; it is not a substitute for release admission.
     uses normal application recovery, which restarts saved application services;
     only the boot gate uses `--boot`.
 
+Service acceptance keeps the worker's defined exceptions. A saved-active managed
+path or timer may remain failed only when its systemd `Result` is a known rate
+limit. Required services and auxiliary units do not get this exception. The web
+portal is optional when it was not active before the update or ComItUp was active.
+Auxiliary names use all worker-supported unit types, including sockets and escaped
+names; unsafe names remain rejected. The stdlib selector contains frozen copies
+of `UNIT_NAME` and `LIMIT_RESULTS`; tests pin them to the current and field workers.
+
 Selection makes no persistent write, exchange, repair, or reserve allocation.
 No current release key or global controller identity file gates boot. If neither
 slot is valid, the selector executes neither. Frozen application recovery can
