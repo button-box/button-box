@@ -23,7 +23,7 @@ ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
 CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="recovery_bootstrap.py recovery_helper.py recovery_launcher.py __init__.py device_http.py software.py cloud_update.py maintenance.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py message_age.py played_history.py
+PACKAGE_PYTHON="controller_selector.py controller_slots.py __init__.py device_http.py software.py cloud_update.py maintenance.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py message_age.py played_history.py
 nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
@@ -71,7 +71,10 @@ for path in \
   scripts/dev/hardware-test.sh \
   scripts/messageboxctl \
   messagebox/syncloop.sh \
-  systemd/messagebox-update-monitor.service \
+  systemd/messagebox-update-selector.service \
+  systemd/messagebox-update-selector.timer \
+  systemd/messagebox-update-bootstrap.service \
+  systemd/messagebox-update-supervisor.service.d/messagebox.conf \
   systemd/messagebox-button.service \
   systemd/messagebox-audio-detect.service \
   systemd/messagebox-sync.service \

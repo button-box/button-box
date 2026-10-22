@@ -1,167 +1,133 @@
-# Independent controller recovery and promotion
+# Frozen selector and two controller slots
 
-The permanent root launcher is outside the active controller directory. It runs
-before application recovery and from an independent monitor. Its bytes become
-fixed at first bootstrap. This revision must pass acceptance before that first
-installation. It adds an internal promotion API, with no OTA trigger or Cloud
-permit. No manual action on a shipped box is part of this design.
+This replaces the unshipped journaled-exchange design. No device migration from
+that design is supported. The OS, Python, systemd, and storage remain shared
+requirements. Successful filesystem flushes must survive a power cut.
 
-## Paths and trust
+The guarantee is conditional: publication cannot remove the last complete,
+accepted controller. It does not cover SD failure or incompatible shared state.
+There is no manual repair step for a shipped box.
 
-Support directories are root-owned, mode 0755. Source and retained proof use
-0644. Persistent state and locks use 0600. File operations use no-follow parent
-and file descriptors. Unsafe owners, writable parents, hardlinks and special
-files are rejected.
+## Components and paths
 
-| Path | Purpose |
+| Path | Use |
 |---|---|
-| `/usr/lib/messagebox-recovery/launcher.py` | Permanent root entry point. |
-| `/usr/lib/messagebox-recovery/{release_verify,trust_update}.py` | Permanent verifier anchors. |
-| `/usr/lib/messagebox-recovery/anchors.json` | Anchor hashes, mode 0600. |
-| `/usr/lib/messagebox-recovery/recovery-keys/` | Retained public recovery proof keys. No new admission authority. |
-| `/usr/lib/messagebox-update/` | One complete active six-module controller. |
-| `/usr/lib/messagebox-update-stage-<transaction>/` | Candidate before exchange; retained old set after exchange. |
-| `/var/lib/button-box-controller/state.json` | Atomic helper selection, accepted descriptor and signature digest pins, sequence and version floors. |
-| `/var/lib/button-box-controller/journal.json` and `journal.json.copy` | Two integrity-checked 32 KiB records, mode 0600. |
-| `/var/lib/button-box-controller/owner.lock` | Ownership from dispatch through activation and completion. |
-| `/var/lib/button-box-controller/owner.json` | PID, process start token, boot ID and monotonic deadline. |
-| `/var/lib/button-box-controller/promotion.lock` | Inner promotion guard. |
-| `/var/lib/button-box-controller/recovery-reserve` | Two MiB of flushed reserve data before promotion. |
-| `/var/lib/button-box-controller/controllers/legacy/` | Frozen original controller snapshot. |
-| `/var/lib/button-box-controller/helpers/<digest>/{current,fallback}/` | Accepted helper bundles and retained proof. |
-| `/run/messagebox-update/promotion-inhibit.json` | Public admission flag, root-owned 0644. |
-| `/etc/systemd/system/messagebox-update-monitor.service` | Independent permanent recovery monitor. |
+| `/usr/lib/messagebox-selector/selector.py` | One frozen Python file. Standard library only. Never upgraded. |
+| `/usr/lib/messagebox-update/` | Slot A: initial frozen field controller. |
+| `/usr/lib/messagebox-update-b/` | Slot B. |
+| Each slot's `GOOD` | Exact six files, sizes, SHA-256 hashes, commit generation, version, format 1 support, descriptor identity, record checksum. |
+| Each slot's `controller_{descriptor,signature}.py` | Retained admission proof for offline audit; not a boot dependency. |
+| Each slot's `TRIED` | Consumed descriptor digest, flushed before trial. |
+| `/var/lib/button-box-controller/floor.json` | Integrity-checked atomic admission sequence, digest and version floor. Not a boot dependency. |
+| `/run/messagebox-selector/selected.json` | Boot-bound exact slot and generation. Trial selection is volatile. |
+| `/run/messagebox-selector/{operation,gate}` | Selection/publication ownership and consumer-start exclusion. |
+| `/run/messagebox-selector/trial.json` | Public trial exclusion. All application installation paths reject it. |
+| `/etc/systemd/system/messagebox-update-*.service.d/90-controller-slot.conf` | Five permanent routes. Future release payloads do not replace them. |
 
-The first bootstrap accepts only the exact v0.3.9–v0.3.12 fixed controller hashes.
-The frozen worker stages recovery source and installs the new monitor unit through
-its existing `messagebox-*.service` path. Bootstrap checks the monitor's exact
-bytes against the signed launcher. It flushes support and both helper slots
-before publishing hooks. It enables the monitor before arming bootstrap.
+Persistent files belong to root. Code and slot records are 0644; the admission
+floor is 0600. Directories are 0755. Reads reject writable parents, symlinks,
+hardlinks, wrong owners, unsafe modes, oversized files and changed hashes.
+New commit generations use the signed monotonic controller sequence.
+`GOOD` wraps canonical JSON with its SHA-256. A bad record disables only its slot.
+This checksum detects damage; it is not a substitute for release admission.
 
-Descriptor schema 2 signs all six controller modules, the three recovery sources
-and both generated drop-ins. Literal data is parsed, never imported. Admission
-verifies signatures under current release trust before publishing root-owned
-descriptor and signature digest pins. Recovery checks those accepted pins and
-every helper hash without temporary files or current release-key dependence.
-Release-key revocation still rejects new admission. These separate recovery pins
-authorize only the selected, previously accepted bytes. They cannot admit another
-old descriptor. Retained public keys allow later offline proof inspection.
+## Boot algorithm
 
-Each helper runs in a fresh Python interpreter with its own 45-second deadline. Missing
-or corrupt code, exceptions, invalid returns, hangs and process exits select the
-compatible fallback. The launcher stops and reaps the failed process group, then
-reloads durable state. It executes captured bytes. Linux's parent-death signal
-kills a helper if its launcher dies. The child does not inherit lock descriptors or Python thread state.
-A fallback does not lower the admission floor. With no usable helper, an intact
-legacy bootstrap can continue. A separately verified terminal active controller
-can also continue. New promotion still requires valid proof and redundancy.
+1. Hold the boot gate. Acquire the volatile operation and consumer-start locks.
+2. Wait for systemd to stop updater consumers. The gate blocks new consumers
+   before they can resolve a slot.
+3. Read each `GOOD` independently. Check integrity, ownership, modes and format 1.
+4. Check every module hash. Ignore incomplete slots and consumed trials without `GOOD`.
+5. Order valid slots by committed generation; use the slot name only to break ties.
+6. Try the newest slot's application recovery command, with a 180-second limit.
+7. Kill its process group after failure or timeout, then try the other valid slot.
+8. After recovery succeeds, write the exact selection into `/run` and clear the volatile trial flag.
+9. Release the boot gate. All controller consumers use that selection.
+10. Each consumer resolves once under the start lock, then executes that slot's command.
+11. The independent timer checks broker readiness and its live PID and hash handshake.
+12. On failure, stop consumers, select the other valid slot, and restart the broker.
+    If only one valid slot exists, recover and restart that slot. Runtime fallback
+    uses normal application recovery, which restarts saved application services;
+    only the boot gate uses `--boot`.
 
-## Ownership and independent supervision
+Selection makes no persistent write, exchange, repair, or reserve allocation.
+No current release key or global controller identity file gates boot. If neither
+slot is valid, the selector executes neither. Frozen application recovery can
+still allocate and rewrite its own metadata. This design does **not** make full
+application startup independent of disk or inode space.
 
-An outer owner lock stays held through activation. Inner lock order is trust,
-application update, promotion, mode transition, then interaction. The broker can
-take the inner locks while it starts. Another promotion cannot recover a live
-owner's transaction. Locks do not wait except for the bounded boot gate.
+## Publication and trial
 
-The monitor has no controller or application dependency. It starts after boot
-recovery, remains enabled, and promotion never stops it. It checks interrupted
-ownership and runs recovery without a reboot. An expired owner can be killed only
-while its lock is held and its boot ID and process start token still match.
-The trusted bootstrap sets the lease before executing candidate helper code.
-Successful callers disarm it.
+Publication runs in a bounded root systemd oneshot, with exclusive operation
+ownership. It takes the existing trust and application-update locks in that
+order. It requires a committed application, complete effective routing, an armed
+selector timer, current signatures, compatible state, and a monotonic admission
+floor. Admission also requires candidate bytes plus 32 MiB free and at least
+128 free inodes before invalidating the inactive slot. These checks are not a
+controller-selection reserve. Equal sequence is allowed only for the accepted digest. Version downgrade
+is rejected. Damage to the floor stops admission, not boot.
 
-The boot hook waits boundedly for busy recovery ownership; it does not admit app
-startup while another process can still exchange controllers. The supervisor
-hook uses `--supervisor`. It may defer so the existing supervisor can inspect and
-stop an expired application worker before taking trust and updater locks.
-Recovery carries the launcher parent PID into its helper so it cannot stop its
-own supervisor pre-start service.
+The working slot and its `GOOD` stay unchanged. Publication removes the inactive
+slot's `GOOD`, flushes the directory, writes and flushes candidate files and
+retained proof, and verifies them. Both controllers' real parsers must accept the
+current application journal and shared records. Format migration is not supported.
+It persists the floor and writes and flushes `TRIED` before starting the trial.
+A consumed digest is never retried automatically.
 
-## Journal and restore
+The trial selects the candidate only in `/run`. It stops consumers first. It
+creates fresh boot-, application-, and controller-bound evidence context, removes
+old readiness evidence, runs normal controller validation and offline discovery,
+and starts the broker. Readiness retries within the trial deadline. Root Unix
+peer credentials, stable systemd PID, exact version and hashes must match.
+Fresh button and heartbeat evidence from the selected application processes and
+the complete local health probe must pass. A candidate success string alone
+cannot authorize `GOOD`.
 
-The journal value is schema 1, kind `controller`, at most 16 KiB. It records the
-transaction, phase, stage path, old/new identities and six hashes, application
-identity, descriptor sequence and signer, integration bytes, prior service states,
-attempt, monotonic deadline and a durable `services_restored` flag. Rollout policy
-remains null until permit support.
+Only the frozen selector publishes `GOOD`, after rechecking module bytes. It
+flushes the record and directory before returning success. A cut before this
+leaves the old slot usable. A cut during publication selects either the old slot
+or a complete checked candidate. A failed or interrupted trial has no `GOOD`.
+Python launches ignore stale slot bytecode through an unwritten volatile cache
+prefix. The timer selects the unchanged accepted slot; it never starts a new trial.
 
-Each record wraps the value with a generation and SHA-256 over the generation
-and value. Recovery selects the highest intact generation. Updates write and
-flush the older record first, then the other copy. Each update flushes the file
-and directory. Slots have allocated storage before promotion. Missing, truncated
-or corrupt copies do not block recovery with one valid copy. Safe regular-file
-slots with the wrong size are repaired in place. If both records are lost,
-independent accepted descriptor and frozen-controller identities can preserve a
-verified active set; promotion remains disabled without a valid journal.
-With one valid record, recovery also repairs the damaged primary copy. This
-keeps the existing OTA admission guard usable after recovery.
+The bounded check service has no `RemainAfterExit`, has explicit start/stop limits,
+and disables permanent start-rate limiting. Boot has a 400-second unit limit;
+the check has a 500-second limit, including readiness, two bounded recovery
+attempts, process stops, and broker restart. Its timer remains enabled through
+publication and trial. A busy operation causes a check to defer, not to compete.
+Systemd terminates a hung publication's entire cgroup. A later timer check can
+then select the accepted controller without reboot. The original application supervisor timer remains enabled. Its selector route
+takes only the consumer-start lock, never admission or publication ownership.
+It retains the existing bounded worker-deadline and rollback behavior.
 
-| Phase or physical state | Result |
-|---|---|
-| Bootstrap or prior terminal record | Keep that verified active set. Ignore incomplete new staging. |
-| `intent`, `staged`, `exchange_intent` | Compare whole identities. Keep old if active; otherwise restore verified old. |
-| `exchanged`, `activated`, `restore_intent` | Stop candidate consumers and restore verified old. Record `restored`. |
-| `committed`, active intact | Keep new. A damaged spare blocks promotion, not startup. |
-| `committed`, active damaged, spare intact | Restore the verified old set. |
-| `restored`, `unsupported`, `aborted` | Keep verified old and restore service selection. |
+## First installation and fixed integration
 
-Ordinary files use a flushed temporary file, atomic replacement and parent flush.
-The complete stage is flushed before Linux `renameat2(RENAME_EXCHANGE)` exchanges
-two real directories under one parent FD. The parent is then flushed. Unsupported
-exchange (`ENOSYS`, `EINVAL`, `EOPNOTSUPP`, `EXDEV`) refuses promotion safely.
-**There is no two-rename fallback.**
+The signed bridge keeps minimum updater 1.1.0. The frozen workers accept both
+new Python files, the new services and timer, and the supervisor `messagebox.conf`
+queue hook. That hook queues bounded bootstrap after the supervisor exits.
+Bootstrap waits for a committed application and the real worker locks.
 
-Recovery compares identities because exchange can finish before its next record.
-It exchanges existing directory entries to restore; it needs no new inode or
-file allocation. It releases the reserve before restore. Integration is unchanged
-and is not rewritten. Record failure after restore cannot block a verified old
-controller. The next attempt derives the result from identities and repairs the
-record. Service restoration finishes before its durable flag is set and before
-the runtime inhibit is removed. A kill between those operations is recoverable.
-Terminal recovery is read-only once finalization is durable and no inhibit needs
-removal. Bootstrap also allocates the reserve before arming hooks. Under disk or
-inode pressure, the boot gate frees it for the frozen application's existing
-small terminal metadata writes.
-A persistent device error that prevents every exchange cannot be solved by
-software alone.
+Bootstrap treats the existing real directory as slot A. It verifies the six
+frozen hashes, installs and flushes the selector, and publishes A's record before
+installing any route. Converted entry points still select A. A trial is permitted
+only after all five routes exist and the independent timer is active. The
+separate generated route filename survives later application manifest updates.
+The original seven fixed unit files are not changed by the payload.
 
-## Activation
+There are no helpers, verifier anchors, recovery-key copies, replicated controller
+journals, owner leases, reserve files, directory exchanges or monitor loops.
+There is no two-rename fallback because there is no exchange transaction.
 
-Activation has a 90-second deadline. It requires imports, normal manifest/path/hash
-rejection tests, exact controller version and hashes, and a broker handshake.
-Readiness retries within the deadline. Linux checks root peer credentials, live
-systemd MainPID and a stable process identity around the handshake.
+## Acceptance limits
 
-Offline discovery exercises normal poll, download, signature/hash checks and
-extraction, including corrupt-archive rejection. Both self-tests run through `systemd-run`
-with discovery's user, groups, private temporary directory, device restrictions,
-strict filesystem protection, address-family limit, empty capability set and
-umask. The fixed public self-test key is confined to that temporary fixture; it
-has no release admission authority.
+Tests use real minisign, frozen v0.3.9–v0.3.12 workers and real builder output.
+They inject cuts at publication and bootstrap writes, missing/corrupt records,
+I/O failures, bounded child failure, and concurrent ownership. Host tests replace
+systemd and physical application health explicitly. They do not prove native
+service ordering, cgroup termination, timer recovery after repeated errors,
+full ext4 blocks/inodes, or Pi SD flush behavior.
 
-Activation checks effective unit executables, ordering and enablement, 900 or
-1,800 seconds for discovery, 330 seconds for install, and current application
-health. Health uses `--current` and local evidence in wacli mode. No Cloud call
-is part of this transaction. Completion rechecks the application, current trust,
-persistent floor, proof digest and active hashes. Failure restores old. A restored
-descriptor is quarantined. A new signed sequence is needed to retry.
-
-## Verification limits
-
-Tests use real minisign, all four frozen workers and actual release-builder
-packages. The promotion matrix models retained and lost unflushed writes.
-A second matrix terminates recovery itself at each executed syscall boundary
-with a real built payload. Tests inject ENOSPC, EIO and fsync errors, corrupt each
-record, run signed helpers that raise/hang/exit, overlap two processes, and kill
-promotion with SIGKILL at stop, exchange and activation boundaries while a separate
-monitor runs. A Linux socket test checks delayed/stale sockets and peer PID.
-
-Host tests substitute systemd and application health. Native Linux validation
-executes the controller and discovery sandboxes. Passing these tests does not prove the
-native service boot graph, process-group death under systemd, actual application
-health, Pi ext4/SD flush behavior or physical power cuts. These need native Linux
-and Pi acceptance before shipment. Live OTA, GPIO, NFC, audio, Wi-Fi, WhatsApp and
-physical Cloud/wacli acceptance also remain separate checks.
-
-Before any later publication, inspect all outgoing surfaces and audiences under
-the standing privacy rules. Keep private review receipts out of public artifacts.
+Before first installation, native Linux/systemd and real Pi power-cut acceptance
+remain required. Physical Cloud and wacli send/play/reply, NFC, quiet hours,
+listened notices, audio, GPIO, Wi-Fi and WhatsApp checks remain separate.
+No Cloud request is part of local selection or publication.

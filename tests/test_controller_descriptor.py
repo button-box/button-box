@@ -47,7 +47,7 @@ class DescriptorDataTests(unittest.TestCase):
             self.assertEqual((entry['size'], entry['mode'], entry['sha256']),
                              (source.stat().st_size, 0o644, verify.digest(source)))
         self.assertNotIn('commit', value)
-        for key in ('schema', 'product', 'min_launcher_protocol', 'min_helper_protocol',
+        for key in ('schema', 'product', 'selector_protocol', 'state_format',
                     'supported_os', 'supported_arch', 'supported_models', 'controller_sequence'):
             self.assertIn(key, value)
 
@@ -70,7 +70,7 @@ class DescriptorDataTests(unittest.TestCase):
         for changes in ({'schema': True}, {'product': 'other'}, {'controller_sequence': True},
                         {'controller_sequence': 0}, {'controller_sequence': 2**63},
                         {'controller_version': 'latest'}, {'min_application_version': '1.3.0'},
-                        {'min_helper_protocol': False}, {'unknown': 1},
+                        {'state_format': False}, {'unknown': 1},
                         {'unit_changes': ['systemd/messagebox-update-install.service']},
                         {'capabilities': {'signed_descriptor': True}},
                         {'supported_arch': ['x86_64']}):

@@ -25,17 +25,6 @@ CONTROLLER_DESCRIPTOR = 'messagebox/controller_descriptor.py'
 CONTROLLER_SIGNATURE = 'messagebox/controller_signature.py'
 CONTROLLER_MODULES = ('bounded_update.py', 'health-probe.py', 'release_verify.py',
                       'trust_update.py', 'update_controller.py', 'update_discovery.py')
-RECOVERY_FILES = ('messagebox/recovery_bootstrap.py', 'messagebox/recovery_helper.py',
-                  'messagebox/recovery_launcher.py')
-RECOVERY_COMMAND = '/usr/bin/python3 -I /usr/lib/messagebox-recovery/launcher.py'
-RECOVERY_DROPINS = {
-    '/etc/systemd/system/messagebox-update-' + unit + '.service.d/messagebox.conf':
-    ('[Service]\nExecStartPre=' + RECOVERY_COMMAND + (' --supervisor' if unit == 'supervisor' else '') + '\n').encode()
-    for unit in ('recovery', 'supervisor')
-}
-UPDATER_UNITS = frozenset('messagebox-update-' + name for name in (
-    'recovery.service', 'controller.service', 'install.service', 'supervisor.service',
-    'supervisor.timer', 'discovery.service', 'discovery.timer'))
 MAX_DESCRIPTOR = 16 * 1024
 MAX_CONTROLLER_SIGNATURE = 4096
 MAX_CONTROLLER_MODULE = 2 * 1024 * 1024
@@ -271,23 +260,21 @@ def _controller_version(value, *, application=False):
 def parse_controller_descriptor(raw):
     value = _controller_literal(raw, MAX_DESCRIPTOR)
     fields = {'schema', 'product', 'controller_version', 'controller_sequence',
-              'min_application_version', 'min_launcher_protocol', 'min_helper_protocol',
+              'min_application_version', 'selector_protocol', 'state_format',
               'supported_os', 'supported_arch', 'supported_models', 'capabilities',
               'modules', 'unit_changes'}
-    if isinstance(value, dict) and value.get('schema') == 2:
-        fields.add('recovery')
     if (not isinstance(value, dict) or set(value) != fields or type(value['schema']) is not int
-            or value['schema'] not in {1, 2} or value['product'] != 'button-box-controller'
+            or value['schema'] != 1 or value['product'] != 'button-box-controller'
             or type(value['controller_sequence']) is not int or not 0 < value['controller_sequence'] < 2**63
             or any(type(value[key]) is not int or not 0 < value[key] < 2**16
-                   for key in ('min_launcher_protocol', 'min_helper_protocol'))
+                   for key in ('selector_protocol', 'state_format'))
             or value['supported_os'] != ['raspios-trixie'] or value['supported_arch'] != ['aarch64']
             or value['supported_models'] != sorted(SUPPORTED_MODELS)
             or not isinstance(value['capabilities'], dict)
             or set(value['capabilities']) != {'signed_descriptor', 'self_upgrade'}
             or value['capabilities']['signed_descriptor'] is not True
             or type(value['capabilities']['self_upgrade']) is not bool
-            or (value['schema'] == 1 and value['unit_changes'] != [])
+            or value['unit_changes'] != []
             or not isinstance(value['modules'], list) or len(value['modules']) != len(CONTROLLER_MODULES)):
         raise ReleaseError('invalid_controller_descriptor')
     _controller_version(value['controller_version'])
@@ -300,36 +287,6 @@ def parse_controller_descriptor(raw):
                 or type(entry['mode']) is not int or entry['mode'] != 0o644
                 or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
             raise ReleaseError('invalid_controller_modules')
-    if value['schema'] == 2:
-        units = value['unit_changes']
-        if not isinstance(units, list) or len(units) > 32:
-            raise ReleaseError('invalid_controller_units')
-        paths = []
-        for entry in units:
-            if (not isinstance(entry, dict) or set(entry) != {'path', 'size', 'mode', 'sha256'}
-                    or not isinstance(entry['path'], str)
-                    or not entry['path'].startswith('/etc/systemd/system/')
-                    or entry['path'].removeprefix('/etc/systemd/system/').removesuffix('.d/messagebox.conf') not in UPDATER_UNITS
-                    or type(entry['size']) is not int or not 0 < entry['size'] <= 64 * 1024
-                    or type(entry['mode']) is not int or entry['mode'] != 0o644
-                    or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
-                raise ReleaseError('invalid_controller_units')
-            paths.append(entry['path'])
-        if paths != sorted(set(paths)):
-            raise ReleaseError('invalid_controller_units')
-        recovery = value['recovery']
-        if (not isinstance(recovery, dict) or set(recovery) != {'protocol', 'helper_version', 'files'}
-                or type(recovery['protocol']) is not int or recovery['protocol'] != 1
-                or not isinstance(recovery['files'], list) or len(recovery['files']) != len(RECOVERY_FILES)):
-            raise ReleaseError('invalid_recovery_descriptor')
-        _controller_version(recovery['helper_version'])
-        for entry, path in zip(recovery['files'], RECOVERY_FILES):
-            if (not isinstance(entry, dict) or set(entry) != {'path', 'size', 'mode', 'sha256'}
-                    or entry['path'] != path or type(entry['size']) is not int
-                    or not 0 < entry['size'] <= MAX_CONTROLLER_MODULE
-                    or type(entry['mode']) is not int or entry['mode'] != 0o644
-                    or not isinstance(entry['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])):
-                raise ReleaseError('invalid_recovery_descriptor')
     return value
 
 
@@ -389,7 +346,7 @@ def verify_retained_controller(release, keys, *, application_version, platform, 
     proof = verify_controller_proof(raw, signature, keys, run=run)
     value = proof['descriptor']
     check_controller_compatibility(value, application_version, platform, floor=floor)
-    for entry in value['modules'] + value.get('recovery', {}).get('files', []):
+    for entry in value['modules']:
         content, mode = controller_file(release, entry['path'], MAX_CONTROLLER_MODULE)
         if mode != entry['mode'] or len(content) != entry['size'] or hashlib.sha256(content).hexdigest() != entry['sha256']:
             raise ReleaseError('controller_module_mismatch')
@@ -397,7 +354,8 @@ def verify_retained_controller(release, keys, *, application_version, platform, 
 
 
 def check_controller_compatibility(value, application_version, platform, *, floor=0):
-    if (type(floor) is not int or floor < 0 or value['controller_sequence'] < floor
+    if (value['selector_protocol'] != 1 or value['state_format'] != 1
+            or type(floor) is not int or floor < 0 or value['controller_sequence'] < floor
             or _controller_version(application_version, application=True)
             < _controller_version(value['min_application_version'], application=True)
             or any(platform.get(field) not in value[key] for field, key in
@@ -406,50 +364,12 @@ def check_controller_compatibility(value, application_version, platform, *, floo
 
 
 def promotion_inhibited(root=Path('/'), *, journal=True, owner=None):
-    """Read root-owned admission evidence; discovery needs only the public flag."""
-    root = Path(root)
-    if owner is None:
-        owner = 0 if root == Path('/') else os.geteuid()
-    paths = ['run/messagebox-update/promotion-inhibit.json']
-    if journal:
-        paths.append('var/lib/button-box-controller/journal.json')
-    for relative in paths:
-        descriptors = []
-        try:
-            descriptors.append(os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-            for part in (*PurePosixPath(relative).parts[:-1], None):
-                info = os.fstat(descriptors[-1])
-                if info.st_uid != owner or info.st_mode & 0o022:
-                    return True
-                if part is not None:
-                    descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                               dir_fd=descriptors[-1]))
-            fd = os.open(PurePosixPath(relative).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                         dir_fd=descriptors[-1])
-            descriptors.append(fd)
-            info = os.fstat(fd)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_nlink != 1
-                    or info.st_mode & 0o022 or info.st_size > 32768):
-                return True
-            raw = os.read(fd, 32769)
-            if len(raw) != info.st_size:
-                return True
-            value = json.loads(raw)
-            if set(value) == {'generation', 'sha256', 'value'}:
-                body = (json.dumps({'generation': value['generation'], 'value': value['value']}, sort_keys=True) + '\n').encode()
-                if hashlib.sha256(body).hexdigest() != value['sha256']:
-                    return True
-                value = value['value']
-            if relative.endswith('promotion-inhibit.json'):
-                return True
-            if value.get('kind') == 'controller' and value.get('phase') not in {
-                    'committed', 'restored', 'unsupported', 'aborted'}:
-                return True
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError, TypeError, AttributeError):
-            return True
-        finally:
-            for fd in reversed(descriptors):
-                os.close(fd)
-    return False
+    """One volatile trial exclusion. Missing means normal application admission."""
+    path = Path(root) / 'run/messagebox-selector/trial.json'
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True

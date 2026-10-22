@@ -1,8 +1,7 @@
 # Retained controller proof
 
-Signed controller proof now also covers independent recovery support. It does
-not promote a controller. Fixed main units remain unchanged. Recovery bootstrap
-adds two service drop-ins. Neither transport calls Cloud for this proof.
+Signed controller proof authenticates admission to the inactive slot.
+The seven fixed unit files do not change. Neither transport calls Cloud for this proof.
 
 ## Files and format
 
@@ -18,8 +17,7 @@ mode 0644. Their `.py` extension lets the frozen field workers retain them.
 The installed-file manifest covers both files. The application signature also
 covers them through the archive hash.
 
-Schema 1 has the exact fields below. Schema 2 adds the signed recovery object
-described later in this document.
+The descriptor has these exact schema-1 fields:
 
 | Field | Meaning |
 |---|---|
@@ -28,14 +26,14 @@ described later in this document.
 | `controller_version` | Target bundle version. The builder emits `1.3.0`. |
 | `controller_sequence` | Reserved positive integer below 2^63. Independent of the application sequence. |
 | `min_application_version` | Minimum application tag, including an optional canary suffix. |
-| `min_launcher_protocol` | Positive protocol integer. The builder emits 1. |
-| `min_helper_protocol` | Positive protocol integer. The builder emits 1. |
+| `selector_protocol` | Positive protocol integer. The builder emits 1. |
+| `state_format` | Positive protocol integer. The builder emits 1. |
 | `supported_os` | `['raspios-trixie']`. |
 | `supported_arch` | `['aarch64']`. |
 | `supported_models` | The sorted Pi 3 A+ and Pi 4 model names from `release_verify.py`. |
 | `capabilities` | Exactly `signed_descriptor` and `self_upgrade`, both Boolean. |
 | `modules` | Exactly the six records below, in this order. |
-| `unit_changes` | Schema 1: empty. Schema 2: signed records for generated recovery and supervisor drop-ins. |
+| `unit_changes` | Empty list. This version authorizes no controller integration changes. |
 
 Each module record has exactly `path`, `size`, `mode`, and `sha256`.
 `size` is a positive byte count. `mode` is integer 420, which is octal 0644.
@@ -71,8 +69,7 @@ Verification rejects a missing signature, wrong key, changed descriptor,
 changed module, wrong hash, wrong size, wrong mode, missing module or extra module
 record. It also rejects incompatible application versions, platforms and sequence
 floors. An equal sequence is permitted when rechecking an accepted retained proof.
-Recovery bootstrap now persists the accepted digest and sequence/version floors.
-The read-only proof API does not replace that admission check.
+Admission of a new promotion needs its own strict sequence check in later work.
 
 Files are read through no-follow file descriptors. The selected root, its
 descendant directories and files must belong to the verifying user and exclude
@@ -97,7 +94,7 @@ python3 scripts/release/build.py v0.3.13-canary.1 \
 ```
 
 The builder checks both transports in two clean clones. It requires all six
-controller sources and all three recovery files in the tracked payload allowlist. It then generates the
+controller sources in the tracked payload allowlist. It then generates the
 descriptor, signs it once, and verifies the selected secret/public pair.
 The second clone must produce identical descriptor bytes. Both archives retain
 the same verified proof. Archive checks reject a mismatch before copying output.
@@ -130,75 +127,19 @@ supplies the controlled release root, current release keys, verified application
 version, platform, and sequence floor. The result contains the parsed descriptor,
 its SHA-256, and the signing key ID.
 
-New admission holds the trust lock, finishes `recover_trust`, and verifies against
-the current key generation. It repeats verification before promotion. A removed
-key cannot admit another descriptor. An earlier build-time check does not
-override revocation. Recovery dispatch uses separate root-owned digest pins for
-previously accepted descriptor and signature bytes. Key replacement cannot
-invalidate those helper slots, and recovery pins cannot authorize new admission.
+Admission holds `trust_update.trust_lock`, finishes `recover_trust`, and verifies
+against current release keys. A removed key cannot admit a new descriptor.
 
-The builder currently emits `signed_descriptor=True` and `self_upgrade=False`.
-The candidate sources set `UPDATER_VERSION` to `1.3.0`. The frozen field worker
-stages those sources in the release's `updater/` directory. The active fixed
-controller remains at `1.1.0` until a verified promotion commits. A descriptor
-or staged version alone does not prove the active version. No heartbeat or
-active capability changes are part of descriptor installation.
+The descriptor uses selector protocol 1 and shared state format 1. There are no
+helper versions, recovery-file descriptors or per-release unit changes.
+Candidate `UPDATER_VERSION` is `1.3.0`. Initial slot A remains `1.1.0` until a
+successful trial commits B. The slot publisher enforces a persistent sequence,
+digest and version floor and runs both retained controllers' real state parsers.
+Boot selection uses the independent local `GOOD` records, with no release keys.
 
-The minimum application field provides a lower version bound only. It does not
-prove state-format or rollback compatibility. Schema 2 now binds recovery helper artifacts. Later work must bind complete
-controller integration and rollback compatibility before promotion. Recovery
-bootstrap and launcher enforce both protocol minima. This API does not attest a
-running launcher or helper.
-Schema 2 now signs the two generated recovery drop-ins in `unit_changes`.
-Each consuming helper must enforce its exact supported integration changes.
+Secret-key custody, recovery copies, emergency approval thresholds and
+operational rotation remain open decisions. Tests use
+throwaway keys. No production release was signed.
 
-Secret-key custody, separate controller-key roles, emergency approval
-thresholds and operational rotation procedures are not settled by these tools. No production
-secret key was used to test this change. No deployable release was signed here.
-
-## Validation and remaining work
-
-Original PR 2 checks on 21 October 2026:
-
-| Command | Result |
-|---|---|
-| `python3 -m unittest discover -s tests -p test_controller_descriptor.py -v` | PASS: 13 tests, including real minisign and all four frozen workers. |
-| `python3 -m unittest discover -s tests -p test_release_tooling.py -v` | PASS: 18 tests. |
-| `MSGBOX_TEST_TRANSPORT=cloud make check` | PASS: syntax, lint, 1,136 Python tests and 54 JavaScript tests. |
-| `MSGBOX_TEST_TRANSPORT=wacli make check` | PASS: syntax, lint, 1,136 Python tests and 54 JavaScript tests. |
-
-The independent review found a selected-pin mismatch during key overlap.
-The signer now verifies the selected pair directly. A real-minisign regression
-test passes. The follow-up review found no remaining blocker in this scope.
-
-Tests use real minisign signatures with temporary test keys. They cover changed
-modules, wrong signed hashes, missing signatures, wrong keys, signed malformed
-data, bounds, unsafe paths, key overlap and emergency-authorized trust replacement.
-
-Each frozen v0.3.9–v0.3.12 worker installs the current candidate modules and both
-proof files in a temporary root. The test removes downloads through the real old
-worker path, then verifies the retained proof offline. The fixed controller bytes
-remain unchanged. Systemd, health and the enclosing application signature process
-use the PR 1 host substitutes. The descriptor signature uses real minisign.
-
-Recovery support and journaled controller promotion are implemented. See
-[controller recovery](controller-recovery.md). New-box recovery installation,
-rollout permits and shipment acceptance remain later work. Live OTA, boot,
-power-loss recovery, storage behavior and physical Cloud/wacli acceptance remain
-unverified. This PR adds no Cloud dependency to wacli.
-
-
-## Schema 2: recovery support
-
-Schema 1 remains readable. New complete payloads use schema 2. It adds a strict
-`recovery` object with `protocol=1`, `helper_version=1.1.0`, and the exact three
-`messagebox/recovery_*.py` files, each with size, mode 0644 and SHA-256. The six
-controller modules remain separate. All recovery files must also be in the
-installed manifest. `unit_changes` gives the two generated drop-in paths, sizes,
-modes and hashes. Bootstrap compares these signed values before it writes support. The builder and publisher check these exact archive bytes.
-
-The first recovery bootstrap stores persistent sequence, digest, controller
-version and helper version floors in one root-owned atomic record with helper
-selection. Equal sequence requires the same accepted digest. Read-only proof
-verification alone is still not promotion authorization. See
-[controller recovery](controller-recovery.md) for paths, ordering and limits.
+See [controller slots](controller-recovery.md) for publication, boot selection,
+failure tests and native/Pi acceptance limits.

@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/install'))
-from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_MODULES, CONTROLLER_SIGNATURE, RECOVERY_FILES, RECOVERY_DROPINS,
+from release_verify import (CONTROLLER_DESCRIPTOR, CONTROLLER_MODULES, CONTROLLER_SIGNATURE,
                             MAX_CONTROLLER_MODULE, check_controller_compatibility,
                             controller_file, parse_controller_descriptor)
 sys.path.pop(0)
@@ -86,22 +86,9 @@ def controller_descriptor(root, sequence, minimum):
                         'sha256': hashlib.sha256(raw).hexdigest()})
     value = {'schema': 1, 'product': 'button-box-controller',
              'controller_version': CONTROLLER_VERSION, 'controller_sequence': sequence,
-             'min_application_version': minimum, 'min_launcher_protocol': 1, 'min_helper_protocol': 1,
+             'min_application_version': minimum, 'selector_protocol': 1, 'state_format': 1,
              'capabilities': {'signed_descriptor': True, 'self_upgrade': False},
              'modules': modules, 'unit_changes': [], **SUPPORTED}
-    present = [(root / path).exists() for path in RECOVERY_FILES]
-    if any(present):
-        if not all(present):
-            raise ReleaseError('incomplete recovery payload')
-        files = []
-        for path in RECOVERY_FILES:
-            content, _mode = controller_file(root, path, MAX_CONTROLLER_MODULE)
-            files.append({'path': path, 'size': len(content), 'mode': 0o644,
-                          'sha256': hashlib.sha256(content).hexdigest()})
-        changes = [{'path': path, 'size': len(raw), 'mode': 0o644, 'sha256': hashlib.sha256(raw).hexdigest()}
-                   for path, raw in sorted(RECOVERY_DROPINS.items())]
-        value.update(schema=2, unit_changes=changes,
-                     recovery={'protocol': 1, 'helper_version': '1.1.0', 'files': files})
     raw = (pprint.pformat(value, sort_dicts=True, width=100) + '\n').encode('ascii')
     parse_controller_descriptor(raw)
     return raw
@@ -238,8 +225,6 @@ def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
             payload = payload_paths(checkout)
             if any('scripts/install/' + name not in payload for name in CONTROLLER_MODULES):
                 raise ReleaseError('controller module missing from the explicit payload allowlist')
-            if any(name not in payload for name in RECOVERY_FILES):
-                raise ReleaseError('recovery files missing from the explicit payload allowlist')
             raw = controller_descriptor(checkout, controller_sequence, min_application_version)
             check_controller_compatibility(parse_controller_descriptor(raw), tag, {
                 'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})

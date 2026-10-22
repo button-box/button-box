@@ -25,6 +25,16 @@ class BuiltFieldPayload(unittest.TestCase):
     def test_actual_checkout_package_installs_with_all_four_frozen_workers(self):
         self.exercise_built_payload()
 
+    def test_real_built_payload_publication_cut_matrix(self):
+        def cuts(box):
+            from test_controller_slots import SlotTests, Host
+            fixture = SlotTests('test_every_publication_and_trial_write_cut_keeps_an_accepted_slot')
+            fixture.root, fixture.base, fixture.box = box.root, box.root.parent, box
+            fixture.host = Host(box.root)
+            fixture.old = fixture.slot_bytes('usr/lib/messagebox-update')
+            fixture.test_every_publication_and_trial_write_cut_keeps_an_accepted_slot()
+        self.exercise_built_payload(after_install=cuts, versions=('v0.3.12',))
+
     def exercise_built_payload(self, *, after_install=None, versions=None):
         # Frozen bounded_update.py:1804-1844,1882-1923;
         # update_controller.py:579-590,611-619. Nothing in the archive is replaced
@@ -46,6 +56,10 @@ class BuiltFieldPayload(unittest.TestCase):
             spec.loader.exec_module(build)
             # Prepare an actual temporary index for uncommitted new payload
             # files. No commit/tag is created; production build uses HEAD.
+            for folder in ('messagebox', 'systemd'):
+                for path in (checkout / folder).rglob('*'):
+                    if path.is_file() and not (ROOT / path.relative_to(checkout)).exists():
+                        path.unlink()
             listing = (ROOT / 'scripts/release/payload.txt').read_text()
             write(checkout / 'scripts/release/payload.txt', listing.encode())
             for name in listing.splitlines():
@@ -102,27 +116,19 @@ class BuiltFieldPayload(unittest.TestCase):
                         platform={'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})
                     self.assertEqual(proof['descriptor_sha256'], digest(descriptor))
                     self.assertEqual(original, {p.name: digest(p) for p in assets.iterdir()})
-                    # Frozen bounded_update.py:248-251,1828-1844 accepts every
-                    # recovery source path in the real package. Bootstrap then
-                    # installs fixed support only after the app has committed.
-                    from messagebox import recovery_bootstrap, recovery_launcher
-                    from test_recovery_support import systemd
-                    for name in verify.RECOVERY_FILES:
-                        self.assertEqual((installed / name).read_bytes(), (checkout / name).read_bytes())
+                    # Frozen bounded_update.py:248-251,1828-1844: both new
+                    # Python inputs and all bootstrap/timer delivery paths.
+                    from messagebox import controller_slots as slots
+                    from messagebox import controller_selector as selector
+                    from test_controller_slots import Host
                     write(box.installed('/etc/button-box-update/release-keys/test.pub'), public.read_bytes())
-                    recovery_bootstrap.bootstrap(box.root, platform={
-                        'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'}, run=systemd)
-                    self.assertEqual(recovery_launcher.launch(box.root), 'current')
+                    host = Host(box.root)
+                    slots.bootstrap(box.root, run=host)
+                    self.assertEqual(selector.valid(box.root)[0][0], selector.SLOTS[0])
+                    for path, content in slots.routes().items():
+                        self.assertEqual((box.root / path).read_bytes(), content)
                     if after_install is not None:
                         after_install(box)
-                    else:
-                        from test_controller_promotion import UpdaterHost, host_exchange
-                        host = UpdaterHost(box.root)
-                        result = recovery_bootstrap.promote(box.root, platform={
-                            'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'},
-                            run=host, exchange=host_exchange, handshake=host.handshake)
-                        self.assertEqual(result['state'], 'committed')
-                        self.assertEqual(host.identity()['version'], '1.3.0')
             # The helper must pass through the builder's SHA256SUMS; it must
             # not silently repackage or repair damaged build output.
             rejected = FieldBox(root / 'damaged')

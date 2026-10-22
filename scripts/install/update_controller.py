@@ -309,7 +309,7 @@ class Controller:
             if uid != 0:
                 raise ValueError('unauthorized_peer')
             return controller_identity()
-        if promotion_inhibited(ROOT) and data.get('command') not in {'status', 'result', 'heartbeat'}:
+        if promotion_inhibited(ROOT) and data.get('command') not in {'status', 'result', 'heartbeat', 'button'}:
             raise ValueError('promotion_inhibited')
         runtime_uid = pwd.getpwnam('messagebox').pw_uid
         discovery_uid = pwd.getpwnam('messagebox-update').pw_uid
@@ -563,7 +563,8 @@ class Controller:
             return
         name = 'button' if command == 'button' else 'heartbeat'
         update.durable_json(RUN / (name + '.json'), {
-            **transaction, 'pid': pid, 'monotonic': time.monotonic(), 'ready': True,
+            **transaction, 'pid': pid, 'process_token': update._process_token(pid),
+            'monotonic': time.monotonic(), 'ready': True,
         }, 0o644)
 
 
