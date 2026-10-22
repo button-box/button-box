@@ -1,0 +1,12 @@
+[Unit]
+Description=Admit and trial the committed controller in the inactive slot
+After=messagebox-update-bootstrap.service messagebox-update-install.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+UMask=0022
+ExecStart=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py publish
+TimeoutStartSec=240
+TimeoutStopSec=10
+KillMode=control-group

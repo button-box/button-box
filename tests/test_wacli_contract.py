@@ -42,6 +42,11 @@ class WacliContractTests(unittest.TestCase):
         self.set_quiet(False)
         self.announcements = AnnouncementStore(self.root / "announcement.json")
         self.now = datetime(2026, 10, 8, 23, tzinfo=timezone.utc)
+        # Morning-ring and quiet-hour checks must observe the same clock.
+        clock = mock.patch.object(button_send, "datetime", wraps=datetime)
+        self.clock = clock.start()
+        self.clock.now.side_effect = lambda zone: self.now.astimezone(zone)
+        self.addCleanup(clock.stop)
         patches = [mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"})]
         for module, values in (
             (button_send, {

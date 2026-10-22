@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -168,6 +169,15 @@ def public_status():
              'trust_sequence': trust.trust_state(STATE)['trust_sequence'],
              'trust_updates_enabled': any((KEYS.parent / 'emergency-keys').glob('*.pub')),
              **installed_identity()}
+    try:
+        path = Path('/opt/messagebox/messagebox/updater_admission.py')
+        spec = importlib.util.spec_from_file_location('runtime_updater_report', path)
+        reporter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reporter)
+        if reporter.cloud(ROOT):
+            value['updater'] = reporter.report(ROOT, active=Path(__file__).resolve().parent)
+    except (OSError, ValueError, KeyError, TypeError, ImportError, StopIteration, subprocess.SubprocessError):
+        pass  # Optional telemetry cannot change updater status or Cloud liveness.
     save('status.json', value, 0o644)
     return value
 

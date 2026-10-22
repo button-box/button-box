@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
-"""Emit content hashes for installed code; never read device configuration/data."""
+"""Emit installed-code hashes. OTA worker calls also enforce bridge admission."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def installed_paths(root):
+    caller = sys._getframe(1)
+    # The frozen worker calls this exact function from load_candidate before
+    # creating the release or snapshot. Raise ITS exception class for retry.
+    if (caller.f_code.co_name == 'load_candidate' and 'UpdateError' in caller.f_globals
+            and caller.f_back.f_code.co_name == 'install_transaction'):
+        try:
+            spec = importlib.util.spec_from_file_location('candidate_admission', root / 'messagebox/updater_admission.py')
+            bridge = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bridge)
+            bridge.legacy_admission(root, caller.f_locals['root'], manifest_path=caller.f_locals['manifest_path'])
+            bridge.protect_legacy_writes(caller.f_globals)
+        except Exception:
+            raise caller.f_globals['UpdateError']('not_idle') from None
     paths = {}
     for source in sorted((root / "messagebox").rglob("*")):
         if not source.is_file() or source.suffix not in {".py", ".sh", ".html", ".js", ".css"}:
@@ -30,9 +45,9 @@ def installed_paths(root):
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
     for pack in ("cloud", "cues", "voice", "voices", "voices/pirate", "voices/alien",
-                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata"):
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata", "voices/buttonbox"):
         # The Cloud-only fallbacks were introduced after the legacy release layout.
-        if pack == "cloud" and not (root / "sounds" / pack).exists():
+        if pack in {"cloud", "voices/buttonbox"} and not (root / "sounds" / pack).exists():
             continue
         for source in sorted((root / "sounds" / pack).iterdir()):
             if source.is_file() and source.suffix in {".wav", ".json", ".md"}:

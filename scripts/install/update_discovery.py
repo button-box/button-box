@@ -73,11 +73,15 @@ def backoff(headers, now, failures):
     return now + max(60, *waits) + random.uniform(5, 60)
 
 
+DOWNLOAD_SECONDS = 1500
+
+
 class Discovery:
-    def __init__(self, directory=CACHE, *, opener=OPEN, clock=time.time, jitter=random.uniform, keys=None):
+    def __init__(self, directory=CACHE, *, opener=OPEN, clock=time.time, jitter=random.uniform, keys=None, monotonic=time.monotonic):
         self.directory = Path(directory)
         self.directory.mkdir(mode=0o750, parents=True, exist_ok=True)
         self.opener, self.clock, self.jitter = opener, clock, jitter
+        self.monotonic = monotonic
         self.archive_urls = {}
         self.keys = Path(keys) if keys is not None else None
         try:
@@ -123,11 +127,14 @@ class Discovery:
         if not allowed_url(url):
             raise DownloadError('unsafe_asset')
         partial = path.with_suffix(path.suffix + '.part')
+        deadline = self.monotonic() + DOWNLOAD_SECONDS
         try:
             with self.opener(urllib.request.Request(url, headers={'User-Agent': 'button-box-updater/1'}), timeout=30) as incoming:
                 with partial.open('wb') as output:
                     size = 0
-                    while block := incoming.read(1024 * 1024):
+                    while block := incoming.read(64 * 1024):
+                        if self.monotonic() >= deadline:
+                            raise DownloadError('download_timeout')
                         size += len(block)
                         if size > limit:
                             raise DownloadError('download_limit')

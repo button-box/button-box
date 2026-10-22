@@ -309,6 +309,10 @@ transaction; that is separate from accepting an older network release.
 
 ### A/B controller payload and proof
 
+See [field OTA bridge](updater-bridge.md) for Release A's permit and pin requirements.
+Release B uses `--min-updater-version 1.3.0`; the builder also requires the
+`controller_self_upgrade_v1` capability before its payload can be installed.
+
 The payload contains `messagebox/controller_selector.py` and
 `messagebox/controller_slots.py`, the bootstrap and selector services, the
 selector timer, and the supervisor queue drop-in. The first bootstrap installs

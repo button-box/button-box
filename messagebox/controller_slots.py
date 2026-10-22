@@ -172,7 +172,7 @@ def admit(root, api, release, app, platform):
 
 
 def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda event, path: None,
-            trial_options=None):
+            trial_options=None, authorize=None):
     root = Path(root)
     api = selector(root / SELECTOR)
     with api.lock(root, 'operation', blocking=False), admission_lock(root):
@@ -203,6 +203,8 @@ def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda ev
                 raise ValueError('trial already consumed')
         except FileNotFoundError:
             pass
+        admission = selector(Path(__file__).with_name('updater_admission.py'))
+        (authorize or admission.admit_promotion)(root, root / release, app, run=run)
         api.mkdir(root / inactive, step)
         (root / inactive / 'GOOD').unlink(missing_ok=True)
         step('unlink_GOOD', inactive)
@@ -227,7 +229,17 @@ def publish(root=Path('/'), *, platform=None, run=subprocess.run, step=lambda ev
         api.write(root / inactive / 'TRIED', api.canonical({'descriptor': digest}), step=step)
         # The selector, not a candidate result string, observes health and owns
         # GOOD publication. The unchanged working slot is still usable on cuts.
-        api.trial(root, inactive, candidate, app, run=run, step=step, **(trial_options or {}))
+        try:
+            api.trial(root, inactive, candidate, app, run=run, step=step, **(trial_options or {}))
+        except Exception as exc:
+            reason = 'timeout' if isinstance(exc, subprocess.TimeoutExpired) or 'timed out' in str(exc) else (
+                'identity_mismatch' if 'identity' in str(exc) else 'recovery_failed' if 'restor' in str(exc) or 'recover' in str(exc)
+                else 'activation_failed')
+            api.write(root / STATE / 'trial-result.json', api.canonical({'descriptor': digest, 'slot_id': ('a','b')[api.SLOTS.index(inactive)],
+                'generation': candidate['generation'], 'result': 'failed', 'reason_code': reason}), step=step)
+            raise
+        api.write(root / STATE / 'trial-result.json', api.canonical({'descriptor': digest, 'slot_id': ('a','b')[api.SLOTS.index(inactive)],
+            'generation': candidate['generation'], 'result': 'promoted', 'reason_code': None}), step=step)
         return candidate
 
 
@@ -238,6 +250,13 @@ def main():
             bootstrap()
         except BlockingIOError:
             pass  # Supervisor queues another attempt after the worker exits.
+        else:
+            try:
+                selector(Path(__file__).with_name('updater_admission.py')).publish_report()
+            except (OSError, ValueError, KeyError, TypeError, StopIteration, subprocess.SubprocessError):
+                pass  # A missing optional report must not block controller recovery.
+            subprocess.run(['systemctl', '--no-block', 'start', 'messagebox-update-publish.service'],
+                           check=True, timeout=5)
     elif command == 'promote':
         subprocess.run(['systemd-run', '--quiet', '--wait', '--collect', '--service-type=oneshot',
             '--unit=messagebox-update-slot', '-p', 'TimeoutStartSec=180', '-p', 'TimeoutStopSec=10',

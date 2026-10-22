@@ -14,6 +14,7 @@ messagebox/cloud_events.py
 messagebox/cloud_quiet.py
 messagebox/cloud_runtime.py
 messagebox/cloud_update.py
+messagebox/cloud_updater_permit.py
 messagebox/cloud_voice.py
 messagebox/contacts.py
 messagebox/controller_selector.py
@@ -64,6 +65,8 @@ messagebox/software.py
 messagebox/sound_pack.py
 messagebox/syncloop.sh
 messagebox/tailnet.py
+messagebox/updater_admission.py
+messagebox/updater_rollout_keys.py
 messagebox/voicepoll.py
 messagebox/wifi_change.py
 messagebox/wifi_watchdog.py
@@ -608,8 +611,10 @@ systemd/messagebox-sync.service
 systemd/messagebox-update-bootstrap.service
 systemd/messagebox-update-controller.service
 systemd/messagebox-update-discovery.service
+systemd/messagebox-update-discovery.service.d/messagebox.conf
 systemd/messagebox-update-discovery.timer
 systemd/messagebox-update-install.service
+systemd/messagebox-update-publish.service
 systemd/messagebox-update-recovery.service
 systemd/messagebox-update-selector.service
 systemd/messagebox-update-selector.timer

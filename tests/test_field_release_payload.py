@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from field_updater import CONTROLLER, PROVENANCE, FieldBox, digest, write
+from bridge_admission import AdmissionHost
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,6 +85,10 @@ class BuiltFieldPayload(unittest.TestCase):
                            check=True, capture_output=True)
             public.chmod(0o644)
             secret.chmod(0o600)
+            rollout_public, rollout_secret = root / 'rollout.pub', root / 'rollout.key'
+            subprocess.run(['minisign','-G','-W','-p',str(rollout_public),'-s',str(rollout_secret)], check=True, capture_output=True)
+            write(checkout / 'messagebox/updater_rollout_keys.py', (repr({'schema': 1,
+                'keys': [rollout_public.read_text().splitlines()[1]]}) + '\n').encode())
             descriptor = write(root / 'descriptor', raw)
             signature = root / 'descriptor.minisig'
             subprocess.run(['minisign', '-S', '-s', str(secret), '-m', str(descriptor), '-x', str(signature)],
@@ -98,9 +103,11 @@ class BuiltFieldPayload(unittest.TestCase):
             for version in versions or PROVENANCE['releases']:
                 with self.subTest(version=version):
                     box = FieldBox(root / version, version)
+                    admission = AdmissionHost(box, rollout_public, rollout_secret)
                     previous = os.umask(0o002)
                     try:
-                        installed = box.run_built_release(assets)
+                        with admission.installed():
+                            installed = box.run_built_release(assets)
                     finally:
                         restored = os.umask(previous)
                     self.assertEqual(restored, 0o002)
@@ -124,8 +131,11 @@ class BuiltFieldPayload(unittest.TestCase):
                     from test_controller_slots import Host
                     write(box.installed('/etc/button-box-update/release-keys/test.pub'), public.read_bytes())
                     host = Host(box.root)
+                    host.recovery_run = box.run
                     slots.bootstrap(box.root, run=host)
                     self.assertEqual(selector.valid(box.root)[0][0], selector.SLOTS[0])
+                    self.assertEqual(selector.recover(box.root, host, execute=host.execute), selector.SLOTS[0])
+                    self.assertEqual(len(admission.requests), 1)
                     for path, content in slots.routes().items():
                         self.assertEqual((box.root / path).read_bytes(), content)
                     if after_install is not None:

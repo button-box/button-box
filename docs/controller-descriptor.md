@@ -69,7 +69,8 @@ Verification rejects a missing signature, wrong key, changed descriptor,
 changed module, wrong hash, wrong size, wrong mode, missing module or extra module
 record. It also rejects incompatible application versions, platforms and sequence
 floors. An equal sequence is permitted when rechecking an accepted retained proof.
-Admission of a new promotion needs its own strict sequence check in later work.
+A/B publication enforces its persistent sequence/digest/version floor and, in
+Cloud mode, a fresh promotion permit. See [bridge admission](updater-bridge.md).
 
 Files are read through no-follow file descriptors. The selected root, its
 descendant directories and files must belong to the verifying user and exclude

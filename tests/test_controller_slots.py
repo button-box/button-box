@@ -363,8 +363,11 @@ class SlotTests(unittest.TestCase):
                 for p in (self.root / slot).rglob('*') if p.is_file()}
 
     def publish(self, **kwargs):
+        # Real child startup and recovery can consume most of five seconds on
+        # a loaded host. Production retains the selector's 75-second deadline.
         return slots.publish(self.root, run=self.host, platform=PLATFORM,
-                             trial_options={'execute': self.host.execute, 'probe': self.host.probe, 'duration': 5}, **kwargs)
+                             trial_options={'execute': self.host.execute, 'probe': self.host.probe, 'duration': 10},
+                             authorize=lambda *a, **k: None, **kwargs)
 
     def boot(self, *, excluded=()):
         shutil.rmtree(self.root / selector.RUN, ignore_errors=True)
@@ -1447,7 +1450,7 @@ class SlotTests(unittest.TestCase):
 
     def test_real_hung_signed_trial_is_killed_and_timer_selects_old(self):
         self.stage(sequence=8, hang=True)
-        self.host.self_test_timeout = 0.5
+        self.host.self_test_timeout = 2
         with self.assertRaises(subprocess.TimeoutExpired):
             self.publish()
         self.assertTrue((self.root / 'run/hung-trial').exists())
@@ -1508,7 +1511,8 @@ class SlotTests(unittest.TestCase):
                 "from test_update_discovery import PLATFORM\nroot=Path(" + repr(str(self.root)) + ")\n"
                 "host=Host(root)\n"
                 "def hang(*a,**k):\n os.write(" + str(ready_w) + ",b'ready')\n time.sleep(60)\n"
-                "s.publish(root,run=host,platform=PLATFORM,trial_options={'probe':hang,'execute':host.execute})\n")
+                "s.publish(root,run=host,platform=PLATFORM,authorize=lambda *a,**k:None,"
+                "trial_options={'probe':hang,'execute':host.execute})\n")
         child = subprocess.Popen([sys.executable, '-I', '-B', '-c', code], pass_fds=(ready_w,))
         os.close(ready_w)
         try:

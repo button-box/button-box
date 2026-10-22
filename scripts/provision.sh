@@ -65,6 +65,9 @@ rsync -azR \
   "$REPO_DIR/./messagebox/software.py" \
   "$REPO_DIR/./messagebox/controller_selector.py" \
   "$REPO_DIR/./messagebox/controller_slots.py" \
+  "$REPO_DIR/./messagebox/updater_admission.py" \
+  "$REPO_DIR/./messagebox/updater_rollout_keys.py" \
+  "$REPO_DIR/./messagebox/cloud_updater_permit.py" \
   "$REPO_DIR/./messagebox/cloud_update.py" \
   "$REPO_DIR/./messagebox/maintenance.py" \
   "$REPO_DIR/./messagebox/cloud_device.py" \

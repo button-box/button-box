@@ -10,7 +10,7 @@ import wave
 from pathlib import Path
 
 from messagebox.software import software_fields
-from messagebox import sound_pack
+from messagebox import sound_pack, updater_admission
 
 
 def transport_mode():
@@ -83,8 +83,14 @@ def heartbeat_fields():
     value = status()
     if not value.get('installed'):
         return {}
-    return {'software_update': {key: value.get(key) for key in
+    fields = {'software_update': {key: value.get(key) for key in
             ('effective_mode', 'channel', 'available_version', 'last_result', 'trust_sequence')}}
+    try:
+        fields['updater'] = (updater_admission.validate_report(value['updater']) if 'updater' in value
+                             else updater_admission.cached_report())
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        pass
+    return fields
 
 
 def heartbeat_succeeded():

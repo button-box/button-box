@@ -2,6 +2,7 @@
 """Build reproducible release artifacts from an existing, stationary tag only."""
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -142,6 +143,8 @@ def release_manifest(root, tag, commit, sequence, minimum, payload):
     result.update(schema=SCHEMA, product=PRODUCT, tag=tag, version=tag, commit=commit,
                   release_sequence=sequence, channel=channel(tag),
                   min_updater_version=minimum, **SUPPORTED)
+    if tuple(map(int, minimum.split('.'))) >= (1, 3, 0):
+        result['required_updater_capabilities'] = ['controller_self_upgrade_v1']
     return result
 
 
@@ -189,6 +192,16 @@ def run_checks(root):
                        env={**os.environ, "MSGBOX_TEST_TRANSPORT": transport}, check=True)
 
 
+def require_rollout_keys(root):
+    path = root / 'messagebox/updater_admission.py'
+    if path.exists():
+        spec = importlib.util.spec_from_file_location('build_rollout_pins', path)
+        admission = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(admission)
+        if not admission.rollout_keys(root / 'messagebox/updater_rollout_keys.py'):
+            raise ReleaseError('Release A requires configured rollout public pins; private keys stay outside the payload')
+
+
 def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
           min_application_version=None, controller_secret=None, controller_key=None):
     if type(sequence) is not int or sequence < 1:
@@ -219,6 +232,7 @@ def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
                             expected[1]], check=True)
             require_tag(checkout, tag, expected)
             require_clean(checkout)
+            require_rollout_keys(checkout)
             run_checks(checkout)
             require_clean(checkout)
             require_tag(repo, tag, expected)

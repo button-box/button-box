@@ -1,5 +1,8 @@
 # On-box software updates
 
+The [field OTA bridge](updater-bridge.md) defines Cloud admission, the A/B heartbeat
+contract, local wacli policy, and the Release B controller capability gate.
+
 Controller selection and local publication run in Cloud and wacli modes on
 Raspberry Pi OS Trixie and aarch64. Cloud application orchestration is described below. The
 supported models are `Raspberry Pi 4 Model B` and `Raspberry Pi 3 Model A Plus`
@@ -24,8 +27,9 @@ Release tooling retains [signed controller proof](controller-descriptor.md)
 with the application. Each descriptor binds the exact six staged modules. Its
 signature is checked against current release trust, excluding emergency pins.
 The literal `.py` proof files pass the frozen field path rules. Installing the
-proof alone does not promote a controller. The local A/B publication API is
-implemented; an OTA promotion trigger and Cloud permit are not added here.
+proof alone does not promote a controller. The committed bridge's supervisor
+hook queues A/B bootstrap and publication. Cloud requires separate signed install
+and promotion permits; wacli uses local policy. See [bridge admission](updater-bridge.md).
 
 - `/opt/messagebox-releases/<tag>-<full-commit>/`: root-owned application trees.
 - `/opt/messagebox`: the application symlink, replaced atomically.
@@ -158,6 +162,10 @@ New sounds map beneath `/opt/messagebox/sounds`; original ringtones retain
 `/opt/messagebox/ringtones` for the shared runtime. Both paths live in each
 release directory. Previous releases keep their own bytes, so rollback restores
 their sounds without sharing or overwriting another release's pack.
+
+These are the frozen field rules. After the bridge selects controller 1.3.0,
+`sounds/voices/buttonbox` is also supported and the total sound limit is 160 MiB.
+Release A itself must fit the old rules; B requires the controller capability gate.
 
 ## Transaction and recovery
 

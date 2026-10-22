@@ -83,7 +83,9 @@ Publication runs in a bounded root systemd oneshot, with exclusive operation
 ownership. It takes the existing trust and application-update locks in that
 order. It requires a committed application, complete effective routing, an armed
 selector timer, current signatures, compatible state, and a monotonic admission
-floor. Admission also requires candidate bytes plus 32 MiB free and at least
+floor. Cloud also requires a fresh box-bound promotion permit before inactive-slot
+mutation; wacli uses local policy. See [bridge admission](updater-bridge.md).
+Admission also requires candidate bytes plus 32 MiB free and at least
 128 free inodes before invalidating the inactive slot. These checks are not a
 controller-selection reserve. Equal sequence is allowed only for the accepted digest. Version downgrade
 is rejected. Damage to the floor stops admission, not boot.
@@ -207,7 +209,8 @@ full ext4 blocks/inodes, or Pi SD flush behavior.
 Before first installation, native Linux/systemd and real Pi power-cut acceptance
 remain required. Physical Cloud and wacli send/play/reply, NFC, quiet hours,
 listened notices, audio, GPIO, Wi-Fi and WhatsApp checks remain separate.
-No Cloud request is part of local selection or publication.
+Boot selection and recovery never need Cloud. Cloud publication requires its
+signed admission permit; wacli publication remains local.
 
 On an isolated Linux system with systemd and cgroup v2, run the native forcing
 case as root with `MSGBOX_NATIVE_SYSTEMD_TESTS=1` and
