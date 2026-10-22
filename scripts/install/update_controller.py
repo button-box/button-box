@@ -309,7 +309,7 @@ class Controller:
             if uid != 0:
                 raise ValueError('unauthorized_peer')
             return controller_identity()
-        if promotion_inhibited(ROOT) and data.get('command') not in {'status', 'result', 'heartbeat', 'button'}:
+        if promotion_inhibited(ROOT) and data.get('command') not in {'status', 'result', 'heartbeat', 'button', 'local'}:
             raise ValueError('promotion_inhibited')
         runtime_uid = pwd.getpwnam('messagebox').pw_uid
         discovery_uid = pwd.getpwnam('messagebox-update').pw_uid
@@ -319,7 +319,7 @@ class Controller:
                 raise ValueError('unauthorized_peer')
         if command in {'button', 'arm', 'confirm'} and (uid != runtime_uid or pid != unit_pid('messagebox-button.service')):
             raise ValueError('not_button_owner')
-        if command == 'heartbeat' and (uid != runtime_uid or pid != unit_pid('messagebox-poller.service')):
+        if command in {'heartbeat', 'local'} and (uid != runtime_uid or pid != unit_pid('messagebox-poller.service')):
             raise ValueError('not_heartbeat_owner')
         if command in {'downloaded', 'download_failed', 'trust_downloaded'} and uid != discovery_uid:
             raise ValueError('not_downloader')
@@ -402,7 +402,7 @@ class Controller:
                 if operation and operation['state'] == 'downloading' and operation['version'] == available['version']:
                     bind_approval(operation, available)
                 return {'accepted': True}
-            if command in {'button', 'heartbeat'}:
+            if command in {'button', 'heartbeat', 'local'}:
                 self.evidence(command, data, pid)
                 operation = active_operation()
                 if command == 'button':
@@ -561,11 +561,11 @@ class Controller:
         if (data.get('software_version') != transaction.get('software_version')
                 or data.get('software_commit') != transaction.get('software_commit')):
             return
-        name = 'button' if command == 'button' else 'heartbeat'
-        update.durable_json(RUN / (name + '.json'), {
-            **transaction, 'pid': pid, 'process_token': update._process_token(pid),
-            'monotonic': time.monotonic(), 'ready': True,
-        }, 0o644)
+        for name in (('heartbeat', 'local') if command == 'heartbeat' else (command,)):
+            update.durable_json(RUN / (name + '.json'), {
+                **transaction, 'pid': pid, 'process_token': update._process_token(pid),
+                'monotonic': time.monotonic(), 'ready': True,
+            }, 0o644)
 
 
 def worker():

@@ -40,6 +40,7 @@ def main(arguments=None, *, root=Path('/'), run=subprocess.run):
     source = parser.add_mutually_exclusive_group()
     source.add_argument('--journal', type=Path, help='live journal (default: updater journal.json)')
     source.add_argument('--current', action='store_true', help='check the running release identity, without transaction binding')
+    parser.add_argument('--local', action='store_true', help='controller trial: local producer readiness only')
     options = parser.parse_args(arguments)
     try:
         if options.current:
@@ -50,6 +51,8 @@ def main(arguments=None, *, root=Path('/'), run=subprocess.run):
             journal = update.read_state(root, 'journal.json')
         if not isinstance(journal, dict) or journal.get('kind') == 'bootstrap':
             raise ValueError('no application health journal')
+        if options.local:
+            journal['local_readiness'] = True
         checks, _pids = update.health_checks(root, journal, run)
     except (OSError, ValueError, KeyError, TypeError, update.UpdateError):
         print('FAIL probe:inputs')

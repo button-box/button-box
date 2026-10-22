@@ -1724,7 +1724,7 @@ class CloudRuntime:
             while not stop.is_set():
                 now = self.monotonic()
                 from messagebox.software import local_ready
-                local_ready('heartbeat')
+                local_ready('local')
                 hinted = wake.is_set()
                 if now >= next_poll or (hinted and not failures and now >= earliest_hint_poll):
                     # Clear before HTTP so a hint arriving during the request survives.

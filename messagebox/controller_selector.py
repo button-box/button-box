@@ -45,7 +45,7 @@ def document(raw):
         raise ValueError('JSON depth') from exc
 
 
-def read(root, relative, limit=16384, mode=0o644):
+def read(root, relative, limit=16384, mode=0o644, *, minimum=1):
     parts = Path(relative).parts
     if not parts or Path(relative).is_absolute() or '..' in parts:
         raise ValueError('unsafe path')
@@ -59,7 +59,7 @@ def read(root, relative, limit=16384, mode=0o644):
         fds.append(fd)
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != (0 if Path(root) == Path('/') else os.geteuid()) or info.st_nlink != 1
-                or stat.S_IMODE(info.st_mode) != mode or not 0 < info.st_size <= limit):
+                or stat.S_IMODE(info.st_mode) != mode or not minimum <= info.st_size <= limit):
             raise ValueError('unsafe file')
         raw = os.read(fd, limit + 1)
         if len(raw) != info.st_size:
@@ -229,6 +229,8 @@ def python_command(root, slot, arguments, python=sys.executable):
 
 
 def execute(root, slot, arguments, timeout=180):
+    if arguments[:2] == ('bounded_update.py', 'recover'):
+        arguments = ('-c', recovery_program(root, slot, arguments))
     process = subprocess.Popen(python_command(root, slot, arguments),
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
@@ -245,7 +247,26 @@ def execute(root, slot, arguments, timeout=180):
         process.stdout.close()
 
 
-def recovered(root):
+def restoration(root):
+    journal = document(read(root, 'var/lib/button-box-update/journal.json', 1024 * 1024, 0o600))
+    if journal['phase'] == 'committed':
+        return []
+    backup = journal['backup'].lstrip('/')
+    try:
+        records = document(read(root, backup + '/state.json', 2 * 1024 * 1024, 0o600))['files']
+    except FileNotFoundError:
+        if journal['phase'] == 'rolled_back':
+            return []  # Completed field rollbacks predate retained snapshots.
+        raise
+    for record in records:
+        if not Path(record['path']).is_absolute() or '..' in Path(record['path']).parts:
+            raise ValueError('unsafe restoration path')
+        if record['kind'] == 'file' and digest(read(root, backup + '/files/' + record['backup'], 2 * 1024 * 1024, 0o600, minimum=0)) != record['sha256']:
+            raise ValueError('damaged restoration proof')
+    return records
+
+
+def recovered(root, required=None):
     """Read-only boot gate: terminal journal, exact pointer, no install inhibit."""
     state = 'var/lib/button-box-update/'
     if os.path.lexists(Path(root) / state / 'install-inhibit'):
@@ -268,12 +289,54 @@ def recovered(root):
         known = document(read(root, state + 'known-good.json', mode=0o600))
         if not isinstance(known, dict) or known.get('current') != expected:
             raise ValueError('known-good pointer mismatch')
+    for record in restoration(root) if required is None else required:
+        path = Path(root) / record['path'].lstrip('/')
+        if record['kind'] == 'absent':
+            if os.path.lexists(path):
+                raise ValueError('restoration removal incomplete')
+        elif record['kind'] == 'symlink':
+            if not path.is_symlink() or os.readlink(path) != record['target']:
+                raise ValueError('restoration link incomplete')
+        else:
+            if digest(read(root, record['path'].lstrip('/'), 2 * 1024 * 1024, record['mode'], minimum=0)) != record['sha256']:
+                raise ValueError('restoration contents incomplete')
+            info = path.lstat()
+            if (info.st_uid, info.st_gid) != (record['uid'], record['gid']):
+                raise ValueError('restoration ownership incomplete')
+
+
+def recovery_program(root, slot, arguments):
+    # Retain the existing snapshot across legacy pruning and failed attempts.
+    # A terminal-but-incomplete rollback must run restoration again.
+    return ("import sys;from pathlib import Path;sys.path.insert(0," + repr(str(Path(root) / slot)) + ");"
+            "import bounded_update as u;root=Path(" + repr(str(root)) + ");"
+            "u.prune_releases=lambda r:None;j=u.read_state(root,'journal.json');"
+            "replay=" + repr(arguments[1] == 'recover') + " and j and j['phase']=='rolled_back' and (root/j['backup'].lstrip('/')/'state.json').exists();"
+            "j.update(phase='rolling_back') if replay else None;u.save_state(root,'journal.json',j) if replay else None;"
+            "u.main(" + repr(['--root', str(root), *arguments[1:]]) + ")")
+
+
+def finish_recovery(root, slot, execute):
+    journal = document(read(root, 'var/lib/button-box-update/journal.json', 1024 * 1024, 0o600))
+    if not re.fullmatch(r'/var/lib/button-box-update/snapshots/[0-9a-f]{32}', journal['backup']):
+        raise ValueError('unsafe recovery snapshot')
+    directory = Path(root) / journal['backup'].lstrip('/')
+    if journal['phase'] == 'rolled_back' and directory.exists():
+        # Retire proof only after independent checks. Flush even if a prior
+        # attempt unlinked it and failed its directory flush. Later legitimate
+        # mode changes must not be undone by an already completed rollback.
+        program = ("import os;fd=os.open(" + repr(str(directory)) + ",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);"
+                   "\nif os.fstat(fd).st_uid!=os.geteuid() or os.fstat(fd).st_mode&0o777!=0o700: raise ValueError('unsafe snapshot')\n"
+                   "\ntry: os.unlink('state.json',dir_fd=fd)\nexcept FileNotFoundError: pass\n"
+                   "os.fsync(fd);os.close(fd)")
+        execute(root, slot, ('-c', program), 15)
 
 
 def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True, deadline=None):
     deadline = deadline or time.monotonic() + 380
     with lock(root, 'gate'):
         stop(root, run)
+        required = restoration(root)
         choices = sorted(valid(root), key=lambda item: item[0] not in preferred)
         for slot, value in choices:
             if slot in excluded:
@@ -283,7 +346,8 @@ def recover(root, run, *, excluded=(), preferred=(), execute=execute, boot=True,
                 if remaining <= 0:
                     break
                 execute(root, slot, ('bounded_update.py', 'recover', *(('--boot',) if boot else ())), min(180, remaining))
-                recovered(root)
+                recovered(root, required)
+                finish_recovery(root, slot, execute)
                 choose(root, slot, value)
                 (Path(root) / RUN / 'trial.json').unlink(missing_ok=True)
                 return slot
@@ -323,6 +387,8 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
                 current = selected(root)
                 if current['trial']:
                     raise ValueError('interrupted trial')
+                recovered(root)  # A healthy broker cannot discharge recovery.
+                finish_recovery(root, current['slot'], execute)
                 deadline = time.monotonic() + 5
                 while True:
                     try:
@@ -340,13 +406,9 @@ def check(root, run=subprocess.run, *, probe=probe, execute=execute):
                 return
             preferred = (tuple(s for s, _ in valid(root) if s != current['slot'])
                          if 'current' in locals() and not current['trial'] else ())
-            try:
-                recover(root, run, preferred=preferred, execute=execute, boot=False,
-                        deadline=time.monotonic() + 380)
-            finally:
-                # Even a transient recovery error must not strand the selected
-                # accepted controller. The next timer run checks it again.
-                call(run, ['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'])
+            recover(root, run, preferred=preferred, execute=execute, boot=False,
+                    deadline=time.monotonic() + 380)
+            call(run, ['systemctl', '--no-block', 'start', 'messagebox-update-controller.service'])
     except BlockingIOError:
         return  # The bounded publication service owns a live trial.
 
@@ -384,7 +446,7 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
                'software_version': application['version'], 'software_commit': application['commit'],
                'controller_digest': value['descriptor']}
     write(Path(root) / 'run/messagebox-update/transaction.json', canonical(context), durable=False, step=step)
-    for name in ('button', 'heartbeat'):
+    for name in ('button', 'local'):
         (Path(root) / ('run/messagebox-update/' + name + '.json')).unlink(missing_ok=True)
         step('unlink_evidence', name)
     output = document(call(run, sandbox(root, slot, 'update_controller.py', 'self-test'), 25).stdout)
@@ -398,14 +460,14 @@ def trial(root, slot, value, application, run=subprocess.run, *, probe=probe, ex
     while time.monotonic() < deadline:
         try:
             probe(root, value, run)
-            for name, unit in (('button', 'messagebox-button.service'), ('heartbeat', 'messagebox-poller.service')):
+            for name, unit in (('button', 'messagebox-button.service'), ('local', 'messagebox-poller.service')):
                 evidence = document(read(root, 'run/messagebox-update/' + name + '.json'))
                 pid = call(run, ['systemctl', 'show', unit, '--property=MainPID']).stdout.strip().split('=')[1]
                 if (any(evidence.get(k) != v for k, v in context.items()) or str(evidence.get('pid')) != pid
                         or evidence.get('process_token') != process_token(root, pid)
                         or not evidence.get('ready') or not started <= evidence.get('monotonic', 0) <= time.monotonic()):
                     raise ValueError('no fresh process evidence')
-            execute(root, slot, ('health-probe.py', '--current'), 15)
+            execute(root, slot, ('health-probe.py', '--current', '--local'), 15)
             inspect(root, slot, value)
         except (OSError, ValueError, subprocess.SubprocessError):
             time.sleep(0.2)
@@ -436,14 +498,27 @@ def recovery_trial(root, slot, execute):
         mkdir(snapshot / 'files')
         (snapshot / 'files').chmod(0o700)
         units = {n: {'active': 'inactive', 'enabled': 'disabled'} for n in journal['units']}
-        write(snapshot / 'state.json', canonical({'format': 1, 'files': [], 'units': units}), mode=0o600, durable=False)
+        content = b'[Service]\nExecStart=/usr/bin/true\n'
+        write(snapshot / 'files/unit', content, mode=0o600, durable=False)
+        write(snapshot / 'files/empty', b'', mode=0o600, durable=False)
+        records = [{'path': '/etc/systemd/system/messagebox-button.service', 'kind': 'file', 'backup': 'unit',
+                    'sha256': digest(content), 'mode': 0o644, 'uid': os.geteuid(), 'gid': os.getegid()},
+                   {'path': '/etc/systemd/system/messagebox-poller.service.d/messagebox.conf', 'kind': 'file', 'backup': 'empty',
+                    'sha256': digest(b''), 'mode': 0o644, 'uid': os.geteuid(), 'gid': os.getegid()},
+                   {'path': '/etc/systemd/system/messagebox-button.service.d/messagebox.conf', 'kind': 'absent'}]
+        for record in records:
+            write(stage / record['path'].lstrip('/'), b'candidate integration\n', mode=0o600, durable=False)
+            if record['kind'] == 'file':
+                record['gid'] = (stage / record['path'].lstrip('/')).stat().st_gid
+        write(snapshot / 'state.json', canonical({'format': 1, 'files': records, 'units': units}), mode=0o600, durable=False)
+        required = restoration(stage)
         program = ("import sys,subprocess;sys.path.insert(0,sys.argv[1]);import bounded_update as u;"
                    "service=lambda c,**k:subprocess.CompletedProcess(c,0,"
                    "'inactive\\n' if c[1]=='is-active' else 'disabled\\n' if c[1]=='is-enabled' else '');"
                    "original=u.recover_transaction;u.recover_transaction=lambda **k:original(run=service,**k);"
                    "u.main(['--root',sys.argv[2],'recover','--boot'])")
         execute(root, slot, ('-c', program, str(Path(root) / slot), str(stage)), 25)
-        recovered(stage)
+        recovered(stage, required)
 
 
 def admit(root, source):
@@ -465,7 +540,8 @@ def admit(root, source):
 
 def install(root, worker, transaction, source, *args, **kwargs):
     protected = admit(root, source)
-    backup, atomic = worker.create_backup, worker._atomic_install
+    backup, atomic, prune = worker.create_backup, worker._atomic_install, worker.prune_releases
+    worker.prune_releases = lambda r: prune(r) if worker.read_state(r, 'journal.json')['phase'] == 'committed' else None
     # Fixed bytes need neither rewriting nor rollback. In particular, legacy
     # rollback unlinks a file before restore; keep the permanent gate out of it.
     worker.create_backup = lambda destination,r,entries,*a,**k: backup(destination,r,
@@ -475,7 +551,7 @@ def install(root, worker, transaction, source, *args, **kwargs):
     try:
         return transaction(source, *args, **kwargs)
     finally:
-        worker.create_backup, worker._atomic_install = backup, atomic
+        worker.create_backup, worker._atomic_install, worker.prune_releases = backup, atomic, prune
 
 
 def install_program(root, slot):
@@ -492,6 +568,8 @@ def run_consumer(root, command):
     with lock(root, 'gate', shared=True):
         value = selected(root)
         arguments = ('-c', install_program(root, value['slot'])) if command == 'install' else COMMANDS[command]
+        if command == 'supervisor':
+            arguments = ('-c', recovery_program(root, value['slot'], arguments))
     # Resolve once; changes stop this service's cgroup before slot reuse.
     os.execv(sys.executable, python_command(root, value['slot'], arguments))
 

@@ -144,8 +144,11 @@ class Host:
             spec.loader.exec_module(worker)
             self.recoveries.append(slot)
             try:
-                worker.recover_transaction(root=root, run=self.recovery_run, start='--boot' not in arguments)
-            except Exception as exc:
+                transaction = worker.recover_transaction
+                with mock.patch.dict(sys.modules, {'bounded_update': worker}), \
+                        mock.patch.object(worker, 'recover_transaction', side_effect=lambda **k: transaction(run=self.recovery_run, **k)):
+                    exec(selector.recovery_program(root, slot, arguments), {})
+            except (Exception, SystemExit) as exc:
                 raise ValueError('actual recovery command failed') from exc
             return b''
         if arguments[0] == 'health-probe.py':
@@ -164,7 +167,7 @@ class Host:
                 raise AssertionError(command)
             output = io.StringIO()
             with mock.patch.object(health.update, '_boot', return_value=selector.boot_id(root)), contextlib.redirect_stdout(output):
-                result = health.main(['--current'], root=root, run=health_run)
+                result = health.main(list(arguments[1:]), root=root, run=health_run)
             self.health_observed = output.getvalue()
             if result:
                 raise ValueError('actual health probe rejected: ' + self.health_observed)
@@ -278,7 +281,7 @@ class SlotTests(unittest.TestCase):
         slots.bootstrap(self.root, run=self.host)
         self.old = self.slot_bytes(selector.SLOTS[0])
 
-    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False):
+    def stage(self, version='1.3.0', sequence=7, *, hang=False, broken_discovery=False, no_recovery=False, restore_defect=None):
         release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
         source = self.base / 'candidate'
         for name in selector.MODULES:
@@ -292,6 +295,11 @@ class SlotTests(unittest.TestCase):
             if no_recovery and name == 'bounded_update.py':
                 raw = raw.replace(b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):',
                                   b'def _recover_locked(root, run, *, start=True, reason=\'interrupted\'):\n    return None')
+            if restore_defect and name == 'bounded_update.py':
+                raw += ("\noriginal_restore=_restore_record\ndef _restore_record(record,path,backup):\n"
+                        + ("    return\n" if restore_defect == 'noop' else
+                           "    if record['kind']!='absent': original_restore(record,path,backup)\n" if restore_defect == 'remove' else
+                           "    original_restore(record,path,backup)\n    if record['kind']=='file': path.chmod(0o600)\n")).encode()
             write(source / 'scripts/install' / name, raw)
             write(release / 'updater' / name, raw)
         with mock.patch.object(build, 'CONTROLLER_VERSION', version):
@@ -478,6 +486,113 @@ class SlotTests(unittest.TestCase):
         self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
         self.assertEqual(self.boot(), selector.SLOTS[0])
 
+    def interrupted_application(self):
+        self.box.data.update(version='v0.3.14', commit='d' * 40)
+        self.box.save_manifest()
+        with self.assertRaises(KeyboardInterrupt):
+            self.box.worker.install_transaction(self.box.source, self.box.manifest, root=self.root,
+                run=self.box.run, sequence=2, health=mock.Mock(side_effect=KeyboardInterrupt('power loss')))
+
+    def test_legacy_failed_install_keeps_its_restoration_proof(self):
+        for name in ('messagebox-update-selector.service', 'messagebox-update-selector.timer'):
+            write(self.box.source / 'systemd' / name, (self.root / 'etc/systemd/system' / name).read_bytes())
+        self.box.refresh()
+        self.box.data.update(version='v0.3.14', commit='d' * 40)
+        self.box.save_manifest()
+        with self.assertRaises(self.box.worker.UpdateError):
+            def transaction(*args):
+                return self.box.worker.install_transaction(*args, root=self.root, run=self.box.run, sequence=2,
+                    health=mock.Mock(side_effect=self.box.worker.UpdateError('health_timeout')))
+            selector.install(self.root, self.box.worker, transaction, self.box.source, self.box.manifest)
+        journal = self.box.worker.read_state(self.root, 'journal.json')
+        self.assertEqual(journal['phase'], 'rolled_back')
+        self.assertTrue(selector.restoration(self.root))
+        selector.recovered(self.root)
+
+    def test_both_recoveries_fail_then_healthy_broker_cannot_discharge_pending_work(self):
+        self.publish()
+        self.interrupted_application()
+        healthy = mock.Mock()
+        self.host.commands.clear()
+        self.host.recoveries.clear()
+        with mock.patch.object(os, 'fsync', side_effect=OSError(errno.EIO, 'injected recovery storage fault')), \
+                self.assertRaisesRegex(ValueError, 'no working'):
+            selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
+        healthy.assert_not_called()
+        self.assertEqual(len(self.host.recoveries), 2)
+        self.assertFalse(any(c[:3] == ['systemctl','--no-block','start'] for c in self.host.commands))
+        selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
+        selector.recovered(self.root)
+        self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'rolled_back')
+        count = len(self.host.recoveries)
+        selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
+        self.assertEqual(len(self.host.recoveries), count)
+        healthy.assert_called_once()
+
+    def test_signed_restore_defects_fail_trial_and_boot_restores_with_the_other_slot(self):
+        for index, defect in enumerate(('noop', 'mode', 'remove')):
+            self.stage('1.3.' + str(index), 7 + index, restore_defect=defect)
+            with self.assertRaises((ValueError, OSError)):
+                self.publish()
+            self.assertFalse((self.root / selector.SLOTS[1] / 'GOOD').exists())
+            self.boot()
+        # Model a previously accepted, correctly signed defective controller.
+        # Boot must reject its terminal journal and restore with the frozen A.
+        proof = verify.verify_retained_controller(self.stage('1.3.3', 10, restore_defect='noop'),
+            self.root / 'etc/button-box-update/release-keys', application_version='v0.3.13', platform=PLATFORM)
+        slot = selector.SLOTS[1]
+        release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+        for name in selector.MODULES:
+            write(self.root / slot / name, (release / 'updater' / name).read_bytes())
+        identity = slots.identity(selector, self.root, slot, generation=10, version='1.3.3',
+                                  descriptor=proof['descriptor_sha256'], legacy=False)
+        selector.write(self.root / slot / 'GOOD', selector.envelope(identity))
+        self.interrupted_application()
+        required = selector.restoration(self.root)
+        # The real frozen install changed an external unit. Corrupt both content
+        # and mode and add a file whose snapshot requires removal.
+        file = next(r for r in required if r['kind'] == 'file' and r['path'].endswith('.service'))
+        write(self.root / file['path'].lstrip('/'), b'defective candidate\n', 0o600)
+        absent = {'path': '/etc/systemd/system/messagebox-extra.service', 'kind': 'absent'}
+        snapshot = self.root / self.box.worker.read_state(self.root, 'journal.json')['backup'].lstrip('/') / 'state.json'
+        state = json.loads(snapshot.read_bytes())
+        state['files'].append(absent)
+        self.box.worker.durable_json(snapshot, state)
+        required.append(absent)
+        write(self.root / absent['path'].lstrip('/'), b'must be removed\n')
+        self.host.recoveries.clear()
+        # First run the defective controller alone: its real command returns
+        # success and marks rolled_back, while the selector still rejects it.
+        self.host.execute(self.root, slot, ('bounded_update.py','recover','--boot'))
+        self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'rolled_back')
+        with self.assertRaises((ValueError, OSError)):
+            selector.recovered(self.root, required)
+        self.host.recoveries.clear()
+        self.assertEqual(self.boot(), selector.SLOTS[0])
+        self.assertEqual(self.host.recoveries, [selector.SLOTS[1], selector.SLOTS[0]])
+        selector.recovered(self.root, required)
+        self.assertFalse(snapshot.exists())
+        marker = write(self.root / 'etc/messagebox-onboarding/enabled', b'')
+        self.boot()
+        self.assertTrue(marker.exists(), 'a completed rollback must preserve a later setup request')
+
+    def test_retired_proof_directory_flush_failure_stays_pending_until_retry(self):
+        self.publish()
+        self.interrupted_application()
+        healthy = mock.Mock()
+        def execute(root, slot, arguments, timeout=180):
+            if arguments[0] == '-c' and "os.unlink('state.json'" in arguments[1]:
+                with mock.patch.object(os, 'fsync', side_effect=OSError(errno.EIO, 'proof directory flush failed')):
+                    exec(arguments[1], {})
+            else:
+                return self.host.execute(root, slot, arguments, timeout)
+        with self.assertRaises(ValueError):
+            selector.check(self.root, self.host, probe=healthy, execute=execute)
+        healthy.assert_not_called()
+        selector.check(self.root, self.host, probe=healthy, execute=self.host.execute)
+        selector.recovered(self.root)
+        healthy.assert_called_once()
+
     def test_good_rename_directory_fsync_failure_then_retry_and_power_loss(self):
         disk = DurableView(self.root)
         renamed = False
@@ -581,32 +696,35 @@ class SlotTests(unittest.TestCase):
 
     def test_zero_exit_incomplete_recovery_tries_the_other_slot(self):
         self.publish()
+        self.interrupted_application()
         journal = self.box.worker.read_state(self.root, 'journal.json')
         journal['phase'] = 'switched'
         self.box.worker.save_state(self.root, 'journal.json', journal)
         attempted = []
         def execute(root, slot, arguments, timeout):
+            if arguments[0] == '-c':
+                return self.host.execute(root, slot, arguments, timeout)
             attempted.append(slot)
             if slot == selector.SLOTS[0]:
-                journal['phase'] = 'committed'
-                self.box.worker.save_state(root, 'journal.json', journal)
                 return self.host.execute(root, slot, arguments, timeout)
             return b''  # A verified command exits zero but leaves recovery pending.
         self.assertEqual(selector.recover(self.root, self.host, execute=execute), selector.SLOTS[0])
         self.assertEqual(attempted, list(reversed(selector.SLOTS)))
+        journal = self.box.worker.read_state(self.root, 'journal.json')
+        target = journal['old']
         for damage in ('inhibit', 'pointer', 'known-good'):
             with self.subTest(damage=damage):
                 if damage == 'inhibit':
                     write(self.root / 'var/lib/button-box-update/install-inhibit', b'{}')
                 elif damage == 'pointer':
-                    self.box.worker.switch_release(self.root, journal['old'])
+                    self.box.worker.switch_release(self.root, journal['new'])
                 else:
-                    self.box.worker.save_state(self.root, 'known-good.json', {'current': journal['old']})
+                    self.box.worker.save_state(self.root, 'known-good.json', {'current': journal['new']})
                 with self.assertRaises((ValueError, FileNotFoundError)):
                     selector.recovered(self.root)
                 (self.root / 'var/lib/button-box-update/install-inhibit').unlink(missing_ok=True)
-                self.box.worker.switch_release(self.root, journal['new'])
-                self.box.worker.save_state(self.root, 'known-good.json', {'current': journal['new']})
+                self.box.worker.switch_release(self.root, target)
+                self.box.worker.save_state(self.root, 'known-good.json', {'current': target})
 
     def test_runtime_prefers_alternate_then_retries_current_each_timer_run(self):
         self.publish()
@@ -798,7 +916,7 @@ class SlotTests(unittest.TestCase):
                 self.assertEqual(selector.recover(self.root, run, excluded=(selector.SLOTS[1],), execute=self.host.execute), selector.SLOTS[0])
             self.assertTrue(select.select([resolved_r], [], [], 5)[0])
             arguments = json.loads(os.read(resolved_r, 8192))
-            self.assertIn(str(self.root / selector.SLOTS[0] / 'bounded_update.py'), arguments)
+            self.assertEqual(arguments[-1], selector.recovery_program(self.root, selector.SLOTS[0], selector.COMMANDS['supervisor']))
             self.assertEqual(children[0].wait(timeout=5), 0)
         finally:
             for child in children:
@@ -822,8 +940,7 @@ class SlotTests(unittest.TestCase):
             try:
                 self.assertTrue(select.select([ready_r], [], [], 5)[0], 'supervisor blocked by worker locks')
                 arguments = json.loads(os.read(ready_r, 8192))
-                self.assertEqual(arguments[-1], 'supervise')
-                self.assertIn(str(self.root / selector.SLOTS[0] / 'bounded_update.py'), arguments)
+                self.assertEqual(arguments[-1], selector.recovery_program(self.root, selector.SLOTS[0], selector.COMMANDS['supervisor']))
                 self.assertEqual(child.wait(timeout=5), 0)
             finally:
                 if child.poll() is None:

@@ -607,7 +607,7 @@ class TransactionTests(unittest.TestCase):
 
     def test_terminal_rollback_receipt_survives_next_supervisor_tick(self):
         import hashlib
-        for state in ('rolled_back', 'rollback_failed'):
+        for state in ('rolled_back',):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
                 fixture, _old = self.prepare(directory)
                 operation_id = 'synthetic-operation'
@@ -630,6 +630,19 @@ class TransactionTests(unittest.TestCase):
                 self.assertEqual(operation['state'], state)
                 self.assertEqual(operation['reason'], 'readiness_lost')
                 self.assertEqual(operation['detail'], 'evidence:heartbeat:fresh')
+
+    def test_supervisor_retries_a_real_rollback_failed_after_storage_fault_is_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, old = self.prepare(directory)
+            with mock.patch.object(update, '_restore_record', side_effect=OSError('injected restore I/O failure')), \
+                    self.assertRaisesRegex(update.UpdateError, 'rollback_failed'):
+                self.install(fixture, health=mock.Mock(side_effect=update.UpdateError('health_timeout')))
+            self.assertEqual(update.read_state(fixture.root, 'journal.json')['phase'], 'rollback_failed')
+            fixture.systemctl.states['messagebox-update-install.service'] = {'active': 'failed', 'enabled': 'static'}
+            update.supervise_transaction(root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(update.read_state(fixture.root, 'journal.json')['phase'], 'rolled_back')
+            self.assertEqual(update.controlled_release(fixture.root), old)
+            self.assertFalse(update._rooted(fixture.root, update.INHIBIT).exists())
 
     def test_bootstrap_only_removes_unheld_top_level_lgpio_fifos(self):
         for kind in ('unused', 'held', 'other', 'nested', 'symlink', 'unreadable'):

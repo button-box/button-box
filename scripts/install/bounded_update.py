@@ -1685,7 +1685,8 @@ def health_checks(root, journal, run=subprocess.run):
                      and recorded.get('enabled') not in ENABLED_STATES | {'enabled-runtime'}):
             continue
         try:
-            evidence = json.loads(_rooted(root, '/run/messagebox-update/' + name + '.json').read_bytes())
+            source = 'local' if name == 'heartbeat' and journal.get('local_readiness') else name
+            evidence = json.loads(_rooted(root, '/run/messagebox-update/' + source + '.json').read_bytes())
             if not isinstance(evidence, dict):
                 raise ValueError('invalid evidence')
         except (OSError, ValueError):
@@ -1969,6 +1970,9 @@ def prune_releases(root):
         directory = _rooted(root, UPDATE_STATE + '/' + name)
         if directory.exists():
             for child in directory.iterdir():
+                if (name == 'snapshots' and journal and journal['phase'] == 'rolled_back'
+                        and child == _rooted(root, journal['backup'])):
+                    continue  # Keep the proof until the next application commit.
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child)
             _fsync_directory(directory)
@@ -1976,7 +1980,7 @@ def prune_releases(root):
 
 def supervise_transaction(*, root=Path('/'), run=subprocess.run):
     journal = read_state(root, 'journal.json')
-    if not journal or journal['phase'] in {'committed', 'rolled_back', 'rollback_failed'}:
+    if not journal or journal['phase'] in {'committed', 'rolled_back'}:
         ticket = read_state(root, 'ticket.json')
         if ticket and isinstance(ticket.get('operation_id'), str):
             name = 'operations/' + hashlib.sha256(ticket['operation_id'].encode()).hexdigest() + '.json'
@@ -1999,7 +2003,7 @@ def supervise_transaction(*, root=Path('/'), run=subprocess.run):
                         save_state(root, name, operation)
         return
     _validate_journal(root, journal)
-    reason = None
+    reason = 'restoration_failed' if journal['phase'] == 'rollback_failed' else None
     if (journal.get('boot') != _boot() or _process_token(journal.get('pid')) is None
             or _process_token(journal.get('pid')) != journal.get('process_token')):
         reason = 'updater_died'

@@ -42,14 +42,17 @@ This checksum detects damage; it is not a substitute for release admission.
 6. Try the newest slot's application recovery command, with a 180-second limit.
 7. Kill its process group after failure or timeout, then try the other valid slot.
 8. Independently check the terminal application journal, exact application and
-   known-good pointers, and absence of install inhibit. A zero exit alone fails
+   known-good pointers, absence of install inhibit, and restored integration
+   contents, modes, ownership, links, and required removals. A zero exit alone fails
    this gate. Only then write the exact selection into `/run` and clear the trial flag.
 9. Release the boot gate. All controller consumers use that selection.
 10. Each consumer resolves once under the start lock, then executes that slot's command.
 11. The independent timer checks broker readiness and its live PID and hash handshake.
 12. On failure, stop consumers, prefer the other valid slot, then retry the current
-    slot if needed. Recovery has one 380-second deadline. Always request broker
-    restart, including after a transient recovery failure.
+    slot if needed. Recovery has one 380-second deadline. Start the broker only
+    after recovery passes. Every timer run checks recovery before the handshake;
+    a healthy broker cannot discharge pending restoration. The application
+    supervisor retries `rollback_failed` after transient faults.
     If only one valid slot exists, recover and restart that slot. Runtime fallback
     uses normal application recovery, which restarts saved application services;
     only the boot gate uses `--boot`.
@@ -85,12 +88,24 @@ The trial selects the candidate only in `/run`. It stops consumers first. It
 creates fresh boot-, application-, and controller-bound evidence context, removes
 old readiness evidence, runs normal controller validation and offline discovery,
 and runs the candidate's actual recovery CLI against a staged interrupted
-application journal. The selector checks the resulting pointer, terminal journal,
-and cleared inhibit. The staged test substitutes only systemctl; it cannot stop
+application journal and nonempty snapshot with a file to restore and an extra
+drop-in to remove. The selector captures required restoration before the command
+and checks it after the command, as well as the pointer, journal, and inhibit.
+Recovery, install, and supervisor routes retain the existing rollback snapshot
+until the selector checks restoration. A failed attempt cannot erase the proof
+needed by another slot or a later boot. After the checks pass, application
+recovery removes the snapshot's state record and flushes its directory before
+selection. Retry repeats that flush even if the record is already absent. A
+completed rollback therefore cannot undo a later setup-mode request. Remaining
+backup data is pruned at the next application commit. A terminal but incomplete rollback is retried.
+The staged test substitutes only systemctl; it cannot stop
 live services. It then starts the broker. Readiness retries within the trial deadline. Root Unix
 peer credentials, stable systemd PID, exact version and hashes must match.
-Fresh button and heartbeat evidence from the selected application processes and
-the complete local health probe must pass. A candidate success string alone
+Fresh button and local poller evidence from the selected application processes
+and the local health probe must pass. `local.json` is separate from successful
+Cloud communication in `heartbeat.json`. Only controller trials use the local
+probe option; ordinary Cloud application probation still requires a successful
+Cloud heartbeat. A candidate success string alone
 cannot authorize `GOOD`.
 
 Only the frozen selector publishes `GOOD`, after rechecking module bytes. It
