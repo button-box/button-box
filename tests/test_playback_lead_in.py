@@ -111,6 +111,21 @@ class LeadInTests(unittest.TestCase):
                             self.assertFalse(played[0].exists())
                             self.assertEqual(source.read_bytes(), original)
 
+    def test_cloud_recording_cue_can_start_without_voice_pre_roll(self):
+        from messagebox import maintenance
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'cue-rec_go.wav'
+            write_wav(source, b'\x01\x02' * 4800)
+            child = types.SimpleNamespace(poll=lambda: 0, returncode=0)
+            with mock.patch.object(runtime.cloud_quiet.silence_store, 'load',
+                    return_value={'muted': False, 'stop_sequence': -1}), \
+                 mock.patch.object(maintenance, 'interaction', side_effect=lambda: nullcontext(True)), \
+                 mock.patch.object(runtime.subprocess, 'Popen', return_value=child) as launch:
+                player = runtime.cloud_quiet.start_player(['aplay', '-q', str(source)], lead_in_s=0)
+                self.assertEqual(player.poll(), 0)
+            self.assertEqual(launch.call_args.args[0][-1], str(source))
+            self.assertTrue(source.exists())
+
     def test_unreadable_or_non_wav_input_keeps_the_original_command(self):
         with tempfile.TemporaryDirectory() as directory:
             for name, data in (('text.wav', b'not a wav'), ('missing.wav', None)):

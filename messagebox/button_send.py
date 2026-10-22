@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
@@ -566,14 +566,16 @@ def wait_for_hold_intent(
 def acknowledge_and_classify_legacy_press(pressed_at=None):
     """Acknowledge the initial press, then classify it after the cue ends."""
     started = time.monotonic() if pressed_at is None else pressed_at
-    beep("press")
-    log_event("legacy_press")
-    return wait_for_hold_intent(
-        lambda: button.is_pressed,
-        MIN_HOLD_S,
-        POLL_S,
-        started_at=started,
-    )
+    with recording_start("hold", press_cue=True) if buttonbox_voice() else nullcontext():
+        if not buttonbox_voice():
+            beep("press")
+        log_event("legacy_press")
+        return wait_for_hold_intent(
+            lambda: button.is_pressed,
+            MIN_HOLD_S,
+            POLL_S,
+            started_at=started,
+        )
 
 
 def prompt_for_token():
@@ -2004,12 +2006,37 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
+@contextmanager
+def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
+    """Cloud Button Box starts the lamp and cue without gating the microphone."""
+    player = None
+    fast = buttonbox_voice()
+    try:
+        if fast:
+            led.on()
+            # Normal hold already used the press cue to classify the gesture.
+            if talk_mode != "hold" or card_prompt or press_cue:
+                cue = "press" if press_cue else "rec_go"
+                player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))], lead_in_s=0)
+        else:
+            play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+        yield player
+    finally:
+        if player is not None and player.poll() is None:
+            player.terminate()
+            try:
+                player.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                player.kill()
+                player.wait(timeout=0.2)
+        if fast:
+            led.off()
+
+
 def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, setup_reply=False):
     global _recording
     require_permit(press_token)
-    with speaker.capture_owner():
-        # Synchronous playback must complete before the microphone is opened.
-        play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt) as start_cue:
         if talk_mode == "hold" and not button.is_pressed:
             return RecordingResult(None, 0, False)
         capture_id = uuid.uuid4().hex
@@ -2031,7 +2058,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
         process = open_microphone(press_token, MIC_DEV, popen=subprocess.Popen)
         _recording = True
         try:
-            led.on()
+            if not buttonbox_voice():
+                led.on()
             presence("recording", recipient)
             with open(raw_path, "wb") as raw:
                 while True:
@@ -2042,7 +2070,8 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                         chunk = os.read(process.stdout.fileno(), 4096)
                         if chunk:
                             raw.write(chunk)
-                            vad.feed(b"\0" * len(chunk) if warning.process else chunk, now=now)
+                            cue_active = start_cue is not None and start_cue.poll() is None
+                            vad.feed(b"\0" * len(chunk) if warning.process or cue_active else chunk, now=now)
                     if now - started >= max_seconds:
                         timed_out = True
                         break
@@ -2113,6 +2142,10 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
         if setup_reply and bounds is not None:
             # Keep the whole first reply, including words spoken over the reminder.
             bounds = (0, raw_path.stat().st_size // 2)
+        elif start_cue is not None and bounds is not None:
+            # Keep words that overlap the parallel start cue. The cue alone
+            # cannot make an otherwise silent recording meaningful.
+            bounds = (0, bounds[1])
         if bounds is None:
             raw_path.unlink(missing_ok=True)
             return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
@@ -2300,7 +2333,7 @@ def _context_matches_card(context, uid):
         return True
     return uid in context.get("contact", {}).get("card_uids", ())
 
-def run_guided_once(settings=None, *, card_prompt_uid=None):
+def run_guided_once(settings=None, *, card_prompt_uid=None, acknowledge_listening=False):
     global _guided_active
     reconcile_card_selections()
     settings = settings or caregiver_settings()
@@ -2346,6 +2379,11 @@ def run_guided_once(settings=None, *, card_prompt_uid=None):
         if context["via_card"] and not ensure_nfc_confirmation(context):
             log_event("nfc_confirmation_failed")
             return
+    elif acknowledge_listening and buttonbox_voice():
+        # An incoming note still acknowledges the listening press. A direct
+        # recording uses its single, parallel recording cue instead.
+        acknowledge_guided_press("start_session")
+        wait_for_stable_open()
     claim_recipient_allowed = False
     if claim and recipient:
         try:
@@ -2591,10 +2629,12 @@ def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
         state = cloud_setup.SetupGuide().load() if transport_mode() == "cloud" else None
         setup_action = state and state["stage"] in {"names", "waiting_note", "your_turn"}
         if setup_action or interaction_settings["talk_mode"] == "tap":
-            # The session starts from this press only after its release; it can
-            # never be carried into incoming audio or recording.
+            # Cloud Button Box capture ignores the start press until release.
+            # Other modes retain their existing acknowledgement and release.
             if card_prompt_uid:
                 run_guided_once(interaction_settings, card_prompt_uid=card_prompt_uid)
+            elif buttonbox_voice():
+                run_guided_once(interaction_settings, acknowledge_listening=True)
             else:
                 acknowledge_guided_press("start_session")
                 wait_for_stable_open()

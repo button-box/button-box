@@ -86,7 +86,7 @@ def muted():
     return silence_store.load()["muted"]
 
 
-def start_player(args, *, allow_muted=False, **kwargs):
+def start_player(args, *, allow_muted=False, lead_in_s=None, **kwargs):
     """Watch only this process; never kill other services' audio players."""
     before = silence_store.load()
     if before["muted"] and not allow_muted:
@@ -107,8 +107,10 @@ def start_player(args, *, allow_muted=False, **kwargs):
         # Greeting, modern name lines, and the two older name-line caches all
         # use the same pad/copy/lock path. Keep press-cue timing unchanged.
         voice_line = args and Path(args[-1]).parent.name in {"voice-lines", "listened-clips", "card-prompts"}
+        if lead_in_s is None and voice_line:
+            lead_in_s = VOICE_LINE_LEAD_IN_S
         process = speaker.start_player(args, popen=launch,
-            lead_in_s=VOICE_LINE_LEAD_IN_S if voice_line else None, **kwargs)
+            lead_in_s=lead_in_s, **kwargs)
     except BaseException:
         reservation.__exit__(None, None, None)
         raise
