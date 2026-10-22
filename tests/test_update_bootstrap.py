@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -239,13 +241,31 @@ exec /usr/bin/install "${args[@]}"
                                                          health=self.application_health,**k)):
                 yield controller
 
-    def signed_application(self, version, commit, sequence):
+    def signed_application(self, version, commit, sequence, *, controller_version='1.3.0',
+                           controller_sequence=7, automatic=False, broken=False):
         source = self.box.source
         for name in (ROOT / 'scripts/release/payload.txt').read_text().splitlines():
             if name and not name.startswith('#'):
                 write(source / name, (ROOT / name).read_bytes(),
                       0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644)
-        descriptor = build.controller_descriptor(ROOT, 7, 'v0.3.13')
+        verifier = source / 'scripts/install/release_verify.py'
+        verifier.write_text(verifier.read_text().replace('UPDATER_VERSION = (1, 3, 0)',
+            'UPDATER_VERSION = ' + str(tuple(map(int, controller_version.split('.'))))))
+        if broken:
+            discovery = source / 'scripts/install/update_discovery.py'
+            discovery.write_text(discovery.read_text().replace("return {'protocol': 1, 'dry_run': True}",
+                                                               "return {'protocol': 1, 'dry_run': False}"))
+        if automatic:
+            helper = source / 'messagebox/controller_slots.py'
+            helper.write_text(helper.read_text().replace('            bootstrap()\n',
+                "            bootstrap()\n"
+                "            # Bootstrap has returned and released all locks.\n"
+                "            subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()),\n"
+                "                            'promote'], check=True, timeout=200)\n"))
+            unit = source / 'systemd/messagebox-update-bootstrap.service'
+            unit.write_text(unit.read_text().replace('TimeoutStartSec=60', 'TimeoutStartSec=300'))
+        with mock.patch.object(build, 'CONTROLLER_VERSION', controller_version):
+            descriptor = build.controller_descriptor(source, controller_sequence, 'v0.3.13')
         proof = write(self.base / 'descriptor', descriptor)
         signature = self.base / 'signature'
         subprocess.run(['minisign','-S','-m',str(proof),'-s',str(self.keys[0][1]),'-x',str(signature)],
@@ -267,6 +287,126 @@ exec /usr/bin/install "${args[@]}"
         subprocess.run(['minisign','-S','-m',str(assets/'SHA256SUMS'),'-s',str(self.keys[0][1]),
                         '-x',str(assets/'SHA256SUMS.minisig')],check=True,capture_output=True)
         return assets
+
+    def install_signed_application(self, assets):
+        version = json.loads((assets / 'release-manifest.json').read_text())['version']
+        with self.installed_controller(selector.selected(self.root)['slot']) as controller:
+            bundle = mkdir(controller.STATE / 'downloads' / ('c' * 32), 0o700)
+            for path in assets.iterdir():
+                write(bundle / path.name, path.read_bytes(), 0o600)
+            self.box.queue_bundle(controller, bundle, version)
+            with mock.patch.object(sys, 'argv', sys.argv[:]):
+                exec(selector.install_program(self.root, selector.selected(self.root)['slot']), {})
+            self.assertEqual(controller.read('journal.json')['phase'], 'committed')
+        return os.readlink(self.root / 'opt/messagebox')
+
+    def automatic_supervisor(self, *, slow_trial=False):
+        """Run the installed supervisor and its real ExecStartPost/ExecStart chain.
+
+        Only systemd job dispatch, elapsed time and hardware remain host edges.
+        No manual promotion entry point is called by the test.
+        """
+        active = selector.selected(self.root)['slot']
+        spec = importlib.util.spec_from_file_location('installed_slot_worker', self.root / active / 'bounded_update.py')
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        worker._boot = self.box.worker._boot
+        transaction = worker.supervise_transaction
+        with mock.patch.dict(sys.modules, {'bounded_update': worker}), \
+             mock.patch.object(worker, 'supervise_transaction',
+                               side_effect=lambda **k: transaction(run=self.box.run, **k)):
+            exec(selector.recovery_program(self.root, active, ('bounded_update.py', 'supervise')), {})
+        dropin = self.root / 'etc/systemd/system/messagebox-update-supervisor.service.d/messagebox.conf'
+        post = next(line.split('=', 1)[1].split() for line in dropin.read_text().splitlines()
+                    if line.startswith('ExecStartPost='))
+        self.assertEqual(post, ['/usr/bin/systemctl', '--no-block', 'start', 'messagebox-update-bootstrap.service'])
+        unit = (self.root / 'etc/systemd/system/messagebox-update-bootstrap.service').read_text()
+        entry = next(line.split('=', 1)[1].split() for line in unit.splitlines() if line.startswith('ExecStart='))
+        budget = int(next(line.split('=', 1)[1] for line in unit.splitlines() if line.startswith('TimeoutStartSec=')))
+        self.assertEqual(entry, ['/usr/bin/python3', '-B', '/opt/messagebox/messagebox/controller_slots.py', 'bootstrap'])
+        self.assertGreaterEqual(budget, 60 + 200)
+        release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+        spec = importlib.util.spec_from_file_location('future_application_slots', release / 'messagebox/controller_slots.py')
+        future = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(future)
+        bootstrap, publish = future.bootstrap, future.publish
+        future.bootstrap = lambda: bootstrap(self.root, platform=PLATFORM, run=self.host)
+        # The real publication acquires these exact locks again. This fails if
+        # the future trigger runs inside bootstrap's critical section.
+        def run(command, **kwargs):
+            if command[0] == sys.executable and command[-1] == 'promote':
+                self.assertEqual(kwargs['timeout'], 200)
+                with mock.patch.object(sys, 'argv', [entry[2], 'promote']):
+                    future.main()
+            elif command[0] == 'systemd-run' and command[-1] == 'publish':
+                self.assertIn('TimeoutStartSec=180', command)
+                self.assertEqual(kwargs['timeout'], 200)
+                with selector.lock(self.root, 'operation', blocking=False), slots.admission_lock(self.root):
+                    pass
+                with mock.patch.dict(os.environ, {'INVOCATION_ID': 'synthetic-systemd-job'}), \
+                     mock.patch.object(sys, 'argv', [entry[2], 'publish']):
+                    future.main()
+            else:
+                raise AssertionError(command)
+            return subprocess.CompletedProcess(command, 0)
+        offset = [0]
+        real_monotonic = time.monotonic
+        def probe(*args, **kwargs):
+            if slow_trial and not offset[0]:
+                offset[0] = 65
+                raise OSError('simulated delayed application readiness')
+            return self.host.probe(*args, **kwargs)
+        future.publish = lambda: publish(self.root, platform=PLATFORM, run=self.host,
+            trial_options={'execute': self.host.execute, 'probe': probe, 'duration': 75})
+        future.subprocess = types.SimpleNamespace(run=run)
+        with mock.patch.object(sys, 'argv', [entry[2], entry[-1]]), \
+             mock.patch.object(time, 'monotonic', side_effect=lambda: real_monotonic() + offset[0]):
+            started = time.monotonic()
+            future.main()
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, budget)
+            if slow_trial:
+                self.assertGreater(elapsed, 60)  # Would exceed the original unit's limit.
+
+    def test_signed_future_ota_automatically_replaces_controller_and_survives_failed_trial(self):
+        result = self.run_bootstrap('cloud')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit_application()
+        slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+        self.application_health = lambda *a: None
+        first = selector.inspect(self.root, selector.SLOTS[0])
+        future = self.signed_application('v0.3.14', 'c' * 40, 2,
+            controller_version='1.3.1', controller_sequence=8, automatic=True)
+        self.install_signed_application(future)  # Still installed by controller 1.3.0.
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
+        self.automatic_supervisor(slow_trial=True)
+        good = selector.inspect(self.root, selector.SLOTS[1])
+        self.assertEqual((good['version'], good['generation']), ('1.3.1', 8))
+        self.assertNotEqual(good['files'], first['files'])
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[1])
+        shutil.rmtree(self.root / selector.RUN)
+        self.assertEqual(selector.recover(self.root, self.host, execute=self.host.execute), selector.SLOTS[1])
+        bad = self.signed_application('v0.3.15', 'd' * 40, 3, controller_version='1.3.2',
+                                      controller_sequence=9, automatic=True, broken=True)
+        self.install_signed_application(bad)
+        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+            self.automatic_supervisor()
+        self.assertEqual(selector.inspect(self.root, selector.SLOTS[1]), good)
+        self.assertFalse((self.root / selector.SLOTS[0] / 'GOOD').exists())
+        # The already-armed independent selector timer repairs the failed
+        # trial at runtime, before the next simulated reboot.
+        selector.check(self.root, self.host, probe=self.host.probe, execute=self.host.execute)
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[1])
+        self.assertFalse(selector.selected(self.root)['trial'])
+        shutil.rmtree(self.root / selector.RUN)
+        self.assertEqual(selector.recover(self.root, self.host, execute=self.host.execute), selector.SLOTS[1])
+        last = self.signed_application('v0.3.16', 'e' * 40, 4, controller_version='1.3.3',
+                                       controller_sequence=10, automatic=True)
+        pointer = self.install_signed_application(last)  # New controller installs another app.
+        self.assertIn('v0.3.16-' + 'e' * 40, pointer)
+        self.automatic_supervisor()
+        self.assertEqual(selector.selected(self.root)['slot'], selector.SLOTS[0])
+        self.assertEqual(selector.inspect(self.root, selector.SLOTS[0])['generation'], 10)
 
     def voice_runtime(self):
         """Import only the installed application in a separate interpreter."""

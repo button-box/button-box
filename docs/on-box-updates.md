@@ -25,7 +25,15 @@ with the application. Each descriptor binds the exact six staged modules. Its
 signature is checked against current release trust, excluding emergency pins.
 The literal `.py` proof files pass the frozen field path rules. Installing the
 proof alone does not promote a controller. The local A/B publication API is
-implemented; an OTA promotion trigger and Cloud permit are not added here.
+implemented. This candidate does not add its automatic trigger. A future signed
+application can add it through the existing supervisor → bootstrap root path.
+The acceptance test installs that future application with controller 1.3.0,
+then exercises automatic publication, reboot, failed-trial recovery and another
+application OTA. The future helper calls publication only after bootstrap has
+returned and released its locks. Its updateable bootstrap unit raises the
+60-second limit to 300 seconds; publication stays bounded at 180 seconds. No
+candidate change is needed to preserve this future path. See
+[the candidate report](rita-candidate-report.md).
 
 - `/opt/messagebox-releases/<tag>-<full-commit>/`: root-owned application trees.
 - `/opt/messagebox`: the application symlink, replaced atomically.

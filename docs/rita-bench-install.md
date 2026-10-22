@@ -225,10 +225,19 @@ tests do not establish that the server contract is live.
 
 On a spare box, install a higher-sequence signed test application through the
 selected controller. Test rollback and reboot recovery. Do not induce power loss
-on the handout box. Test controller publication with
-`sudo python3 -B /opt/messagebox/messagebox/controller_slots.py promote` only
-after a committed application carries a new, reviewed, signed controller proof.
-That command runs the bounded A/B trial. It does not fetch an update.
+on the handout box. Test unattended controller replacement with a signed future
+application that remains installable by controller 1.3.0. It must carry changed
+controller bytes and signed proof, add the trigger to the supervisor → bootstrap
+path, and raise the updateable bootstrap timeout from 60 to 300 seconds. Call
+bounded publication only after bootstrap returns and releases its locks. Keep
+the publication service's 180-second bound. Do not invoke `promote` manually for
+this acceptance test. Let the existing supervisor start it. Require the new
+GOOD record, selection after reboot, independent timer recovery after a failed
+trial, and another application OTA through the accepted new controller.
+
+The host acceptance test covers this sequence. The candidate itself keeps the
+existing activation behavior; the trigger and timeout change are in the signed
+future application used by the test. Native Pi execution still needs acceptance.
 
 Before packaging, arm the recipient setup with the existing manufacturer flow:
 
