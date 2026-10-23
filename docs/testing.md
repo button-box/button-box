@@ -293,20 +293,20 @@ the portal does not gain runtime-store access. Test before WhatsApp linking,
 after receive/play/send events, with no history, and with the worker unavailable.
 Never complete setup or expose audio/recipient identifiers just to view events.
 
-# Early send during own-recording review
+# Review and approval
 
-In tap/review mode, a fresh deliberate press during review of the user's own
-recording stops preview and approves that recording once. It skips the later
-send prompt, approval timeout and delete warning. Incoming-message listening
-is unchanged. A held recording-stop press must be released before review can
-accept a new press. With no review press, the existing prompt, timeout, warning
-and cancellation flow remains unchanged. Approval queues a send; only actual
-send success may trigger the successful-send sound.
+Review plays the full recording, then the send question. Presses during either
+playback are discarded, including a press still held when playback ends.
+A fresh press during the following ten-second approval wait sends the saved
+recording to its saved recipient; no press deletes it. Setup replies use the
+same rule. Failed optional setup-question speech still reaches the approval
+wait. Incoming playback and wacli behavior remain unchanged.
 
-On a named box, verify early review approval for both standalone and reply
-flows, a held recording-stop press, a short bounce, no approval/cancellation,
-and exactly one outgoing voice note in the intended chat. Keep software tests
-and physical switch/audio/delivery evidence separate.
+On a named box, verify setup and ordinary replies, held playback presses, a
+fresh approval after the question, no approval, and exactly one outgoing voice
+note in the intended chat. Physical GPIO/audio/delivery evidence remains
+separate from software tests. Early approval during review is deferred; see
+[the design and acceptance cases](flow-fixes.md#f313-deferred).
 
 ## Cloud mode
 

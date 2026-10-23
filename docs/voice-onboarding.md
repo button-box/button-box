@@ -63,15 +63,27 @@ A speech receipt is written before playback. A restart does not replay that
 speech. A deliberate setup press can replay the current instruction once.
 Returning to the hotspot does not reset the guide.
 
+A confirmed pending claim can create the guide before the online cue is
+consumed. Both button owners use the same receipt. Speech records the stage
+and pending claim it read; a concurrent stage change leaves the new prompt
+unconsumed for the next idle pass. Registration alone never arms the press line.
+The root handover gate advances to names only after its own successful claim
+verification, so the runtime cannot inherit a stale press instruction when a
+phone completion request overtakes the setup watcher.
+
 A new program install does not start the guide on an already claimed box.
-A missing guide file starts only from the first setup-online event. A damaged
+A missing guide file starts from the first setup-online event or a confirmed
+pending claim. A damaged
 state file disables the guide. A restart during recording or review ends the
 guide; normal outbox recovery keeps approved messages. Unapproved recordings
 still use the existing temporary-file cleanup. The guide does not add automatic
 recording or automatic approval after a restart.
 
-Quiet hours defer setup instructions. Settings confirmations keep their short
-lifetime and are discarded during quiet hours. Missing or failed guide audio is
+Quiet hours defer setup instructions. Cloud settings still apply and are
+acknowledged during setup, but their saved confirmation is not queued until the
+guide is `done`. Suppressed confirmations are not replayed later. Settings
+confirmations keep their short lifetime and are discarded during quiet hours.
+Missing or failed guide audio is
 silent. It does not prevent claim completion through WhatsApp.
 
 ## Optional greeting download and voice
