@@ -6,8 +6,8 @@
     {
       "file": "voice-sending.wav",
       "text": "Sending!",
-      "seconds": 1.04,
-      "sha256": "b86c86af0e188711fb1b71a8d371d070cf7f836895c46bd155b1aed2469cac41",
+      "seconds": 1.18997917,
+      "sha256": "de03fa7da0bee8022a1eb6b635c65f8c20c1c2868334eaea4ae379b9a33af6de",
       "replacement": {
         "voice_id": "PTh0NF64AaTAIDPGzj0O",
         "model": "eleven_v3",

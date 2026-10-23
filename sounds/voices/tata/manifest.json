@@ -12,32 +12,32 @@
   {
    "file": "voice-all-set.wav",
    "text": "Coucou ! Je suis Button Box ! Je vais t'apporter les messages de tous ceux qui t'aiment !",
-   "seconds": 4.24,
-   "sha256": "411db3b9407bcf58bda9f87ea64603802d9ad1444cef2def956f0b68035f82c1"
+   "seconds": 4.36522917,
+   "sha256": "c51ea0ad8cbaba738abd4cd34b4b6c9992a1514fc18df39c72eb3009b6a6b90d"
   },
   {
    "file": "voice-online.wav",
    "text": "Me voilà !",
-   "seconds": 1.36,
-   "sha256": "c1598c3531b5d4c3c446ba424ba0efee4cc52da75da17ddbdc65e6a280660b50"
+   "seconds": 1.46058333,
+   "sha256": "46eec9fc532e8e5e61ddcc5ae5aa86ee5f3159c74ea7da50bd8a31aa1bc86971"
   },
   {
    "file": "voice-msg-start.wav",
    "text": "Oh ! Un message pour toi !",
-   "seconds": 2.24,
-   "sha256": "f2226e486c285e77c1364463ab799e08c9dcb5fe3e238e86d76c57c8ad716a66"
+   "seconds": 2.33691667,
+   "sha256": "d4725efef0cd62553ce9c956dfa744c07bbb7e434b5872c26ef1fa8bbb43a232"
   },
   {
    "file": "voice-count-reply.wav",
    "text": "À toi ! Trois... deux... un...",
-   "seconds": 4.08,
-   "sha256": "3c6e87e5c3b9b2040af583503a6313e0b14395a693c23a5b417dc78590d6eeb5"
+   "seconds": 4.1774375,
+   "sha256": "1e75722962d7190dda2cc5daab3dee84222ff1a134600baa4b30ffe0328f9852"
   },
   {
    "file": "voice-count-new.wav",
    "text": "C'est parti ! Trois... deux... un...",
-   "seconds": 3.28,
-   "sha256": "76f01c97de50ceb9cc69bc017c8aecd1a5a964343ab21c22508d391ac5b6683d"
+   "seconds": 3.33185417,
+   "sha256": "82bc06999eb4ad2dad9d6eb3b9ef12dbc8989f655f768b5c55a8eed39ce36a24"
   },
   {
    "file": "voice-review.wav",
@@ -48,26 +48,26 @@
   {
    "file": "voice-ask-send-1.wav",
    "text": "Super ! Appuie pour envoyer.",
-   "seconds": 2.8,
-   "sha256": "1259bb3294307ef56b3950544ac2bbd4055e8b045ddc82881d7c328ab7b1921e"
+   "seconds": 2.90985417,
+   "sha256": "bd8e9cb57fa518dc51426cf2c8c15b160bcef91be363e9db866b03263e6218cb"
   },
   {
    "file": "voice-ask-send-2.wav",
    "text": "Bravo ! Appuie pour envoyer.",
-   "seconds": 2.24,
-   "sha256": "f71ac61a08294c3fe9ab8253e1dc3fde79c57141a9f2b3789cf9134a78166a87"
+   "seconds": 2.345625,
+   "sha256": "e65ce531d17812b4f48045f1dad1406e88bb7f951a85e8595c20c4fae3aec5b2"
   },
   {
    "file": "voice-ask-send-3.wav",
    "text": "Trop bien ! Appuie pour envoyer.",
-   "seconds": 2.24,
-   "sha256": "2c6996135fdda32e49f5ac2e8af257989d575b19d65d61247dbac820e7d2475d"
+   "seconds": 2.29185417,
+   "sha256": "ad2a80aa28e3e203dbc815cbd6155892160a12b43293c08110007e271924bb10"
   },
   {
    "file": "voice-last-chance.wav",
    "text": "Tu veux l'envoyer ? Appuie sur le bouton !",
-   "seconds": 2.32,
-   "sha256": "5ee46b00e3fc80679e802e9e141b8aae4406399dead68945c22197e356552595"
+   "seconds": 2.37858333,
+   "sha256": "e66a1681a8a2babf18d26c11b95bd70545a3d92b337cfa02c8cc710a8fd4506c"
   },
   {
    "file": "voice-not-sent.wav",
@@ -78,8 +78,8 @@
   {
    "file": "voice-empty.wav",
    "text": "Hmm, je n'ai rien entendu. On réessaie ?",
-   "seconds": 3.68,
-   "sha256": "33c32295f472c43768c33aaa812ce295dd55f0c2dd46978e9df3a88772c1abb9"
+   "seconds": 3.75085417,
+   "sha256": "001ab0ccd261fbf946eb10b1caac17463adee09f93301946e115970e90debc8a"
   },
   {
    "file": "voice-listened.wav",
@@ -90,8 +90,8 @@
   {
    "file": "voice-card-needed.wav",
    "text": "C'est pour qui ? Choisis une carte famille !",
-   "seconds": 2.32,
-   "sha256": "a5404739e3bf1024af26579e62e5aa81da9960a89aa49c3c42d5f66eac63439c"
+   "seconds": 2.37764583,
+   "sha256": "037766e82f96da1ff636126558f7bf433a8d2750de2f3675cbc84235bb953ff8"
   },
   {
    "file": "voice-card-unknown.wav",
@@ -102,8 +102,8 @@
   {
    "file": "voice-stuck.wav",
    "text": "Ça prend un peu de temps. Je continue d'essayer !",
-   "seconds": 3.28,
-   "sha256": "a194a4c129d2daf777d740e9055121c909fd39facfce281ab5d839b0d6d5c9e7"
+   "seconds": 3.4020625,
+   "sha256": "d24fd07dba62f72413c6029316a73813827df2b3dc4e9b0f045f010f5345dd79"
   },
   {
    "file": "voice-fail.wav",
@@ -115,24 +115,24 @@
    "file": "voice-card-prompt.wav",
    "cue": "BX-CARD-PROMPT",
    "purpose": "Generic family-card recording invitation",
-   "seconds": 2.32,
-   "sha256": "6f762f7867ec3197584b9c57c2236e5ceed63b6a7de0f023134eab5288657f22",
+   "seconds": 2.420125,
+   "sha256": "f95aea24935d1fb3c0623095ee048cfd43a9d3e478b922130c52068ddbbb0f77",
    "text": "C'est parti ! Appuie et parle !"
   },
   {
    "file": "voice-card-saved.wav",
    "cue": "BX-CARD-SAVED",
    "purpose": "Successful family-card pairing confirmation",
-   "seconds": 2.88,
-   "sha256": "d1705d1573b210c863f34b4aae984d210147d67d46da9aa39ab848cb311126a3",
+   "seconds": 3.02558333,
+   "sha256": "de84de9b1217dc136ce1d770685fb30197b74bb1f386c37448a12d2bef5f1f0c",
    "text": "Super ! Nouvelle carte de famille enregistrée !"
   },
   {
    "file": "voice-online-ready.wav",
    "cue": "BX-ONLINE-READY",
    "text": "I'm online and ready to send and get messages!",
-   "seconds": 4.16,
-   "sha256": "92a407fe51467d4e03ef285cd74515cad99df5f23f9edabe12d262cc98fa620b"
+   "seconds": 4.23927083,
+   "sha256": "f6a207c001fccb2803777055a1a33331b4598421522b682704cbfef24f177f2c"
   }
  ],
  "source_key": "tata_fr",
@@ -140,23 +140,23 @@
   {
    "file": "voice-sent-heart.wav",
    "text": "You just sent a heart!",
-   "seconds": 1.76,
+   "seconds": 1.8103125,
    "seed": 7,
-   "sha256": "4c1b43b1b042b69324b31bfa44b1978904a277d4e55a5c458a8b0298dec5f0d9"
+   "sha256": "a82a3a7c9d5b6f8da8e22b101698f325b841f3ffb3889859d42c7c1a9a9e501e"
   },
   {
    "file": "voice-sent-big-laugh.wav",
    "text": "You just sent a big laugh!",
-   "seconds": 2.32,
+   "seconds": 2.44025,
    "seed": 7,
-   "sha256": "327aa97bcee9e2a85cc47c17360574ece5a44df8ad56587b3ae4791d3ffa0527"
+   "sha256": "cfd7e3e352f793b8bd87f3bc222896a2360cba53e5e180f2dec92d0593d59cc5"
   },
   {
    "file": "voice-sent-applause.wav",
    "text": "You just sent applause!",
-   "seconds": 1.84,
+   "seconds": 1.91491667,
    "seed": 7,
-   "sha256": "bff3b093c2f2b5c55da0ad176aac9cfe5218ba778079d1096a2fb9a443ba7f44"
+   "sha256": "65a89256b975cf72a337776cd001ec09622ec8938f9677a50f7c9e49d18d53ce"
   },
   {
    "file": "voice-sent-heart-eyes.wav",
@@ -168,23 +168,23 @@
   {
    "file": "voice-sent-thumbs-up.wav",
    "text": "You just sent a thumbs up!",
-   "seconds": 1.52,
+   "seconds": 1.636125,
    "seed": 7,
-   "sha256": "000a86cc04b43a9d82592423114e4fc36ecb95dc17de3a72cec63afa0c15a156"
+   "sha256": "740ecf0b0f15d2970ebea3d9fb71f64a75ace6a4b952975fd17618ff5925c7ba"
   },
   {
    "file": "voice-sent-fire.wav",
    "text": "You just sent fire!",
-   "seconds": 1.76,
+   "seconds": 1.83541667,
    "seed": 7,
-   "sha256": "54a42bbdcbf3136dea3d4ba82f61a2dbf5e705d9591c92bb631ada6dfb7950c0"
+   "sha256": "4833d70bbfbae15b2f44dc368aefd1696afde3e97c3364f405617977bfbaf9cd"
   },
   {
    "file": "voice-sent-celebration.wav",
    "text": "You just sent a celebration!",
-   "seconds": 2.24,
+   "seconds": 2.30227083,
    "seed": 7,
-   "sha256": "877c2c7ee6953d026182d5ed29f803350bbddf2e64b96c765e7c20dd8acafe75"
+   "sha256": "bdfe62b49c668a8d361f2edc6cf8b58fad7ac0114abe1ef58f827b1d5cc0a86c"
   },
   {
    "file": "voice-sent-kiss.wav",
@@ -217,9 +217,9 @@
   {
    "file": "voice-sent-smile.wav",
    "text": "You just sent a smile!",
-   "seconds": 1.76,
+   "seconds": 1.824875,
    "seed": 7,
-   "sha256": "9bca3af1c5133d7f4f8bce438164bd287ad1da21eeff75ba27d408e17159917e"
+   "sha256": "bcd2ef8c56911eec7120391e9b7f8ab5c9eb35b89cd7cf3db7887bcd6f8b00d4"
   },
   {
    "file": "voice-sent-reaction.wav",
@@ -233,30 +233,30 @@
   {
    "file": "voice-age-this-morning.wav",
    "text": "Oh! This one's from this morning!",
-   "seconds": 2.0,
+   "seconds": 2.07491667,
    "seed": 7,
-   "sha256": "21f78d251e4219d36da86fe5623a85b0eb89c2be547033c539a7b16509e3b91b"
+   "sha256": "aebf524f144834635f549c61e6d1961edb6b50ace56ac018a85120ced29f2d2e"
   },
   {
    "file": "voice-age-this-afternoon.wav",
    "text": "Oh! This one's from this afternoon!",
-   "seconds": 2.24,
+   "seconds": 2.3153125,
    "seed": 7,
-   "sha256": "8ad41e9b3cf4cc1b5e929ec9b7764743aef8f9401accee09c06b445833174ccc"
+   "sha256": "34ddba2336736bdc6fbd85c8e391ec709f416d5d06c6127f4341e49d7e05b7b5"
   },
   {
    "file": "voice-age-this-evening.wav",
    "text": "Oh! This one's from this evening!",
-   "seconds": 1.92,
+   "seconds": 2.06979167,
    "seed": 7,
-   "sha256": "8d479ac794bcab7f9cc145abba62840fb11b160a900d129735a03c66a0e9a062"
+   "sha256": "f3ef30aff3c11209a3b3f2684e976fb0a7160588cd17d2c05a1f5e75f773f28e"
   },
   {
    "file": "voice-age-last-night.wav",
    "text": "Oh! This one's from last night!",
-   "seconds": 1.84,
+   "seconds": 1.90127083,
    "seed": 7,
-   "sha256": "f39deaafa333c6d179a06ef642e8e6d412a917a7bbb119ce3bbd4029ba1c8f00"
+   "sha256": "685ebee88606936377a1f73a367c823369e7581feba6338e705b65b08a87e7af"
   },
   {
    "file": "voice-age-yesterday.wav",
@@ -268,44 +268,44 @@
   {
    "file": "voice-age-2-days-ago.wav",
    "text": "Oh! This one's from two days ago!",
-   "seconds": 2.0,
+   "seconds": 2.09829167,
    "seed": 7,
-   "sha256": "fd4d23067c024e3a4aaf4608ba01706d8bc01e17fd8f39491ddfe00bcae488f3"
+   "sha256": "ec200d3f0488bcf081fc685b6d21dd592796451a286619a54c46744bd52e9727"
   },
   {
    "file": "voice-age-3-days-ago.wav",
    "text": "Oh! This one's from three days ago!",
-   "seconds": 2.16,
+   "seconds": 2.256,
    "seed": 7,
-   "sha256": "ef57d899665a64fd6e27b73d37b83bb79f7943d2613727f1fc7c8db5dae4743e"
+   "sha256": "853c32458a4c5e7f4a1521efd481fdd84cd32740222a6199d26deb3b86a0dd50"
   },
   {
    "file": "voice-age-4-days-ago.wav",
    "text": "Oh! This one's from four days ago!",
-   "seconds": 2.48,
+   "seconds": 2.57491667,
    "seed": 7,
-   "sha256": "b3ed3f931e7f99d158fb083fba8266729ccbe30932130e472d9ec285f67de278"
+   "sha256": "f412ad4f8708ccfd9990e6a0a7dbae5a92f57877a7b3545a6d93f755e6a28eb5"
   },
   {
    "file": "voice-age-5-days-ago.wav",
    "text": "Oh! This one's from five days ago!",
-   "seconds": 2.32,
+   "seconds": 2.416375,
    "seed": 7,
-   "sha256": "933ead2666cc0b0877846aa3b2d9a38a186920fd8c25961b967a5f8a30719d78"
+   "sha256": "e2ac62398a980939e105c56a33deb1ddaf3c31b4d4bc90d17e95411dbefe2387"
   },
   {
    "file": "voice-age-6-days-ago.wav",
    "text": "Oh! This one's from six days ago!",
-   "seconds": 2.24,
+   "seconds": 2.33529167,
    "seed": 7,
-   "sha256": "dc99c4002af6ace998c2bcafe3d9832362b7ccc8ee5e07c18898fb1d437682dc"
+   "sha256": "093451a2740e5debd0bb5f14792f5d63966f15674c8d3709fcda0f7dccd580ff"
   },
   {
    "file": "voice-age-last-week.wav",
    "text": "Oh! This one's from last week!",
-   "seconds": 1.92,
+   "seconds": 1.9815,
    "seed": 7,
-   "sha256": "9b21543551c919c319daa914c6fae96c167432548f8f18e6434e2a5548ffa3cc"
+   "sha256": "764d562f97943b8a68f7527072e66ae24e1bb10da671dc2770b1f2494a6b785b"
   },
   {
    "file": "voice-age-a-while-ago.wav",

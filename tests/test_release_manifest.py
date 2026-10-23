@@ -67,6 +67,7 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertIn("messagebox/qrcodegen.py", paths)
         self.assertNotIn("sounds/feedback/sent-swoosh.wav", paths)
         self.assertIn("sounds/cues/cue-press.wav", paths)
+        self.assertEqual(paths["sounds/cues/cue-rec_start.wav"], "/opt/messagebox/sounds/cues/cue-rec_start.wav")
         self.assertEqual(paths["sounds/cues/cue-deleted.wav"], "/opt/messagebox/sounds/cues/cue-deleted.wav")
         self.assertEqual(paths["sounds/cues/cue-card_saved.wav"], "/opt/messagebox/sounds/cues/cue-card_saved.wav")
         self.assertEqual(paths["sounds/voices/buttonbox/voice-sending.wav"],

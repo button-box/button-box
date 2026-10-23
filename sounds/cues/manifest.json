@@ -20,6 +20,12 @@
    "sha256": "db90ed0cbbba363c93c1bef38be2a4e8507cf51ff15672e4c50b9ab50ffeac62"
   },
   {
+   "file": "cue-rec_start.wav",
+   "seconds": 0.27,
+   "meaning": "Recording start. 150 ms speaker wake-up silence, then the existing 120 ms rec_go tick.",
+   "sha256": "e769dd266117c5af4ff2a605c59358211e0efb04c9cc049b5e6a53853029d777"
+  },
+  {
    "file": "cue-rec_limit.wav",
    "seconds": 0.55,
    "meaning": "Wrap it up. Two soft taps, five seconds before the end.",

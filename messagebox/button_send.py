@@ -94,6 +94,7 @@ _sending_feedback = None
 SENDING_FAILURE_GRACE_S = 0.15
 APPROVAL_CUE_TIMEOUT_S = 5
 START_CUE_SECONDS = 0.12
+RECORD_START_CUE_SECONDS = 0.27
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -2080,9 +2081,9 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
             led.on()
             # Normal hold already used the press cue to classify the gesture.
             if talk_mode != "hold" or card_prompt or press_cue:
-                cue = "press" if press_cue else "rec_go"
+                cue = "press" if press_cue else "rec_start"
                 player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))],
-                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS)
+                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS if press_cue else RECORD_START_CUE_SECONDS)
                 code = player.wait(timeout=5)
                 if code:
                     raise subprocess.CalledProcessError(code, "aplay")

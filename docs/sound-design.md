@@ -1,6 +1,6 @@
 # Button Box sound design v1
 
-The sound pack has 16 motif cues, 21 Jessica lines and 20 lines in each other
+The sound pack has 17 motif cues, 21 Jessica lines and 20 lines in each other
 pack. The setup handoff line is Jessica-only. All output uses the saved
 master volume. "Swoosh sound", "Family confirmation beep" and every setting ID
 retain their existing names and meanings. Cloud boxes with the Button Box voice
@@ -26,7 +26,7 @@ requires a fresh press after the prompt.
 | Listened / listener announcement test | Listened cue, then cached family/Cloud voice. Missing, evicted, wrong-pack or failed Cloud clips use the bundled voice: Button Box `voice-listened-noname.wav` ("Your message was heard!"), otherwise `voice-listened.wav`. Failures log only the exception type. Mute still suppresses fallback. wacli family clips and fallback stay unchanged. |
 | Every incoming message starts | Guided, legacy and unroutable-but-authorized paths play `cue-msg_start.wav` then family audio. With the Cloud setting `announce_messages_voice` on and outside quiet controls, the current pack's `voice-msg-start.wav` plays between the cue and the message. It is also used for voice previews. Then, on Cloud boxes, the message age phrase (`voice-age-<key>.wav`, for example "This one's from last night!") plays when the message is old enough; see `docs/architecture.md`. wacli plays the cue only. |
 | Last waiting message ends | Guided last-message `incoming_end_path`, legacy last-message path: msg_end before an invited reply. |
-| Recording starts | Cloud Button Box: lamp on, one short cue without voice pre-roll, and microphone open in parallel. Tap starts without a release wait. Hold keeps its 400 ms gesture check and does not add rec_go after the press cue. Other voices and wacli keep synchronous rec_go before capture. |
+| Recording starts | Cloud Button Box tap/card start: lamp on, finish cue-rec_start (150 ms silence + the existing 120 ms rec_go tick), then open the microphone. Nominal cue delay is 270 ms. Normal hold keeps the original 120 ms press cue and 400 ms gesture check, without a second go cue. Other voices and wacli keep synchronous rec_go before capture. |
 | Recording limit approaches | Cloud Button Box: the bundled stop reminder at 40 s for a 60 s capture, including normal standalone recordings. Other voices and wacli keep rec_limit at limit minus 5 s. Playback is nonblocking and stays in the recording. |
 | Review starts | Cloud Button Box plays `voice-review.wav` ("Listen!"), the recording, then a rotating `voice-ask-send-1/2/3.wav` (for example "Love it! Press to send."). Other modes play the recording only. All require a fresh approval tap. |
 | Short or silent capture in either mode | Delete and play the deletion cue. Cloud Button Box adds `voice-empty.wav`; declined reviews add `voice-not-sent.wav`. The capture limit always offers review of meaningful audio; Cloud Button Box then uses the full `voice-setup-ask-send.wav` instruction, including waiting to delete. Only a fresh approval creates an outgoing job. |
@@ -37,24 +37,33 @@ requires a fresh press after the prompt.
 
 ## Recording rules
 
-The new `sounds/voices/buttonbox/voice-sending.wav` is a temporary local-TTS
-placeholder. Replace it before final voice acceptance; see the generation and
-manifest instructions in [Sending voice asset](sound-design/voices/PTh0NF64AaTAIDPGzj0O/README.md).
+The bundled `sounds/voices/buttonbox/voice-sending.wav` is the selected ElevenLabs
+take; see [Sending voice asset](sound-design/voices/PTh0NF64AaTAIDPGzj0O/README.md).
+All shipped voice clips have at least 100 ms before the first sample above 2%
+of peak amplitude. Clips below that threshold receive only prepended PCM silence
+to reach 150 ms, retaining their original samples, format and metadata. This
+asset padding is additional to the shared playback pre-roll.
 
-Cloud Button Box opens the microphone while its single start tick plays.
-The start tick cannot make an otherwise silent recording meaningful. Keep the
-beginning of meaningful audio so words over the tick are not lost. The tick
-can be audible in the recording; check this on the physical speaker and mic.
-Other voices and wacli finish rec_go before opening the microphone.
+Cloud Button Box finishes its start cue before opening the microphone.
+For tap and card starts, `cue-rec_start.wav` contains 150 ms of silence followed
+by the same 120 ms tick previously played from `cue-rec_go.wav`. The clip limit
+covers the complete 270 ms asset, with no additional playback pre-roll. This
+raises the nominal cue delay from 120 ms to 270 ms so the child hears the beep
+before talking. Actual device/startup latency still needs physical measurement.
+Nonzero playback exits or a five-second timeout prevent capture; stalled players
+are terminated and reaped. Capture and VAD have no start-cue overlap or masking.
+Normal hold classification keeps the original unpadded 120 ms press cue and
+400 ms gesture check. Other voices and wacli keep their original synchronous
+`rec_go` asset and playback path.
 The 5 s limit warning (rec_limit) plays while capture continues
 and stays in the recording as two soft taps: removing it would also remove the
 child's words that overlap it (Dan, 7 October 2026). The hardware acceptance
 check confirms the legacy go tick is absent from sent audio and that the
-parallel Cloud tick does not remove the child's first words.
+Cloud tick is audible before capture and words spoken just after it are kept.
 
 A press during the card invitation stops and reaps its player before the start
-cue. It skips hold classification. Cloud Button Box starts capture alongside
-rec_go; other voices and wacli wait for that cue. Hold to talk ends on release; tap to talk ignores the
+cue. It skips hold classification. Cloud Button Box waits for its padded
+rec_start; other voices and wacli wait for rec_go. Hold to talk ends on release; tap to talk ignores the
 starting press until release and ends on a later tap. At the recording limit,
 both talk modes stop and keep meaningful audio for review,
 even when review is normally disabled. A fresh approval sends it; ten seconds
@@ -115,15 +124,15 @@ per-file runtime fallback, and the originals remain in `sounds/voice/`.
 See [pack licensing](../sounds/voices/README.md) and
 [settings behavior](cloud-settings.md#voice-packs).
 
-Cloud Button Box recording time starts when the microphone opens, without
-waiting for its start cue. Other voices and wacli retain their synchronous
-start. Legacy countdown and approval voice assets remain bundled but
+Recording time starts when the microphone opens, after successful start-cue
+completion. All modes use a sequential start. Legacy countdown and approval voice assets remain bundled but
 are no longer used by the recording flow.
 
 On a real box, listen to Jessica, Pirate, Alien, DJ, Robot, French and Charlie on
 the speaker. For each, preview and switch the setting; confirm the sample, volume
 and dark lamp. Exercise all four talk/review combinations and the go tick,
-checking that no start cue is captured and the deletion cue is clear. Verify a matched Cloud
+checking that the start cue is audible and excluded from capture in every mode,
+and that words spoken just after it are kept. Confirm the deletion cue is clear. Verify a matched Cloud
 name clip and a queued clip after changing packs, plus Robot/DJ fixed listened
 lines. Confirm that volume and ringtone changes each say "Setting saved!" once.
 Offline checks do not establish speaker quality or physical microphone timing.

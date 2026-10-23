@@ -11,306 +11,306 @@
   {
    "file": "voice-all-set.wav",
    "text": "Yo! DJ Button Box in the house! I'll bring you messages from everyone who loves you!",
-   "seconds": 7.37,
-   "sha256": "67081f0794b7db28ffc2d387b4a18915a76f5d283eb6b202e743fd9150027c0f"
+   "seconds": 7.50739583,
+   "sha256": "045dda20d04fb247c5335512fadaf7acd1f6bbc831809b542144c25bd2c14061"
   },
   {
    "file": "voice-online.wav",
    "text": "DJ's in the house!",
-   "seconds": 2.97,
-   "sha256": "78cf70edcb6ef6b1bd121ef1e4f73e7b889ca9083c0c3b10c975cedff9f07b73"
+   "seconds": 3.10791667,
+   "sha256": "3188381131d890f1545efb5a0a2158204fd7abc13726ffe8ca00fac8cf796e18"
   },
   {
    "file": "voice-msg-start.wav",
    "text": "Drop it! A message for you!",
-   "seconds": 3.85,
-   "sha256": "689b3af2c99dc7c4a9dc6d6f458e130b3943c44fc6e21d76f13c4caca21d26b1"
+   "seconds": 3.9873125,
+   "sha256": "f08f42013bb711a006f4d4cfefefc60f0012a6581b38fc689954e4596b6ff071"
   },
   {
    "file": "voice-count-reply.wav",
    "text": "Your turn on the mic! Three... two... one...",
-   "seconds": 5.85,
-   "sha256": "ac625cd46180cb0560a8aa0a38514688621a900c715cdd209c9ad1c3d31ce429"
+   "seconds": 5.9875,
+   "sha256": "87131e2360122f9751337525050b15926edf9dc7823001b87c0e99a496687468"
   },
   {
    "file": "voice-count-new.wav",
    "text": "Mic check! Three... two... one...",
-   "seconds": 4.65,
-   "sha256": "dbf346a51497649dc67a0beab10801528802c93115fc407903f73925c05ac277"
+   "seconds": 4.78789583,
+   "sha256": "e35f59ccef95a8bcc9f195f85c5169b562595e10654a43a9667e1c89046f6c0a"
   },
   {
    "file": "voice-review.wav",
    "text": "Play it back!",
-   "seconds": 2.33,
-   "sha256": "e6d8145762606e76089af56e8b38d3759129618ec13dffd923a05c7a4b928b93"
+   "seconds": 2.4679375,
+   "sha256": "85ed45890608bc8e9d200af8746e5c1d9a595e9491d3c7a460654ddd085085b2"
   },
   {
    "file": "voice-ask-send-1.wav",
    "text": "That's fire! Press to send!",
-   "seconds": 3.69,
-   "sha256": "cbea7cc0097645cb4a42e5b67fa3d858fc9c9993339d490e4575688dba02d5fc"
+   "seconds": 3.8278125,
+   "sha256": "13fe2aa2ec8c047f7ef47d59c2f687b5829fa853663ed73f0c6004bcbf6aed9a"
   },
   {
    "file": "voice-ask-send-2.wav",
    "text": "Big tune! Now press to send!",
-   "seconds": 3.69,
-   "sha256": "ed9ff8c7fd06931e50b686112e365746bbdb5393a4441e2fdd30359c972e67f7"
+   "seconds": 3.82725,
+   "sha256": "b71a5ebd981e9c165e3d7c5a27162e41320c947b972201f98246db784547b0b8"
   },
   {
    "file": "voice-ask-send-3.wav",
    "text": "Love that track! Press to send!",
-   "seconds": 3.53,
-   "sha256": "700335316fcd5f70639c8869ee9fb37c9e18f5388a60b0d1f2827119757f036b"
+   "seconds": 3.667625,
+   "sha256": "4502003351306466f4ccc1d3d40ae4d78f99b342b6aa7cfa6128349ac0344f7f"
   },
   {
    "file": "voice-last-chance.wav",
    "text": "Wanna drop it? Press the button!",
-   "seconds": 3.69,
-   "sha256": "fb29bb26a81dfc79866b4252bf31b1f2738b63c48b5cc2a081d6937d3c974d37"
+   "seconds": 3.82747917,
+   "sha256": "4aa99059a81232ea1cf2ee5e73704311cbbe1c94e1817cb903260a4ea689b731"
   },
   {
    "file": "voice-not-sent.wav",
    "text": "Cool, I won't send that one.",
-   "seconds": 3.05,
-   "sha256": "42a058cbfa381529306c74e9e5b8fec5dd462a8288c932041a90ac73c7f0bbae"
+   "seconds": 3.18775,
+   "sha256": "26f35f82c4713e56e8c253f934d6034b3f953ee487ff3aab08c8d234494ddb05"
   },
   {
    "file": "voice-empty.wav",
    "text": "Hold up, I didn't hear you. Try again?",
-   "seconds": 4.01,
-   "sha256": "47e152872ee43f5cf78fe6deda8b1af16e5ba681604d60ac05d2dbfd207432dd"
+   "seconds": 4.1475,
+   "sha256": "22fb5b533f06f519008f28b5f54276e1dca6fc179d521ae0e71764e201d6e845"
   },
   {
    "file": "voice-listened.wav",
    "text": "Turn it up! They heard your message!",
-   "seconds": 3.13,
-   "sha256": "8087ebe45bafe84e51194c192501731e540a2fa9c6d3c45404c191bfa748044f"
+   "seconds": 3.2678125,
+   "sha256": "44ee5191f679f2406a89661f7bab139ffe8174668312d3808becc6eac093bc19"
   },
   {
    "file": "voice-card-needed.wav",
    "text": "Who's it for? Pick a family card!",
-   "seconds": 4.09,
-   "sha256": "53164379cab8d0d43ad02e4e1d825f01b053f427e845b365b111340bdcaadf10"
+   "seconds": 4.22739583,
+   "sha256": "74f5308ecb49642af5ef4fb919ac7fc041e5891e104f7a0326c002d2f7b10886"
   },
   {
    "file": "voice-card-unknown.wav",
    "text": "New card in the crowd! Ask a grown-up to add it.",
-   "seconds": 4.33,
-   "sha256": "76d222641f3840218c67b55f2da80803889a4e9cac1c054ec6dde59f9160fc9a"
+   "seconds": 4.46733333,
+   "sha256": "61b5dcf629f0fd38d9f5ffc14ab500bf0f315775f8aa9447ed322bdbd836b983"
   },
   {
    "file": "voice-stuck.wav",
    "text": "Still loading the track. I'll keep trying!",
-   "seconds": 4.41,
-   "sha256": "ed6d306e12f1c971b7c89b0ece2cecfd6f21afd833cc200745091d20a3474db4"
+   "seconds": 4.54770833,
+   "sha256": "1e21585a675caea8525b4be83698e373bf0ce2005ca3e1477712c3be2a8a0bfe"
   },
   {
    "file": "voice-fail.wav",
    "text": "I need a grown-up to set up the decks!",
-   "seconds": 3.29,
-   "sha256": "d543251e3cbaac0b94b1d347101170becac39f2b307263955f3e12d381f5f78a"
+   "seconds": 3.42764583,
+   "sha256": "a7d5bc5e768c7199f17064422fb0a8927edde9bc57c3a69d520fc7778d85115b"
   },
   {
    "file": "voice-card-prompt.wav",
    "cue": "BX-CARD-PROMPT",
    "purpose": "Generic family-card recording invitation",
-   "seconds": 4.33,
-   "sha256": "4f1e2eefef6c0e95fa8304e31a95d7bd1fd57cf4dfcc31b949136ea6e237484f",
+   "seconds": 4.46764583,
+   "sha256": "dc5785daaa34b2bc84f6eab5e540e9f3d8ddf59af285a2c617db0ad4d7efbb60",
    "text": "Mic is live! Press and talk now!"
   },
   {
    "file": "voice-card-saved.wav",
    "cue": "BX-CARD-SAVED",
    "purpose": "Successful family-card pairing confirmation",
-   "seconds": 4.17,
-   "sha256": "2e6efac8bf8ee8de34a085020d9d6bc37beb62dd562696c550475cbd195c55c7",
+   "seconds": 4.30760417,
+   "sha256": "d9ac03df50de15fe6cb9be755fd9b72bde87ffe0321003a1b32f741fb893d35c",
    "text": "New card in the mix! Family card saved!"
   },
   {
    "file": "voice-online-ready.wav",
    "cue": "BX-ONLINE-READY",
    "text": "I'm online and ready to send and get messages!",
-   "seconds": 4.97,
-   "sha256": "944b46c518fc396758bc66f8f726efc39569285b648a12da7165faeb8fe2233e"
+   "seconds": 5.10760417,
+   "sha256": "bc13839f0027248899a6a3dd44d0f12932f8b8dc6f1782f0615dcd5ced78c244"
   }
  ],
  "reaction_lines": [
   {
    "file": "voice-sent-heart.wav",
    "text": "You just sent a heart!",
-   "seconds": 3.21,
+   "seconds": 3.3476875,
    "seed": 1,
-   "sha256": "32ab2a1ece03637fa441dedaaf21bf3047fcc17a5a8ea4d5ca6379ea15bc841e"
+   "sha256": "386a1066addd3615a4b2513ae60f2081e397f2a7f25094a7a9af0f603e34dd3a"
   },
   {
    "file": "voice-sent-big-laugh.wav",
    "text": "You just sent a big laugh!",
-   "seconds": 3.37,
+   "seconds": 3.50733333,
    "seed": 7,
-   "sha256": "abc5238f8e9ed6597bb3bd2983d27de69f8f6890bb92e86c11fdbaabb696a603"
+   "sha256": "fc86b04a4e5757320cd8939c8c3e2e016cd143f83e83e913b4cb21c8ffc3e672"
   },
   {
    "file": "voice-sent-applause.wav",
    "text": "You just sent applause!",
-   "seconds": 2.73,
+   "seconds": 2.8678125,
    "seed": 7,
-   "sha256": "71be49e9195f4432de6236f03e4c6ae188c1d5d52f4e5f4d879a42baa4be7d79"
+   "sha256": "0509e7bf40985e3ab27e420fb9bc9fcee2ddc3a16ce70041aedb9ff05ebf3ee3"
   },
   {
    "file": "voice-sent-heart-eyes.wav",
    "text": "You just sent heart eyes!",
-   "seconds": 3.29,
+   "seconds": 3.42760417,
    "seed": 2,
-   "sha256": "dc5882f2c38af96f37b68aad52453258edeb47f7f923bfcb8a6a9c5e91ef390b"
+   "sha256": "7ae44b4896276e1b055541c6e55066d2676648f2a36ecd68f56b3b4909d5edd5"
   },
   {
    "file": "voice-sent-thumbs-up.wav",
    "text": "You just sent a thumbs up!",
-   "seconds": 2.89,
+   "seconds": 3.0278125,
    "seed": 7,
-   "sha256": "b6b155e7fa2251105c053654928f21637074c22ddf6f927b4ca40ad1b11f3d14"
+   "sha256": "d0e14fbf5d6e8bdbe9d61221f4907d0ea051c250f5f3dfaa2a43f3d30e5827ba"
   },
   {
    "file": "voice-sent-fire.wav",
    "text": "You just sent fire!",
-   "seconds": 2.97,
+   "seconds": 3.1078125,
    "seed": 7,
-   "sha256": "64db65efef755d8966f8d08bbdaa5a9946457e7a47196b997c1adb66476a76ca"
+   "sha256": "fecdc0431533dd2ea5cdcf332dcf1cbe46d4dc08b91416fc990a87444f00863a"
   },
   {
    "file": "voice-sent-celebration.wav",
    "text": "You just sent a celebration!",
-   "seconds": 3.69,
+   "seconds": 3.8278125,
    "seed": 7,
-   "sha256": "26e418b41a89f74f993dc862649a150199eb2746de2337c40e50fa981018f97d"
+   "sha256": "b720c09889018080cc675b78514a57848069f442f8f249a6fa485041698635f1"
   },
   {
    "file": "voice-sent-kiss.wav",
    "text": "You just sent a kiss!",
-   "seconds": 3.05,
+   "seconds": 3.18766667,
    "seed": 7,
-   "sha256": "eea6a71ff9faa3df3b245988117f6c1eebb18e0ea36f35cfb4d3e0e60ac090c7"
+   "sha256": "0f70a71bfcc58f6067fc112bd39d1b0c990b90452f1964316dca4ac30deb4a1a"
   },
   {
    "file": "voice-sent-surprise.wav",
    "text": "You just sent a surprise!",
-   "seconds": 3.53,
+   "seconds": 3.667625,
    "seed": 7,
-   "sha256": "799899495cf8243baaf23b1686e19ed9f139eb363ccbc92fb71f9b3a9855563d"
+   "sha256": "7f2d23df7142b39160cfa19b0c4ad9db147d2a1c86a69ae0a3236ff91b81ffb6"
   },
   {
    "file": "voice-sent-tear.wav",
    "text": "You just sent a tear!",
-   "seconds": 3.05,
+   "seconds": 3.188625,
    "seed": 7,
-   "sha256": "2ddfc28c24f8a3ebd1bef88dcb1a52725e5d9ae06b059e9e8e972b3b3b0888f2"
+   "sha256": "c583a18313da6f7b91700e961f54e42d7546afcf3e03b7142746e901eec788f1"
   },
   {
    "file": "voice-sent-hooray.wav",
    "text": "You just sent a hooray!",
-   "seconds": 3.45,
+   "seconds": 3.5873125,
    "seed": 1,
-   "sha256": "c9d85bc1925b6bdd88713b54f78291cef43ec9350d98c3e7dd97e5714c2fbfb7"
+   "sha256": "b9f7ba6911165d9dd31f40b5a2fc66799f3c912010edce1c8e38bb9d1e1eb27e"
   },
   {
    "file": "voice-sent-smile.wav",
    "text": "You just sent a smile!",
-   "seconds": 3.05,
+   "seconds": 3.1879375,
    "seed": 7,
-   "sha256": "8d3be1c2acab733bd9515a4054d44e51cae72549783e3ed053bcc2bfb0cbeab5"
+   "sha256": "e90d85f77561ac553fab2232c34e8494cd8a4a058d2e53d178f9d0ea20b7df08"
   },
   {
    "file": "voice-sent-reaction.wav",
    "text": "You just sent a reaction!",
-   "seconds": 2.73,
+   "seconds": 2.86783333,
    "seed": 7,
-   "sha256": "2aa0e81087915dc2e24171533a2df6aa6e7ca3edf48f1baefcb6c5907889f42b"
+   "sha256": "c109a402f291b9949b85c3064265b4a59b34a692138eda835757df1f9d8f0a99"
   }
  ],
  "age_lines": [
   {
    "file": "voice-age-this-morning.wav",
    "text": "Throwback! From this morning!",
-   "seconds": 3.21,
+   "seconds": 3.3479375,
    "seed": 7,
-   "sha256": "b16999edcd289b6dfa7e2e24bc8945acf996fcb73cddb6b57f7b59de57fadc73"
+   "sha256": "188cacf71add5cb9cdb0b6cea0fe0eff47a5b139943c15dfe877dda7187d2d48"
   },
   {
    "file": "voice-age-this-afternoon.wav",
    "text": "Throwback! From this afternoon!",
-   "seconds": 3.61,
+   "seconds": 3.74766667,
    "seed": 7,
-   "sha256": "4daa878cf75097d90b4933518d879a71cdb366f6b0ef70ded0f7f3423e86a680"
+   "sha256": "79eddab6d2cec5882b91d35faf5c4c52496a30603e8aad3ec60eb78406d1380b"
   },
   {
    "file": "voice-age-this-evening.wav",
    "text": "Throwback! From this evening!",
-   "seconds": 3.05,
+   "seconds": 3.1879375,
    "seed": 7,
-   "sha256": "7c56376b117aff81ac356d905c46223d9e9ce3d313b32efdedfd0683af1a1fb8"
+   "sha256": "ce4117d2d479adf6a8c70a4d3b30322f665b1667c47aba6ca5dac572aac9122a"
   },
   {
    "file": "voice-age-last-night.wav",
    "text": "Throwback! From last night!",
-   "seconds": 3.61,
+   "seconds": 3.74745833,
    "seed": 7,
-   "sha256": "a752b289de8db7a2f643a93d647eabb5eca26db4804d8fb23703409501e82294"
+   "sha256": "c6b04446c2a6d0ac27920878a1e47a7cef7766ccae3c2a4bbc689c828a93e1e3"
   },
   {
    "file": "voice-age-yesterday.wav",
    "text": "Throwback! From yesterday!",
-   "seconds": 3.69,
+   "seconds": 3.82791667,
    "seed": 2,
-   "sha256": "33b1c78b7581d7eb2e4467bf58aea224e9b254ba87cd4c6d27e01a1e02cc8559"
+   "sha256": "8274f347682fbeabb2595e7c64be0ab3bf7bfba7fbe2e3152b7418a61e40ac01"
   },
   {
    "file": "voice-age-2-days-ago.wav",
    "text": "Throwback! From two days ago!",
-   "seconds": 3.37,
+   "seconds": 3.50760417,
    "seed": 7,
-   "sha256": "511f520da823ba59f055b7dbb11870e28291d229ca2aeb5e85d62d32cee8aa95"
+   "sha256": "d3b0cfc867c67abc84a4df61912b3086e67727a912004530edce91f7aed50059"
   },
   {
    "file": "voice-age-3-days-ago.wav",
    "text": "Throwback! From three days ago!",
-   "seconds": 3.69,
+   "seconds": 3.82760417,
    "seed": 1,
-   "sha256": "18047f9ae6e1bf8dfde3e2a93d7eb2c4ca7f253de9514e762b7e87fe0f9b4f67"
+   "sha256": "9b4996e632dad33a2135a2747f3da5996bf6483646a19407fa04016f364db8b1"
   },
   {
    "file": "voice-age-4-days-ago.wav",
    "text": "Throwback! From four days ago!",
-   "seconds": 3.53,
+   "seconds": 3.66710417,
    "seed": 7,
-   "sha256": "193aee0e60a8aff605e8147d3aef47b0559c595b8aafd03599624ac9b1a1273a"
+   "sha256": "2a688b5f63394cfccfe89bfb00f0301b469fdffe807306a7e341b1cc8c099c3d"
   },
   {
    "file": "voice-age-5-days-ago.wav",
    "text": "Throwback! From five days ago!",
-   "seconds": 3.61,
+   "seconds": 3.74764583,
    "seed": 7,
-   "sha256": "b4d956be6ddc006c715fecf641f377c63f2706b83570a2f03b476526fb1e58ad"
+   "sha256": "c5d6e853f169fde632c89426d20d4947924024d7a704f6586240770c3947d6f7"
   },
   {
    "file": "voice-age-6-days-ago.wav",
    "text": "Throwback! From six days ago!",
-   "seconds": 3.61,
+   "seconds": 3.74760417,
    "seed": 1,
-   "sha256": "945454221dfdfc1dd8b3b380b1e227cc85e4ec22b1591917ab9c52d1f0172add"
+   "sha256": "05c9d2a8d0da58d968003e1da8d885e206f87cb9455a333c48454666ab242039"
   },
   {
    "file": "voice-age-last-week.wav",
    "text": "Throwback! From last week!",
-   "seconds": 3.37,
+   "seconds": 3.50733333,
    "seed": 7,
-   "sha256": "f64e69726025d958c9f7e749ee087fb3891e6eda9f532c117e38e00b49cd1b12"
+   "sha256": "da0c119e591fc71695224801b56c66f8878ca70532b2ec10a6ed6c4659f2106e"
   },
   {
    "file": "voice-age-a-while-ago.wav",
    "text": "Throwback! From a while ago!",
-   "seconds": 3.61,
+   "seconds": 3.7475,
    "seed": 7,
-   "sha256": "b100442f00d1fb7cfc119246c032089deea1d125eb78e064ca47fd612560134e"
+   "sha256": "b131feba5f60e6abc7a9ae6c2e793b979f3012e021ef1d8f352e91f91f6ee99e"
   }
  ]
 }

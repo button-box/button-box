@@ -23,7 +23,7 @@ class RecordingModesTests(unittest.TestCase):
     def setUp(self):
         isolate_audio(self)
 
-    def capture_cue_overlap(self, root, *, stop_at, speech_windows, transport='cloud'):
+    def capture_cue_overlap(self, root, *, stop_at, speech_windows, transport='cloud', startup_latency=0, drain_only=False):
         clock = [0.0]
         button = types.SimpleNamespace(is_pressed=False)
         recorder = mock.Mock()
@@ -43,7 +43,7 @@ class RecordingModesTests(unittest.TestCase):
         def tick(*args):
             clock[0] = round(clock[0] + .02, 6)
             button.is_pressed = elapsed() >= stop_at
-            return [recorder.stdout], [], []
+            return ([] if drain_only else [recorder.stdout]), [], []
 
         def read(*args):
             voiced = any(start <= elapsed() < end for start, end in speech_windows)
@@ -57,18 +57,22 @@ class RecordingModesTests(unittest.TestCase):
 
         def drain(**kwargs):
             remainder = b''
-            if clock[0] < observed['reminder_end']:
+            if drain_only:
+                remainder = b''.join(struct.pack('<h', 3000 if any(start <= frame * .02 < end
+                    for start, end in speech_windows) else 0) * 320 for frame in range(round(elapsed() / .02)))
+                chunks.append(remainder)
+            elif clock[0] < observed['reminder_end']:
                 remainder = struct.pack('<h', 6000) * 3200
                 chunks.append(remainder)
             return remainder, b''
         recorder.communicate.side_effect = drain
 
         def player(command, **kwargs):
-            if Path(command[-1]).name in {'cue-rec_go.wav', 'cue-press.wav'}:
+            if Path(command[-1]).name in {'cue-rec_start.wav', 'cue-press.wav'}:
                 def launch(clipped, **options):
                     with wave.open(str(clipped[-1])) as cue:
                         observed['cue_seconds'] = cue.getnframes() / cue.getframerate()
-                    observed['start_end'] = clock[0] + observed['cue_seconds']
+                    observed['start_end'] = clock[0] + startup_latency + observed['cue_seconds']
                     def wait(**unused):
                         clock[0] = max(clock[0], observed['start_end'])
                         return 0
@@ -103,8 +107,8 @@ class RecordingModesTests(unittest.TestCase):
             result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=2,
                                                             speech_windows=[(0, .36)])
             self.assertEqual(observed['lamp_at'], 0)
-            self.assertAlmostEqual(observed['cue_seconds'], .12)
-            self.assertAlmostEqual(observed['mic_at'], .12)
+            self.assertAlmostEqual(observed['cue_seconds'], .27)
+            self.assertAlmostEqual(observed['mic_at'], .27)
             self.assertEqual(observed['mic_at'], observed['start_end'])
             self.assertTrue(result.meaningful)
             with wave.open(result.path) as audio:
@@ -309,9 +313,9 @@ class RecordingModesTests(unittest.TestCase):
             vad.trim_bounds.return_value = None
             def sound(command, **options):
                 led.on.assert_called_once()
-                self.assertEqual(Path(command[-1]).name, 'cue-rec_go.wav')
+                self.assertEqual(Path(command[-1]).name, 'cue-rec_start.wav')
                 self.assertEqual(options['lead_in_s'], 0)
-                self.assertEqual(options['clip_seconds'], .12)
+                self.assertEqual(options['clip_seconds'], .27)
                 order.append('cue_started')
                 return cue
             def microphone(*args, **kwargs):
@@ -374,6 +378,138 @@ class RecordingModesTests(unittest.TestCase):
         self.assertEqual(cue.wait.call_count, 3)
         led.on.assert_called_once()
         led.off.assert_called_once()
+
+    def test_record_start_asset_has_silent_lead_in_and_played_clip_covers_full_tick(self):
+        directory = Path(__file__).resolve().parents[1] / 'sounds/cues'
+        source = directory / 'cue-rec_start.wav'
+        with wave.open(str(source)) as cue, wave.open(str(directory / 'cue-rec_go.wav')) as original:
+            self.assertEqual(cue.getparams()[:3], original.getparams()[:3])
+            rate = cue.getframerate()
+            pcm = cue.readframes(cue.getnframes())
+            silence = b'\0' * (round(rate * .15) * 2)
+            self.assertEqual(pcm, silence + original.readframes(round(rate * .12)))
+            self.assertGreaterEqual(len(silence) / (rate * 2), .1)
+            self.assertEqual(cue.getnframes(), round(rate * runtime.RECORD_START_CUE_SECONDS))
+            self.assertLessEqual(runtime.RECORD_START_CUE_SECONDS, .3)
+        def launch(command, **kwargs):
+            with wave.open(str(command[-1])) as played:
+                self.assertEqual(played.readframes(played.getnframes()), pcm)
+            return types.SimpleNamespace(wait=lambda **kwargs: 0)
+        player = speaker.start_player(['aplay', '-q', str(source)], popen=launch,
+                                      lead_in_s=0, clip_seconds=runtime.RECORD_START_CUE_SECONDS)
+        self.assertEqual(player.wait(timeout=5), 0)
+
+    def test_playback_startup_latency_finishes_before_capture_and_cannot_create_a_job(self):
+        from test_guided_reply import FakeIO
+        for drain_only in (False, True):
+            with self.subTest(drain_only=drain_only), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result, _, observed = self.capture_cue_overlap(root, stop_at=2,
+                    speech_windows=[(.6, .68)], startup_latency=.12, drain_only=drain_only)
+                self.assertAlmostEqual(observed['mic_at'], .39)
+                self.assertEqual(observed['mic_at'], observed['start_end'])
+                self.assertFalse(result.meaningful)
+                store = OutboxStore(root / 'outbox', transport='cloud')
+                outcome = GuidedSession(FakeIO([result]), store, lambda *a, **kw: None).run(
+                    recipient='person@example.invalid', flow_kind='standalone',
+                    deleted_cue_path='cue-deleted.wav', review_before_send=False, account_scope='a' * 64)
+                self.assertEqual(outcome, 'empty')
+                self.assertEqual(store.jobs(), [])
+
+    def test_short_words_after_sequential_start_cue_are_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, pcm, _ = self.capture_cue_overlap(Path(directory), stop_at=2,
+                                                    speech_windows=[(.1, .42)])
+            self.assertTrue(result.meaningful)
+            with wave.open(result.path) as audio:
+                self.assertEqual(audio.readframes(audio.getnframes()), pcm)
+
+    def test_failed_start_cue_aborts_tap_and_card_capture_without_an_outgoing_job(self):
+        from test_guided_reply import FakeIO
+        for talk, card_prompt in (('tap', False), ('hold', True)):
+            for delayed in (False, True):
+                with self.subTest(talk=talk, delayed=delayed), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    cue = mock.Mock()
+                    cue.poll.return_value = None if delayed else 1
+                    def fail(**kwargs):
+                        self.assertEqual(kwargs, {'timeout': 5})
+                        cue.poll.return_value = 1
+                        return 1
+                    cue.wait.side_effect = fail if delayed else None
+                    cue.wait.return_value = 1
+                    store = OutboxStore(root / 'outbox', transport='cloud')
+                    io = FakeIO([])
+                    io.record = lambda: physical_capture(runtime, 'person@example.invalid',
+                                                        talk_mode=talk, card_prompt=card_prompt)
+                    with mock.patch.object(runtime, 'TEMP_DIR', directory), \
+                         mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
+                         mock.patch.object(runtime, 'led', mock.Mock(), create=True), \
+                         mock.patch.object(runtime, 'start_player', return_value=cue), \
+                         mock.patch.object(runtime, 'open_microphone') as microphone:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            GuidedSession(io, store, lambda *a, **kw: None).run(
+                                recipient='person@example.invalid', flow_kind='standalone',
+                                deleted_cue_path='cue-deleted.wav', review_before_send=False, account_scope='a' * 64)
+                    microphone.assert_not_called()
+                    cue.wait.assert_called_once_with(timeout=5)
+                    self.assertEqual(store.jobs(), [])
+                    self.assertFalse(list(root.glob('*.raw')))
+                    self.assertFalse(list(root.glob('*.wav')))
+
+    def test_two_short_presses_never_open_microphone_in_hold_dispatch(self):
+        clock = [0.0]
+        class Switch:
+            @property
+            def is_pressed(self):
+                return 0 <= clock[0] < .2 or .28 <= clock[0] < .58
+        def sleep(seconds):
+            clock[0] = round(clock[0] + seconds, 6)
+        def start(command, **kwargs):
+            self.assertEqual(Path(command[-1]).name, 'cue-press.wav')
+            self.assertEqual(kwargs, {'lead_in_s': 0, 'clip_seconds': .12})
+            self.assertEqual(clock[0], .06)
+            def wait(**kwargs):
+                sleep(.12)
+                return 0
+            return types.SimpleNamespace(poll=lambda: 0, wait=wait)
+        classify = runtime.wait_for_hold_intent
+        outcomes = []
+        def intent(*args, **kwargs):
+            result = classify(*args, monotonic=lambda: clock[0], sleeper=sleep, **kwargs)
+            outcomes.append(result)
+            return result
+        with contextlib.ExitStack() as stack:
+            for name, value in (('button', Switch()), ('led', mock.Mock())):
+                stack.enter_context(mock.patch.object(runtime, name, value, create=True))
+            for name in ('reconcile_card_selections', 'wait_for_stable_open', 'log_event', 'refresh_led'):
+                stack.enter_context(mock.patch.object(runtime, name))
+            stack.enter_context(mock.patch.object(runtime, 'transport_mode', return_value='cloud'))
+            stack.enter_context(mock.patch.object(runtime, 'buttonbox_voice', return_value=True))
+            stack.enter_context(mock.patch.object(runtime.cloud_runtime, 'account_scope', return_value='a' * 64))
+            stack.enter_context(mock.patch.object(runtime, 'claim_fresh_card_intent', return_value=('none', None)))
+            stack.enter_context(mock.patch.object(runtime, 'recording_recipient_context', return_value={
+                'contact': {'jid': 'person@example.invalid'}, 'via_card': False}))
+            stack.enter_context(mock.patch.object(runtime.time, 'sleep', side_effect=sleep))
+            stack.enter_context(mock.patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]))
+            stack.enter_context(mock.patch.object(runtime, 'wait_for_hold_intent', side_effect=intent))
+            stack.enter_context(mock.patch.object(runtime, 'start_player', side_effect=start))
+            play = stack.enter_context(mock.patch.object(runtime, 'play_next_legacy'))
+            microphone = stack.enter_context(mock.patch.object(runtime, 'open_microphone', side_effect=AssertionError('unexpected capture')))
+            with runtime.capture_session(runtime.button) as permit, mock.patch.object(runtime, '_capture_permit', permit):
+                runtime.record_and_send_legacy({**defaults({}), 'talk_mode': 'hold', 'review_before_send': False}, pressed_at=0)
+        self.assertEqual(outcomes, ['play'])
+        play.assert_called_once()
+        microphone.assert_not_called()
+
+    def test_wacli_keeps_synchronous_rec_go_with_buttonbox_pack(self):
+        with mock.patch.object(runtime, 'transport_mode', return_value='wacli'), \
+             mock.patch.object(runtime.sound_pack, 'current_voice_pack', return_value='buttonbox'), \
+             mock.patch.object(runtime, 'play_sound') as play, \
+             mock.patch.object(runtime, 'start_player') as start:
+            with runtime.recording_start('tap'):
+                play.assert_called_once_with(runtime.sound_pack.cue_path('rec_go'), timeout=5)
+            start.assert_not_called()
 
     def test_approval_arms_sending_for_tap_review_and_hold_release_only_in_cloud(self):
         for transport in ('cloud', 'wacli'):

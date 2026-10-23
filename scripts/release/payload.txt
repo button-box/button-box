@@ -206,6 +206,7 @@ sounds/cues/cue-press.wav
 sounds/cues/cue-ready.wav
 sounds/cues/cue-rec_go.wav
 sounds/cues/cue-rec_limit.wav
+sounds/cues/cue-rec_start.wav
 sounds/cues/cue-sent.wav
 sounds/cues/cue-still_trying.wav
 sounds/cues/cues.json
