@@ -2,26 +2,22 @@
 
 ## F313: approval during Cloud review
 
-`PiGuidedIO.play_review` now listens for approval in Cloud mode. It first
-releases the recording stop press, ignores the first 0.5 seconds of playback,
-and requires any press started during that interval to be released. A fresh
-press held for the normal confirmation interval interrupts playback and uses
-the normal approval cue, durable outbox and sending feedback. The send question
-also accepts an interrupting press. With no press, the ten-second approval wait
-and deletion remain unchanged.
+`PiGuidedIO.review_and_wait_for_approval` owns one polling loop from Cloud
+review playback start, through the send question, to the end of the ten-second
+approval wait. It retains the same button state across audio completion,
+cleanup and the busy retry delay; no phase releases or rearms the button.
+A stable half-second release excludes the recording stop hold and contact
+bounce. A new press must start at least 0.5 seconds after review starts and
+remain closed for the normal 80 ms confirmation interval. Confirmation stops
+any active audio with bounded terminate/kill and reaping, then uses the normal
+approval cue, durable outbox and sending feedback exactly once. With no press,
+the recording is deleted after the final wait.
 
-Rearming after an ignored hold requires a stable half-second release; an open
-bounce cannot arm approval. A fresh press closed at review or question exit,
-including one begun since the last poll, keeps its 80 ms confirmation window
-across playback completion. Playback retains
-the 600-second timeout, with bounded terminate/kill and reaping before the
-speaker and maintenance reservations are released.
-When playback ends released and armed, the approval wait starts immediately.
-An ignored hold still requires a stable release across clips. Cloud playback
-retries an ALSA busy error once after 150 ms, matching ordinary playback; other
-audio failures are not retried.
-If the optional setup send question fails, the approval wait remains available
-for the saved recording and recipient.
+Playback retains the 600-second timeout and speaker/maintenance reservation
+release. Cloud playback retries an ALSA busy error once after 150 ms, matching
+ordinary playback; the same monitor keeps sampling during the delay. Other
+review errors are not retried. If the optional setup send question fails, the
+approval wait remains available for the saved recording and recipient.
 
 Setup replies use the same rule: they review the same recording and bind the
 same saved recipient through `ReplyOutbox`. Ordinary inbound playback, required

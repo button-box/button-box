@@ -295,18 +295,20 @@ Never complete setup or expose audio/recipient identifiers just to view events.
 
 # Early send during own-recording review
 
-In tap/review mode, a fresh deliberate press during review of the user's own
-recording stops preview and approves that recording once. It skips the later
-send prompt, approval timeout and delete warning. Incoming-message listening
-is unchanged. A held recording-stop press must be released before review can
-accept a new press. With no review press, the existing prompt, timeout, warning
-and cancellation flow remains unchanged. Approval queues a send; only actual
-send success may trigger the successful-send sound.
+In Cloud tap/review mode, one button monitor spans review of the user's own
+recording, the send question and the ten-second approval wait. A stable
+half-second release excludes a held recording-stop press. A new press starting
+at least 0.5 seconds after review starts and held for 80 ms approves that
+recording once, stopping active playback. With no approval, the recording is
+deleted after the wait. Incoming-message listening and wacli review are
+unchanged. Approval queues a send; only actual send success may trigger the
+successful-send sound.
 
-On a named box, verify early review approval for both standalone and reply
-flows, a held recording-stop press, a short bounce, no approval/cancellation,
-and exactly one outgoing voice note in the intended chat. Keep software tests
-and physical switch/audio/delivery evidence separate.
+On a named box, verify standalone and setup/ordinary replies: press during
+each clip, across its end and immediately after the send question. Include a
+held recording-stop press, a short open bounce in that hold, a short press,
+and no approval. Check exactly one outgoing voice note in the intended chat.
+Keep software tests and physical switch/audio/delivery evidence separate.
 
 ## Cloud mode
 

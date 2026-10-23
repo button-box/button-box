@@ -872,6 +872,7 @@ class CardSelectionLifecycleTests(unittest.TestCase):
             store = OutboxStore(root / "outbox", transport=mode, selection_path=selection.path)
             audio = root / "recording.wav"
             io = mock.Mock()
+            io.review_and_wait_for_approval = None
             io.wait_for_approval.return_value = True
             io.delete.side_effect = lambda path: Path(path).unlink(missing_ok=True)
 

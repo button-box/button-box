@@ -1979,89 +1979,114 @@ def approve_guided_press(session_id=None):
     return True
 
 
-def play_audio_for_approval(path, session_id=None, *, action="approve_warning", ignore_first_s=0):
-    """Consume only a fresh deliberate press in review or deletion warning."""
-    if transport_mode() != "cloud":
-        return _play_audio_for_approval(path, session_id, action=action, ignore_first_s=ignore_first_s)
-    for attempt in range(2):
-        # A file avoids a full stderr pipe stalling the interruptible player.
-        with tempfile.TemporaryFile() as errors:
-            try:
-                return _play_audio_for_approval(path, session_id, action=action,
-                                                ignore_first_s=ignore_first_s, stderr=errors)
-            except subprocess.CalledProcessError:
-                errors.seek(0)
-                if not speaker.busy(errors.read(4096)):
-                    raise
-                if attempt:
-                    raise speaker.SpeakerBusy("speaker unavailable") from None
-        time.sleep(0.15)
-
-
-def _play_audio_for_approval(path, session_id, *, action, ignore_first_s, stderr=None):
-    discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)],
-                           **({"stderr": stderr} if stderr is not None else {}))
-    started = time.monotonic()
-    accept_after = started + ignore_first_s
-    deadline = started + 600
-    armed = ignore_first_s == 0
+def review_and_wait_for_approval(review_path, question, timeout, session_id=None, *,
+                                 optional_question=False, on_review=None):
+    """One button owner from review start through the final approval wait."""
+    phase = "review"
+    path = review_path
+    process = None
+    started = None
+    deadline = None
+    retry_at = 0
+    attempt = 0
+    stopping_at = None
+    killed = False
+    armed = False
+    open_since = None
+    closed_since = None
     approved = False
-    try:
-        open_since = None
-        closed_since = None
-        while True:
-            code = process.poll()
-            now = time.monotonic()
-            if now >= deadline:
-                raise subprocess.TimeoutExpired("aplay", 600)
-            # Sample at playback exit too: a press may have started since the
-            # last poll. Keep its confirmation window across that boundary.
-            if now < accept_after:
-                armed = False
-            elif open_since is not None and now - open_since >= SETTLE_OPEN_S:
-                armed = True
-            pressed = button.is_pressed
-            if pressed:
-                open_since = None
-            elif open_since is None:
-                open_since = now
-            if armed and pressed:
-                closed_since = now if closed_since is None else closed_since
-                if now - closed_since >= CONFIRM_PRESS_S:
-                    approved = True
-                    break
-            else:
-                closed_since = None
-            if code is not None and closed_since is None:
-                break
-            time.sleep(POLL_S)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=0.2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=0.2)
-            released = getattr(process, "reservation_released", None)
-            if released is not None:
-                released.wait(0.25)
-    if transport_mode() == "cloud" and not approved and process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, "aplay")
-    if approved:
-        if action == "approve":
-            return approve_guided_press(session_id)
-        acknowledge_guided_press(action, session_id)
-    if not armed:
-        wait_for_stable_open()
-    else:
-        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-    return approved
+    # A file avoids a full stderr pipe stalling the interruptible player.
+    with tempfile.TemporaryFile() as errors:
+        try:
+            while True:
+                now = time.monotonic()
+                pressed = button.is_pressed
+                if started is not None:
+                    if open_since is not None and now >= open_since + SETTLE_OPEN_S:
+                        armed = True
+                    if pressed:
+                        open_since = None
+                        if now < started + 0.5:
+                            armed = False
+                        if armed:
+                            closed_since = now if closed_since is None else closed_since
+                            if now >= closed_since + CONFIRM_PRESS_S:
+                                approved = True
+                                break
+                    else:
+                        closed_since = None
+                        open_since = now if open_since is None else open_since
 
-
-def play_warning_for_approval(path, session_id=None):
-    return play_audio_for_approval(path, session_id)
+                if phase == "wait":
+                    if now >= deadline:
+                        break
+                elif process is None and now >= retry_at:
+                    errors.seek(0)
+                    errors.truncate()
+                    try:
+                        process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)], stderr=errors)
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        if phase != "question" or not optional_question:
+                            raise
+                        phase = "wait"
+                        deadline = time.monotonic() + timeout
+                    else:
+                        deadline = time.monotonic() + 600
+                        if started is None:
+                            started = time.monotonic()
+                            open_since = None if pressed else started
+                elif process is not None:
+                    code = process.poll()
+                    if code is None and now >= deadline:
+                        if phase != "question" or not optional_question:
+                            raise subprocess.TimeoutExpired("aplay", 600)
+                        if stopping_at is None:
+                            process.terminate()
+                            stopping_at = now + 0.2
+                        elif now >= stopping_at:
+                            if killed:
+                                raise subprocess.TimeoutExpired("aplay", 600)
+                            process.kill()
+                            killed = True
+                            stopping_at = now + 0.2
+                    if code is not None:
+                        process = None  # poll reaps the exited player and releases the speaker.
+                        if code and stopping_at is None:
+                            errors.seek(0)
+                            busy = speaker.busy(errors.read(4096))
+                            if busy and not attempt:
+                                attempt = 1
+                                retry_at = time.monotonic() + 0.15
+                                continue
+                            if phase != "question" or not optional_question:
+                                if busy:
+                                    raise speaker.SpeakerBusy("speaker unavailable")
+                                raise subprocess.CalledProcessError(code, "aplay")
+                        if phase == "review":
+                            if on_review is not None:
+                                on_review()
+                            path = question()
+                            phase = "question" if path is not None else "wait"
+                        else:
+                            phase = "wait"
+                        deadline = time.monotonic() + timeout
+                        attempt = 0
+                time.sleep(POLL_S)
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=0.2)
+                released = getattr(process, "reservation_released", None)
+                if released is not None:
+                    released.wait(0.25)
+    if approved and phase == "review" and on_review is not None:
+        on_review()
+    return approve_guided_press(session_id) if approved else False
 
 
 def presence(kind, recipient):
@@ -2289,7 +2314,6 @@ class PiGuidedIO:
         self.talk_mode = talk_mode
         self.setup_reply = False
         self.limit_reached = False
-        self.review_approved = False
 
     def play_ordinary(self, path):
         if self.setup_reply and Path(path) == sound_pack.cue_path("deleted"):
@@ -2300,15 +2324,6 @@ class PiGuidedIO:
 
     def play_after_cue(self, path):
         play_audio_after_cue(path)
-
-    def play_review(self, path):
-        if not self.setup_reply and buttonbox_voice():
-            play_moment(voice="review")
-        if transport_mode() == "cloud":
-            self.review_approved = play_audio_for_approval(
-                path, self.session_id, action="approve", ignore_first_s=0.5)
-        else:
-            self.play_ordinary(path)
 
     def play_deleted(self, path):
         self.play_ordinary(path)
@@ -2332,29 +2347,28 @@ class PiGuidedIO:
                                    review_required=result.review_required)
         return result
 
-    def wait_for_approval(self, timeout):
-        if self.review_approved:
-            return True
+    def approval_question(self):
         if self.setup_reply:
             cloud_setup.SetupGuide().advance({"recording"}, "review")
-            path = sound_pack.voice_path("setup-ask-send")
-        elif buttonbox_voice():
-            path = sound_pack.voice_path("setup-ask-send") if self.limit_reached else sound_pack.next_send_prompt()
-        else:
-            path = None
-        if path is not None:
-            try:
-                if transport_mode() == "cloud":
-                    if play_audio_for_approval(path, self.session_id, action="approve"):
-                        return True
-                else:
-                    self.play_ordinary(path)
-            except (OSError, ValueError, subprocess.SubprocessError):
-                # Optional setup speech must not discard the saved reply.
-                if not self.setup_reply:
-                    raise
-        approved = wait_for_approval(timeout, self.session_id)
-        return approved
+            return sound_pack.voice_path("setup-ask-send")
+        if buttonbox_voice():
+            return sound_pack.voice_path("setup-ask-send") if self.limit_reached else sound_pack.next_send_prompt()
+        return None
+
+    def review_and_wait_for_approval(self, path, timeout, on_review=None):
+        if transport_mode() == "cloud":
+            if not self.setup_reply and buttonbox_voice():
+                play_moment(voice="review")
+            return review_and_wait_for_approval(
+                path, self.approval_question, timeout, self.session_id,
+                optional_question=self.setup_reply, on_review=on_review)
+        self.play_ordinary(path)
+        if on_review is not None:
+            on_review()
+        question = self.approval_question()
+        if question is not None:
+            self.play_ordinary(question)
+        return wait_for_approval(timeout, self.session_id)
 
     def delete(self, path):
         try:
