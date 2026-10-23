@@ -2015,10 +2015,8 @@ def _play_audio_for_approval(path, session_id, *, action, ignore_first_s, stderr
             now = time.monotonic()
             if now >= deadline:
                 raise subprocess.TimeoutExpired("aplay", 600)
-            # A press already started during audio keeps its confirmation
-            # window when audio ends; no new press starts after that boundary.
-            if code is not None and closed_since is None:
-                break
+            # Sample at playback exit too: a press may have started since the
+            # last poll. Keep its confirmation window across that boundary.
             if now < accept_after:
                 armed = False
             elif open_since is not None and now - open_since >= SETTLE_OPEN_S:
@@ -2345,11 +2343,16 @@ class PiGuidedIO:
         else:
             path = None
         if path is not None:
-            if transport_mode() == "cloud":
-                if play_audio_for_approval(path, self.session_id, action="approve"):
-                    return True
-            else:
-                self.play_ordinary(path)
+            try:
+                if transport_mode() == "cloud":
+                    if play_audio_for_approval(path, self.session_id, action="approve"):
+                        return True
+                else:
+                    self.play_ordinary(path)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                # Optional setup speech must not discard the saved reply.
+                if not self.setup_reply:
+                    raise
         approved = wait_for_approval(timeout, self.session_id)
         return approved
 

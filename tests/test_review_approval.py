@@ -131,7 +131,7 @@ class ReviewApprovalTests(unittest.TestCase):
         wait.assert_called_once_with(10, 'session')
 
     def timed_session(self, windows, *, during='review', duration=1, setup_reply=False,
-                      real_wait=False, busy_first_review=False, release_delay=0):
+                      real_wait=False, busy_first_review=False, release_delay=0, fail_question=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'recording.wav'
@@ -146,8 +146,11 @@ class ReviewApprovalTests(unittest.TestCase):
             approvals = []
             events = []
             review_attempts = []
+            question_attempts = []
             retry_sleeps = []
             def tick(seconds):
+                if fail_question:
+                    self.assertEqual(source.read_bytes(), original)
                 if seconds == .15:
                     retry_sleeps.append(seconds)
                     self.assertEqual(source.read_bytes(), original)
@@ -174,6 +177,11 @@ class ReviewApprovalTests(unittest.TestCase):
                         return mock.Mock(returncode=1, poll=lambda: 1)
                 if (path == source) == (during == 'review'):
                     origin[0] = clock[0]
+                if path != source:
+                    question_attempts.append(clock[0])
+                    if fail_question:
+                        kwargs['stderr'].write(b'aplay: Input/output error\n')
+                        return mock.Mock(returncode=1, poll=lambda: 1)
                 end = clock[0] + duration
                 player = mock.Mock(returncode=0)
                 player.poll.side_effect = lambda: 0 if clock[0] >= end or player.terminate.called else None
@@ -195,12 +203,15 @@ class ReviewApprovalTests(unittest.TestCase):
                  mock.patch.object(runtime, 'wait_for_stable_open', side_effect=release_wait if real_wait else release), \
                  mock.patch.object(runtime, 'play_moment'), \
                  mock.patch.object(runtime, 'log_event', side_effect=log), \
-                 mock.patch.object(runtime, 'wait_for_approval', side_effect=approval_wait if real_wait else lambda *a: False), \
+                 mock.patch.object(runtime, 'wait_for_approval', side_effect=approval_wait if real_wait else lambda *a: False) as wait, \
                  mock.patch.object(runtime.sound_pack, 'next_send_prompt', return_value=Path('ask-send.wav')), \
                  mock.patch.object(io, 'record', return_value=RecordingResult(str(source), 2, True)), \
                  mock.patch.object(io, 'play_deleted'):
                 result = GuidedSession(io, store, lambda kind, **data: events.append(kind)).run(
                     recipient=io.recipient, flow_kind='reply', deleted_cue_path='deleted.wav', account_scope='a' * 64)
+                if fail_question:
+                    wait.assert_called_once_with(10.0, 'session')
+                    self.assertEqual(len(question_attempts), 1)
             jobs = store.jobs()
             self.assertEqual(len(jobs), len(approvals))
             self.assertEqual(events.count('guided_approved'), len(approvals))
@@ -269,6 +280,26 @@ class ReviewApprovalTests(unittest.TestCase):
                     self.assertEqual(result, 'approved')
                     self.assertEqual(len(approvals), 1)
                     self.assertAlmostEqual(approvals[0], 1.04)
+
+    def test_press_starting_in_final_poll_interval_approves_exact_recording_once(self):
+        for during in ('review', 'question'):
+            for setup_reply in (False, True):
+                with self.subTest(during=during, setup_reply=setup_reply):
+                    result, approvals = self.timed_session([(.996, 1.25)], during=during,
+                        setup_reply=setup_reply, real_wait=True)
+                    self.assertEqual(result, 'approved')
+                    self.assertEqual(len(approvals), 1)
+                    self.assertAlmostEqual(approvals[0], 1.08)
+
+    def test_failed_optional_setup_question_keeps_approval_wait_and_original_reply(self):
+        result, approvals = self.timed_session([(.1, .3)], during='question',
+            setup_reply=True, real_wait=True, fail_question=True)
+        self.assertEqual(result, 'approved')
+        self.assertEqual(len(approvals), 1)
+        self.assertGreaterEqual(approvals[0], .18)
+        self.assertLess(approvals[0], .3)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.timed_session([(.1, .3)], during='question', real_wait=True, fail_question=True)
 
     def test_stalled_review_times_out_reaps_player_and_releases_reservations(self):
         with tempfile.TemporaryDirectory() as directory:
