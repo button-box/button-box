@@ -1,5 +1,8 @@
 # On-box software updates
 
+For the application activator ordering repair and exact field-delivery limits,
+see [boot recovery ordering](boot-ordering.md).
+
 Controller selection and local publication run in Cloud and wacli modes on
 Raspberry Pi OS Trixie and aarch64. Cloud application orchestration is described below. The
 supported models are `Raspberry Pi 4 Model B` and `Raspberry Pi 3 Model A Plus`
