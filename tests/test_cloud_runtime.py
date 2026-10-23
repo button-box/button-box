@@ -1417,7 +1417,10 @@ class CloudRuntimeTests(unittest.TestCase):
         guide = cloud_runtime.cloud_setup.SetupGuide()
         guide.change('start')
         self.runtime.heartbeat()
-        with self.settings_audio_owner(), mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+        # Quiet hours use the host clock, independently of the runtime's fake clock.
+        # Keep audio eligible so silence here proves the setup guard suppressed it.
+        with self.settings_audio_owner(), mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}), \
+             mock.patch.object(button_send, 'quiet_hours', return_value=False):
             for revision, stage in enumerate(('scan', 'press', 'names', 'your_turn', 'await_listened', 'done'), 1):
                 with self.subTest(stage=stage):
                     guide.change('stage', stage=stage)
@@ -1425,6 +1428,7 @@ class CloudRuntimeTests(unittest.TestCase):
                                                  timezone='Europe/Lisbon')
                     self.runtime._command(item, NOW)
                     self.apply_settings_on_button()
+                    self.assertTrue(json.loads(cloud_runtime.APPLIED_FILE.read_text())['settings_sound'])
                     self.runtime._finish_settings()
                     self.runtime.flush_acks()
                     self.assertEqual(self.runtime.settings.load()[0]['master_volume_percent'], 80 - revision)

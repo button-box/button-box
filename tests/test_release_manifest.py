@@ -21,21 +21,21 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 class ReleaseManifestTests(unittest.TestCase):
     def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
         payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
-        self.assertEqual(len(payload), 704)
+        self.assertEqual(len(payload), 705)
         for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
                      'config/emergency-keys/README.md', 'scripts/install/health-probe.py',
                      'messagebox/controller_selector.py', 'messagebox/controller_slots.py',
-                     'messagebox/cloud_boot_repair.py'):
+                     'messagebox/cloud_boot_repair.py', 'sounds/cues/cue-rec_start.wav'):
             self.assertIn(name, payload)
-        # The installed program mapping now has 689 files. Fixed trust code is
-        # staged separately in updater/, and public pins are bootstrap-only.
+        # Boot repair and the record-start cue bring the installed mapping to 690 files.
+        # Fixed trust code is staged separately in updater/; public pins are bootstrap-only.
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 689)
+        self.assertEqual(len(paths), 690)
         self.assertFalse(any('/etc/button-box-update/' in target for target in paths.values()))
 
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 689)
+        self.assertEqual(len(paths), 690)
         for name in ("cloud-local.html", "cloud-local.js"):
             self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
@@ -134,7 +134,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 689)
+            self.assertEqual(len(entries), 690)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(
