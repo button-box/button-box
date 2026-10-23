@@ -1413,6 +1413,29 @@ class CloudRuntimeTests(unittest.TestCase):
             self.assertFalse(button_send.maybe_play_cloud_sound())
         self.assertEqual(play.call_args.args[0].name, "voice-setting-saved.wav")
 
+    def test_setup_settings_apply_and_ack_silently_then_dashboard_change_announces(self):
+        guide = cloud_runtime.cloud_setup.SetupGuide()
+        guide.change('start')
+        self.runtime.heartbeat()
+        with self.settings_audio_owner(), mock.patch.dict(os.environ, {'MSGBOX_TRANSPORT': 'cloud'}):
+            for revision, stage in enumerate(('scan', 'press', 'names', 'your_turn', 'await_listened', 'done'), 1):
+                with self.subTest(stage=stage):
+                    guide.change('stage', stage=stage)
+                    item = self.settings_command(revision=revision, master_volume_percent=80 - revision,
+                                                 timezone='Europe/Lisbon')
+                    self.runtime._command(item, NOW)
+                    self.apply_settings_on_button()
+                    self.runtime._finish_settings()
+                    self.runtime.flush_acks()
+                    self.assertEqual(self.runtime.settings.load()[0]['master_volume_percent'], 80 - revision)
+                    ack = self.client.acks[-1]
+                    self.assertEqual((ack['operation_id'], ack['state'], ack['applied_revision']),
+                                     (item['operation_id'], 'applied', revision))
+                    self.assertEqual(len(list(self.runtime.audio_requests.directory.glob('*.json'))), int(stage == 'done'))
+            # Suppressed confirmations never reappear after setup finishes.
+            self.runtime._finish_settings()
+            self.assertEqual(len(list(self.runtime.audio_requests.directory.glob('*.json'))), 1)
+
     def test_voice_switch_says_setting_saved_after_apply_and_debounce(self):
         self.runtime.heartbeat()
         item = self.settings_command(voice_pack="dj", master_volume_percent=35)

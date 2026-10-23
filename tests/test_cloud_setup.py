@@ -83,6 +83,52 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.guide.speak(play))
         play.assert_called_once_with('setup-press')
 
+    def test_pending_claim_before_online_receipt_survives_button_owner_handover(self):
+        for onboarding_speaks in (False, True):
+            with self.subTest(onboarding_speaks=onboarding_speaks):
+                self.guide.path.unlink(missing_ok=True)
+                client = FakeClient()
+                client.setup_checkin = lambda: {'claimed': False,
+                    'pending_claim': {'claim_id': ID, 'expires_at': NOW + 600}}
+                claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
+                claim.setup_checkin()  # Before the onboarding button consumes setup-online.
+                play = mock.Mock()
+                with mock.patch.object(runtime, 'quiet_hours', return_value=False), \
+                     mock.patch.object(runtime.cloud_claim, 'setup_online_cue', return_value=False), \
+                     mock.patch.object(runtime, 'play_setup_line', play):
+                    if onboarding_speaks:
+                        runtime.play_setup_online({})
+                    # New runtime button owner uses the same durable receipt.
+                    restarted = cloud_setup.SetupGuide()
+                    restarted.speak(play)
+                    claim.setup_checkin()
+                    restarted.speak(play)
+                play.assert_called_once_with('setup-press')
+
+    def test_stage_change_between_speech_read_and_receipt_cannot_consume_press_prompt(self):
+        self.guide.change('start')
+        change = self.guide.change
+        def race(action, **fields):
+            change('pending_claim', claim_id=ID, expires_at=NOW + 600)
+            return change(action, **fields)
+        play = mock.Mock()
+        with mock.patch.object(self.guide, 'change', side_effect=race):
+            self.assertFalse(self.guide.speak(play))
+        play.assert_not_called()
+        self.assertNotIn('press', self.guide.load()['spoken'])
+        self.assertTrue(cloud_setup.SetupGuide().speak(play))
+        play.assert_called_once_with('setup-press')
+
+    def test_claim_completed_during_handover_does_not_speak_stale_press_instruction(self):
+        self.guide.pending_claim(ID, NOW + 600)
+        client = FakeClient()
+        client.setup_checkin = lambda: {'claimed': True}
+        claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
+        claim.setup_checkin()
+        play = mock.Mock()
+        self.assertTrue(cloud_setup.SetupGuide().speak(play))
+        play.assert_called_once_with('setup-names')
+
     def test_missing_expired_or_cancelled_remote_claim_cannot_arm_press_speech(self):
         client = FakeClient()
         claim = CloudClaim(client, path=self.root / 'claim.json', clock=lambda: NOW)
@@ -158,6 +204,7 @@ class SetupTests(unittest.TestCase):
                                 ("recording_recipient_context", lambda: None),
                                 ("inbound_audio_authorized", lambda meta: True), ("queued", lambda: []),
                                 ("wait_for_stable_open", mock.Mock()), ("play_audio_ordinary", mock.Mock()),
+                                ("play_audio_for_approval", mock.Mock(return_value=False)),
                                 ("play_audio_after_cue", mock.Mock()), ("play_setup_line", mock.Mock()),
                                 ("finish_claim", mock.Mock()), ("react_played", mock.Mock()),
                                 ("mark_queue_known", mock.Mock()), ("refresh_led", mock.Mock()),
@@ -288,7 +335,8 @@ class SetupTests(unittest.TestCase):
         result = RecordingResult('synthetic.wav', 60, True, True, 60)
         with mock.patch.object(runtime, 'capture_guided_recording', return_value=result), \
              mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
-             mock.patch.object(runtime, 'play_audio_ordinary') as play, \
+             mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+             mock.patch.object(runtime, 'play_audio_for_approval', return_value=False) as play, \
              mock.patch.object(runtime, 'wait_for_approval', return_value=False), \
              mock.patch.object(runtime.sound_pack, 'next_send_prompt', return_value=Path('voice-ask-send-1.wav')) as short_prompt:
             io = runtime.PiGuidedIO('person', 'session', 60)

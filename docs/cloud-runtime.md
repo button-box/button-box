@@ -125,14 +125,14 @@ already confirmed/claimed presses and pending cancellation do not. Setup plays
 bundled `cue-press.wav` and `cue-oops.wav` through the detected speaker; audio
 failures remain content-free and never prevent claim confirmation.
 
-The first successful setup check-in queues `cue-connected.wav`. The shared,
+The first successful authenticated setup check-in queues an online event. The shared,
 group-restricted `/var/lib/messagebox-cloud/setup-online.json` keeps one receipt
 per setup marker. The idle setup button listener marks it played before bounded
-playback, so polling and restarts cannot replay it in the same session. After
-the connected cue finishes, Jessica's `voice-setup-online.wav` gives the setup
-card handoff once in the box's lifetime, using its own durable receipt (older
-`voice-online.wav` receipts do not suppress this new line). Setup always uses
-Jessica. Claimed runtime plays connected plus the current voice pack's
+playback, so polling and restarts cannot replay it in the same session. The
+current guide plays `voice-setup-scan.wav` in the setup voice, then
+`voice-setup-press.wav` only for an unexpired pending claim from Cloud.
+Registration alone does not permit the press line. See `voice-onboarding.md`
+for the guide receipts and first-reply flow. Claimed runtime plays connected plus the current voice pack's
 `voice-online-ready.wav` on a fresh heartbeat after boot or after recovery from
 an outage. The box counts as offline only when its last good heartbeat is at
 least ten minutes old; the offline cue uses the same threshold, so shorter

@@ -396,6 +396,7 @@ class SoundPackTests(unittest.TestCase):
                          mock.patch.object(sound_pack, 'next_send_prompt', return_value=sound_pack.voice_path('ask-send-1')), \
                          mock.patch.object(runtime, 'capture_guided_recording', return_value=recording), \
                          mock.patch.object(runtime, 'wait_for_approval', return_value=outcome == 'approved'), \
+                         mock.patch.object(runtime, 'play_audio_for_approval', side_effect=lambda p, *a, **kw: played.append(Path(p).name) or False), \
                          mock.patch.object(runtime, 'play_audio_ordinary', side_effect=lambda p: played.append(Path(p).name)):
                         io = runtime.PiGuidedIO('person', 'session', 60)
                         result = GuidedSession(io, store, mock.Mock()).run(recipient='person',

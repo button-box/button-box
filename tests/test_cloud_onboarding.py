@@ -245,12 +245,14 @@ class CloudOnboardingTests(unittest.TestCase):
             with self.subTest(result=type(result).__name__):
                 self.cloud.setup_checkin = mock.Mock(side_effect=result if isinstance(result, Exception) else None,
                                               return_value=result)
+                online = mock.Mock()
                 pending = [True]
                 write, path, _ = self.run_watcher(setup_pending=lambda: pending[0],
-                                                sleep=lambda _: pending.__setitem__(0, False))
+                                                sleep=lambda _: pending.__setitem__(0, False), online_cue=online)
                 write.assert_not_called()
                 self.assertFalse(path.exists())
                 self.cloud.setup_checkin.assert_called_once_with()
+                self.assertEqual(online.call_count, int(not isinstance(result, Exception)))
 
     def test_online_cue_failure_does_not_block_claimed_completion(self):
         self.cloud.claimed = True

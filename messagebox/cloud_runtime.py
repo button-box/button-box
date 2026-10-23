@@ -1721,6 +1721,9 @@ class CloudRuntime:
                 self._save()
 
     def _queue_settings_saved(self, operation_id, marker):
+        guide = cloud_setup.SetupGuide().load()
+        if guide and guide["stage"] != "done":
+            return
         try:
             intent = json.loads(self._intent_path(operation_id).read_text(encoding="utf-8"))
         except FileNotFoundError:

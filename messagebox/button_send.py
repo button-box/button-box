@@ -1962,6 +1962,10 @@ def maybe_play_pending_listened():
 def wait_for_approval(timeout, session_id=None):
     if not wait_for_confirmed_press(timeout):
         return False
+    return approve_guided_press(session_id)
+
+
+def approve_guided_press(session_id=None):
     if buttonbox_voice():
         start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("press"))],
                      lead_in_s=0, max_seconds=APPROVAL_CUE_TIMEOUT_S)
@@ -1974,16 +1978,22 @@ def wait_for_approval(timeout, session_id=None):
     return True
 
 
-def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
+def play_audio_for_approval(path, session_id=None, *, action="approve_warning", ignore_first_s=0):
     """Consume only a fresh deliberate press in review or deletion warning."""
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
     process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    accept_after = time.monotonic() + ignore_first_s
+    armed = ignore_first_s == 0
     approved = False
     try:
         closed_since = None
         while process.poll() is None:
             now = time.monotonic()
-            if button.is_pressed:
+            if now < accept_after:
+                armed = False
+            elif not button.is_pressed:
+                armed = True
+            if armed and button.is_pressed:
                 closed_since = closed_since or now
                 if now - closed_since >= CONFIRM_PRESS_S:
                     approved = True
@@ -1994,10 +2004,16 @@ def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
             time.sleep(POLL_S)
     finally:
         if process.poll() is None:
-            process.wait()
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.2)
     if transport_mode() == "cloud" and not approved and process.returncode:
         raise subprocess.CalledProcessError(process.returncode, "aplay")
     if approved:
+        if action == "approve":
+            return approve_guided_press(session_id)
         acknowledge_guided_press(action, session_id)
     wait_for_stable_open()
     return approved
@@ -2232,6 +2248,7 @@ class PiGuidedIO:
         self.talk_mode = talk_mode
         self.setup_reply = False
         self.limit_reached = False
+        self.review_approved = False
 
     def play_ordinary(self, path):
         if self.setup_reply and Path(path) == sound_pack.cue_path("deleted"):
@@ -2246,7 +2263,11 @@ class PiGuidedIO:
     def play_review(self, path):
         if not self.setup_reply and buttonbox_voice():
             play_moment(voice="review")
-        self.play_ordinary(path)
+        if transport_mode() == "cloud":
+            self.review_approved = play_audio_for_approval(
+                path, self.session_id, action="approve", ignore_first_s=0.5)
+        else:
+            self.play_ordinary(path)
 
     def play_deleted(self, path):
         self.play_ordinary(path)
@@ -2271,13 +2292,21 @@ class PiGuidedIO:
         return result
 
     def wait_for_approval(self, timeout):
+        if self.review_approved:
+            return True
         if self.setup_reply:
             cloud_setup.SetupGuide().advance({"recording"}, "review")
-            play_setup_line("setup-ask-send")
-            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+            path = sound_pack.voice_path("setup-ask-send")
         elif buttonbox_voice():
             path = sound_pack.voice_path("setup-ask-send") if self.limit_reached else sound_pack.next_send_prompt()
-            play_audio_ordinary(path)
+        else:
+            path = None
+        if path is not None:
+            if transport_mode() == "cloud":
+                if play_audio_for_approval(path, self.session_id, action="approve"):
+                    return True
+            else:
+                self.play_ordinary(path)
         approved = wait_for_approval(timeout, self.session_id)
         return approved
 

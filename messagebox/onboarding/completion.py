@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from messagebox import sound_pack
+from messagebox import cloud_setup, sound_pack
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
 from messagebox.onboarding.paths import (
@@ -131,6 +131,7 @@ def complete(
                 raise RuntimeError("cloud claim cannot be verified") from exc
             if claim.get("claimed") is not True:
                 raise RuntimeError("cloud claim is incomplete")
+            cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
             has_cards = False
         else:
             recipient_setup = recipients or RecipientSetup(contacts_path=contacts_path)

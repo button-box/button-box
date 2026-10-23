@@ -54,6 +54,10 @@ class SetupGuide:
                 if state is not None:
                     return state
                 state = {"stage": "scan", "spoken": []}
+            elif state is None and action == "pending_claim" and fields.get("claim_id"):
+                state = {"stage": "press", "spoken": [],
+                         "pending_claim_id": fields["claim_id"],
+                         "pending_claim_expires_at": fields["expires_at"]}
             elif state is None:
                 return None
             elif action == "pending_claim":
@@ -84,9 +88,14 @@ class SetupGuide:
                     raise ValueError("unknown setup stage")
                 state.update(fields)
             elif action == "spoken":
-                if state["stage"] in state["spoken"]:
+                if (state["stage"] != fields.get("stage", state["stage"])
+                        or "pending_claim_id" in fields and state.get("pending_claim_id") != fields["pending_claim_id"]
+                        or state["stage"] == "press" and (not state.get("pending_claim_id")
+                            or state.get("pending_claim_expires_at", 0) <= time.time())
+                        or not fields.get("replay") and state["stage"] in state["spoken"]):
                     return None
-                state["spoken"].append(state["stage"])
+                if state["stage"] not in state["spoken"]:
+                    state["spoken"].append(state["stage"])
             elif action == "fields":
                 state.update(fields)
             atomic_json(self.path, state)
@@ -109,7 +118,9 @@ class SetupGuide:
             return False
         if state["stage"] == "await_listened" and not state.get("sent_ready"):
             return False
-        if not replay and not self.change("spoken"):
+        state = self.change("spoken", stage=state["stage"],
+                            pending_claim_id=state.get("pending_claim_id"), replay=replay)
+        if not state:
             return False
         try:
             play(LINES[state["stage"]])

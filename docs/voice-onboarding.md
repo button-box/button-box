@@ -29,8 +29,10 @@ keep their existing roles.
 6. After playback: `voice-setup-your-turn.wav`. Wait for a new press.
 7. Record the first reply. At 40 seconds, play `voice-setup-remind-stop.wav`
    once. At 60 seconds, stop and keep the recording for review.
-8. Play the review. Play `voice-setup-ask-send.wav`. A new press within ten
-   seconds approves the exact saved recipient. No press deletes the recording
+8. Play the review. A deliberate new press after its first half-second sends
+   immediately. Otherwise play `voice-setup-ask-send.wav`; a press during the
+   question or within ten seconds afterward approves the exact saved recipient.
+   No press deletes the recording
    and plays `voice-setup-deleted.wav`.
 9. The normal successful-upload cue is followed by `voice-setup-sent.wav`.
 10. The matching parent listened receipt uses `voice-listened-noname.wav`.
@@ -47,8 +49,8 @@ that WhatsApp delivered the message or that the parent played it.
 | Claim pending | Confirm the claim. The same press cannot start recording. | Release before another action. |
 | Setup guide | Before claim, replay scan. After claim, replay the current names step if no note waits. After the first note, a new press starts the first reply. | Ignore presses during required speech. Optional greetings yield to a press or a real note. |
 | Recording | A new press stops tap recording. In the first reply, the 40-second reminder ignores presses; 60 seconds stops capture. Normal hold mode stops on release. | The start press must be released before a stop press. |
-| Review | Play the whole recording and the setup send question. A new press in the next ten seconds sends. No press deletes. | The stop press and all playback presses must be released before approval. |
-| Normal runtime | Keep the selected tap/hold, playback, family-card, and review actions. Cloud speech ignores presses. | A press consumed by playback, claim, or an update cannot enter another action. |
+| Review | A deliberate press during Cloud review or its send question sends immediately. Otherwise wait ten seconds, then delete. | Release the stop press first. Ignore the first half-second of review and require release of any press started in that interval. |
+| Normal runtime | Keep the selected tap/hold, playback, and family-card actions. Cloud review uses the same early-send rule as setup. Other required speech ignores presses. | A press consumed by playback, claim, or an update cannot enter another action. |
 
 The boot reset gesture has a risk: a child or a stuck switch can hold the
 button during boot and reset Wi-Fi. This change does not alter that gesture.
@@ -63,15 +65,27 @@ A speech receipt is written before playback. A restart does not replay that
 speech. A deliberate setup press can replay the current instruction once.
 Returning to the hotspot does not reset the guide.
 
+A confirmed pending claim can create the guide before the online cue is
+consumed. Both button owners use the same receipt. Speech records the stage
+and pending claim it read; a concurrent stage change leaves the new prompt
+unconsumed for the next idle pass. Registration alone never arms the press line.
+The root handover gate advances to names only after its own successful claim
+verification, so the runtime cannot inherit a stale press instruction when a
+phone completion request overtakes the setup watcher.
+
 A new program install does not start the guide on an already claimed box.
-A missing guide file starts only from the first setup-online event. A damaged
+A missing guide file starts from the first setup-online event or a confirmed
+pending claim. A damaged
 state file disables the guide. A restart during recording or review ends the
 guide; normal outbox recovery keeps approved messages. Unapproved recordings
 still use the existing temporary-file cleanup. The guide does not add automatic
 recording or automatic approval after a restart.
 
-Quiet hours defer setup instructions. Settings confirmations keep their short
-lifetime and are discarded during quiet hours. Missing or failed guide audio is
+Quiet hours defer setup instructions. Cloud settings still apply and are
+acknowledged during setup, but their saved confirmation is not queued until the
+guide is `done`. Suppressed confirmations are not replayed later. Settings
+confirmations keep their short lifetime and are discarded during quiet hours.
+Missing or failed guide audio is
 silent. It does not prevent claim completion through WhatsApp.
 
 ## Optional greeting download and voice
