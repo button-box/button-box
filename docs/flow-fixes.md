@@ -10,6 +10,12 @@ the normal approval cue, durable outbox and sending feedback. The send question
 also accepts an interrupting press. With no press, the ten-second approval wait
 and deletion remain unchanged.
 
+Rearming after an ignored hold requires a stable half-second release; an open
+bounce cannot arm approval. A fresh press begun during review or its question
+keeps its 80 ms confirmation window across playback completion. Playback retains
+the 600-second timeout, with bounded terminate/kill and reaping before the
+speaker and maintenance reservations are released.
+
 Setup replies use the same rule: they review the same recording and bind the
 same saved recipient through `ReplyOutbox`. Ordinary inbound playback, required
 setup instructions and wacli review still discard playback presses.

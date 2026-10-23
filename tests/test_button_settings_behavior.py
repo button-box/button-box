@@ -301,7 +301,7 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
                     process.stopped = True
                 process.poll = poll
                 process.terminate = terminate
-                process.wait = lambda: None
+                process.wait = lambda **kwargs: None
                 def spawn(*args, **kwargs):
                     self.assertFalse(button.is_pressed)
                     calls.append("spawn")

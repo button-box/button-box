@@ -1982,33 +1982,53 @@ def play_audio_for_approval(path, session_id=None, *, action="approve_warning", 
     """Consume only a fresh deliberate press in review or deletion warning."""
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
     process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
-    accept_after = time.monotonic() + ignore_first_s
+    started = time.monotonic()
+    accept_after = started + ignore_first_s
+    deadline = started + 600
     armed = ignore_first_s == 0
     approved = False
     try:
+        open_since = None
         closed_since = None
-        while process.poll() is None:
+        while True:
+            code = process.poll()
             now = time.monotonic()
+            if now >= deadline:
+                raise subprocess.TimeoutExpired("aplay", 600)
+            # A press already started during audio keeps its confirmation
+            # window when audio ends; no new press starts after that boundary.
+            if code is not None and closed_since is None:
+                break
             if now < accept_after:
                 armed = False
-            elif not button.is_pressed:
+            elif open_since is not None and now - open_since >= SETTLE_OPEN_S:
                 armed = True
-            if armed and button.is_pressed:
-                closed_since = closed_since or now
+            pressed = button.is_pressed
+            if pressed:
+                open_since = None
+            elif open_since is None:
+                open_since = now
+            if armed and pressed:
+                closed_since = now if closed_since is None else closed_since
                 if now - closed_since >= CONFIRM_PRESS_S:
                     approved = True
-                    process.terminate()
                     break
             else:
                 closed_since = None
+            if code is not None and closed_since is None:
+                break
             time.sleep(POLL_S)
     finally:
         if process.poll() is None:
+            process.terminate()
             try:
                 process.wait(timeout=0.2)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=0.2)
+        released = getattr(process, "reservation_released", None)
+        if released is not None:
+            released.wait(0.25)
     if transport_mode() == "cloud" and not approved and process.returncode:
         raise subprocess.CalledProcessError(process.returncode, "aplay")
     if approved:
