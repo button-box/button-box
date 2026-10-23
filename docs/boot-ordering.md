@@ -116,15 +116,82 @@ not application version alone:
   through the same real outer-signature and transaction boundaries.
 - A newer voice application selected onto an original 1.1.0 fallback worker is
   not covered by the legacy capsule: its base guard rejects that combination.
-  It needs compatible controller restoration/delivery before the full release.
+  It needs compatible controller restoration/delivery before the full release;
+  see the specific worker limitation below.
 - Unbootstrapped, unsupported-platform, offline/untrusted or storage-failing
   boxes cannot acquire a normal signed update until their specific prerequisite
   is restored. Setup mode still defers normal application installation.
 
+### Newer application with frozen 1.1.0 fallback: not safely covered
+
+This combination remains outside the two application artifacts' delivery
+coverage. The frozen worker's `load_candidate()` requires the complete sound
+floor, canonical manifest equality and checked mode migration inputs. A tiny
+repair-only application cannot pass those contracts. Its `_expected_target()`
+also rejects `sounds/voices/buttonbox/*`, present in every v0.3.13–v0.3.15
+payload. The worker builds a fresh candidate release from listed files; it does
+not overlay the installed application's program or sounds. Omitting that voice
+pack would discard it. Merely widening the v0.3.12 capsule's version guard would
+replace the newer application's program/sounds with v0.3.12, so it remains
+forbidden. Lowering the full artifact's minimum version cannot change the
+frozen path allowlist.
+
+Safely supporting this case needs a separately proven controller-restoration
+path before the full application release. Copying installed files or writing
+root configuration from the staged migration **check** would introduce mutation
+before the transaction's snapshot/journal and is not a safe shortcut. B76 keeps
+that check read-only and does not bypass worker validation. Signed rejection
+tests exercise both exact artifacts against application identities v0.3.13,
+v0.3.14 and v0.3.15 with frozen 1.1.0 selected; program/voice bytes remain
+unchanged. Those are admission tests with host systemd/health boundaries, not
+execution tests of each newer application.
+
+**Field detection:** no existing heartbeat field reports the selected worker.
+`software_version` / `software_commit` describe the application.
+`software_update` contains only `effective_mode`, `channel`, `available_version`,
+`last_result` and `trust_sequence`; its capability `protocol=1` is also not a
+worker version. These fields cannot distinguish a 1.1.0 fallback from 1.3.0.
+The coordinator must treat that state as unknown from Cloud heartbeat alone.
+
+With operator access on a selector-equipped box, validate the current-boot
+selection and its module hashes using the installed selector, rather than
+inferring selection from whichever slot has the newest files:
+
+```sh
+sudo python3 -I - <<'PYCODE'
+import json
+import runpy
+from pathlib import Path
+api = runpy.run_path('/usr/lib/messagebox-selector/selector.py')
+root = Path('/')
+with api['lock'](root, 'gate', shared=True):
+    selected = api['selected'](root)
+    print(json.dumps({'slot': selected['slot'],
+                      'version': selected['identity']['version'],
+                      'legacy': selected['identity']['legacy'],
+                      'trial': selected['trial']}))
+PYCODE
+```
+
+`version=1.1.0` with an application v0.3.13–v0.3.15 identifies the unsupported
+combination. A missing/invalid selection is unknown, not evidence of 1.3.0.
+On a pre-selector installation, inspect `systemctl show
+messagebox-update-controller.service --property=ExecStart,MainPID` and the live
+process command line to establish the worker directory; compare its six module
+hashes with the frozen provenance in `tests/fixtures/field-updater/provenance.json`.
+Inspect the selected directory's `release_verify.py` `UPDATER_VERSION` only after
+establishing that route. No new telemetry is deployed by this hotfix; adding
+selected-worker identity to Cloud reporting is a companion task.
+
 Host tests substitute systemd and application health. Production signing,
 publication, live policy/window/approval and physical acceptance remain separate.
 
-## Already-dead boxes: the button is not a rescue path
+## Known limit: already-dead boxes require operator recovery
+
+The coordinator accepts this existing limitation for B76: a box already dead
+after the failed boot cannot acquire the repair through normal OTA. Recover it
+through operator access (for example, Tailscale where working access exists),
+or retrieve it. This hotfix does not add an autonomous or family-button rescue.
 
 `messagebox-wifi-reset.service` itself has the bootstrap's recovery
 `Requires`/`After` gate. When that dependency job is deleted, its
@@ -157,7 +224,11 @@ export containing `/etc/systemd/system`, `/usr/lib/systemd/system`, the `/lib`
 alias when used by unit links, and generated
 unit links, including packaged Comitup and tmpfiles units. It preserves sandbox
 properties and replaces only executable commands. It verifies the original cycle
-and repaired graph in both modes, without substituting vendor units. Missing
+and repaired graph in both modes, without substituting vendor units. Any
+`Found ordering cycle` or `deleted to break ordering cycle` diagnostic rejects
+the repaired graph, even if systemd exits zero after deleting a job. A separate
+deliberately cyclic native fixture checks this boundary without a field export;
+captured box-4 diagnostics test the parser on every host. Missing
 export/native systemd is an explicit skip. Export no environment files, secrets,
 controller state or device data.
 

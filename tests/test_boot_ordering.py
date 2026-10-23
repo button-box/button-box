@@ -1,6 +1,7 @@
 """Boot graph contracts, including the unchanged drop-ins already in the field."""
 
 import re
+import ast
 import contextlib
 import importlib.util
 import json
@@ -19,6 +20,7 @@ from messagebox import cloud_boot_repair as repair, controller_selector as selec
 from test_bounded_update import bounded_update
 from test_controller_slots import DurableView
 from test_release_tooling import build, release
+from boot_graph_export import check_result
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +30,12 @@ ACTIVATORS = (
     'messagebox-onboarding-voice.path',
 )
 RECOVERY = 'messagebox-update-recovery.service'
+BOX4_CYCLE = '''messagebox-onboarding-complete.path: Found ordering cycle on messagebox-update-recovery.service/start
+... Found dependency on basic.target/start
+... Found dependency on paths.target/start
+... Found dependency on messagebox-onboarding-complete.path/start
+... Job messagebox-update-recovery.service/start deleted to break ordering cycle starting with messagebox-onboarding-complete.path/start
+'''
 
 
 def unit_settings(raw):
@@ -201,6 +209,84 @@ def app_graph(repaired=False):
 
 
 class BootOrderingTests(unittest.TestCase):
+    def test_native_diagnostics_reject_cycles_even_when_exit_status_is_zero(self):
+        for output in (BOX4_CYCLE, BOX4_CYCLE.splitlines()[0], BOX4_CYCLE.splitlines()[-1]):
+            for stream in ('stdout', 'stderr'):
+                for mode in ('runtime', 'setup'):
+                    with self.subTest(output=output, stream=stream, mode=mode):
+                        result = subprocess.CompletedProcess('verify', 0, '', '')
+                        setattr(result, stream, output)
+                        with self.assertRaisesRegex(AssertionError, 'repaired field graph rejected'):
+                            check_result(result, mode=mode, repaired=True)
+                        check_result(result, mode=mode, repaired=False)
+        clean = subprocess.CompletedProcess('verify', 0, '', '')
+        check_result(clean, mode='runtime', repaired=True)
+        with self.assertRaisesRegex(AssertionError, 'did not reproduce'):
+            check_result(clean, mode='runtime', repaired=False)
+        with self.assertRaisesRegex(AssertionError, 'repaired field graph rejected'):
+            check_result(subprocess.CompletedProcess('verify', 1, '', 'invalid unit'),
+                         mode='setup', repaired=True)
+
+    def test_field_verifier_rejects_zero_exit_cycle_in_either_repaired_mode(self):
+        from boot_graph_export import verify
+        for failing_mode in ('runtime', 'setup'):
+            with self.subTest(mode=failing_mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                # Only test verifier control flow here: no native graph or field
+                # certification is claimed for these mocked command results.
+                for name in ('comitup.service', 'comitup-web.service', 'basic.target', 'sysinit.target',
+                             'paths.target', 'timers.target', 'systemd-tmpfiles-setup.service', 'multi-user.target'):
+                    write(root / 'usr/lib/systemd/system' / name, b'[Unit]\n')
+                wants = root / 'etc/systemd/system/multi-user.target.wants'
+                wants.mkdir(parents=True)
+                for name in ('messagebox-onboarding-complete.path', 'messagebox-onboarding-voice.path'):
+                    (wants / name).symlink_to('/etc/systemd/system/' + name)
+                cycle = subprocess.CompletedProcess('verify', 0, '', BOX4_CYCLE)
+                clean = subprocess.CompletedProcess('verify', 0, '', '')
+                results = [cycle, cycle] if failing_mode == 'runtime' else [cycle, clean, cycle, cycle]
+                with mock.patch('boot_graph_export.subprocess.run', side_effect=results) as run:
+                    with self.assertRaisesRegex(AssertionError, failing_mode + ' repaired field graph rejected'):
+                        verify(root)
+                self.assertEqual(run.call_count, len(results))
+
+    def test_field_heartbeat_has_no_selected_worker_identity(self):
+        for version in ('v0.3.13', 'v0.3.14', 'v0.3.15'):
+            with self.subTest(application=version):
+                raw = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                               version + ':messagebox/cloud_update.py'], text=True)
+                function = next(node for node in ast.parse(raw).body
+                                if isinstance(node, ast.FunctionDef) and node.name == 'heartbeat_fields')
+                namespace = {'status': lambda: {'installed': True, 'worker_version': '1.1.0',
+                                                'controller_version': '1.1.0'}}
+                exec(compile(ast.Module(body=[function], type_ignores=[]), version + ':cloud_update.py', 'exec'), namespace)
+                self.assertEqual(set(namespace['heartbeat_fields']()['software_update']),
+                                 {'effective_mode', 'channel', 'available_version', 'last_result', 'trust_sequence'})
+
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'requires native systemd-analyze')
+    def test_native_deliberately_cyclic_fixture_is_rejected(self):
+        # This fixture tests native cycle detection independently of the exact
+        # field export. Defaults are disabled so no host OS units are needed.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            units = root / 'etc/systemd/system'
+            units.mkdir(parents=True)
+            write(root / 'bin/true', b'#!/bin/sh\nexit 0\n', 0o755)
+            (units / 'fixture.target').write_text('[Unit]\nDefaultDependencies=no\n'
+                                                'Wants=first.service second.service\n')
+            service = '[Unit]\nDefaultDependencies=no\nAfter={}\n[Service]\nType=oneshot\nExecStart=/bin/true\n'
+            (units / 'first.service').write_text(service.format('second.service'))
+            second = units / 'second.service'
+            second.write_text(service.format('first.service'))
+            command = ['systemd-analyze', 'verify', '--man=no', '--generators=no',
+                       '--root=' + str(root), 'fixture.target']
+            cyclic = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            check_result(cyclic, mode='fixture', repaired=False)
+            with self.assertRaisesRegex(AssertionError, 'repaired field graph rejected'):
+                check_result(cyclic, mode='fixture', repaired=True)
+            second.write_text(service.format(''))
+            clean = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            check_result(clean, mode='fixture', repaired=True)
+
     def test_both_modes_cycle_before_repair_and_are_acyclic_after_single_switch(self):
         for mode in ('runtime', 'setup'):
             for fixed in (False, True):
@@ -491,8 +577,11 @@ class HotfixDeliveryTests(unittest.TestCase):
                     self.assertEqual((source / 'messagebox/button_send.py').read_bytes(),
                                      (self.source / 'messagebox/button_send.py').read_bytes())
 
-    def test_current_complete_payload_through_current_worker(self):
-        source = self.root / 'current'
+    @classmethod
+    def current_assets(cls):
+        if hasattr(cls, '_current_assets'):
+            return cls._current_assets
+        source = cls.root / 'current'
         source.mkdir()
         payload = {}
         for name in (ROOT / 'scripts/release/payload.txt').read_text().splitlines():
@@ -501,7 +590,11 @@ class HotfixDeliveryTests(unittest.TestCase):
             mode = 0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644
             write(source / name, (ROOT / name).read_bytes(), mode)
             payload[name] = mode
-        assets = self.package(source, payload, self.root / 'current-assets', minimum='1.3.0', version='v0.3.17')
+        cls._current_assets = cls.package(source, payload, cls.root / 'current-assets', minimum='1.3.0', version='v0.3.17')
+        return cls._current_assets
+
+    def test_current_complete_payload_through_current_worker(self):
+        assets = self.current_assets()
         with tempfile.TemporaryDirectory() as directory:
             box = FieldBox(directory)
             self.application_version(box, 'v0.3.15')
@@ -513,15 +606,47 @@ class HotfixDeliveryTests(unittest.TestCase):
                  mock.patch.object(bounded_update, '_boot', return_value='synthetic-boot'):
                 self.deliver(box, assets)
 
-    def test_legacy_capsule_refuses_newer_application_before_any_installed_mutation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            box = FieldBox(directory)
-            self.application_version(box, 'v0.3.15')
-            keys = box.root / 'etc/button-box-update/release-keys'
-            for path in keys.glob('*.pub'):
-                path.unlink()
-            write(keys / 'test.pub', self.public.read_bytes())
-            before = box.tree()
-            with self.assertRaisesRegex(box.worker.UpdateError, 'staged mode migration check failed'):
-                self.deliver(box, self.assets)
-            self.assertEqual(box.tree(), before)
+    def test_newer_applications_cannot_receive_either_signed_artifact_on_frozen_worker(self):
+        for version in ('v0.3.13', 'v0.3.14', 'v0.3.15'):
+            for capsule in (True, False):
+                with self.subTest(application=version, capsule=capsule), tempfile.TemporaryDirectory() as directory:
+                    box = FieldBox(directory)
+                    self.application_version(box, version)
+                    # Admission is tested with the frozen worker and synthetic
+                    # device state, not by running the newer application's GPIO.
+                    # Include real program/voice bytes in the unchanged tree.
+                    for name in ('messagebox/button_send.py', 'sounds/voices/buttonbox/voice-all-set.wav'):
+                        raw = subprocess.check_output(['git', '-C', str(ROOT), 'show', version + ':' + name])
+                        write(box.installed('/opt/messagebox/' + name), raw)
+                    keys = box.root / 'etc/button-box-update/release-keys'
+                    for path in keys.glob('*.pub'):
+                        path.unlink()
+                    write(keys / 'test.pub', self.public.read_bytes())
+                    before = box.tree()
+                    # The capsule refuses a program downgrade. The full payload
+                    # fails its signed minimum-worker contract before extraction.
+                    with self.assertRaisesRegex(box.worker.UpdateError if capsule else ValueError,
+                                                'staged mode migration check failed' if capsule else '^incompatible$'):
+                        self.deliver(box, self.assets if capsule else self.current_assets())
+                    self.assertEqual(box.tree(), before)
+
+    def test_frozen_worker_cannot_preserve_newer_sound_pack_or_accept_repair_only_payload(self):
+        for version in ('v0.3.13', 'v0.3.14', 'v0.3.15'):
+            listing = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                               version + ':scripts/release/payload.txt'], text=True)
+            sounds = [name for name in listing.splitlines() if name.startswith('sounds/voices/buttonbox/')]
+            self.assertTrue(sounds)
+            with tempfile.TemporaryDirectory() as directory:
+                box = FieldBox(directory)
+                for name in sounds:
+                    self.assertIsNone(box.worker._expected_target(name))
+                # Removing the rejected pack would lose its installed bytes:
+                # the frozen transaction builds a fresh candidate, not an overlay.
+                # Removing the rest of the floor to make a tiny capsule is also
+                # explicitly rejected before any installation.
+                box.data['files'] = [item for item in box.data['files'] if not item['source'].startswith('sounds/')]
+                box.save_manifest()
+                before = box.tree()
+                with self.assertRaisesRegex(box.worker.UpdateError, 'sound pack is incomplete'):
+                    box.worker.load_candidate(box.source, box.manifest, box.root)
+                self.assertEqual(box.tree(), before)

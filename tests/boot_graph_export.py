@@ -13,6 +13,20 @@ from pathlib import Path
 from messagebox import cloud_boot_repair as repair
 
 
+def check_result(result, *, mode, repaired):
+    output = result.stdout + result.stderr
+    diagnostics = output.lower()
+    cycle = ('found ordering cycle' in diagnostics
+             or 'deleted to break ordering cycle' in diagnostics)
+    if repaired:
+        # PID 1 may drop a job and successfully construct the remaining
+        # transaction. A zero exit status alone does not establish boot safety.
+        if result.returncode or cycle:
+            raise AssertionError(mode + ' repaired field graph rejected:\n' + output)
+    elif not cycle:
+        raise AssertionError(mode + ' did not reproduce the field ordering cycle:\n' + output)
+
+
 def verify(exported):
     from test_boot_ordering import executable_substitute
     exported = Path(exported).resolve()
@@ -74,9 +88,4 @@ def verify(exported):
                 result = subprocess.run(['systemd-analyze', 'verify', '--man=no', '--generators=no',
                                          '--root=' + str(root), 'default.target'],
                                         capture_output=True, text=True, timeout=60)
-                output = result.stdout + result.stderr
-                if fixed:
-                    if result.returncode:
-                        raise AssertionError(mode + ' repaired field graph rejected:\n' + output)
-                elif 'ordering cycle' not in output.lower():
-                    raise AssertionError(mode + ' did not reproduce the field ordering cycle:\n' + output)
+                check_result(result, mode=mode, repaired=fixed)
