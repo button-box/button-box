@@ -557,8 +557,7 @@ class GuidedSession:
 
     ``io`` owns real audio and button operations.  Ordinary playback never
     returns a button result, making carried presses impossible by contract.
-    A combined review/approval operation lets hardware retain one button owner
-    across audio boundaries; other IO uses the ordinary playback/wait pair.
+    Only ``wait_for_approval`` can approve a reviewed recording.
     """
 
     def __init__(self, io, outbox: OutboxStore, event):
@@ -613,15 +612,9 @@ class GuidedSession:
         review_before_send = review_before_send or recording.timed_out or recording.review_required
         approved = not review_before_send
         if review_before_send:
-            def reviewed():
-                self.event("guided_review_played", session_id=session_id, duration=recording.duration)
-            review = getattr(self.io, "review_and_wait_for_approval", None)
-            if review is not None:
-                approved = review(recording.path, 10.0, reviewed)
-            else:
-                getattr(self.io, "play_review", self.io.play_ordinary)(recording.path)
-                reviewed()
-                approved = self.io.wait_for_approval(10.0)
+            getattr(self.io, "play_review", self.io.play_ordinary)(recording.path)
+            self.event("guided_review_played", session_id=session_id, duration=recording.duration)
+            approved = self.io.wait_for_approval(10.0)
         if approved:
             job = self.outbox.approve(
                 recording.path,

@@ -1,27 +1,38 @@
 # Review, claim and settings flow fixes
 
-## F313: approval during Cloud review
+## F313 deferred
 
-`PiGuidedIO.review_and_wait_for_approval` owns one polling loop from Cloud
-review playback start, through the send question, to the end of the ten-second
-approval wait. It retains the same button state across audio completion,
-cleanup and the busy retry delay; no phase releases or rearms the button.
-A stable half-second release excludes the recording stop hold and contact
-bounce. A new press must start at least 0.5 seconds after review starts and
-remain closed for the normal 80 ms confirmation interval. Confirmation stops
-any active audio with bounded terminate/kill and reaping, then uses the normal
-approval cue, durable outbox and sending feedback exactly once. With no press,
-the recording is deleted after the final wait.
+Early approval during review is excluded from this batch. Review, send-question
+playback, approval wait and held-playback-press discard are restored exactly to
+`3d54ac7`, for ordinary and setup replies. The next attempt must observe the
+button independently of blocking audio and filesystem work, for example GPIO
+edge callbacks in a dedicated thread feeding one debounced state machine.
+Audio phases must not transfer button ownership or consume approval edges.
 
-Playback retains the 600-second timeout and speaker/maintenance reservation
-release. Cloud playback retries an ALSA busy error once after 150 ms, matching
-ordinary playback; the same monitor keeps sampling during the delay. Other
-review errors are not retried. If the optional setup send question fails, the
-approval wait remains available for the saved recording and recipient.
+Acceptance must cover all five review rounds, with exactly one approval/job
+containing the original audio and recipient for every valid press, and none
+for ignored holds or bounce. Run ordinary and setup replies where applicable:
 
-Setup replies use the same rule: they review the same recording and bind the
-same saved recipient through `ReplyOutbox`. Ordinary inbound playback, required
-setup instructions and wacli review still discard playback presses.
+1. Hold from 0.2 s through the ignore interval, open for only 5 ms at 0.6 s,
+   then remain closed: require a stable release and a fresh press. Preserve a
+   fresh press whose 80 ms confirmation spans either clip's end (press starts
+   40 ms before completion, held for 240 ms). A stalled player must terminate
+   by the 600 s deadline, be reaped and release speaker/maintenance reservations.
+2. Question ends at 1.000 s; a 200 ms press starts at 1.100 s: accept it without
+   a release-wait gap. A first review attempt failing with ALSA busy must retry
+   once, preserve the recording and allow subsequent deliberate approval.
+3. Last open sample at 0.995 s, clip ends at 1.000 s, press lasts
+   0.996–1.250 s: preserve it for both clips. A failed optional setup question
+   must leave approval available after audio recovers.
+4. Question ends at 1.000 s, cleanup pauses 20 ms, press lasts
+   1.010–1.210 s: preserve it without requiring another press.
+5. Block audio startup/cleanup and filesystem work while a complete deliberate
+   press occurs: independent observation must retain its edges and confirmation.
+   No audio phase or blocking operation may create an unobserved interval.
+
+Also retain the stop-recording hold exclusion, first 0.5 s ignore interval,
+short-press rejection, no-press deletion, normal sending feedback and unchanged
+wacli playback behavior. Verify real GPIO/audio timing before release.
 
 ## F314: pending-claim speech across owners
 
@@ -93,11 +104,12 @@ claim before the WhatsApp message is sent. Cloud must ensure `pending_claim`
 means a WhatsApp-bound claim before release, or the Pi cannot distinguish that
 early QR claim using the existing payload. Verify/fix this in Cloud, with a
 scan-without-WhatsApp regression test. No payload or identifier change is needed.
-Assistant guidance about sending should allow a press during review or its send
-question; it must not promise that optional box speech was heard. No Cloud
-settings companion change is needed for the timezone default.
+Assistant guidance must continue to request a fresh press after review and its
+send question; early approval is deferred. It must not promise that optional
+box speech was heard. No Cloud settings companion change is needed for the
+timezone default.
 
-Real-box acceptance remains required for press timing, stop holds, audio
-interruption/level, claim handover, settings during setup, and Wi-Fi outage
+Real-box acceptance remains required for normal approval timing, held playback
+presses, audio level, claim handover, settings during setup, and Wi-Fi outage
 reproduction. Physical wacli send, receive/play, reply, family-card, quiet-hours
 and listened-notice checks remain required before a main release.

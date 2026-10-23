@@ -282,23 +282,36 @@ class ButtonSettingsBehaviorTests(unittest.TestCase):
     def test_review_approval_requires_a_new_press_after_recording_release(self):
         for fresh_press in (False, True):
             with self.subTest(fresh_press=fresh_press):
-                clock = [0.0]
+                calls = []
                 button = types.SimpleNamespace(is_pressed=True)
-                def tick(seconds):
-                    clock[0] = round(clock[0] + seconds, 6)
-                    button.is_pressed = clock[0] < .6 or (fresh_press and 1.2 <= clock[0] < 1.6)
-                process = Mock(returncode=0)
-                process.poll.side_effect = lambda: 0 if clock[0] >= 2 or process.terminate.called else None
-                with patch.object(button_send, "button", button, create=True), \
-                     patch.object(button_send, "time", types.SimpleNamespace(monotonic=lambda: clock[0], sleep=tick)), \
-                     patch.object(button_send, "start_player", return_value=process), \
-                     patch.object(button_send, "approve_guided_press", return_value=True) as approve, \
-                     patch.object(button_send, "wait_for_stable_open") as release:
-                    result = button_send.review_and_wait_for_approval("review.wav", lambda: None, 10, "test")
+                tick = [0]
+                def release():
+                    calls.append("release")
+                    button.is_pressed = False
+                def now():
+                    tick[0] += 1
+                    button.is_pressed = fresh_press and tick[0] >= 2
+                    return tick[0] * .05
+                process = types.SimpleNamespace(polls=0, stopped=False)
+                def poll():
+                    process.polls += 1
+                    return 0 if process.stopped or process.polls > 7 else None
+                def terminate():
+                    calls.append("terminate")
+                    process.stopped = True
+                process.poll = poll
+                process.terminate = terminate
+                process.wait = lambda: None
+                def spawn(*args, **kwargs):
+                    self.assertFalse(button.is_pressed)
+                    calls.append("spawn")
+                    return process
+                with patch.object(button_send, "button", button, create=True), patch.object(button_send, "wait_for_stable_open", side_effect=release), patch.object(button_send.time, "monotonic", side_effect=now), patch.object(button_send.time, "sleep"), patch.object(button_send.subprocess, "Popen", side_effect=spawn), patch.object(button_send, "acknowledge_guided_press") as acknowledge:
+                    result = button_send.play_audio_for_approval("review.wav", "test", action="approve_review")
                 self.assertEqual(result, fresh_press)
-                self.assertEqual(approve.call_count, int(fresh_press))
-                self.assertEqual(process.terminate.call_count, int(fresh_press))
-                release.assert_not_called()
+                self.assertEqual(calls[:2], ["release", "spawn"])
+                self.assertEqual(acknowledge.call_count, int(fresh_press))
+                self.assertEqual(calls.count("terminate"), int(fresh_press))
 
     def settings(self, **changes):
         document = defaults({"TZ": "America/New_York"})

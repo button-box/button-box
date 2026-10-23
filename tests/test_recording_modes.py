@@ -232,7 +232,7 @@ class RecordingModesTests(unittest.TestCase):
                         store = OutboxStore(root / "outbox", transport=transport)
                         with mock.patch.object(io, "record", return_value=recording), \
                              mock.patch.object(io, "play_ordinary") as playback, \
-                             mock.patch.object(io, "review_and_wait_for_approval", side_effect=lambda path, timeout, reviewed: (io.play_ordinary(path), reviewed(), True)[2]) as approval:
+                             mock.patch.object(io, "wait_for_approval", return_value=True) as approval:
                             result = GuidedSession(io, store, lambda *a, **kw: None).run(
                                 recipient=io.recipient, flow_kind="standalone", deleted_cue_path="deleted",
                                 review_before_send=review, account_scope="a" * 64 if transport == "cloud" else None)
@@ -390,7 +390,8 @@ class RecordingModesTests(unittest.TestCase):
                          mock.patch.object(runtime, 'sender_wake') as wake, \
                          mock.patch.object(runtime, 'log_event'), \
                          mock.patch.object(io, 'record', return_value=runtime.RecordingResult(str(source), 2, True)), \
-                         mock.patch.object(io, 'review_and_wait_for_approval', return_value=True):
+                         mock.patch.object(io, 'play_review'), \
+                         mock.patch.object(io, 'wait_for_approval', return_value=True):
                         result = GuidedSession(io, store, lambda kind, **data: runtime.recording_session_event(None, kind, **data)).run(
                             recipient=io.recipient, flow_kind='standalone', deleted_cue_path='deleted',
                             review_before_send=review, account_scope='a' * 64 if transport == 'cloud' else None)

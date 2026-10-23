@@ -204,7 +204,6 @@ class SetupTests(unittest.TestCase):
                                 ("recording_recipient_context", lambda: None),
                                 ("inbound_audio_authorized", lambda meta: True), ("queued", lambda: []),
                                 ("wait_for_stable_open", mock.Mock()), ("play_audio_ordinary", mock.Mock()),
-                                ("review_and_wait_for_approval", mock.Mock(return_value=True)),
                                 ("play_audio_after_cue", mock.Mock()), ("play_setup_line", mock.Mock()),
                                 ("finish_claim", mock.Mock()), ("react_played", mock.Mock()),
                                 ("mark_queue_known", mock.Mock()), ("refresh_led", mock.Mock()),
@@ -215,7 +214,7 @@ class SetupTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(runtime, "ContactStore", return_value=types.SimpleNamespace(allowed_jids=lambda: {"person"})))
             capture = stack.enter_context(mock.patch.object(runtime, "capture_guided_recording",
                 return_value=RecordingResult(str(recording), 2, True, True, 60)))
-            approve = runtime.review_and_wait_for_approval
+            approve = stack.enter_context(mock.patch.object(runtime, "wait_for_approval", return_value=True))
             with mock.patch.object(runtime, "claim_oldest", return_value=claim):
                 runtime.run_guided_once(settings)
             capture.assert_not_called()
@@ -335,14 +334,13 @@ class SetupTests(unittest.TestCase):
         result = RecordingResult('synthetic.wav', 60, True, True, 60)
         with mock.patch.object(runtime, 'capture_guided_recording', return_value=result), \
              mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
-             mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
-             mock.patch.object(runtime, 'review_and_wait_for_approval', return_value=False) as play, \
-             mock.patch.object(runtime, 'play_moment'), \
+             mock.patch.object(runtime, 'play_audio_ordinary') as play, \
+             mock.patch.object(runtime, 'wait_for_approval', return_value=False), \
              mock.patch.object(runtime.sound_pack, 'next_send_prompt', return_value=Path('voice-ask-send-1.wav')) as short_prompt:
             io = runtime.PiGuidedIO('person', 'session', 60)
             self.assertTrue(io.record().timed_out)
-            self.assertFalse(io.review_and_wait_for_approval('synthetic.wav', 10))
-            self.assertEqual(Path(play.call_args.args[1]()).name, 'voice-setup-ask-send.wav')
+            self.assertFalse(io.wait_for_approval(10))
+        self.assertEqual(Path(play.call_args.args[0]).name, 'voice-setup-ask-send.wav')
         short_prompt.assert_not_called()
 
     def test_listened_matches_only_the_first_reply_in_the_same_account(self):

@@ -293,22 +293,20 @@ the portal does not gain runtime-store access. Test before WhatsApp linking,
 after receive/play/send events, with no history, and with the worker unavailable.
 Never complete setup or expose audio/recipient identifiers just to view events.
 
-# Early send during own-recording review
+# Review and approval
 
-In Cloud tap/review mode, one button monitor spans review of the user's own
-recording, the send question and the ten-second approval wait. A stable
-half-second release excludes a held recording-stop press. A new press starting
-at least 0.5 seconds after review starts and held for 80 ms approves that
-recording once, stopping active playback. With no approval, the recording is
-deleted after the wait. Incoming-message listening and wacli review are
-unchanged. Approval queues a send; only actual send success may trigger the
-successful-send sound.
+Review plays the full recording, then the send question. Presses during either
+playback are discarded, including a press still held when playback ends.
+A fresh press during the following ten-second approval wait sends the saved
+recording to its saved recipient; no press deletes it. Setup replies use the
+same rule. Failed optional setup-question speech still reaches the approval
+wait. Incoming playback and wacli behavior remain unchanged.
 
-On a named box, verify standalone and setup/ordinary replies: press during
-each clip, across its end and immediately after the send question. Include a
-held recording-stop press, a short open bounce in that hold, a short press,
-and no approval. Check exactly one outgoing voice note in the intended chat.
-Keep software tests and physical switch/audio/delivery evidence separate.
+On a named box, verify setup and ordinary replies, held playback presses, a
+fresh approval after the question, no approval, and exactly one outgoing voice
+note in the intended chat. Physical GPIO/audio/delivery evidence remains
+separate from software tests. Early approval during review is deferred; see
+[the design and acceptance cases](flow-fixes.md#f313-deferred).
 
 ## Cloud mode
 
