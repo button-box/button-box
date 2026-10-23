@@ -9,7 +9,7 @@ from speaker_helpers import isolate_audio, assert_padded_playback
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -46,6 +46,7 @@ class WacliContractTests(unittest.TestCase):
         self.set_quiet(False)
         self.announcements = AnnouncementStore(self.root / "announcement.json")
         self.now = datetime(2026, 10, 8, 23, tzinfo=timezone.utc)
+        self.tick = 100
         patches = [mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"})]
         for module, values in (
             (button_send, {
@@ -58,6 +59,9 @@ class WacliContractTests(unittest.TestCase):
                 "button": SimpleNamespace(is_pressed=False), "led": FakeLed(),
                 "_recording": False, "_guided_active": False,
                 "_known": set(), "_seen_ever": set(), "_ring_last": 0,
+                "MORNING_RING_FILE": self.root / "morning-ring.json",
+                "_morning_ring_window": None, "_applied_volume_revision": None,
+                "SPEAKER_CARD": "contract-card", "SPEAKER_CONTROL": "contract-control",
                 "send_success_notices": button_send.queue.SimpleQueue(),
             }),
             (nfc, {
@@ -75,6 +79,7 @@ class WacliContractTests(unittest.TestCase):
             patches.append(mock.patch.object(button_send, name))
         patches.extend([
             mock.patch.object(voicepoll, "log_event"),
+            mock.patch.object(button_send.time, "monotonic", side_effect=lambda: self.tick),
             mock.patch.object(button_send, "in_quiet_hours",
                               side_effect=lambda settings, now=None:
                               in_quiet_hours(settings, now or self.now)),
@@ -86,6 +91,10 @@ class WacliContractTests(unittest.TestCase):
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
+        clock = mock.patch.object(button_send, "datetime", wraps=datetime)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.clock.now.side_effect = lambda zone: self.now.astimezone(zone)
 
     def test_wacli_poller_uses_wacli_and_never_polls_cloud(self):
         from messagebox.cloud_device import CloudDeviceClient
@@ -236,9 +245,27 @@ class WacliContractTests(unittest.TestCase):
             self.assertEqual(button_send.play_pending_listened(), 0)
             self.assertEqual(self.receipts.pending_count(), 1)
             self.set_quiet(False)
+            self.tick += 2
+            self.now += timedelta(seconds=2)
             button_send.maybe_ring()  # No delayed overnight arrival ring.
             ring.assert_not_called()
             play.assert_not_called()
             spawn.assert_not_called()
             play.return_value = SimpleNamespace(returncode=0)
             self.assertEqual(button_send.play_pending_listened(), 1)
+
+    def test_morning_alert_applies_mixer_volume_once_at_the_same_contract_clock(self):
+        self.set_quiet(True)
+        self.now = datetime(2026, 10, 9, 7, 10, tzinfo=timezone.utc)
+        write_pcm_wav(self.root / 'queue' / '1000-overnight.wav', 1)
+        button_send._known = set(button_send.queued())
+        with mock.patch.object(button_send, 'ring_alert') as ring, \
+             mock.patch.object(button_send.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as mixer:
+            button_send.maybe_ring()
+            self.tick += 2
+            self.now += timedelta(seconds=2)
+            button_send.maybe_ring()
+        mixer.assert_called_once_with(
+            ['amixer', '-q', '-c', 'contract-card', 'sset', 'contract-control', '50%', 'unmute'], check=False)
+        ring.assert_called_once_with(source='quiet_hours_end', settings=button_send.caregiver_settings())
+        self.assertTrue(button_send.MORNING_RING_FILE.is_file())
