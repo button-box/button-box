@@ -341,10 +341,12 @@ needs loopback socket access for its HTTP tests, but uses no external network.
 Run `make check` using the repository's cached/offline tool approach. Sound pack
 contracts cover checksums, durations, format, at least 100 ms voice lead-in using
 the 2%-of-peak rule, and exact 0.40 s press asset duration. Cloud Button Box
-tests cover immediate capture alongside a 150 ms pre-roll and 120 ms tick,
-rejection of the actual tick plus 80 ms handling noise (streamed and drained),
-intact overlapping words, immediate/delayed cue failures and player cleanup. Other voices
-and wacli retain go-before-capture ordering (including playback failure).
+tests cover the sequential 270 ms start cue, its 150 ms silent lead-in and
+complete 120 ms tick, speech immediately after playback, independent playback
+startup latency, short-word preservation, failed-cue abort and bounded cleanup.
+The original hold classification tests remain, with a two-short-press GPIO
+regression that must never open the microphone. Other voices and wacli retain
+go-before-capture ordering and their original assets.
 Tests also cover the limit-minus-5-s warning at 30/60/120 s,
 quiet hours, receipt durability, deletion tone, incoming
 bookends and bounded update removal/rollback. These tests use synthetic PCM and
@@ -357,9 +359,9 @@ accepted-send interruption, listened cue with default and custom family clips,
 first-online and all-set across service restarts and reboot. In quiet hours,
 verify no offline/listened/still-trying audio and that deliberate press responses
 remain audible. Check that Cloud Button Box's start tick is audible and that
-words spoken immediately at the press survive, including words over the tick.
-Record silence to verify the tick and its acoustic tail do not pass the speech
-gate. Other voices and wacli must keep the synchronous go tick out of capture.
+the microphone opens only after playback finishes. Speak immediately after
+the beep and check that short words survive. Record silence to confirm that
+the tick and its acoustic tail stay out of the recording. Other voices and wacli must keep the synchronous go tick out of capture.
 Record and review at each 30/60/120 s limit: the warning and overlapping words
 must survive, and warning playback must require deliberate review.
 Check loudness, comfort and clarity at low/normal/high master volume on the

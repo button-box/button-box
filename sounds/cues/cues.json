@@ -62,5 +62,9 @@
  "deleted": {
   "desc": "Deleted. Two soft descending wooden notes, without a voice.",
   "seconds": 0.4
+ },
+ "rec_start": {
+  "desc": "Recording start. 150 ms speaker wake-up silence, then the existing 120 ms rec_go tick.",
+  "seconds": 0.27
  }
 }

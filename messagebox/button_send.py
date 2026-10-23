@@ -3,7 +3,6 @@
 
 import json
 import hashlib
-import math
 import os
 import queue
 import re
@@ -95,7 +94,7 @@ _sending_feedback = None
 SENDING_FAILURE_GRACE_S = 0.15
 APPROVAL_CUE_TIMEOUT_S = 5
 START_CUE_SECONDS = 0.12
-START_CUE_LEAD_IN_S = 0.15
+RECORD_START_CUE_SECONDS = 0.27
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -2072,32 +2071,9 @@ class RecordingLimitCue:
             self.intervals[-1][1] = now - self.started
 
 
-def check_recording_start(player, *, finish=False):
-    if player is None:
-        return
-    code = player.poll()
-    if code is None and finish:
-        code = player.wait(timeout=5)
-    if code is not None and code != 0:
-        raise subprocess.CalledProcessError(code, "aplay")
-
-
-def feed_recording_vad(vad, pcm, offset, *, now, cue_offset=None):
-    if cue_offset is not None:
-        # Mask whole VAD frames touching the tick, by PCM position rather than
-        # read time: buffered chunks and the microphone drain can arrive late.
-        frame_s = vad.frame_ms / 1000
-        first = math.floor((cue_offset + START_CUE_LEAD_IN_S) / frame_s) * vad.frame_bytes
-        last = math.ceil((cue_offset + START_CUE_LEAD_IN_S + START_CUE_SECONDS) / frame_s) * vad.frame_bytes
-        first, last = max(0, first - offset), min(len(pcm), last - offset)
-        if last > first:
-            pcm = pcm[:first] + b'\0' * (last - first) + pcm[last:]
-    vad.feed(pcm, now=now)
-
-
 @contextmanager
 def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
-    """Light the lamp and warm the speaker without delaying capture."""
+    """Light the lamp first; finish one short cue before opening the mic."""
     player = None
     fast = buttonbox_voice()
     try:
@@ -2105,18 +2081,12 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
             led.on()
             # Normal hold already used the press cue to classify the gesture.
             if talk_mode != "hold" or card_prompt or press_cue:
-                cue = "press" if press_cue else "rec_go"
-                cue_started = time.monotonic()
+                cue = "press" if press_cue else "rec_start"
                 player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))],
-                                      lead_in_s=START_CUE_LEAD_IN_S, clip_seconds=START_CUE_SECONDS,
-                                      max_seconds=5)
-                player.recording_cue_started_at = cue_started
-                # Hold classification already has a 400 ms gesture window.
-                # Finish its tick there; tap/card capture must not wait for it.
-                if press_cue:
-                    check_recording_start(player, finish=True)
-                else:
-                    check_recording_start(player)
+                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS if press_cue else RECORD_START_CUE_SECONDS)
+                code = player.wait(timeout=5)
+                if code:
+                    raise subprocess.CalledProcessError(code, "aplay")
         else:
             play_sound(sound_pack.cue_path("rec_go"), timeout=5)
         yield player
@@ -2135,7 +2105,7 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
 def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, setup_reply=False):
     global _recording
     require_permit(press_token)
-    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt) as start_cue:
+    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt):
         if talk_mode == "hold" and not button.is_pressed:
             return RecordingResult(None, 0, False)
         capture_id = uuid.uuid4().hex
@@ -2143,7 +2113,6 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
         wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
         vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
         started = time.monotonic()
-        cue_offset = start_cue.recording_cue_started_at - started if start_cue is not None else None
         vad.start(started)
         warning = RecordingLimitCue(started, max_seconds)
         if setup_reply or buttonbox_voice():
@@ -2164,14 +2133,13 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
             with open(raw_path, "wb") as raw:
                 while True:
                     now = time.monotonic()
-                    check_recording_start(start_cue)
                     warning.update(now)
                     readable, _, _ = select.select([process.stdout], [], [], 0.02)
                     if readable:
                         chunk = os.read(process.stdout.fileno(), 4096)
                         if chunk:
                             raw.write(chunk)
-                            feed_recording_vad(vad, chunk, raw.tell() - len(chunk), now=now, cue_offset=cue_offset)
+                            vad.feed(chunk, now=now)
                     if now - started >= max_seconds:
                         timed_out = True
                         break
@@ -2207,9 +2175,7 @@ def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card
                     remainder, _ = process.communicate(timeout=3)
                 if remainder:
                     raw.write(remainder)
-                    feed_recording_vad(vad, remainder, raw.tell() - len(remainder),
-                                       now=time.monotonic(), cue_offset=cue_offset)
-                check_recording_start(start_cue, finish=True)
+                    vad.feed(remainder, now=time.monotonic())
                 raw.flush()
                 os.fsync(raw.fileno())
         except BaseException:
