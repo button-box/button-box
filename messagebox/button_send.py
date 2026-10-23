@@ -10,6 +10,7 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1980,8 +1981,27 @@ def approve_guided_press(session_id=None):
 
 def play_audio_for_approval(path, session_id=None, *, action="approve_warning", ignore_first_s=0):
     """Consume only a fresh deliberate press in review or deletion warning."""
+    if transport_mode() != "cloud":
+        return _play_audio_for_approval(path, session_id, action=action, ignore_first_s=ignore_first_s)
+    for attempt in range(2):
+        # A file avoids a full stderr pipe stalling the interruptible player.
+        with tempfile.TemporaryFile() as errors:
+            try:
+                return _play_audio_for_approval(path, session_id, action=action,
+                                                ignore_first_s=ignore_first_s, stderr=errors)
+            except subprocess.CalledProcessError:
+                errors.seek(0)
+                if not speaker.busy(errors.read(4096)):
+                    raise
+                if attempt:
+                    raise speaker.SpeakerBusy("speaker unavailable") from None
+        time.sleep(0.15)
+
+
+def _play_audio_for_approval(path, session_id, *, action, ignore_first_s, stderr=None):
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)],
+                           **({"stderr": stderr} if stderr is not None else {}))
     started = time.monotonic()
     accept_after = started + ignore_first_s
     deadline = started + 600
@@ -2026,16 +2046,19 @@ def play_audio_for_approval(path, session_id=None, *, action="approve_warning", 
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=0.2)
-        released = getattr(process, "reservation_released", None)
-        if released is not None:
-            released.wait(0.25)
+            released = getattr(process, "reservation_released", None)
+            if released is not None:
+                released.wait(0.25)
     if transport_mode() == "cloud" and not approved and process.returncode:
         raise subprocess.CalledProcessError(process.returncode, "aplay")
     if approved:
         if action == "approve":
             return approve_guided_press(session_id)
         acknowledge_guided_press(action, session_id)
-    wait_for_stable_open()
+    if not armed:
+        wait_for_stable_open()
+    else:
+        discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
     return approved
 
 

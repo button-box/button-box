@@ -130,7 +130,8 @@ class ReviewApprovalTests(unittest.TestCase):
         interruptible.assert_not_called()
         wait.assert_called_once_with(10, 'session')
 
-    def timed_session(self, windows, *, during='review', duration=1, setup_reply=False):
+    def timed_session(self, windows, *, during='review', duration=1, setup_reply=False,
+                      real_wait=False, busy_first_review=False, release_delay=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'recording.wav'
@@ -144,7 +145,12 @@ class ReviewApprovalTests(unittest.TestCase):
             button = types.SimpleNamespace(is_pressed=False)
             approvals = []
             events = []
+            review_attempts = []
+            retry_sleeps = []
             def tick(seconds):
+                if seconds == .15:
+                    retry_sleeps.append(seconds)
+                    self.assertEqual(source.read_bytes(), original)
                 clock[0] = round(clock[0] + seconds, 6)
                 button.is_pressed = origin[0] is not None and any(
                     start <= round(clock[0] - origin[0], 6) < end for start, end in windows)
@@ -159,25 +165,37 @@ class ReviewApprovalTests(unittest.TestCase):
                 path = Path(command[-1])
                 if path == runtime.sound_pack.cue_path('press'):
                     return mock.Mock(poll=lambda: 0)
+                if path == source:
+                    review_attempts.append(clock[0])
+                    self.assertEqual(source.read_bytes(), original)
+                    if busy_first_review and len(review_attempts) == 1:
+                        if kwargs.get('stderr') is not None:
+                            kwargs['stderr'].write(b'aplay: Device or resource busy\n')
+                        return mock.Mock(returncode=1, poll=lambda: 1)
                 if (path == source) == (during == 'review'):
                     origin[0] = clock[0]
                 end = clock[0] + duration
                 player = mock.Mock(returncode=0)
                 player.poll.side_effect = lambda: 0 if clock[0] >= end or player.terminate.called else None
+                if release_delay:
+                    player.reservation_released = types.SimpleNamespace(wait=lambda timeout: tick(release_delay))
                 return player
             def log(kind, **fields):
                 if kind == 'guided_press' and fields['action'] == 'approve':
                     approvals.append(clock[0] - origin[0])
+            release_wait = runtime.wait_for_stable_open
+            approval_wait = runtime.wait_for_approval
             with mock.patch.object(runtime, 'time', types.SimpleNamespace(monotonic=lambda: clock[0], sleep=tick)), \
                  mock.patch.object(runtime, 'POLL_S', .005), \
+                 mock.patch.object(runtime, '_guided_active', True), \
                  mock.patch.object(runtime, 'button', button, create=True), \
                  mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
                  mock.patch.object(runtime, 'buttonbox_voice', return_value=True), \
                  mock.patch.object(runtime, 'start_player', side_effect=start), \
-                 mock.patch.object(runtime, 'wait_for_stable_open', side_effect=release), \
+                 mock.patch.object(runtime, 'wait_for_stable_open', side_effect=release_wait if real_wait else release), \
                  mock.patch.object(runtime, 'play_moment'), \
                  mock.patch.object(runtime, 'log_event', side_effect=log), \
-                 mock.patch.object(runtime, 'wait_for_approval', return_value=False), \
+                 mock.patch.object(runtime, 'wait_for_approval', side_effect=approval_wait if real_wait else lambda *a: False), \
                  mock.patch.object(runtime.sound_pack, 'next_send_prompt', return_value=Path('ask-send.wav')), \
                  mock.patch.object(io, 'record', return_value=RecordingResult(str(source), 2, True)), \
                  mock.patch.object(io, 'play_deleted'):
@@ -189,6 +207,8 @@ class ReviewApprovalTests(unittest.TestCase):
             if jobs:
                 self.assertEqual(jobs[0].audio_path.read_bytes(), original)
                 self.assertEqual(jobs[0].recipient, io.recipient)
+            self.assertEqual(len(review_attempts), 2 if busy_first_review else 1)
+            self.assertEqual(retry_sleeps, [.15] if busy_first_review else [])
             return result, approvals
 
     def test_ignored_hold_open_bounce_requires_stable_release_and_new_press(self):
@@ -198,6 +218,48 @@ class ReviewApprovalTests(unittest.TestCase):
         self.assertEqual(result, 'approved')
         self.assertEqual(len(approvals), 1)
         self.assertGreaterEqual(approvals[0], 1.68)
+        # An ignored hold must not rearm through a short opening between clips.
+        self.assertEqual(self.timed_session([(.2, .995), (1.005, 1.4)]), ('deleted', []))
+
+    def test_fresh_press_after_send_question_approves_without_release_wait_gap(self):
+        for setup_reply in (False, True):
+            for release_delay in (0, .25):
+                with self.subTest(setup_reply=setup_reply, release_delay=release_delay):
+                    result, approvals = self.timed_session([(1.1, 1.3)], during='question',
+                        setup_reply=setup_reply, real_wait=True, release_delay=release_delay)
+                    self.assertEqual(result, 'approved')
+                    self.assertEqual(len(approvals), 1)
+                    self.assertAlmostEqual(approvals[0], 1.18)
+
+    def test_busy_review_retry_is_bounded_and_nonbusy_error_is_not_retried(self):
+        for error, expected, attempts in ((b'Device or resource busy', speaker.SpeakerBusy, 2),
+                                          (b'Input/output error', subprocess.CalledProcessError, 1)):
+            with self.subTest(error=error):
+                streams = []
+                def start(command, **kwargs):
+                    streams.append(kwargs['stderr'])
+                    kwargs['stderr'].write(error)
+                    return mock.Mock(returncode=1, poll=lambda: 1)
+                sleep = mock.Mock()
+                with mock.patch.object(runtime, 'transport_mode', return_value='cloud'), \
+                     mock.patch.object(runtime, 'time', types.SimpleNamespace(monotonic=lambda: 0, sleep=sleep)), \
+                     mock.patch.object(runtime, 'button', types.SimpleNamespace(is_pressed=False), create=True), \
+                     mock.patch.object(runtime, 'start_player', side_effect=start) as player, \
+                     mock.patch.object(runtime, 'approve_guided_press') as approve:
+                    with self.assertRaises(expected):
+                        runtime.play_audio_for_approval('review.wav', action='approve', ignore_first_s=.5)
+                    self.assertEqual(player.call_count, attempts)
+                    self.assertEqual(sleep.call_args_list, [mock.call(.15)] if attempts == 2 else [])
+                    approve.assert_not_called()
+                self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_busy_review_retries_once_preserves_recording_and_sends_after_fresh_approval(self):
+        for setup_reply in (False, True):
+            with self.subTest(setup_reply=setup_reply):
+                result, approvals = self.timed_session([(1.1, 1.3)], during='question',
+                    setup_reply=setup_reply, real_wait=True, busy_first_review=True)
+                self.assertEqual(result, 'approved')
+                self.assertEqual(len(approvals), 1)
 
     def test_fresh_press_spanning_review_or_question_completion_approves_exact_recording_once(self):
         for during in ('review', 'question'):
