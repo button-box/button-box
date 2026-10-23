@@ -9,6 +9,7 @@ messagebox/QR-PROVENANCE.md
 messagebox/__init__.py
 messagebox/audio_requests.py
 messagebox/button_send.py
+messagebox/cloud_boot_repair.py
 messagebox/cloud_claim.py
 messagebox/cloud_device.py
 messagebox/cloud_events.py

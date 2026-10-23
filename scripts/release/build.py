@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import io
+import importlib.util
 import json
 import os
 import pprint
@@ -190,14 +191,18 @@ def run_checks(root):
 
 
 def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
-          min_application_version=None, controller_secret=None, controller_key=None):
+          min_application_version=None, controller_secret=None, controller_key=None,
+          boot_hotfix_base=None):
     if type(sequence) is not int or sequence < 1:
         raise ReleaseError("release_sequence must be a positive integer")
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", minimum):
         raise ReleaseError("minimum updater version must be major.minor.patch")
     repo, output = Path(repo).resolve(), Path(output).resolve()
+    if boot_hotfix_base is not None and (boot_hotfix_base != 'v0.3.12' or minimum != '1.1.0'):
+        raise ReleaseError('legacy boot hotfix requires base v0.3.12 and minimum updater 1.1.0')
     require_clean(repo)
     expected = resolve_tag(repo, tag)
+    base_expected = resolve_tag(repo, boot_hotfix_base) if boot_hotfix_base else None
     if output.exists():
         raise ReleaseError("output already exists; use a new directory")
     if output.is_relative_to(repo):
@@ -223,9 +228,17 @@ def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
             require_clean(checkout)
             require_tag(repo, tag, expected)
             payload = payload_paths(checkout)
+            source, profile = checkout, None
+            if boot_hotfix_base:
+                require_tag(checkout, boot_hotfix_base, base_expected)
+                spec = importlib.util.spec_from_file_location('boot_hotfix_profile', checkout / 'scripts/dev/build_boot_hotfix.py')
+                profile = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(profile)
+                source = temporary / f'legacy-{index}'
+                payload = profile.prepare(source, base=boot_hotfix_base, repo=checkout)
             if any('scripts/install/' + name not in payload for name in CONTROLLER_MODULES):
                 raise ReleaseError('controller module missing from the explicit payload allowlist')
-            raw = controller_descriptor(checkout, controller_sequence, min_application_version)
+            raw = controller_descriptor(source, controller_sequence, min_application_version)
             check_controller_compatibility(parse_controller_descriptor(raw), tag, {
                 'os': 'raspios-trixie', 'architecture': 'aarch64', 'model': 'Raspberry Pi 4 Model B'})
             if proof_raw is None:
@@ -236,18 +249,19 @@ def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
             # The legacy mapper retains both .py data files as installed files.
             # Generate only after the clean-check and tracked payload check.
             for name, data in ((CONTROLLER_DESCRIPTOR, raw), (CONTROLLER_SIGNATURE, proof_signature)):
-                if name in payload or (checkout / name).exists():
+                if name in payload or (source / name).exists():
                     raise ReleaseError('controller proof paths are reserved generated files')
-                (checkout / name).write_bytes(data)
-                (checkout / name).chmod(0o644)
+                (source / name).write_bytes(data)
+                (source / name).chmod(0o644)
                 payload[name] = 0o644
-            manifest = release_manifest(checkout, tag, expected[1], sequence, minimum, payload)
+            manifest = (profile.manifest(source, tag=tag, commit=expected[1], sequence=sequence, supported=SUPPORTED)
+                        if profile else release_manifest(source, tag, expected[1], sequence, minimum, payload))
             installed = {item['source']: item['installed'] for item in manifest['files']}
             if any(installed.get(name) != '/opt/messagebox/' + name
                    for name in (CONTROLLER_DESCRIPTOR, CONTROLLER_SIGNATURE)):
                 raise ReleaseError('controller proof missing from the installed manifest')
             timestamp = int(git(checkout, "show", "-s", "--format=%ct", "HEAD"))
-            package(checkout, temporary / f"build-{index}", manifest, payload, timestamp)
+            package(source, temporary / f"build-{index}", manifest, payload, timestamp)
             inspect_package(temporary / f'build-{index}', controller_key)
         first, second = temporary / "build-1", temporary / "build-2"
         for asset in first.iterdir():
@@ -255,6 +269,8 @@ def build(repo, tag, output, sequence, minimum, *, controller_sequence=None,
                 raise ReleaseError("two builds differ; refusing release artifacts")
         require_clean(repo)
         require_tag(repo, tag, expected)
+        if boot_hotfix_base:
+            require_tag(repo, boot_hotfix_base, base_expected)
         shutil.copytree(first, output)
     print(f"Two builds matched: {tag} {expected[1]} (sequence {sequence})")
 
@@ -270,11 +286,13 @@ def main():
     parser.add_argument('--min-application-version', required=True)
     parser.add_argument('--controller-secret-key', type=Path, required=True)
     parser.add_argument('--controller-public-key', type=Path, required=True)
+    parser.add_argument('--boot-hotfix-base', choices=['v0.3.12'])
     args = parser.parse_args()
     try:
         build(args.repo, args.tag, args.output, args.release_sequence, args.min_updater_version,
               controller_sequence=args.controller_sequence, min_application_version=args.min_application_version,
-              controller_secret=args.controller_secret_key, controller_key=args.controller_public_key)
+              controller_secret=args.controller_secret_key, controller_key=args.controller_public_key,
+              boot_hotfix_base=args.boot_hotfix_base)
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Release build failed: {exc}\n")
 

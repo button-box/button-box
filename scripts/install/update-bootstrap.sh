@@ -60,10 +60,11 @@ done
 install -d -o root -g root -m 0755 /etc/systemd/system/messagebox-update-discovery.service.d
 install -o root -g root -m 0644 "$REPO_DIR/config/update-discovery-voice-ready.conf" /etc/systemd/system/messagebox-update-discovery.service.d/voice-ready.conf
 install -o root -g root -m 0644 /dev/null /run/messagebox-update/maintenance.lock
+# Persist early recovery before adding any gates; every new-bootstrap prefix
+# must remain acyclic if power is lost before layout conversion.
+python3 "$REPO_DIR/messagebox/cloud_boot_repair.py" --bootstrap
 # Add ordering to existing units, including activators and ComItUp. Dependencies
 # live in bootstrap drop-ins so ordinary wacli setup does not need recovery.
-# Application path/timer units explicitly run after basic.target without their
-# default Before=paths.target/timers.target; otherwise these gates form a cycle.
 for unit in messagebox.target messagebox-audio-detect.service messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service messagebox-wifi-change.service messagebox-wifi-change.path messagebox-wifi-watchdog.service messagebox-wifi-watchdog.timer messagebox-mode-reconcile.service messagebox-mode-reconcile.path comitup.service comitup-web.service messagebox-onboarding-home.service messagebox-onboarding-nfc.service messagebox-onboarding-complete.service messagebox-onboarding-complete.path messagebox-onboarding-button.service messagebox-onboarding-voice-gate.service messagebox-onboarding-voice.path messagebox-onboarding-voice.target messagebox-whatsapp-pairing.service messagebox-wifi-reset.service; do
   install -d -o root -g root -m 0755 "/etc/systemd/system/$unit.d"
   cat > "/etc/systemd/system/$unit.d/software-update.conf" <<'EOF'

@@ -40,6 +40,14 @@ change heartbeat protocol `version` or install VERSION on existing boxes.
 
 ## Build and review
 
+For the original-controller v0.3.12 boot repair only, the same builder accepts
+`--boot-hotfix-base v0.3.12` with `--min-updater-version 1.1.0`. This profile keeps
+that base's complete program/sounds, adds the signed post-commit repair hook and
+retained candidate controller proof, and rejects newer installed applications
+before mutation. It retains clean-tag, repeat-build, checks, signing and archive
+inspection gates. Use a distinct release tag/sequence from the full current
+voice release. See [boot repair coverage and limits](boot-ordering.md).
+
 Use a reviewed, clean checkout containing these tools and an existing release
 tag containing `scripts/release/payload.txt`. Python 3.9+, Git, gzip, make, uv,
 Bun and minisign are needed; use the repository's pinned check tools. This build

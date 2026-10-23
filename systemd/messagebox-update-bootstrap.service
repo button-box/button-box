@@ -6,6 +6,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 UMask=0022
+ExecStartPre=/usr/bin/python3 -I -B /opt/messagebox/messagebox/cloud_boot_repair.py
 ExecStart=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py bootstrap
 ExecStartPost=/usr/bin/python3 -B /opt/messagebox/messagebox/controller_slots.py complete
 TimeoutStartSec=60

@@ -203,6 +203,13 @@ class FieldBox:
             value = self.states[command[2]]["enabled"]
         elif command[:4] == ["systemctl", "show", "--property=ConsistsOf", "--value"]:
             value = ""
+        elif command == ['systemctl', 'show', 'messagebox-update-recovery.service',
+                         '--property=DefaultDependencies,After,Before,Conflicts']:
+            # Loaded manager properties are an explicit host substitute.
+            repaired = (self.root / 'etc/systemd/system/messagebox-update-recovery.service.d/80-boot-ordering.conf').is_file()
+            value = ('DefaultDependencies=no\nAfter=local-fs.target sysinit.target\n'
+                     'Before=basic.target shutdown.target\nConflicts=shutdown.target' if repaired
+                     else 'DefaultDependencies=yes\nAfter=basic.target local-fs.target')
         elif command == ["systemctl", "daemon-reload"]:
             value = ""
         elif command[:2] == ["systemctl", "stop"]:

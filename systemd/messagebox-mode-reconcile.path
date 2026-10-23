@@ -1,11 +1,4 @@
 [Unit]
-# Cloud bootstrap gates this activator on recovery, a normal service.
-# Its default Before=paths.target would cycle through basic.target.
-DefaultDependencies=no
-Requires=sysinit.target
-After=basic.target
-Conflicts=shutdown.target
-Before=shutdown.target
 ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Watch Button Box boot-mode authority
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from field_updater import FieldBox, load_frozen, mkdir, write
-from messagebox import controller_selector as selector, controller_slots as slots
+from messagebox import cloud_boot_repair, controller_selector as selector, controller_slots as slots
 import test_controller_descriptor as descriptors
 from test_controller_slots import DurableView, Host
 from test_release_tooling import build
@@ -57,6 +57,7 @@ class BootstrapCommandTests(unittest.TestCase):
         write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
         for path in (ROOT / 'scripts/install').glob('*.py'):
             write(self.repo / 'scripts/install' / path.name, path.read_bytes())
+        write(self.repo / 'messagebox/cloud_boot_repair.py', (ROOT / 'messagebox/cloud_boot_repair.py').read_bytes())
         script = (ROOT / 'scripts/install/update-bootstrap.sh').read_text()
         # Redirect only fixed device paths. Keep the complete shell control flow
         # and the real current unit/drop-in glob, including its source directory.
@@ -91,6 +92,14 @@ elif name=='python3':
             v.local_platform=lambda:{'os':'raspios-trixie','architecture':'aarch64','model':v.SUPPORTED_MODELS[0]}
         sys.argv=args
         exec(compile(code,'bootstrap-stdin','exec'),{'__name__':'__main__'})
+    elif args[0].endswith('cloud_boot_repair.py'):
+        sys.path.insert(0,str(repo))
+        from messagebox.cloud_boot_repair import repair
+        from field_updater import FieldBox
+        box=object.__new__(FieldBox)
+        box.root=root
+        box.commands=[]
+        repair(root,bootstrap=True,run=box.run)
     else:
         import bounded_update as u
         from field_updater import FieldBox
@@ -326,6 +335,8 @@ exec /usr/bin/install "${args[@]}"
         if marker.is_symlink() and os.readlink(marker) == os.readlink(self.root / 'opt/messagebox'):
             return False
         unit = (self.root / 'etc/systemd/system/messagebox-update-bootstrap.service').read_text()
+        self.assertIn('ExecStartPre=/usr/bin/python3 -I -B /opt/messagebox/messagebox/cloud_boot_repair.py', unit)
+        cloud_boot_repair.repair(self.root, run=self.box.run)
         entry = next(line.split('=', 1)[1].split() for line in unit.splitlines() if line.startswith('ExecStart='))
         budget = int(next(line.split('=', 1)[1] for line in unit.splitlines() if line.startswith('TimeoutStartSec=')))
         self.assertEqual(entry, ['/usr/bin/python3', '-B', '/opt/messagebox/messagebox/controller_slots.py', 'bootstrap'])

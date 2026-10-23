@@ -1,127 +1,175 @@
-# Boot recovery ordering
+# Cloud boot recovery ordering repair
 
-The Cloud bootstrap adds `Requires=` and `After=messagebox-update-recovery.service`
-to application units, including path and timer activators. Recovery is a normal
-service: its implicit ordering is after `basic.target`. A default path unit is
-before `paths.target`, and a default timer is before `timers.target`; both targets
-are before `basic.target`. Combining those dependencies forms a boot cycle.
-Systemd may delete recovery's job to break it, leaving dependent application and
-controller starts unsuccessful. A successful boot on another attempt does not
-disprove the cycle.
+The bootstrap gates application services, targets and activators with
+`Requires=` / `After=messagebox-update-recovery.service`. Normal service defaults
+put recovery after `basic.target`. Path/timer defaults put activators before
+`paths.target` / `timers.target`, which precede basic initialization. This is an
+ordering cycle. Conditions, including install-inhibit and setup-mode conditions,
+do not remove ordering edges while systemd constructs the transaction.
 
-## Repair
+Setup enables the onboarding-complete and onboarding-voice watchers on every
+installation, independently of the selected mode. Thus an otherwise ordinary
+runtime **or setup** boot can contain the cycle. Verified affected field boots
+consistently deleted recovery's job and left its dependents inactive. Replugging
+is not a rescue procedure for those boxes. Prior successful runtime activation
+by setup completion or an operator does not establish reboot safety.
 
-These application activators explicitly disable default dependencies and order
-themselves after `basic.target`:
+## One persistent switch
 
-- `messagebox-mode-reconcile.path`
-- `messagebox-wifi-change.path`
-- `messagebox-wifi-watchdog.timer`
-- `messagebox-onboarding-complete.path`
-- `messagebox-onboarding-voice.path`
+`messagebox/cloud_boot_repair.py` writes exactly one drop-in:
+`/etc/systemd/system/messagebox-update-recovery.service.d/80-boot-ordering.conf`.
+It retains the original frozen service file and its command/selector routes:
 
-They retain `Requires=sysinit.target` and explicitly restore
-`Conflicts=shutdown.target` / `Before=shutdown.target`. Their path triggers,
-timer intervals, target membership, mode conditions and install inhibit are
-unchanged. In wacli mode they have no dependency on the Cloud updater. Their
-services already run after basic initialization; the watchers now do too.
-Application targets have no implicit ordering before basic initialization and
-need no change. The independent updater timers have no recovery ordering gate
-and retain their original default dependencies.
+```ini
+[Unit]
+DefaultDependencies=no
+Requires=sysinit.target
+After=local-fs.target sysinit.target
+Before=basic.target shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/usr /var /opt /run
+```
 
-The existing Cloud bootstrap drop-ins remain unchanged, so recovery still
-finishes before any gated application unit, controller, selector or supervisor
-starts. Recovery does not move to early boot: `/usr/bin/python3`, local mounts
-(including separate `/var` and `/opt` mounts), `/run/lock`, update journals and
-snapshots, and its existing sandbox continue to use the normal service boot
-environment. There is no new pre-sysinit filesystem or sandbox assumption.
+Recovery runs after local filesystems and sysinit, before basic initialization
+and the application activators. Python, `/usr`, `/var`, `/opt`, `/run`, the
+journal/snapshots, and sysinit's tmpfiles setup are available at that stage.
+Existing `PrivateTmp` and other sandbox settings remain. Root systemctl calls
+use PID 1's local control socket; boot recovery does not need network service
+or the application broker. The `--boot` path restores files/enablement and reloads
+systemd without starting application services. The selector's boot route also
+runs the selected recovery worker in boot mode before admitting consumers.
+Native verification of implicit mount/tmpfiles dependencies is still required.
 
-## Signed delivery and its limits
+The five application path/timer files remain byte-identical to the pre-hotfix
+source. Their recovery gates, trigger semantics and shutdown defaults stay in
+place. wacli performs no repair writes or systemd operations.
 
-The manifest mapper already installs these five unit files under
-`/etc/systemd/system/`; they are already in the release payload allowlist.
-Both frozen and current workers accept their paths. The application transaction
-snapshots the old external files, installs the new units while inhibited and
-quiesced, switches the application and reloads systemd. A committed release
-therefore has the corrected graph on its next boot, even with the original
-`software-update.conf` files still present. No bootstrap rerun or updater binary
-rewrite is needed. Application rollback or interrupted-install recovery restores
-the old unit files, so the repair is retained only after successful commit.
-Until all five units are replaced, or after rollback to the old units, the
-original cycle exposure remains. Host interrupted-write tests exercise rollback
-once recovery runs; they cannot prove systemd will schedule that recovery on a
-partially repaired physical box.
+The helper validates root-owned paths, uses the existing update -> mode lock
+order, and refuses install-inhibit, a nonterminal journal or a pointer that does
+not match the committed application. Re-entry after completed rollback requires
+the restored pointer to match the old release and known-good record. Initial attended bootstrap has a separate
+explicit entry point before layout conversion. The helper writes and fsyncs a
+complete temporary file, atomically renames it, then flushes the inode and parent
+directories before daemon-reload. A completion marker is written only after a
+successful reload. Retrying after rename or a failed directory flush settles
+existing bytes again. Different existing contents require maintenance rather
+than silent overwrite.
 
-The seven original updater unit files are frozen: changing the recovery service
-file would cause `maintenance_release_required`. Legacy workers accept a
-`*.service.d/messagebox.conf`, but the installed frozen selector rejects new or
-changed controller/recovery drop-ins. Changing a recovery drop-in would therefore
-miss selector-equipped boxes. The five application activators are outside those
-protections, and permanent controller routes are preserved by this repair.
+The drop-in is deliberately absent from the application manifest. Therefore it
+is not snapshotted or removed by application rollback, and the frozen selector's
+manifest admission does not reject it as a new controller-route payload. It does
+not replace a controller or alter its command routes. Only the signed root
+helper has this narrow, fixed write effect.
 
-Reachability depends on the installed controller and current runtime:
+There is no partially repaired five-unit graph: the switch is absent or complete.
+Once its directory flush has completed, future application interruption/rollback
+retains the repair. **Before the first durable repair write, the original boot
+bug still exists.** No new release can promise recovery from a power cut before
+its code has reached and repaired an old box. Host durability tests distinguish
+that original state from the repaired state; they do not pretend systemd can
+boot the original cyclic graph. Keep running boxes powered until the repair and
+live daemon-reload have been verified.
 
-- A running, bootstrapped Cloud box with a compatible selected controller can
-  receive this repair in its normal signed application release. Existing policy,
-  approval, time window, trust, compatibility and sequence checks still apply.
-- A box still running the original v0.3.9–v0.3.12 worker accepts a compatible
-  application carrying just this repair. The complete current application also
-  includes `sounds/voices/buttonbox`, which that worker does not accept. A
-  compatible signed controller bridge and promotion must precede the full current
-  application, or the hotfix must be packaged against the legacy application.
-  A signed descriptor alone does not promote the controller. Check the selected
-  controller, not just the application's version string.
-- If boot deleted the recovery job, a later discovery timer activation pulls in
-  controller and recovery again. Once the original boot jobs have settled, that
-  transaction need not contain the offending path jobs and can succeed. This is
-  conditional, not a guaranteed field recovery: failed or rate-limited services,
-  a failed timer, or an incomplete recovery can still prevent discovery.
-- Even when discovery resumes, an entirely inactive runtime cannot normally
-  install the release. The frozen broker's `installed()` gate needs an active
-  button PID and current-boot confirmation proof; Auto refuses without it and
-  Ask needs the button. Those boxes need runtime restoration first. On a
-  settled boot, an operator can use `sudo systemctl start messagebox.target`,
-  then verify recovery, runtime and heartbeat before the normal signed update.
-  A reboot may happen to start the old release, but is not the repair.
-- Boxes without an operational bootstrap, usable trust/network/storage, or a
-  supported update platform cannot acquire this release through this OTA path.
-  Setup mode still defers normal application updates. wacli has no Cloud
-  application discovery; its normal installation receives the same unit fix.
+## Delivery to running boxes
 
-No new runtime self-heal monitor is included. The existing Wi-Fi watchdog belongs
-to `messagebox.target` and cannot rescue an inactive parent. An independent
-monitor would need the update lock throughout probation, a terminal journal,
-completed recovery and the mode transition lock: checking only `install-inhibit`
-is insufficient because probation removes it. A new monitor also cannot reach
-boxes already stranded behind the old broker's readiness gate. Keep that work
-separate from this five-unit repair rather than add an updater competitor.
+The ordinary current release adds the helper to the runtime/setup/provisioning
+and payload allowlists. `messagebox-update-bootstrap.service` executes it as an
+`ExecStartPre` before controller initialization/completion. The existing
+supervisor hook queues that service after the transaction worker exits. The
+helper takes the real locks and checks commit again. Contention/failure prevents
+bootstrap completion, so the existing hook retries. No timer, poller, privilege
+grant or unprivileged systemd writer is added.
 
-## Validation and physical acceptance
+A normal application process runs as `messagebox` and cannot safely write root
+systemd configuration. Calling repair from that process would need a new
+privilege boundary. The existing signed post-commit root hook avoids that change.
+It also avoids depending on legacy allowlists for the generated drop-in itself.
 
-`tests/test_boot_ordering.py` parses every shipped unit/drop-in and the actual
-bootstrap-generated gates, models the relevant systemd default dependencies,
-reproduces the frozen cycle and checks Cloud, wacli and selector graphs. It
-tests the repair through every recorded frozen worker's verification, extraction
-and transaction path with and without selector admission; it also tests the full
-current payload with the current worker, legacy payload rejection, partial-write
-boot rollback and
-the dead-button readiness gate. Host systemd, outer signature results and health
-are substitutes in the field harness. The native dependency-graph test runs
-`systemd-analyze verify` when available, with OS dependency stubs and service
-executables replaced; macOS uses the static checks. These are not Pi boot tests.
+The full current payload still requires controller 1.3.0 because of the existing
+buttonbox voice assets. For original-controller boxes running application
+v0.3.12, the normal release builder now supports `--boot-hotfix-base v0.3.12`
+with `--min-updater-version 1.1.0`. The profile exports the exact local base tag's
+complete payload, preserves its program and sounds, and adds the repair module,
+bootstrap service and existing supervisor queue hook. It retains signed candidate
+controller 1.3.0 sources/proof but does not promote or replace the selected
+controller. Clean-tag checks, both build/check passes, descriptor signing,
+archive inspection, signature-first outer verification and release sequencing
+remain the normal release process. No tag or production signature is created by
+preparing this change.
 
-On a physical Cloud Pi, install the signed candidate through the actual selected
-controller, verify the five effective units and unchanged recovery gates, and
-run `systemd-analyze verify` against the installed units. Repeatedly power-cycle
-and inspect each boot for ordering-cycle/job-deletion messages, recovery success,
-active `messagebox.target` and runtime services, and a fresh Cloud heartbeat.
-Test a power cut during installation and confirm rollback/recovery ordering;
-test setup mode and updater probation to confirm nothing starts ahead of recovery.
-Before merging a release, the physical wacli send/play/reply, family card,
-quiet-hours and listened-notice checks remain required.
+The legacy profile's staged mode-migration preflight rejects any installed
+application other than v0.3.12 **before mutation**. It must never replace a newer
+voice application's program with the legacy application. Use distinct release
+tags/sequences for the legacy capsule and the full release. While original
+clients still depend on `/latest`, keep an eligible capsule discoverable or use
+the existing exact-version request; do not assume a higher incompatible latest
+release will automatically expose an older capsule to every discovery policy.
 
-This is a Pi boot/updater fix. Cloud assistant, Cloud service/dashboard and setup
-screens need no change. A companion Cloud feature could alert on a claimed box's
-missing heartbeat, with startup/update/setup grace periods and deduplication.
-Such an alert detects outages; it does not repair the Pi. It is not implemented
-here.
+Delivery coverage is based on the selected worker and installed application,
+not application version alone:
+
+- v0.3.12 + original 1.1.0 worker, direct or behind the selector: the complete
+  legacy-profile artifact is exercised through real minisign verification,
+  extraction, transaction and the delivered root helper for every recorded
+  v0.3.9-v0.3.12 frozen worker.
+- Compatible selected 1.3.0 worker: the complete current payload is exercised
+  through the same real outer-signature and transaction boundaries.
+- A newer voice application selected onto an original 1.1.0 fallback worker is
+  not covered by the legacy capsule: its base guard rejects that combination.
+  It needs compatible controller restoration/delivery before the full release.
+- Unbootstrapped, unsupported-platform, offline/untrusted or storage-failing
+  boxes cannot acquire a normal signed update until their specific prerequisite
+  is restored. Setup mode still defers normal application installation.
+
+Host tests substitute systemd and application health. Production signing,
+publication, live policy/window/approval and physical acceptance remain separate.
+
+## Already-dead boxes: the button is not a rescue path
+
+`messagebox-wifi-reset.service` itself has the bootstrap's recovery
+`Requires`/`After` gate. When that dependency job is deleted, its
+`ExecStart=/usr/bin/python3 -m messagebox.onboarding.reset` never runs. Therefore
+`wait_for_hold()` cannot observe the ten-second power-on hold, and
+`perform_reset()` cannot write the setup marker or queue Comitup.
+
+Even if a marker were changed externally, both always-enabled watchers still
+participate in setup boot, and Comitup/onboarding services have recovery gates.
+Setup completion would normally remove the marker, reload systemd and start
+`messagebox.target`, but that root completion service must first be running.
+This is not a reachable family-only rescue for the reported failed boot.
+
+Discovery may independently retry recovery/controller after the boot jobs have
+settled. That does not start the failed reset/runtime units, and the broker's
+`installed()` gate still requires an active button PID and current-boot proof.
+Thus a fully inactive runtime cannot normally install either repair artifact.
+Do not bypass this gate or ask a family to repeat a gesture whose reader is dead.
+An already-dead box needs an existing operator access path to restore runtime,
+or a prepared repaired microSD/retrieval workflow. This change does not establish
+that such access exists on any particular box.
+
+## Test and bench gates
+
+The portable graph contract preserves every Unit section, includes bootstrap and
+setup enablement dependencies and checks separate runtime/setup transactions.
+Its small OS model is explicitly limited. It is not a certificate of the complete
+field graph. The native test requires `MSGBOX_BOOT_GRAPH_ROOT`, an exact local
+export containing `/etc/systemd/system`, `/usr/lib/systemd/system`, the `/lib`
+alias when used by unit links, and generated
+unit links, including packaged Comitup and tmpfiles units. It preserves sandbox
+properties and replaces only executable commands. It verifies the original cycle
+and repaired graph in both modes, without substituting vendor units. Missing
+export/native systemd is an explicit skip. Export no environment files, secrets,
+controller state or device data.
+
+On the Pi bench, verify effective early recovery dependencies, helper completion
+and active runtime/heartbeat before removing power. Run repeated power cycles in
+both modes, then interrupted application installs and rollback with the durable
+repair already present. Separately exercise a cut during repair publication and
+check old-or-complete bytes; an unpatched result retains the original known bug.
+Native PID 1 boot scheduling, GPIO/audio/NFC/Wi-Fi/WhatsApp, and physical wacli
+send/play/reply/card/quiet-hours/listened-notice acceptance remain unverified by
+host tests. No merge or field deployment is implied.
+
+Cloud assistant, Cloud service/dashboard and setup screens need no feature
+change. A claimed-box missing-heartbeat alert remains a companion detection
+feature, not an implemented rescue.

@@ -84,16 +84,44 @@ class ReleaseToolingTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
         return self.real_run(command, *args, **kwargs)
 
-    def make_build(self, output=None):
+    def make_build(self, output=None, *, boot_hotfix_base=None):
         output = output or self.root / "output"
         with mock.patch.object(build, "git", side_effect=self.git), \
                 mock.patch.object(build, 'controller_signature', return_value=b"'synthetic signature'\n"), \
                 mock.patch.object(build, 'inspect_package', side_effect=lambda path, key: release.inspect_archive(path, release.checksums(path))), \
                 mock.patch.object(build.subprocess, "run", side_effect=self.command_run):
-            build.build(self.repo, TAG, output, 7, "1.0.0", controller_sequence=1,
+            build.build(self.repo, TAG, output, 7, "1.1.0" if boot_hotfix_base else "1.0.0", controller_sequence=1,
                         min_application_version=TAG, controller_secret=self.root / 'offline.key',
-                        controller_key=self.root / 'pin.pub')
+                        controller_key=self.root / 'pin.pub', boot_hotfix_base=boot_hotfix_base)
         return output
+
+    def test_boot_hotfix_profile_uses_normal_repeat_build_checks_and_packaging(self):
+        profile = 'scripts/dev/build_boot_hotfix.py'
+        (self.repo / profile).write_text('''import hashlib,json,shutil
+from pathlib import Path
+def prepare(destination, *, base, repo):
+    assert base == 'v0.3.12'
+    shutil.copytree(repo,destination)
+    example=destination/'messagebox/example.py'
+    example.write_text(example.read_text()+'# legacy profile\\n')
+    return {name:0o644 for name in (destination/'scripts/release/payload.txt').read_text().splitlines()}
+def manifest(source, *, tag, commit, sequence, supported):
+    return dict(schema=1,product='button-box',version=tag,tag=tag,commit=commit,
+                release_sequence=sequence,channel='canary',min_updater_version='1.1.0',
+                boot_hotfix_base='v0.3.12',**supported,
+                files=[dict(source=str(p.relative_to(source)),installed='/opt/messagebox/'+str(p.relative_to(source)),
+                            sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+                       for p in sorted((source/'messagebox').glob('*.py'))])
+''')
+        self.tracked.append(profile)
+        (self.repo / 'scripts/release/payload.txt').write_text('\n'.join(sorted(self.tracked)) + '\n')
+        assets = self.make_build(boot_hotfix_base='v0.3.12')
+        manifest = json.loads((assets / 'release-manifest.json').read_bytes())
+        self.assertEqual(manifest['boot_hotfix_base'], 'v0.3.12')
+        with tarfile.open(assets / ('button-box-' + TAG + '.tar.gz')) as archive:
+            self.assertTrue(archive.extractfile('messagebox/example.py').read().endswith(b'# legacy profile\n'))
+        self.assertEqual(len([command for command in self.commands if command[0] == 'make']), 4)
+        self.assertNotIn('legacy profile', (self.repo / 'messagebox/example.py').read_text())
 
     def test_manifest_deterministic_archive_checksums_and_allowlist(self):
         first = self.make_build(self.root / "first")
