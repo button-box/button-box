@@ -94,6 +94,7 @@ _sending_feedback = None
 SENDING_FAILURE_GRACE_S = 0.15
 APPROVAL_CUE_TIMEOUT_S = 5
 START_CUE_SECONDS = 0.12
+START_CUE_LEAD_IN_S = 0.15
 cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
 cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
 CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
@@ -2072,7 +2073,7 @@ class RecordingLimitCue:
 
 @contextmanager
 def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
-    """Light the lamp first; finish one short cue before opening the mic."""
+    """Light the lamp and warm the speaker without delaying capture."""
     player = None
     fast = buttonbox_voice()
     try:
@@ -2082,10 +2083,14 @@ def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
             if talk_mode != "hold" or card_prompt or press_cue:
                 cue = "press" if press_cue else "rec_go"
                 player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))],
-                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS)
-                code = player.wait(timeout=5)
-                if code:
-                    raise subprocess.CalledProcessError(code, "aplay")
+                                      lead_in_s=START_CUE_LEAD_IN_S, clip_seconds=START_CUE_SECONDS,
+                                      max_seconds=5)
+                # Hold classification already has a 400 ms gesture window.
+                # Finish its tick there; tap/card capture must not wait for it.
+                if press_cue:
+                    code = player.wait(timeout=5)
+                    if code:
+                        raise subprocess.CalledProcessError(code, "aplay")
         else:
             play_sound(sound_pack.cue_path("rec_go"), timeout=5)
         yield player
