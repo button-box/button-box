@@ -46,9 +46,14 @@ asset padding is additional to the shared playback pre-roll.
 
 Cloud Button Box opens the microphone while its single start tick plays.
 The 150 ms speaker pre-roll and 120 ms tick do not gate the microphone. The
-tick is shorter than VAD's 200 ms cumulative speech threshold. Feed all captured
-samples to VAD and keep the whole meaningful recording, including words over
-the tick; do not mask or trim that window. The tick can be audible in the
+tick's known playback window is excluded from VAD scoring, aligned to complete
+VAD frames by PCM position, including buffered reads and the final drain. This
+prevents the tick combining with brief handling noise to pass the speech gate.
+The saved audio retains every sample of a meaningful recording, including words
+over the tick. Playback exits are checked before and during capture and after
+the microphone drain; a failed or unfinished cue aborts the recording with
+bounded cleanup. These checks add no wait before opening the microphone.
+The tick can be audible in the
 recording. Check audibility, acoustic echo and silent-recording rejection on
 the physical speaker and mic; offline tests cannot establish the echo tail.
 Other voices and wacli finish rec_go before opening the microphone.

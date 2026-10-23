@@ -253,7 +253,7 @@ class SetupTests(unittest.TestCase):
         recorder = mock.Mock()
         recorder.poll.return_value = None
         recorder.communicate.return_value = (b'\x01\x02' * 48000, None)
-        vad = mock.Mock()
+        vad = mock.Mock(frame_ms=20, frame_bytes=640)
         vad.trim_bounds.return_value = (0, 48000)
         player = mock.Mock()
         player.poll.return_value = 0
@@ -270,7 +270,7 @@ class SetupTests(unittest.TestCase):
              mock.patch.object(runtime, 'box_muted', return_value=False), \
              mock.patch.object(runtime, 'quiet_hours', return_value=False), \
              mock.patch.object(runtime.select, 'select', return_value=([], [], [])), \
-             mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 40, 60, 60, 60]):
+             mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 0, 40, 60, 60, 60]):
             result = physical_capture(runtime, 'person')
         self.assertTrue(result.timed_out)
         self.assertTrue(Path(result.path).is_file())

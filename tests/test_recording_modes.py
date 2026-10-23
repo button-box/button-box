@@ -23,13 +23,16 @@ class RecordingModesTests(unittest.TestCase):
     def setUp(self):
         isolate_audio(self)
 
-    def capture_cue_overlap(self, root, *, stop_at, speech_windows, transport='cloud', talk='tap', card_prompt=False):
+    def capture_cue_overlap(self, root, *, stop_at, speech_windows, transport='cloud', talk='tap', card_prompt=False,
+                            handling_noise=False, drain_only=False, cue_exit_at=None, observed=None):
         clock = [0.0]
         button = types.SimpleNamespace(is_pressed=talk == 'hold')
         recorder = mock.Mock()
         recorder.poll.return_value = None
+        recorder.wait.side_effect = [subprocess.TimeoutExpired('arecord', 3), 0]
         chunks = []
-        observed = {'start_sound': 0, 'start_end': 0, 'reminder_end': 0}
+        observed = {} if observed is None else observed
+        observed.update(start_sound=0, start_end=0, reminder_end=0, recorder=recorder)
         led = mock.Mock()
         led.on.side_effect = lambda: observed.setdefault('lamp_at', clock[0])
 
@@ -43,22 +46,36 @@ class RecordingModesTests(unittest.TestCase):
         def tick(*args):
             clock[0] = round(clock[0] + .02, 6)
             button.is_pressed = elapsed() < stop_at if talk == 'hold' else elapsed() >= stop_at
-            return [recorder.stdout], [], []
+            return ([] if drain_only else [recorder.stdout]), [], []
+
+        def render(first, count):
+            samples = []
+            for index in range(first, first + count):
+                seconds = index / 16000
+                level = 3000 if any(start <= seconds < end for start, end in speech_windows) else 0
+                if handling_noise and .6 <= seconds < .68:
+                    level += 3000
+                if clock[0] < observed['reminder_end']:
+                    level += 6000
+                cue_index = index + round((observed.get('mic_at', 0) - observed.get('cue_at', 0)) * 16000)
+                cue_pcm = observed.get('cue_pcm', ())
+                if 0 <= cue_index < len(cue_pcm):
+                    level += cue_pcm[cue_index]
+                samples.append(level)
+            return struct.pack('<' + 'h' * len(samples), *samples)
 
         def read(*args):
-            voiced = any(start <= elapsed() < end for start, end in speech_windows)
-            level = 3000 if voiced else 0
-            if clock[0] < observed['reminder_end']:
-                level += 6000
-            if observed['start_sound'] <= clock[0] < observed['start_end']:
-                level += 9000
-            expected = struct.pack('<h', level) * 320
+            expected = render(round((elapsed() - .02) * 16000), 320)
             chunks.append(expected)
             return expected
 
         def drain(**kwargs):
+            recorder.poll.return_value = 0
             remainder = b''
-            if clock[0] < observed['reminder_end']:
+            if drain_only:
+                remainder = render(0, round(elapsed() * 16000))
+                chunks.append(remainder)
+            elif clock[0] < observed['reminder_end']:
                 remainder = struct.pack('<h', 6000) * 3200
                 chunks.append(remainder)
             return remainder, b''
@@ -69,12 +86,22 @@ class RecordingModesTests(unittest.TestCase):
                 def launch(clipped, **options):
                     with wave.open(str(clipped[-1])) as cue:
                         observed['cue_seconds'] = cue.getnframes() / cue.getframerate()
+                        self.assertEqual(cue.getframerate(), 48000)
+                        # Model the actual clipped/padded WAV reaching the 16 kHz mic.
+                        observed['cue_pcm'] = [sample[0] for sample in struct.iter_unpack('<h',
+                            cue.readframes(cue.getnframes()))][::3]
+                    observed['cue_at'] = clock[0]
                     observed['start_sound'] = clock[0] + kwargs['lead_in_s']
                     observed['start_end'] = clock[0] + observed['cue_seconds']
                     def wait(**unused):
-                        clock[0] = max(clock[0], observed['start_end'])
-                        return 0
-                    return types.SimpleNamespace(poll=lambda: None if clock[0] < observed['start_end'] else 0,
+                        observed.setdefault('cue_wait_timeouts', []).append(unused['timeout'])
+                        clock[0] = max(clock[0], observed['start_end'] if cue_exit_at is None else cue_exit_at)
+                        return 0 if cue_exit_at is None else 1
+                    def poll():
+                        if cue_exit_at is not None:
+                            return None if clock[0] < cue_exit_at else 1
+                        return None if clock[0] < observed['start_end'] else 0
+                    return types.SimpleNamespace(poll=poll,
                         wait=wait, returncode=0, terminate=lambda: None)
                 self.assertEqual(kwargs.pop('max_seconds'), 5)
                 return speaker.start_player(command, popen=launch, **kwargs)
@@ -102,6 +129,7 @@ class RecordingModesTests(unittest.TestCase):
         return result, b''.join(chunks), observed
 
     def test_speech_during_start_cue_is_kept_from_the_first_sample(self):
+        from test_guided_reply import FakeIO
         for talk, card_prompt in (('tap', False), ('hold', True)):
             with self.subTest(talk=talk), tempfile.TemporaryDirectory() as directory:
                 result, pcm, observed = self.capture_cue_overlap(Path(directory), stop_at=2,
@@ -111,8 +139,16 @@ class RecordingModesTests(unittest.TestCase):
                 self.assertAlmostEqual(observed['mic_at'], 0)
                 self.assertAlmostEqual(observed['start_sound'], .15)
                 self.assertTrue(result.meaningful)
-                self.assertIn(struct.pack('<h', 12000), pcm)
+                self.assertEqual(pcm[:2], struct.pack('<h', 3000))
+                self.assertNotEqual(pcm[5120:7680], struct.pack('<h', 3000) * 1280)
                 with wave.open(result.path) as audio:
+                    self.assertEqual(audio.readframes(audio.getnframes()), pcm)
+                store = OutboxStore(Path(directory) / 'outbox', transport='cloud')
+                outcome = GuidedSession(FakeIO([result]), store, lambda *a, **kw: None).run(
+                    recipient='person@example.invalid', flow_kind='standalone',
+                    deleted_cue_path='cue-deleted.wav', review_before_send=False, account_scope='a' * 64)
+                self.assertEqual(outcome, 'approved')
+                with wave.open(str(store.jobs()[0].audio_path)) as audio:
                     self.assertEqual(audio.readframes(audio.getnframes()), pcm)
 
     def test_start_beep_alone_does_not_count_as_speech(self):
@@ -121,7 +157,64 @@ class RecordingModesTests(unittest.TestCase):
             self.assertFalse(result.meaningful)
             self.assertIsNone(result.path)
             self.assertLess(observed['mic_at'], observed['start_sound'])
-            self.assertIn(struct.pack('<h', 9000), pcm)
+            self.assertTrue(any(pcm))
+
+    def test_actual_start_cue_plus_handling_noise_cannot_create_an_outgoing_job(self):
+        from test_guided_reply import FakeIO
+        for drain_only in (False, True):
+            with self.subTest(drain_only=drain_only), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result, pcm, _ = self.capture_cue_overlap(root, stop_at=2, speech_windows=[],
+                    handling_noise=True, drain_only=drain_only)
+                # This exact input passes unmasked VAD, reproducing the review finding.
+                unmasked = runtime.EnergyVAD()
+                unmasked.feed(pcm, now=2)
+                self.assertTrue(unmasked.meaningful)
+                self.assertFalse(result.meaningful)
+                store = OutboxStore(root / 'outbox', transport='cloud')
+                io = FakeIO([result])
+                outcome = GuidedSession(io, store, lambda *a, **kw: None).run(
+                    recipient='person@example.invalid', flow_kind='standalone',
+                    deleted_cue_path='cue-deleted.wav', review_before_send=False, account_scope='a' * 64)
+                self.assertEqual(outcome, 'empty')
+                self.assertEqual(store.jobs(), [])
+                self.assertFalse(list(root.glob('*.raw')))
+                self.assertFalse(list(root.glob('*.wav')))
+
+    def test_failed_start_cue_aborts_tap_and_card_capture_without_an_outgoing_job(self):
+        from test_guided_reply import FakeIO
+        for talk, card_prompt in (('tap', False), ('hold', True)):
+            for cue_exit_at in (0, .2, 3):
+                with self.subTest(talk=talk, cue_exit_at=cue_exit_at), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    observed = {}
+                    io = FakeIO([])
+                    io.record = lambda: self.capture_cue_overlap(root, stop_at=2, speech_windows=[(0, 1)],
+                        talk=talk, card_prompt=card_prompt, cue_exit_at=cue_exit_at, observed=observed)[0]
+                    store = OutboxStore(root / 'outbox', transport='cloud')
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        GuidedSession(io, store, lambda *a, **kw: None).run(
+                            recipient='person@example.invalid', flow_kind='standalone',
+                            deleted_cue_path='cue-deleted.wav', review_before_send=False, account_scope='a' * 64)
+                    self.assertEqual(store.jobs(), [])
+                    recorder = observed['recorder']
+                    if cue_exit_at == 0:
+                        self.assertNotIn('mic_at', observed)
+                    else:
+                        self.assertEqual(observed['mic_at'], 0)
+                        self.assertFalse(runtime._recording)
+                        if cue_exit_at == .2:
+                            recorder.terminate.assert_called_once()
+                            recorder.kill.assert_called_once()
+                            self.assertEqual(recorder.wait.call_args_list,
+                                [mock.call(timeout=3), mock.call(timeout=3)])
+                        else:
+                            recorder.send_signal.assert_called_once()
+                            recorder.communicate.assert_called_once_with(timeout=3)
+                            recorder.terminate.assert_not_called()
+                            self.assertEqual(observed['cue_wait_timeouts'], [5])
+                    self.assertFalse(list(root.glob('*.raw')))
+                    self.assertFalse(list(root.glob('*.wav')))
 
     def test_reminder_only_audio_including_drain_is_kept_for_review(self):
         for stop_at in (40.5, 42.5):
@@ -307,7 +400,10 @@ class RecordingModesTests(unittest.TestCase):
             order = []
             cue = mock.Mock()
             cue.poll.return_value = None
-            cue.wait.return_value = 0
+            def finish_cue(**kwargs):
+                cue.poll.return_value = 0
+                return 0
+            cue.wait.side_effect = finish_cue
             recorder = mock.Mock()
             recorder.communicate.return_value = (b'', b'')
             vad = mock.Mock()
@@ -336,13 +432,13 @@ class RecordingModesTests(unittest.TestCase):
                  mock.patch.object(runtime, 'RecordingLimitCue', return_value=mock.Mock(process=None, intervals=[], played=False)), \
                  mock.patch.object(runtime, 'presence'), \
                  mock.patch.object(runtime.select, 'select', return_value=([], [], [])), \
-                 mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 60, 60]):
+                 mock.patch.object(runtime.time, 'monotonic', side_effect=[0, 0, 60, 60]):
                 physical_capture(runtime, 'person')
             self.assertEqual(order, ['cue_started', 'mic_open'])
             start.assert_called_once()
             blocking_sound.assert_not_called()
-            cue.terminate.assert_called_once()
-            cue.wait.assert_called_once_with(timeout=.2)
+            cue.terminate.assert_not_called()
+            cue.wait.assert_called_once_with(timeout=5)
             self.assertFalse(runtime._recording)
 
     def test_buttonbox_hold_uses_one_press_cue_and_no_second_go_cue(self):

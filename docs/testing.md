@@ -342,7 +342,8 @@ Run `make check` using the repository's cached/offline tool approach. Sound pack
 contracts cover checksums, durations, format, at least 100 ms voice lead-in using
 the 2%-of-peak rule, and exact 0.40 s press asset duration. Cloud Button Box
 tests cover immediate capture alongside a 150 ms pre-roll and 120 ms tick,
-cue-only rejection, intact overlapping words and player cleanup. Other voices
+rejection of the actual tick plus 80 ms handling noise (streamed and drained),
+intact overlapping words, immediate/delayed cue failures and player cleanup. Other voices
 and wacli retain go-before-capture ordering (including playback failure).
 Tests also cover the limit-minus-5-s warning at 30/60/120 s,
 quiet hours, receipt durability, deletion tone, incoming
