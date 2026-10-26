@@ -47,7 +47,7 @@ from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, succ
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
 from messagebox.contacts import _BOX_JID, ContactError, ContactStore
-from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore
+from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, REANNOUNCE_COOLDOWN_S
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
@@ -720,14 +720,28 @@ def play_pending_nfc_announcement(*, force=False, expected_uid=None, allow_recor
     if not force and now - _last_nfc_announcement_poll < NFC_ANNOUNCEMENT_POLL_S:
         return False
     _last_nfc_announcement_poll = now
-    request = nfc_announcement_store.take()
+    request = nfc_announcement_store.take(keep_claimed=True)
     if request is None:
         return None
-    if expected_uid is not None and request["uid"] != expected_uid:
-        return None
-    return request["action"] if _play_nfc_prompt(
-        request["uid"], request["action"], request["prompt"], allow_recording=allow_recording
-    ) else None
+    try:
+        if expected_uid is not None and request["uid"] != expected_uid:
+            return None
+        selection = request["action"] in {"selected", "recognized"}
+        if selection and transport_mode() == "cloud":
+            contact = ContactStore(CONTACTS_FILE).resolve_card(request["uid"])
+            selection = not (contact and contact["jid"].startswith("box:reaction_"))
+        # Catch a duplicate queued before the first playback acknowledged it.
+        # A deliberate A -> B -> A switch still gets its own immediate line.
+        if selection and nfc_announcement_store.reuse_confirmation(
+            request["uid"], now=now, cooldown=REANNOUNCE_COOLDOWN_S,
+            request_id=request["request_id"] if request["card_switch"] else None,
+        ):
+            return None
+        return request["action"] if _play_nfc_prompt(
+            request["uid"], request["action"], request["prompt"], allow_recording=allow_recording
+        ) else None
+    finally:
+        nfc_announcement_store.finish(request["request_id"])
 
 
 def ensure_nfc_confirmation(context):
@@ -735,7 +749,8 @@ def ensure_nfc_confirmation(context):
     uid = context.get("uid")
     if uid is None or nfc_announcement_store.is_acknowledged(uid):
         return True
-    if play_pending_nfc_announcement(force=True, expected_uid=uid, allow_recording=False):
+    if (play_pending_nfc_announcement(force=True, expected_uid=uid, allow_recording=False)
+            or nfc_announcement_store.is_acknowledged(uid)):
         return True
     contact = context["contact"]
     return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""), allow_recording=False)

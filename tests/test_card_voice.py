@@ -22,6 +22,7 @@ from messagebox.settings import defaults
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = "04:01:02:03"
+OTHER_CARD = "04:05:06:07"
 JID = "12025550101@s.whatsapp.net"
 
 
@@ -45,6 +46,187 @@ class CardVoiceTests(unittest.TestCase):
             (runtime.sound_pack._settings, "snapshot", lambda: self.settings),
         ):
             self.stack.enter_context(mock.patch.object(target, name, value, create=True))
+
+    @contextlib.contextmanager
+    def reader(self, mode):
+        tick = [0.0]
+        root = Path(tempfile.mkdtemp(dir=self.root, prefix=mode))
+        contacts = ContactStore(root / "contacts.json")
+        contacts.add_contact(JID, "Card person")
+        contacts.add_contact("12025550102@s.whatsapp.net", "Another person")
+        contacts.assign_card(JID, CARD)
+        contacts.assign_card("12025550102@s.whatsapp.net", OTHER_CARD)
+        store = AnnouncementStore(root / "announcement.json", clock=lambda: 1000 + tick[0],
+                                  monotonic=lambda: tick[0], boot_id="test-boot")
+        router = NfcRouter(contacts, SelectionStore(root / "selection.json", clock=lambda: 1000 + tick[0]),
+                           EnrollmentStore(root / "enrollment.json"), store)
+        self.settings["nfc_confirmation_beep"] = False
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": mode}), \
+             mock.patch.object(runtime, "transport_mode", return_value=mode), \
+             mock.patch.object(runtime, "CONTACTS_FILE", contacts.path), \
+             mock.patch.object(runtime, "nfc_announcement_store", store), \
+             mock.patch.object(runtime, "quiet_hours", return_value=False), \
+             mock.patch.object(runtime.cloud_runtime, "card_prompt_clip", return_value=""), \
+             mock.patch.object(runtime.time, "monotonic", side_effect=lambda: tick[0]):
+            yield NfcRuntime(router, Announcer(store)), store, tick
+
+    def test_same_card_during_playback_plays_once(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+
+                def play(_path, _timeout):
+                    tick[0] = 1
+                    reader.observe(None, 1)
+                    tick[0] = 1.1
+                    reader.observe(CARD, 1.1)
+                    tick[0] = 2
+                    return True
+
+                with mock.patch.object(runtime, "play_idle_sound", side_effect=play) as audio:
+                    runtime.play_pending_nfc_announcement(force=True)
+                    runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 1)
+                self.assertTrue(store.is_acknowledged(CARD))
+
+    def test_pending_same_card_keeps_original_request_and_expiry(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+                original = store.path.read_bytes()
+                tick[0] = 1
+                reader.observe(None, 1)
+                tick[0] = 1.1
+                repeated = reader.observe(CARD, 1.1)
+                self.assertFalse(repeated.announce)
+                self.assertEqual(store.path.read_bytes(), original)
+                tick[0] = 11
+                reader.observe(None, 11)
+                tick[0] = 12
+                self.assertTrue(reader.observe(CARD, 12).announce)
+                with mock.patch.object(runtime, "play_idle_sound", return_value=True) as audio:
+                    runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 1)
+
+    def test_reader_restart_does_not_erase_playing_claim(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+
+                def play(_path, _timeout):
+                    tick[0] = 1
+                    reader.observe(None, 1)
+                    store.clear(preserve_claimed=True)
+                    restarted = NfcRuntime(reader.router, Announcer(store))
+                    tick[0] = 1.1
+                    self.assertFalse(restarted.observe(CARD, 1.1).announce)
+                    tick[0] = 2
+                    return True
+
+                with mock.patch.object(runtime, "play_idle_sound", side_effect=play) as audio:
+                    runtime.play_pending_nfc_announcement(force=True)
+                    runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 1)
+
+    def test_consumer_drops_same_uid_duplicate_queued_before_ack(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+
+                def play(_path, _timeout):
+                    # Force a duplicate past the producer check, as in a race
+                    # with acknowledgment or a request from an older reader.
+                    tick[0] = 1.1
+                    store.put(action="selected", uid=CARD, prompt="")
+                    tick[0] = 2
+                    return True
+
+                with mock.patch.object(runtime, "play_idle_sound", side_effect=play) as audio:
+                    runtime.play_pending_nfc_announcement(force=True)
+                    runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 1)
+                self.assertFalse(store.path.exists())
+
+    def test_confirmation_after_duplicate_drop_does_not_replay(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick), \
+                 mock.patch.object(runtime, "play_idle_sound", return_value=True) as audio:
+                reader.observe(CARD, 0)
+                runtime.play_pending_nfc_announcement(force=True)
+                tick[0] = 1
+                store.put(action="selected", uid=CARD, prompt="")
+                self.assertTrue(runtime.ensure_nfc_confirmation({"uid": CARD}))
+                self.assertEqual(audio.call_count, 1)
+
+    def test_switch_away_and_back_during_playback_still_announces(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+
+                def play(_path, _timeout):
+                    tick[0] = 1
+                    self.assertTrue(reader.observe(OTHER_CARD, 1).announce)
+                    tick[0] = 1.1
+                    self.assertTrue(reader.observe(CARD, 1.1).announce)
+                    tick[0] = 2
+                    return True
+
+                with mock.patch.object(runtime, "play_idle_sound", side_effect=play) as audio:
+                    runtime.play_pending_nfc_announcement(force=True)
+                    audio.side_effect = None
+                    audio.return_value = True
+                    runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 2)
+                self.assertFalse(store.claimed_path.exists())
+
+    def test_dropped_or_failed_playback_releases_claim_for_retry(self):
+        for mode in ("wacli", "cloud"):
+            for failure in ("wrong_card", "speaker"):
+                with self.subTest(mode=mode, failure=failure), self.reader(mode) as (reader, store, tick):
+                    reader.observe(CARD, 0)
+                    if failure == "wrong_card":
+                        self.assertIsNone(runtime.play_pending_nfc_announcement(force=True, expected_uid=OTHER_CARD))
+                    else:
+                        with mock.patch.object(runtime, "play_idle_sound", side_effect=OSError("speaker unavailable")):
+                            with self.assertRaises(OSError):
+                                runtime.play_pending_nfc_announcement(force=True)
+                    self.assertFalse(store.claimed_path.exists())
+                    tick[0] = 1
+                    reader.observe(None, 1)
+                    tick[0] = 1.1
+                    self.assertTrue(reader.observe(CARD, 1.1).announce)
+                    with mock.patch.object(runtime, "play_idle_sound", return_value=True) as audio:
+                        runtime.play_pending_nfc_announcement(force=True)
+                    self.assertEqual(audio.call_count, 1)
+
+    def test_old_playback_cleanup_cannot_release_a_newer_claim(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (reader, store, tick):
+                reader.observe(CARD, 0)
+                first = store.take(keep_claimed=True)
+                tick[0] = 0.1
+                reader.observe(OTHER_CARD, 0.1)
+                replacement = store.take(keep_claimed=True)
+                store.finish(first["request_id"])
+                tick[0] = 1
+                reader.observe(None, 1)
+                tick[0] = 1.1
+                self.assertFalse(reader.observe(OTHER_CARD, 1.1).announce)
+                store.finish(replacement["request_id"])
+                self.assertFalse(store.claimed_path.exists())
+
+    def test_acknowledged_switch_claim_is_not_replayed_after_consumer_crash(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.reader(mode) as (_reader, store, _tick), \
+                 mock.patch.object(runtime, "play_idle_sound", return_value=True) as audio:
+                store.put(action="selected", uid=CARD, prompt="", card_switch=True)
+                request = store.take(keep_claimed=True)
+                runtime._play_nfc_prompt(request["uid"], request["action"], request["prompt"])
+                # Model a crash after acknowledgment but before claim cleanup.
+                self.assertTrue(store.claimed_path.exists())
+                runtime.play_pending_nfc_announcement(force=True)
+                self.assertEqual(audio.call_count, 1)
+                self.assertFalse(store.claimed_path.exists())
 
     def test_tap_uses_current_pack_generic_in_wacli_and_cached_names_in_cloud(self):
         for mode in ("wacli", "cloud"):

@@ -20,6 +20,7 @@ from messagebox.nfc_state import (
     EnrollmentStore,
     NfcError,
     NfcRouter,
+    REANNOUNCE_COOLDOWN_S,
     SelectionStore,
     normalize_uid,
     public_enrollment,
@@ -40,7 +41,6 @@ def unknown_token_wav():
 REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
-REANNOUNCE_COOLDOWN_S = float(os.environ.get("MSGBOX_NFC_REANNOUNCE_COOLDOWN_S", "60"))
 HEALTH_INTERVAL_S = 2.0
 
 
@@ -91,7 +91,7 @@ class Announcer:
     def __init__(self, store=None):
         self.store = store or AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
 
-    def announce(self, result):
+    def announce(self, result, *, card_switch=False):
         if not result.announce or result.uid is None:
             return
         if result.contact is not None:
@@ -100,7 +100,7 @@ class Announcer:
             prompt = unknown_token_wav()
         else:
             return
-        self.store.put(action=result.action, uid=result.uid, prompt=prompt)
+        self.store.put(action=result.action, uid=result.uid, prompt=prompt, card_switch=card_switch)
 
 
 class NfcRuntime:
@@ -150,12 +150,14 @@ class NfcRuntime:
             result.action in {"selected", "recognized"}
             and not reaction
             and previous_uid in (None, result.uid)
-            and self.router.announcements.reuse_confirmation(
-                result.uid, now=now, cooldown=self.reannounce_cooldown
+            and (
+                self.router.announcements.reuse_confirmation(
+                    result.uid, now=now, cooldown=self.reannounce_cooldown
+                ) or self.router.announcements.pending_for(result.uid)
             )
         ):
             return replace(result, announce=False)
-        self.announcer.announce(result)
+        self.announcer.announce(result, card_switch=previous_uid not in (None, result.uid))
         return result
 
     def observe(self, raw_uid, now):
@@ -218,7 +220,7 @@ def run_daemon():
     nfc_router = router(announcement_store)
     announcer = Announcer(announcement_store)
     runtime = NfcRuntime(nfc_router, announcer)
-    announcement_store.clear()
+    announcement_store.clear(preserve_claimed=True)
     try:
         reader = hardware_reader()
         recovered = nfc_router.reconcile_enrollment(new_presentation=False)
@@ -243,7 +245,7 @@ def run_daemon():
             Path(NFC_HEALTH_FILE).unlink()
         except FileNotFoundError:
             pass
-        announcement_store.clear()
+        announcement_store.clear(preserve_claimed=True)
 
 
 def print_json(payload):

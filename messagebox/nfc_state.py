@@ -31,6 +31,7 @@ ANNOUNCEMENT_VERSION = 1
 CARD_REFERENCES_VERSION = 1
 DEFAULT_SELECTION_TTL_S = 30.0
 DEFAULT_ENROLLMENT_TTL_S = 300
+REANNOUNCE_COOLDOWN_S = float(os.environ.get("MSGBOX_NFC_REANNOUNCE_COOLDOWN_S", "60"))
 
 
 class NfcError(ValueError):
@@ -635,7 +636,7 @@ class AnnouncementStore:
     def confirmed_path(self):
         return self.path.with_name(f".{self.path.name}.confirmed")
 
-    def put(self, *, action, uid, prompt):
+    def put(self, *, action, uid, prompt, card_switch=False):
         if not isinstance(action, str) or not action or len(action) > 32:
             raise NfcError("announcement action is invalid")
         if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
@@ -646,18 +647,44 @@ class AnnouncementStore:
             "uid": normalize_uid(uid),
             "prompt": prompt,
             "created_at": self.clock(),
+            "request_id": uuid.uuid4().hex,
+            "card_switch": card_switch,
         }
-        self.clear_acknowledgement()
-        _atomic_json(self.path, payload)
+        with _locked_path(self.confirmed_path):
+            self.clear_acknowledgement()
+            _atomic_json(self.path, payload)
         return payload
 
-    def clear(self):
-        for pending in (self.path, self.claimed_path):
+    def clear(self, *, preserve_claimed=False):
+        with _locked_path(self.confirmed_path):
+            for pending in ((self.path,) if preserve_claimed else (self.path, self.claimed_path)):
+                pending.unlink(missing_ok=True)
+            self.clear_acknowledgement()
+
+    def pending_for(self, uid, max_age=10):
+        """A queued or playing line coalesces repeats without starting cooldown."""
+        with _locked_path(self.confirmed_path):
+            for path in (self.path, self.claimed_path):
+                try:
+                    payload = _load_json(path)
+                    if (payload is not None and payload.get("version") == ANNOUNCEMENT_VERSION
+                            and payload.get("action") in {"selected", "recognized", "enrolled"}
+                            and normalize_uid(payload.get("uid")) == normalize_uid(uid)
+                            and -5 <= self.clock() - float(payload.get("created_at")) <= max_age):
+                        return True
+                except (NfcError, TypeError, ValueError):
+                    continue
+        return False
+
+    def finish(self, request_id):
+        """Release only this playback claim, including on failure or a drop."""
+        with _locked_path(self.confirmed_path):
             try:
-                pending.unlink()
-            except FileNotFoundError:
-                pass
-        self.clear_acknowledgement()
+                payload = _load_json(self.claimed_path)
+            except NfcError:
+                return
+            if payload is not None and payload.get("request_id") == request_id:
+                self.claimed_path.unlink(missing_ok=True)
 
     def acknowledge(self, uid):
         payload = {
@@ -670,10 +697,17 @@ class AnnouncementStore:
         # Only the audio owner writes this receipt, after feedback. Pending
         # handoffs and daemon cleanup must not erase the last confirmed line.
         with _locked_path(self.confirmed_path):
+            try:
+                claimed = _load_json(self.claimed_path)
+                if (claimed is not None and claimed.get("uid") == payload["uid"]
+                        and isinstance(claimed.get("request_id"), str)):
+                    payload["request_id"] = claimed["request_id"]
+            except NfcError:
+                pass
             _atomic_json(self.confirmed_path, payload)
             _atomic_json(self.acknowledged_path, payload)
 
-    def reuse_confirmation(self, uid, *, now, cooldown):
+    def reuse_confirmation(self, uid, *, now, cooldown, request_id=None):
         """Reuse feedback within this boot without renewing its cooldown."""
         with _locked_path(self.confirmed_path):
             try:
@@ -681,6 +715,7 @@ class AnnouncementStore:
                 if (not self.boot_id or payload is None
                         or payload.get("version") != ANNOUNCEMENT_VERSION
                         or payload.get("boot_id") != self.boot_id
+                        or (request_id is not None and payload.get("request_id") != request_id)
                         or normalize_uid(payload.get("uid")) != normalize_uid(uid)):
                     return False
                 announced = payload.get("announced_mono")
@@ -727,37 +762,42 @@ class AnnouncementStore:
             return action
         return None
 
-    def take(self, max_age=10):
-        try:
-            os.replace(self.path, self.claimed_path)
-        except FileNotFoundError:
-            if not self.claimed_path.exists():
-                return None
-        try:
-            payload = _load_json(self.claimed_path)
-            if payload is None or payload.get("version") != ANNOUNCEMENT_VERSION:
-                return None
-            created_at = float(payload.get("created_at"))
-            if created_at > self.clock() + 5 or self.clock() - created_at > max_age:
-                return None
-            action = payload.get("action")
-            prompt = payload.get("prompt", "")
-            if not isinstance(action, str) or not action or len(action) > 32:
-                return None
-            if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
-                return None
-            return {
-                "action": action,
-                "uid": normalize_uid(payload.get("uid")),
-                "prompt": prompt,
-            }
-        except (NfcError, TypeError, ValueError):
-            return None
-        finally:
+    def take(self, max_age=10, *, keep_claimed=False):
+        with _locked_path(self.confirmed_path):
             try:
-                self.claimed_path.unlink()
+                os.replace(self.path, self.claimed_path)
             except FileNotFoundError:
-                pass
+                if not self.claimed_path.exists():
+                    return None
+            retained = False
+            try:
+                payload = _load_json(self.claimed_path)
+                if payload is None or payload.get("version") != ANNOUNCEMENT_VERSION:
+                    return None
+                created_at = float(payload.get("created_at"))
+                if created_at > self.clock() + 5 or self.clock() - created_at > max_age:
+                    return None
+                action = payload.get("action")
+                prompt = payload.get("prompt", "")
+                if not isinstance(action, str) or not action or len(action) > 32:
+                    return None
+                if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
+                    return None
+                result = {"action": action, "uid": normalize_uid(payload.get("uid")), "prompt": prompt}
+                if keep_claimed:
+                    request_id = payload.get("request_id")
+                    if not isinstance(request_id, str) or re.fullmatch(r"[0-9a-f]{32}", request_id) is None:
+                        # A handoff from the previous installed build has no ID.
+                        payload["request_id"] = uuid.uuid4().hex
+                        _atomic_json(self.claimed_path, payload)
+                    result.update(request_id=payload["request_id"], card_switch=payload.get("card_switch") is True)
+                    retained = True
+                return result
+            except (NfcError, TypeError, ValueError):
+                return None
+            finally:
+                if not retained:
+                    self.claimed_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)

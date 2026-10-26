@@ -78,6 +78,11 @@ Cloud reaction cards keep their separate per-message send deduplication.
 The cooldown starts when the audio owner acknowledges played feedback (including
 intentional silent feedback during quiet time), not when a request is queued.
 Expired or dropped unplayed requests do not suppress the next presentation.
+Same-card reads coalesce while feedback is queued or playing. The audio owner
+retains the claimed request until acknowledgment, failure or a drop, and checks
+confirmed feedback again before playing a queued duplicate. A deliberate switch
+away and back keeps its own announcement. Coalescing does not renew the original
+request's ten-second expiry. NFC daemon cleanup preserves an active audio claim.
 The private mode-0600 `/run/messagebox/.nfc-announcement.json.confirmed` receipt
 retains the last confirmed card, boot ID and monotonic acknowledgment time across
 NFC daemon restarts. A reboot may reset it. Suppressed reads do not renew it.

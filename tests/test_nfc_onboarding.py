@@ -47,7 +47,7 @@ class FakeAnnouncer:
     def __init__(self):
         self.results = []
 
-    def announce(self, result):
+    def announce(self, result, *, card_switch=False):
         if result.announce:
             self.results.append(result)
 
