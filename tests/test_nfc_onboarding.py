@@ -70,7 +70,7 @@ class NfcTests(unittest.TestCase):
         self.selection = SelectionStore(self.selection_path, clock=self.clock)
         self.enrollment = EnrollmentStore(self.enrollment_path, clock=self.clock)
         self.announcements = AnnouncementStore(
-            self.announcement_path, clock=self.clock
+            self.announcement_path, clock=self.clock, monotonic=self.clock, boot_id="test-boot"
         )
         self.router = NfcRouter(
             self.contacts,
@@ -578,6 +578,8 @@ class NfcTests(unittest.TestCase):
         first = runtime.observe("04-a1-00-ff", 10.0)
         self.assertEqual(first.action, "selected")
         self.assertEqual(len(announcer.results), 1)
+        with mock.patch.object(self.announcements, "monotonic", return_value=10):
+            self.announcements.acknowledge(CARD_ONE)
         self.assertIsNone(runtime.observe(CARD_ONE, 10.2))
         refreshed = runtime.observe(CARD_ONE, 10.6)
         self.assertEqual(refreshed.action, "refreshed")

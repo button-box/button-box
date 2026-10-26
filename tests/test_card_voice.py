@@ -86,6 +86,8 @@ class CardVoiceTests(unittest.TestCase):
         for mode in ("wacli", "cloud"):
             with self.subTest(mode=mode), \
                  mock.patch.object(runtime, "transport_mode", return_value=mode), \
+                 mock.patch.object(runtime, "nfc_announcement_store", AnnouncementStore(
+                     self.root / (mode + "-announcement.json"), monotonic=lambda: 0.0, boot_id="test-boot")), \
                  mock.patch.object(runtime, "quiet_hours", return_value=True), \
                  mock.patch.object(runtime, "CONTACTS_FILE", self.root / (mode + "-contacts.json")), \
                  mock.patch.object(runtime.cloud_runtime, "card_prompt_clip", return_value=""), \
@@ -108,6 +110,19 @@ class CardVoiceTests(unittest.TestCase):
                 player.reset_mock()
                 reader.observe(None, 1)
                 reader.observe(CARD, 2)
+                self.assertIsNone(runtime.play_pending_nfc_announcement(force=True))
+                self.assertTrue(runtime.ensure_nfc_confirmation({"uid": CARD}))
+                player.assert_not_called()
+                announcements.clear()
+                reader = NfcRuntime(router, Announcer(announcements))
+                reader.observe(CARD, 2.5)  # Restart while the card stays held.
+                self.assertTrue(announcements.is_acknowledged(CARD))
+                self.assertTrue(runtime.ensure_nfc_confirmation({"uid": CARD}))
+                player.assert_not_called()
+                reader.observe(None, 3.5)
+                announcements.clear()  # NFC daemon shutdown/startup cleanup.
+                reader = NfcRuntime(router, Announcer(announcements))
+                reader.observe(CARD, 4)
                 self.assertIsNone(runtime.play_pending_nfc_announcement(force=True))
                 self.assertTrue(runtime.ensure_nfc_confirmation({"uid": CARD}))
                 player.assert_not_called()

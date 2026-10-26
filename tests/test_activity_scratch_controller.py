@@ -290,7 +290,7 @@ class ActivityScratchControllerTests(unittest.TestCase):
         for name in (
             "nfc_enrollment", "nfc_selection", "nfc_selection_claimed", "nfc_unknown",
             "nfc_announcement", "nfc_announcement_claimed",
-            "nfc_announcement_acknowledged", "nfc_health",
+            "nfc_announcement_acknowledged", "nfc_announcement_confirmed", "nfc_health",
         ):
             production[name] = self.root / ("missing-" + name)
         return production

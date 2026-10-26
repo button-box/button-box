@@ -609,9 +609,19 @@ class EnrollmentStore:
 class AnnouncementStore:
     """Single-slot handoff to the process that owns audio playback."""
 
-    def __init__(self, path, *, clock: Callable[[], float] = time.time):
+    def __init__(self, path, *, clock: Callable[[], float] = time.time,
+                 monotonic=None, boot_id=None):
         self.path = Path(path)
         self.clock = clock
+        self.monotonic = monotonic or time.monotonic
+        if boot_id is None:
+            try:
+                boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            except OSError:
+                boot_id = None
+            if boot_id is not None and re.fullmatch(r"[0-9a-f-]{36}", boot_id) is None:
+                boot_id = None
+        self.boot_id = boot_id
 
     @property
     def claimed_path(self):
@@ -620,6 +630,10 @@ class AnnouncementStore:
     @property
     def acknowledged_path(self):
         return self.path.with_name(f".{self.path.name}.acknowledged")
+
+    @property
+    def confirmed_path(self):
+        return self.path.with_name(f".{self.path.name}.confirmed")
 
     def put(self, *, action, uid, prompt):
         if not isinstance(action, str) or not action or len(action) > 32:
@@ -646,14 +660,39 @@ class AnnouncementStore:
         self.clear_acknowledgement()
 
     def acknowledge(self, uid):
-        _atomic_json(
-            self.acknowledged_path,
-            {
-                "version": ANNOUNCEMENT_VERSION,
-                "uid": normalize_uid(uid),
-                "announced_at": self.clock(),
-            },
-        )
+        payload = {
+            "version": ANNOUNCEMENT_VERSION,
+            "uid": normalize_uid(uid),
+            "announced_at": self.clock(),
+            "announced_mono": self.monotonic(),
+            "boot_id": self.boot_id,
+        }
+        # Only the audio owner writes this receipt, after feedback. Pending
+        # handoffs and daemon cleanup must not erase the last confirmed line.
+        with _locked_path(self.confirmed_path):
+            _atomic_json(self.confirmed_path, payload)
+            _atomic_json(self.acknowledged_path, payload)
+
+    def reuse_confirmation(self, uid, *, now, cooldown):
+        """Reuse feedback within this boot without renewing its cooldown."""
+        with _locked_path(self.confirmed_path):
+            try:
+                payload = _load_json(self.confirmed_path)
+                if (not self.boot_id or payload is None
+                        or payload.get("version") != ANNOUNCEMENT_VERSION
+                        or payload.get("boot_id") != self.boot_id
+                        or normalize_uid(payload.get("uid")) != normalize_uid(uid)):
+                    return False
+                announced = payload.get("announced_mono")
+                if type(announced) not in (int, float) or not 0 <= now - announced < cooldown:
+                    return False
+            except NfcError:
+                return False
+            # The button owner still needs confirmation after the NFC daemon has
+            # cleared its handoff/ack files, or it would speak again on a press.
+            if not self.is_acknowledged(uid):
+                _atomic_json(self.acknowledged_path, payload)
+            return True
 
     def is_acknowledged(self, uid):
         payload = _load_json(self.acknowledged_path)

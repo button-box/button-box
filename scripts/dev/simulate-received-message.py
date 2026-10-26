@@ -254,7 +254,7 @@ def _production_trees(production):
 def _verify_production_nfc_clear(production):
     for key in ("nfc_enrollment", "nfc_selection", "nfc_selection_claimed", "nfc_unknown",
                 "nfc_announcement", "nfc_announcement_claimed",
-                "nfc_announcement_acknowledged", "nfc_health"):
+                "nfc_announcement_acknowledged", "nfc_announcement_confirmed", "nfc_health"):
         if shared.trace_present(production[key]) is not False:
             raise SimulationError("existing or unknown production NFC state must remain untouched")
 
@@ -739,6 +739,7 @@ def _production_paths():
         "nfc_announcement_acknowledged": announcement.with_name(
             f".{announcement.name}.acknowledged"
         ),
+        "nfc_announcement_confirmed": announcement.with_name(f".{announcement.name}.confirmed"),
         "nfc_health": Path(runtime_paths.NFC_HEALTH_FILE),
     }
 

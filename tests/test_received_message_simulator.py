@@ -86,6 +86,7 @@ class ReceiveFixture:
             "nfc_announcement": runtime / "nfc-announcement.json",
             "nfc_announcement_claimed": runtime / ".nfc-announcement.json.claimed",
             "nfc_announcement_acknowledged": runtime / ".nfc-announcement.json.acknowledged",
+            "nfc_announcement_confirmed": runtime / ".nfc-announcement.json.confirmed",
             "nfc_health": runtime / "nfc-health",
         })
         self.receiver_root = self.parent / "receiver"
@@ -244,14 +245,16 @@ class ReceivedMessageSimulatorTests(unittest.TestCase):
             self.assertEqual(list(fixture.receiver_root.iterdir()), [])
             self.assertFalse(fixture.output.exists())
 
-            marker = fixture.production["nfc_unknown"]
-            marker.parent.mkdir(mode=0o700)
-            marker.write_text("{}")
-            with fixture.production_receiver(), self.assertRaises(receiver.SimulationError):
-                receiver.receive_one(fixture.authorization, fixture.receiver_root, fixture.output,
-                                     fixture.production, clock=lambda: fixture.now)
-            self.assertEqual(list(fixture.receiver_root.iterdir()), [])
-            self.assertFalse(fixture.output.exists())
+            for key in ("nfc_unknown", "nfc_announcement_confirmed"):
+                marker = fixture.production[key]
+                marker.parent.mkdir(mode=0o700, exist_ok=True)
+                marker.write_text("{}")
+                with fixture.production_receiver(), self.assertRaises(receiver.SimulationError):
+                    receiver.receive_one(fixture.authorization, fixture.receiver_root, fixture.output,
+                                         fixture.production, clock=lambda: fixture.now)
+                self.assertEqual(list(fixture.receiver_root.iterdir()), [])
+                self.assertFalse(fixture.output.exists())
+                marker.unlink()
 
     def test_real_poll_once_download_queue_and_seen_commit_are_isolated(self):
         with tempfile.TemporaryDirectory() as directory:

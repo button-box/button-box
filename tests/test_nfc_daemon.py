@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,14 +46,18 @@ class NfcAnnouncementTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(nfc, "SelectionStore", side_effect=lambda path: SelectionStore(path, clock=lambda: 1000 + tick[0])))
             stack.enter_context(mock.patch.object(nfc, "EnrollmentStore", side_effect=lambda path: EnrollmentStore(path, clock=lambda: 1000 + tick[0])))
             stack.enter_context(mock.patch("messagebox.cloud_device.CloudDeviceClient.from_environment", side_effect=AssertionError("unexpected Cloud call")))
-            announcements = AnnouncementStore(root / "announcement.json", clock=lambda: 1000 + tick[0])
+            announcements = AnnouncementStore(root / "announcement.json", clock=lambda: 1000 + tick[0],
+                                              monotonic=lambda: tick[0], boot_id="test-boot")
             router = nfc.router(announcements)
             reader = nfc.NfcRuntime(router, nfc.Announcer(announcements), reannounce_cooldown=cooldown)
 
             def observe(uid, at):
                 tick[0] = at
                 result = reader.observe(uid, at)
-                return result, announcements.take()
+                line = announcements.take()
+                if line is not None:
+                    announcements.acknowledge(line["uid"])
+                return result, line
 
             yield router, observe
 
@@ -139,6 +144,130 @@ class NfcAnnouncementTests(unittest.TestCase):
                 self.assertIsNone(router.enrollment.active())
                 self.assertIsNone(observe(None, 4)[1])
                 self.assertIsNone(observe(CARD, 5)[1])
+
+
+class NfcConfirmedAnnouncementTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def box(self, mode):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            tick = [0.0]
+            contacts = ContactStore(root / "contacts.json")
+            contacts.add_contact(PERSON, "Card person")
+            contacts.add_contact(OTHER, "Another person")
+            contacts.assign_card(PERSON, CARD)
+            for name, value in {
+                "CONTACTS_FILE": contacts.path, "CLOUD_CONTACTS_FILE": contacts.path,
+                "NFC_SELECTION_FILE": root / "selection.json", "NFC_ENROLLMENT_FILE": root / "enrollment.json",
+                "NFC_ANNOUNCEMENT_FILE": root / "announcement.json", "NFC_HEALTH_FILE": root / "health",
+            }.items():
+                stack.enter_context(mock.patch.object(nfc, name, value))
+            stack.enter_context(mock.patch.dict(nfc.os.environ, {"MSGBOX_TRANSPORT": mode}))
+            stack.enter_context(mock.patch.object(nfc.time, "monotonic", side_effect=lambda: tick[0]))
+            stack.enter_context(mock.patch.object(nfc, "SelectionStore", side_effect=lambda path: SelectionStore(path, clock=lambda: 1000 + tick[0])))
+            stack.enter_context(mock.patch("messagebox.cloud_device.CloudDeviceClient.from_environment", side_effect=AssertionError("unexpected Cloud call")))
+
+            def store(path):
+                # This factory works before the fix too, so reproduction tests
+                # fail on feedback behavior rather than a new constructor API.
+                instance = AnnouncementStore(path, clock=lambda: 1000 + tick[0])
+                instance.monotonic = lambda: tick[0]
+                instance.boot_id = "test-boot"
+                return instance
+
+            stack.enter_context(mock.patch.object(nfc, "AnnouncementStore", side_effect=store))
+            announcements = store(nfc.NFC_ANNOUNCEMENT_FILE)
+
+            def run(readings):
+                steps = iter(readings)
+
+                def read():
+                    try:
+                        uid, at, feedback = next(steps)
+                    except StopIteration:
+                        raise ReaderStopped()
+                    tick[0] = at
+                    if feedback:
+                        feedback(announcements)
+                    return bytes.fromhex(uid.replace(":", "")) if uid else None
+
+                with mock.patch.object(nfc, "hardware_reader", return_value=mock.Mock(read=read)), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(ReaderStopped):
+                        nfc.run_daemon()
+
+            def play(store):
+                line = store.take()
+                self.assertIsNotNone(line)
+                store.acknowledge(line["uid"])
+
+            yield announcements, run, play
+
+    def test_unplayed_expired_or_dropped_request_does_not_start_cooldown(self):
+        for mode in ("wacli", "cloud"):
+            for dropped in (False, True):
+                with self.subTest(mode=mode, dropped=dropped), self.box(mode) as (_store, run, _play):
+                    def discard(store):
+                        if dropped:
+                            self.assertEqual(store.take()["uid"], CARD)
+                        else:
+                            self.assertIsNone(store.take())
+
+                    def retry(store):
+                        line = store.take()
+                        self.assertIsNotNone(line)
+                        self.assertEqual(line["uid"], CARD)
+
+                    run([(CARD, 0, None), (None, 1 if dropped else 11, discard),
+                         (CARD, 12, None), (CARD, 12.1, retry)])
+
+    def test_confirmed_cooldown_survives_restart_before_or_after_removal(self):
+        for mode in ("wacli", "cloud"):
+            for removed in (False, True):
+                with self.subTest(mode=mode, removed=removed), self.box(mode) as (_store, run, play):
+                    run([(CARD, 0, None), (None if removed else CARD, 1, play)])
+
+                    def silent(store):
+                        self.assertIsNone(store.take())
+                        self.assertTrue(store.is_acknowledged(CARD))
+
+                    # Restart with a held card, then prove removal, or restart
+                    # after removal. Both paths must reuse the confirmed line.
+                    run([(None, 2, None), (None, 3, None), (CARD, 4, None),
+                         (CARD, 4.1, silent)])
+
+    def test_cooldown_starts_at_acknowledgment_and_does_not_slide(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), self.box(mode) as (announcements, run, play):
+                def silent(store):
+                    self.assertIsNone(store.take())
+                    receipt = json.loads(store.confirmed_path.read_text())
+                    self.assertEqual(receipt["announced_mono"], 8)
+                    self.assertEqual(store.confirmed_path.stat().st_mode & 0o777, 0o600)
+
+                run([(CARD, 0, None), (CARD, 8, play), (None, 9, None),
+                     (CARD, 61, None), (CARD, 61.1, silent)])
+                # Wall-clock adjustments cannot change the boot-monotonic window.
+                payload = json.loads(announcements.confirmed_path.read_text())
+                payload["announced_at"] = 1_000_000
+                announcements.confirmed_path.write_text(json.dumps(payload))
+                run([(None, 62, None), (None, 63, None), (CARD, 64, None),
+                     (CARD, 64.1, silent), (None, 68, None),
+                     (CARD, 69, None), (CARD, 69.1, play)])
+
+    def test_old_boot_future_or_invalid_receipt_does_not_suppress_feedback(self):
+        for mode in ("wacli", "cloud"):
+            for invalid in ("boot", "future", "corrupt"):
+                with self.subTest(mode=mode, invalid=invalid), self.box(mode) as (announcements, run, play):
+                    run([(CARD, 0, None), (None, 1, play)])
+                    path = announcements.confirmed_path
+                    payload = json.loads(path.read_text())
+                    if invalid == "corrupt":
+                        path.write_text("not json")
+                    else:
+                        payload.update({"boot_id": "old-boot"} if invalid == "boot" else {"announced_mono": 9999})
+                        path.write_text(json.dumps(payload))
+                    run([(None, 2, None), (None, 3, None), (CARD, 4, None),
+                         (CARD, 4.1, play)])
 
 
 class NfcDaemonRestartTests(unittest.TestCase):

@@ -124,14 +124,21 @@ class NfcRuntime:
         self.last_seen = None
         self.last_refresh = None
         self.absent_since = None
-        self.last_announced_uid = None
-        self.last_announced_at = None
+        self.last_requested_uid = None
 
     def _announce(self, result, now):
         # Routing still sees every presentation; only repeated selection audio
         # is suppressed. Enrollment feedback must always reach the audio owner.
         if not result.announce:
+            # A held card resumes silently after restart, but the button must
+            # also retain its confirmation before the next recording press.
+            if result.action in {"refreshed", "recognized"}:
+                self.router.announcements.reuse_confirmation(
+                    result.uid, now=now, cooldown=self.reannounce_cooldown
+                )
             return result
+        previous_uid = self.last_requested_uid
+        self.last_requested_uid = result.uid
         # Cloud reaction handoffs trigger sends, with their own per-message
         # deduplication in the audio owner, rather than selecting a recipient.
         reaction = (
@@ -142,13 +149,13 @@ class NfcRuntime:
         if (
             result.action in {"selected", "recognized"}
             and not reaction
-            and result.uid == self.last_announced_uid
-            and now - self.last_announced_at < self.reannounce_cooldown
+            and previous_uid in (None, result.uid)
+            and self.router.announcements.reuse_confirmation(
+                result.uid, now=now, cooldown=self.reannounce_cooldown
+            )
         ):
             return replace(result, announce=False)
         self.announcer.announce(result)
-        self.last_announced_uid = result.uid
-        self.last_announced_at = now
         return result
 
     def observe(self, raw_uid, now):

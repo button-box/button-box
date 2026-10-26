@@ -75,10 +75,13 @@ announcement for 60 seconds after the last announcement, including reader gaps
 while moving it. `MSGBOX_NFC_REANNOUNCE_COOLDOWN_S` overrides this positive interval.
 A different card announces immediately; pairing feedback bypasses the cooldown.
 Cloud reaction cards keep their separate per-message send deduplication.
-The cooldown uses process-local monotonic time and does not renew on suppressed
-reads. It does not change selection expiry, rearming, or quiet-time playback.
-An NFC daemon restart resets this audio cooldown; held-card restart protection
-still applies as described below. No new state is persisted.
+The cooldown starts when the audio owner acknowledges played feedback (including
+intentional silent feedback during quiet time), not when a request is queued.
+Expired or dropped unplayed requests do not suppress the next presentation.
+The private mode-0600 `/run/messagebox/.nfc-announcement.json.confirmed` receipt
+retains the last confirmed card, boot ID and monotonic acknowledgment time across
+NFC daemon restarts. A reboot may reset it. Suppressed reads do not renew it.
+It does not change selection expiry, rearming, or quiet-time playback.
 In hold-to-record mode, a short release keeps the choice without playing the
 queue or saving silent audio. A button-service crash before approval leaves
 the choice available until expiry; there is no claim to recover. Invalid card
