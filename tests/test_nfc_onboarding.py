@@ -587,7 +587,7 @@ class NfcTests(unittest.TestCase):
         self.assertEqual(self.router.active_contact()["jid"], GRANDMA)
 
         self.assertEqual(runtime.observe(CARD_ONE, 12.0).action, "selected")
-        self.assertEqual(len(announcer.results), 2)
+        self.assertEqual(len(announcer.results), 1)
 
     def test_runtime_requires_unknown_card_to_be_represented_for_enrollment(self):
         self.add_grandma(CARD_ONE)

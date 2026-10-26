@@ -13,7 +13,9 @@ from unittest import mock
 with mock.patch.dict(sys.modules, {"gpiozero": types.SimpleNamespace(Button=object, LED=object)}):
     from messagebox import button_send as runtime
 from messagebox.guided_reply import OutboxStore, RecordingResult
-from messagebox.nfc_state import AnnouncementStore
+from messagebox.contacts import ContactStore
+from messagebox.nfc import Announcer, NfcRuntime
+from messagebox.nfc_state import AnnouncementStore, EnrollmentStore, NfcRouter, SelectionStore
 from messagebox.onboarding.nfc import TonePlayer
 from messagebox.onboarding import nfc as onboarding_nfc
 from messagebox.settings import defaults
@@ -79,6 +81,36 @@ class CardVoiceTests(unittest.TestCase):
             self.settings["nfc_confirmation_beep"] = True
             runtime._play_nfc_prompt(CARD, "recognized", "")
             self.assertEqual(play.call_args.args[0], runtime.sound_pack.cue_path("card"))
+
+    def test_reader_cooldown_preserves_quiet_playback_in_both_modes(self):
+        for mode in ("wacli", "cloud"):
+            with self.subTest(mode=mode), \
+                 mock.patch.object(runtime, "transport_mode", return_value=mode), \
+                 mock.patch.object(runtime, "quiet_hours", return_value=True), \
+                 mock.patch.object(runtime, "CONTACTS_FILE", self.root / (mode + "-contacts.json")), \
+                 mock.patch.object(runtime.cloud_runtime, "card_prompt_clip", return_value=""), \
+                 mock.patch.object(runtime, "start_player", return_value=mock.Mock(poll=lambda: 0)) as player:
+                contacts = ContactStore(runtime.CONTACTS_FILE)
+                contacts.add_contact(JID, "Card person")
+                contacts.add_contact("12025550102@s.whatsapp.net", "Another person")
+                contacts.assign_card(JID, CARD)
+                announcements = runtime.nfc_announcement_store
+                announcements.clear()
+                router = NfcRouter(contacts, SelectionStore(self.root / (mode + "-selection.json")),
+                                   EnrollmentStore(self.root / (mode + "-enrollment.json")), announcements)
+                reader = NfcRuntime(router, Announcer(announcements))
+                reader.observe(CARD, 0)
+                self.assertEqual(runtime.play_pending_nfc_announcement(force=True), "selected")
+                self.assertTrue(announcements.is_acknowledged(CARD))
+                # Cloud quiet time remains silent. Self-hosted card feedback
+                # retains its existing behavior, including its quiet-hours policy.
+                self.assertEqual(player.call_count, 0 if mode == "cloud" else 2)
+                player.reset_mock()
+                reader.observe(None, 1)
+                reader.observe(CARD, 2)
+                self.assertIsNone(runtime.play_pending_nfc_announcement(force=True))
+                self.assertTrue(runtime.ensure_nfc_confirmation({"uid": CARD}))
+                player.assert_not_called()
 
     def test_enrollment_and_onboarding_success_play_saved_cue_then_current_voice_in_both_modes(self):
         for mode in ("wacli", "cloud"):

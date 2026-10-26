@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from messagebox import sound_pack
@@ -39,6 +40,7 @@ def unknown_token_wav():
 REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
+REANNOUNCE_COOLDOWN_S = float(os.environ.get("MSGBOX_NFC_REANNOUNCE_COOLDOWN_S", "60"))
 HEALTH_INTERVAL_S = 2.0
 
 
@@ -111,15 +113,43 @@ class NfcRuntime:
         *,
         removal_grace=REMOVAL_GRACE_S,
         refresh=REFRESH_S,
+        reannounce_cooldown=REANNOUNCE_COOLDOWN_S,
     ):
         self.router = router
         self.announcer = announcer
         self.removal_grace = removal_grace
         self.refresh = refresh
+        self.reannounce_cooldown = reannounce_cooldown
         self.uid, self.resuming_presence = self.router.selection.presentation()
         self.last_seen = None
         self.last_refresh = None
         self.absent_since = None
+        self.last_announced_uid = None
+        self.last_announced_at = None
+
+    def _announce(self, result, now):
+        # Routing still sees every presentation; only repeated selection audio
+        # is suppressed. Enrollment feedback must always reach the audio owner.
+        if not result.announce:
+            return result
+        # Cloud reaction handoffs trigger sends, with their own per-message
+        # deduplication in the audio owner, rather than selecting a recipient.
+        reaction = (
+            os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+            and result.contact is not None
+            and result.contact["jid"].startswith("box:reaction_")
+        )
+        if (
+            result.action in {"selected", "recognized"}
+            and not reaction
+            and result.uid == self.last_announced_uid
+            and now - self.last_announced_at < self.reannounce_cooldown
+        ):
+            return replace(result, announce=False)
+        self.announcer.announce(result)
+        self.last_announced_uid = result.uid
+        self.last_announced_at = now
+        return result
 
     def observe(self, raw_uid, now):
         if raw_uid is None:
@@ -132,7 +162,6 @@ class NfcRuntime:
                     self.uid = None
                     self.resuming_presence = False
                     self.absent_since = None
-                    self.announcer.announce(result)
                     return result
                 return None
             if (
@@ -142,7 +171,6 @@ class NfcRuntime:
             ):
                 result = self.router.card_absent()
                 self.uid = self.last_seen = self.last_refresh = None
-                self.announcer.announce(result)
                 return result
             return None
         self.absent_since = None
@@ -153,16 +181,14 @@ class NfcRuntime:
             self.resuming_presence = False
             self.uid = uid
             self.last_seen = self.last_refresh = now
-            self.announcer.announce(result)
-            return result
+            return self._announce(result, now)
         self.last_seen = now
         if self.last_refresh is None or now - self.last_refresh >= self.refresh:
             result = self.router.card_seen(uid, new_presentation=False)
             self.last_refresh = now
             if result.action == "unknown":
                 return None
-            self.announcer.announce(result)
-            return result
+            return self._announce(result, now)
         return None
 
 
@@ -176,7 +202,10 @@ def router(announcement_store=None):
 
 
 def run_daemon():
-    if REMOVAL_GRACE_S <= 0 or REFRESH_S <= 0 or READ_TIMEOUT_S <= 0:
+    if (
+        REMOVAL_GRACE_S <= 0 or REFRESH_S <= 0 or READ_TIMEOUT_S <= 0
+        or not 0 < REANNOUNCE_COOLDOWN_S < float("inf")
+    ):
         raise NfcError("NFC timing values must be positive")
     announcement_store = AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
     nfc_router = router(announcement_store)

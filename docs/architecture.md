@@ -70,6 +70,15 @@ timeouts, and audio errors keep the choice with its original selection time.
 The choice expires after `MSGBOX_NFC_SELECTION_TTL_S` (30 seconds by default),
 even while the card remains on the reader. A new presentation replaces it.
 A recording that starts within the window keeps its exact recipient.
+Removing a card is silent. Re-presenting the same card suppresses its selection
+announcement for 60 seconds after the last announcement, including reader gaps
+while moving it. `MSGBOX_NFC_REANNOUNCE_COOLDOWN_S` overrides this positive interval.
+A different card announces immediately; pairing feedback bypasses the cooldown.
+Cloud reaction cards keep their separate per-message send deduplication.
+The cooldown uses process-local monotonic time and does not renew on suppressed
+reads. It does not change selection expiry, rearming, or quiet-time playback.
+An NFC daemon restart resets this audio cooldown; held-card restart protection
+still applies as described below. No new state is persisted.
 In hold-to-record mode, a short release keeps the choice without playing the
 queue or saving silent audio. A button-service crash before approval leaves
 the choice available until expiry; there is no claim to recover. Invalid card
