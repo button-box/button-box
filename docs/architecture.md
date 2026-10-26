@@ -85,7 +85,10 @@ away and back keeps its own announcement. Coalescing does not renew the original
 request's ten-second expiry. NFC daemon cleanup preserves an active audio claim.
 The private mode-0600 `/run/messagebox/.nfc-announcement.json.confirmed` receipt
 retains the last confirmed card, boot ID and monotonic acknowledgment time across
-NFC daemon restarts. A reboot may reset it. Suppressed reads do not renew it.
+NFC daemon restarts. It also retains the most recently presented card, even if
+its feedback never played, so switching away and back still announces after a
+reader restart. A late acknowledgment preserves that newer presentation.
+A reboot may reset the receipt. Suppressed reads do not renew the cooldown.
 It does not change selection expiry, rearming, or quiet-time playback.
 In hold-to-record mode, a short release keeps the choice without playing the
 queue or saving silent audio. A button-service crash before approval leaves

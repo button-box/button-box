@@ -179,6 +179,36 @@ class CardVoiceTests(unittest.TestCase):
                 self.assertEqual(audio.call_count, 2)
                 self.assertFalse(store.claimed_path.exists())
 
+    def test_switch_back_after_reader_restart_reaches_audio_despite_late_ack(self):
+        for mode in ("wacli", "cloud"):
+            for removed in (False, True):
+                with self.subTest(mode=mode, removed=removed), self.reader(mode) as (reader, store, tick):
+                    reader.observe(CARD, 0)
+
+                    def play(_path, _timeout):
+                        tick[0] = 1
+                        reader.observe(OTHER_CARD, 1)
+                        tick[0] = 2
+                        return True
+
+                    with mock.patch.object(runtime, "play_idle_sound", side_effect=play) as audio:
+                        runtime.play_pending_nfc_announcement(force=True)
+                        # A's acknowledgment arrives after B was presented.
+                        if removed:
+                            tick[0] = 3
+                            reader.observe(None, 3)
+                        store.clear(preserve_claimed=True)
+                        restarted = NfcRuntime(reader.router, Announcer(store))
+                        tick[0] = 4
+                        restarted.observe(None if removed else OTHER_CARD, 4)
+                        tick[0] = 5
+                        restarted.observe(CARD, 5)
+                        audio.side_effect = None
+                        audio.return_value = True
+                        self.assertEqual(runtime.play_pending_nfc_announcement(force=True), "selected")
+                    self.assertEqual(audio.call_count, 2)
+                    self.assertTrue(store.is_acknowledged(CARD))
+
     def test_dropped_or_failed_playback_releases_claim_for_retry(self):
         for mode in ("wacli", "cloud"):
             for failure in ("wrong_card", "speaker"):

@@ -156,6 +156,7 @@ class NfcConfirmedAnnouncementTests(unittest.TestCase):
             contacts.add_contact(PERSON, "Card person")
             contacts.add_contact(OTHER, "Another person")
             contacts.assign_card(PERSON, CARD)
+            contacts.assign_card(OTHER, OTHER_CARD)
             for name, value in {
                 "CONTACTS_FILE": contacts.path, "CLOUD_CONTACTS_FILE": contacts.path,
                 "NFC_SELECTION_FILE": root / "selection.json", "NFC_ENROLLMENT_FILE": root / "enrollment.json",
@@ -201,6 +202,26 @@ class NfcConfirmedAnnouncementTests(unittest.TestCase):
                 store.acknowledge(line["uid"])
 
             yield announcements, run, play
+
+    def test_switch_back_after_restart_with_other_card_held_or_removed(self):
+        for mode in ("wacli", "cloud"):
+            for removed in (False, True):
+                with self.subTest(mode=mode, removed=removed), self.box(mode) as (_store, run, play):
+                    readings = [(CARD, 0, None), (OTHER_CARD, 1, play)]
+                    if removed:
+                        readings.append((None, 2, None))
+                    run(readings)
+
+                    def switched(store):
+                        request = store.take(keep_claimed=True)
+                        self.assertIsNotNone(request)
+                        self.assertEqual(request["uid"], CARD)
+                        self.assertTrue(request["card_switch"])
+
+                    # B's unplayed handoff is cleared at reader shutdown. Its
+                    # presentation must still distinguish this return to A.
+                    run([(None if removed else OTHER_CARD, 3, None),
+                         (CARD, 4, None), (CARD, 4.1, switched)])
 
     def test_unplayed_expired_or_dropped_request_does_not_start_cooldown(self):
         for mode in ("wacli", "cloud"):

@@ -636,6 +636,34 @@ class AnnouncementStore:
     def confirmed_path(self):
         return self.path.with_name(f".{self.path.name}.confirmed")
 
+    def _receipt(self):
+        try:
+            payload = _load_json(self.confirmed_path)
+        except NfcError:
+            return {}
+        if (payload is None or payload.get("version") != ANNOUNCEMENT_VERSION
+                or payload.get("boot_id") != self.boot_id):
+            return {}
+        return payload
+
+    def last_presentation(self):
+        if not self.boot_id:
+            return None
+        with _locked_path(self.confirmed_path):
+            try:
+                return normalize_uid(self._receipt().get("presented_uid"))
+            except NfcError:
+                return None
+
+    def record_presentation(self, uid):
+        """Remember switches independently of whether their feedback played."""
+        uid = normalize_uid(uid)
+        with _locked_path(self.confirmed_path):
+            payload = self._receipt()
+            if payload.get("presented_uid") != uid:
+                payload.update(version=ANNOUNCEMENT_VERSION, boot_id=self.boot_id, presented_uid=uid)
+                _atomic_json(self.confirmed_path, payload)
+
     def put(self, *, action, uid, prompt, card_switch=False):
         if not isinstance(action, str) or not action or len(action) > 32:
             raise NfcError("announcement action is invalid")
@@ -694,9 +722,12 @@ class AnnouncementStore:
             "announced_mono": self.monotonic(),
             "boot_id": self.boot_id,
         }
-        # Only the audio owner writes this receipt, after feedback. Pending
-        # handoffs and daemon cleanup must not erase the last confirmed line.
+        # A late acknowledgment must retain any newer card presentation. Only
+        # the audio owner advances the confirmed line and its cooldown.
         with _locked_path(self.confirmed_path):
+            presented_uid = self._receipt().get("presented_uid")
+            if presented_uid is not None:
+                payload["presented_uid"] = presented_uid
             try:
                 claimed = _load_json(self.claimed_path)
                 if (claimed is not None and claimed.get("uid") == payload["uid"]

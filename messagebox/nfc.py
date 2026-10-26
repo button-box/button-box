@@ -124,9 +124,9 @@ class NfcRuntime:
         self.last_seen = None
         self.last_refresh = None
         self.absent_since = None
-        self.last_requested_uid = None
+        self.last_presented_uid = self.router.announcements.last_presentation()
 
-    def _announce(self, result, now):
+    def _announce(self, result, now, *, previous_uid=None):
         # Routing still sees every presentation; only repeated selection audio
         # is suppressed. Enrollment feedback must always reach the audio owner.
         if not result.announce:
@@ -137,8 +137,6 @@ class NfcRuntime:
                     result.uid, now=now, cooldown=self.reannounce_cooldown
                 )
             return result
-        previous_uid = self.last_requested_uid
-        self.last_requested_uid = result.uid
         # Cloud reaction handoffs trigger sends, with their own per-message
         # deduplication in the audio owner, rather than selecting a recipient.
         reaction = (
@@ -187,10 +185,14 @@ class NfcRuntime:
         if self.uid != uid or self.resuming_presence:
             new_presentation = self.uid != uid and not (self.resuming_presence and self.uid is None)
             result = self.router.card_seen(uid, new_presentation=new_presentation)
+            previous_uid = self.last_presented_uid
+            if previous_uid != uid:
+                self.router.announcements.record_presentation(uid)
+                self.last_presented_uid = uid
             self.resuming_presence = False
             self.uid = uid
             self.last_seen = self.last_refresh = now
-            return self._announce(result, now)
+            return self._announce(result, now, previous_uid=previous_uid)
         self.last_seen = now
         if self.last_refresh is None or now - self.last_refresh >= self.refresh:
             result = self.router.card_seen(uid, new_presentation=False)
