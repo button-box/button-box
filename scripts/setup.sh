@@ -158,6 +158,23 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
+# Validate fresh I2S pin assignments before changing services or installed files.
+if sudo test -L "$CONFIG_DIR/env" || {
+  sudo test -e "$CONFIG_DIR/env" && ! sudo test -f "$CONFIG_DIR/env"
+}; then
+  echo "Cannot use non-regular runtime configuration: $CONFIG_DIR/env" >&2
+  exit 1
+fi
+if sudo test -e "$CONFIG_DIR/env"; then
+  if [ "$MIC_TYPE" = i2s ]; then
+    sudo /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" --check-i2s-pins "$CONFIG_DIR/env"
+  fi
+else
+  GENERATED_ENV=$(mktemp)
+  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" --mic-type "$MIC_TYPE" --prepare-install \
+    "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
+fi
+
 if systemctl is-active --quiet messagebox-mode-reconcile.path 2>/dev/null; then
   MODE_PATH_WAS_ACTIVE=1
 fi
@@ -185,17 +202,6 @@ for unit in \
   fi
 done
 
-if sudo test -L "$CONFIG_DIR/env" || {
-  sudo test -e "$CONFIG_DIR/env" && ! sudo test -f "$CONFIG_DIR/env"
-}; then
-  echo "Cannot use non-regular runtime configuration: $CONFIG_DIR/env" >&2
-  exit 1
-fi
-if ! sudo test -e "$CONFIG_DIR/env"; then
-  GENERATED_ENV=$(mktemp)
-  /usr/bin/python3 "$SCRIPT_DIR/install/audio_config.py" --mic-type "$MIC_TYPE" \
-    "$REPO_DIR/config/env.example" >"$GENERATED_ENV"
-fi
 
 if account=$(getent passwd "$SERVICE_USER"); then
   account_home=$(printf '%s\n' "$account" | cut -d: -f6)

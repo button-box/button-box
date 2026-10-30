@@ -125,7 +125,7 @@ elif name not in ('systemctl','getent','minisign','espeak-ng'):
         return subprocess.run(['/bin/sh', str(self.script), 'auto', 'stable'], env=self.env,
                               capture_output=True, text=True, timeout=30)
 
-    def fresh_setup(self):
+    def fresh_setup(self, mic_type='usb', *, existing_env=None, expect_success=True):
         """Run setup's real allowlists/install commands, with OS edges replaced.
 
         Package installation, accounts, hardware and systemd are host boundaries.
@@ -133,6 +133,9 @@ elif name not in ('systemctl','getent','minisign','espeak-ng'):
         """
         shutil.rmtree(self.root)
         self.root.mkdir(mode=0o755)
+        write(self.root / 'boot/firmware/config.txt', b'dtparam=audio=on\n[all]\n')
+        if existing_env is not None:
+            write(self.root / 'etc/messagebox/env', existing_env.encode(), 0o640)
         # Model membership in the shared service group on non-root test hosts.
         os.chown(self.root, -1, os.getegid())
         for name in ('etc/systemd/system', 'etc/tmpfiles.d', 'usr/local/bin', 'usr/local/sbin', 'run/lock'):
@@ -177,11 +180,16 @@ elif name=='bench-os-helper':
 elif name=='python3':
     if args[0].endswith('audio_config.py'):
         sys.path.insert(0,str(repo/'scripts/install'))
-        from audio_config import main
+        import audio_config as audio
         from unittest.mock import patch
+        audio.CONFIG_ENV=root/'etc/messagebox/env'
+        audio.BOOT_CONFIG=root/'boot/firmware/config.txt'
+        audio.I2S_ALSA_CONFIG=root/'etc/alsa/conf.d/60-button-box-i2s-mic.conf'
+        audio.I2S_GUARD=root/'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf'
+        audio.I2S_CAPABILITY=root/'opt/messagebox/messagebox/mic_capture.py'
         with patch('audio_config.detect_microphone',return_value=('mic','plughw:CARD=mic,DEV=0')), \
              patch('audio_config.detect_speaker',return_value=('Device','plughw:CARD=Device,DEV=0')):
-            raise SystemExit(main(args[1:]))
+            raise SystemExit(audio.main(args[1:]))
     elif args[0].endswith('messagebox-mode-migrate.py') or args[:2]==['-m','messagebox.wifi_watchdog']:
         pass
     else: os.execv(sys.executable,[sys.executable,*args])
@@ -201,11 +209,13 @@ while (( $# )); do
 done
 exec /usr/bin/install "${args[@]}"
 ''', 0o755)
-        env = dict(self.env, PATH=str(shim.parent) + os.pathsep + os.environ['PATH'])
+        env = dict(self.env, PATH=str(shim.parent) + os.pathsep + os.environ['PATH'], MSGBOX_MIC_TYPE=mic_type)
         result = subprocess.run(['/bin/sh', str(setup_path)], env=env,
                                 capture_output=True, text=True, timeout=180)
+        if not expect_success:
+            return result
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for name in ('controller_slots.py', 'cloud_setup.py', 'speaker.py', 'remote_access.py'):
+        for name in ('controller_slots.py', 'cloud_setup.py', 'speaker.py', 'remote_access.py', 'mic_capture.py'):
             self.assertEqual((self.root / 'opt/messagebox/messagebox' / name).read_bytes(),
                              (ROOT / 'messagebox' / name).read_bytes())
         # A fresh box has no enabled messaging components or saved household.
@@ -224,6 +234,34 @@ exec /usr/bin/install "${args[@]}"
         # Restore release trust; bootstrap must verify the real disposable pin.
         shutil.rmtree(self.repo / 'config/release-keys')
         write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
+
+    def test_fresh_i2s_setup_installs_safe_pins_overlay_pcm_and_start_guard(self):
+        self.fresh_setup('i2s')
+        env = (self.root / 'etc/messagebox/env').read_text()
+        for setting in ('MSGBOX_MIC_TYPE=i2s', 'MSGBOX_NFC_RESET_PIN=D4',
+                        'MSGBOX_NFC_REQUEST_PIN=D27', 'MSGBOX_BUTTON_PIN=17', 'MSGBOX_LED_PIN=26'):
+            self.assertIn(setting + '\n', env)
+        self.assertIn('dtoverlay=googlevoicehat-soundcard', (self.root / 'boot/firmware/config.txt').read_text())
+        self.assertIn('slave.rate 48000', (self.root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf').read_text())
+        self.assertIn('--check-i2s-application', (self.root / 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf').read_text())
+
+    def test_i2s_setup_rejects_existing_conflicting_pins_before_service_or_install_mutation(self):
+        original = 'MSGBOX_MIC_TYPE=usb\nMSGBOX_NFC_RESET_PIN=D20\nMSGBOX_NFC_REQUEST_PIN=D16\n'
+        result = self.fresh_setup('i2s', existing_env=original, expect_success=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('pins are used by the I2S microphone', result.stderr)
+        self.assertEqual((self.root / 'etc/messagebox/env').read_text(), original)
+        self.assertFalse((self.root / 'opt/messagebox').exists())
+        commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse([command for command in commands if command[0] in ('systemctl', 'apt-get', 'install')])
+
+    def test_fresh_usb_setup_keeps_original_nfc_mapping_without_i2s_files(self):
+        self.fresh_setup()
+        env = (self.root / 'etc/messagebox/env').read_text()
+        for setting in ('MSGBOX_MIC_TYPE=usb', 'MSGBOX_NFC_RESET_PIN=D20', 'MSGBOX_NFC_REQUEST_PIN=D16'):
+            self.assertIn(setting + '\n', env)
+        self.assertFalse((self.root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf').exists())
+        self.assertFalse((self.root / 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf').exists())
 
     @contextlib.contextmanager
     def installed_controller(self, slot):

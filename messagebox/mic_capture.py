@@ -11,6 +11,11 @@ import time
 from gpiozero import Button
 
 
+# Declarative release capability, read without importing this hardware module.
+# Declare version 1 only while every recording caller honors MSGBOX_MIC_PCM.
+I2S_CAPTURE_VERSION = 1
+
+
 class CaptureDenied(RuntimeError):
     pass
 

@@ -25,6 +25,12 @@ conflict**. `--set-mic-type i2s` refuses to run while any box pin setting,
 including a missing NFC setting that falls back to `D20`/`D16`, uses GPIO 16,
 18, 19, 20 or 21.
 
+Fresh setup with `MSGBOX_MIC_TYPE=i2s` explicitly uses NFC reset/request
+`D4`/`D27`, button GPIO 17 and lamp GPIO 26. It validates these pins before
+changing services or installing files. Existing configurations must already
+contain valid, distinct pins outside the I2S and I2C GPIOs. USB setup keeps
+the existing `D20`/`D16` NFC defaults.
+
 ## How it works
 
 - `/boot/firmware/config.txt` gets a managed block with `[all]`,
@@ -38,8 +44,8 @@ including a missing NFC setting that falls back to `D20`/`D16`, uses GPIO 16,
   headroom (bench speech peaked near
   -14 to -20 dBFS at +33 dB).
 - At boot, `messagebox-audio-detect` reads `MSGBOX_MIC_TYPE` from
-  `/etc/messagebox/env`. For `i2s` it requires the `sndrpigooglevoi` capture
-  card and the ALSA file, then writes `MSGBOX_MIC_PCM=buttonbox_mic` to
+  `/etc/messagebox/env`. With the `sndrpigooglevoi` capture card and the ALSA
+  file present, it writes `MSGBOX_MIC_PCM=buttonbox_mic` to
   `/run/messagebox-audio/audio.env`. All button recording flows (hold, guided
   tap/reply, family-card recording and the first setup reply) and the developer
   hardware test record from `MSGBOX_MIC_PCM` when it is set. Setup greetings
@@ -47,6 +53,12 @@ including a missing NFC setting that falls back to `D20`/`D16`, uses GPIO 16,
   (`plughw:CARD=sndrpigooglevoi,DEV=0`) because the fixed updater health check
   accepts only that form.
 - A USB box never selects the I2S card, even if the overlay is enabled.
+- If the configured I2S card is absent at boot, detection logs a warning and
+  tries the normal USB selection. It removes the processed PCM from the new
+  runtime output. With no USB microphone either, detection fails and the
+  recording service does not start. The configured type stays `i2s` so the
+  next boot tries I2S again. A present I2S card without its ALSA configuration
+  fails closed rather than recording raw audio.
 - The recorded file format and the WhatsApp/Cloud upload are unchanged.
 - No Cloud or dashboard setting, command, capability flag or wording change is
   required. Microphone type and gain are local installation settings.
@@ -55,9 +67,11 @@ including a missing NFC setting that falls back to `D20`/`D16`, uses GPIO 16,
 
 ## Switch a box
 
-Install a software release that contains this change first. Older
-`audio_config.py` versions ignore `MSGBOX_MIC_TYPE` and can pick the raw I2S
-card once the overlay is active.
+Start with an I2S-capable application. Enabling I2S checks its installed
+`messagebox/mic_capture.py` for `I2S_CAPTURE_VERSION = 1`; the declaration means
+that every recording path honors `MSGBOX_MIC_PCM`. A missing, invalid or
+unsupported declaration is refused before changing audio configuration.
+Do not use a legacy USB bridge as an I2S migration route.
 
 ```sh
 sudo python3 /usr/lib/messagebox/audio_config.py --set-mic-type i2s
@@ -76,13 +90,33 @@ sudo python3 /usr/lib/messagebox/audio_config.py --set-mic-type usb
 sudo reboot
 ```
 
-This removes only the managed `config.txt` block and the ALSA file. An overlay
-line added by hand stays; remove it yourself.
+This removes the managed overlay block and the ALSA file. An `[all]` boundary
+remains so settings appended below the block keep their original global
+scope. An overlay line added by hand stays; remove it yourself. The application
+start guard remains installed and bypasses its I2S check when USB is selected.
 
 A fresh developer install can do the same in one step:
 `MSGBOX_MIC_TYPE=i2s ./scripts/provision.sh user@host` (or
 `MSGBOX_MIC_TYPE=i2s ./scripts/setup.sh` on the Pi). Setup prints a reboot
 note when `config.txt` changed.
+
+## Interrupted configuration and manual boot settings
+
+Microphone switches are serialized by `/etc/messagebox/.audio-config.lock`.
+Enabling first persists the application start guard, so even a later legacy
+install cannot record raw I2S after an interruption. It then writes boot
+configuration, the ALSA configuration, and activates `MSGBOX_MIC_TYPE=i2s` last. Each file
+and its containing directory is synced before proceeding, including newly
+created parent directories. Disabling commits USB mode before removing the
+overlay and ALSA file; deletion also syncs the containing directory. This
+ordering covers separate boot and root filesystems. Repeating the switch
+after an interruption completes it safely.
+
+An unmanaged overlay is accepted only with an unconditional `dtparam=i2s=on`
+and one unparameterized overlay line in global scope. Conditional overlays,
+includes, duplicate overlays, unclear I2S parameters and incomplete or edited
+managed blocks are refused. Resolve these manually before retrying. The helper
+does not guess which Pi model or nested include will make a line effective.
 
 ## Install and verify checklist
 
@@ -137,3 +171,34 @@ controller has no `self-test` command. Discovery self-tests use local fixtures,
 without microphone checks.
 These checks do not verify that the processed PCM records usable audio;
 the recording and physical checks above are still required.
+
+## Legacy applications and rollback
+
+Enabling I2S durably creates
+`/etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf`.
+This device configuration is outside normal application manifest/rollback
+ownership. Before the button service starts with I2S configured or selected, it calls
+`audio_config.py --check-i2s-application` against the selected application's
+capability declaration. Legacy helpers reject that option; newer helpers
+reject missing or unsupported declarations. Neither case starts the button
+application or its recorder. A selected I2S card also requires
+`MSGBOX_MIC_PCM=buttonbox_mic`; stale raw-only runtime settings are refused.
+This also covers a legacy detector selecting I2S during an interrupted switch
+to USB. The guard remains effective if an older
+application replaces the main service unit.
+
+No updater/controller code is changed. A candidate can be staged and its
+pointer switched before the guard rejects its service start. A monitored
+running button service then fails health and the updater restores the prior
+I2S-capable application. Keep the first installation and every intended
+rollback target I2S-capable.
+
+This is activation protection, not pre-install manifest admission: when setup
+mode or an unselected button service makes health omit that service, an
+incompatible candidate can remain selected but cannot record. A corrupted or
+manually replaced incompatible rollback target is also blocked and can leave
+recovery requiring operator action. Install a compatible application to recover;
+do not remove the guard to make a legacy application run on raw I2S audio.
+Manual execution outside the managed service and privileged changes can bypass
+this guard. Capability declarations are a trusted release contract, not a
+proof of audio quality or protection against dishonest signed software.

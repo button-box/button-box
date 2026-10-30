@@ -2,6 +2,8 @@
 """Detect attached audio devices and render Message Box configuration."""
 
 import argparse
+import ast
+import fcntl
 import os
 import re
 import sys
@@ -23,6 +25,8 @@ MIC_TYPES = ("usb", "i2s")
 I2S_CARD = "sndrpigooglevoi"
 I2S_PCM = "buttonbox_mic"
 I2S_DEVICE = f"plughw:CARD={I2S_CARD},DEV=0"
+I2S_CAPABILITY = Path("/opt/messagebox/messagebox/mic_capture.py")
+I2S_GUARD = Path("/etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf")
 I2S_ALSA_CONFIG = Path("/etc/alsa/conf.d/60-button-box-i2s-mic.conf")
 BOOT_CONFIG = Path("/boot/firmware/config.txt")
 BOOT_BLOCK_START = "# Button Box I2S microphone (managed by audio_config.py)"
@@ -39,6 +43,7 @@ PIN_SETTINGS = {
     "MSGBOX_NFC_RESET_PIN": "D20",
     "MSGBOX_NFC_REQUEST_PIN": "D16",
 }
+I2S_INSTALL_PINS = dict(PIN_SETTINGS, MSGBOX_NFC_RESET_PIN="D4", MSGBOX_NFC_REQUEST_PIN="D27")
 
 
 class AudioConfigError(RuntimeError):
@@ -155,14 +160,19 @@ def render_environment(
     speaker_card,
     speaker_device,
     kind="usb",
+    *,
+    prepare_install=False,
 ):
     replacements = {
-        "MSGBOX_MIC_TYPE": kind,
+        "MSGBOX_MIC_TYPE": "usb" if prepare_install else kind,
         "MSGBOX_MIC_DEV": microphone_device,
         "MSGBOX_SPK_DEV": speaker_device,
         "MSGBOX_MIC_CARD": microphone_card,
         "MSGBOX_SPEAKER_CARD": speaker_card,
     }
+    if kind == "i2s":
+        validate_i2s_pins(I2S_INSTALL_PINS)
+        replacements.update(I2S_INSTALL_PINS)
     counts = dict.fromkeys(replacements, 0)
     rendered = []
     for line in template.splitlines():
@@ -206,6 +216,50 @@ def i2s_pin_conflicts(settings):
     return conflicts
 
 
+def validate_i2s_pins(settings):
+    conflicts = i2s_pin_conflicts(settings)
+    if conflicts:
+        raise AudioConfigError(
+            "these pins are used by the I2S microphone: " + ", ".join(conflicts)
+            + "; rewire and change them in /etc/messagebox/env first"
+        )
+    pins = []
+    for key, default in PIN_SETTINGS.items():
+        match = re.fullmatch(r"(?:D|GPIO)?([0-9]+)", settings.get(key) or default)
+        if match is None or not 0 <= int(match[1]) <= 27:
+            raise AudioConfigError(f"invalid GPIO setting: {key}")
+        pins.append(int(match[1]))
+    if len(set(pins)) != len(pins) or set(pins) & {2, 3}:
+        raise AudioConfigError("box GPIOs must be distinct and leave I2C GPIO 2/3 free")
+
+
+def check_i2s_application(capability_file=I2S_CAPABILITY):
+    # Read declarative metadata without importing application code into an
+    # installation helper. Versioned releases cannot inherit a stale marker.
+    try:
+        tree = ast.parse(Path(capability_file).read_text(encoding="utf-8"))
+        values = [ast.literal_eval(node.value) for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "I2S_CAPTURE_VERSION"
+                          for target in node.targets)]
+        if len(values) == 1 and type(values[0]) is int and values[0] == 1:
+            return
+    except (OSError, SyntaxError, ValueError, TypeError):
+        pass
+    raise AudioConfigError("application lacks I2S recording support; install a compatible application")
+
+
+def render_i2s_guard():
+    # This generated device configuration is outside release/rollback ownership.
+    # Its zz filename sorts after the updater's allowed messagebox.conf drop-ins.
+    # Older helpers reject the option, so a legacy application fails closed too.
+    return ("# Managed by audio_config.py; retained across application rollback.\n"
+            "[Service]\n"
+            "ExecStartPre=/bin/sh -c 'test \"$${MSGBOX_MIC_TYPE:-usb}\" != i2s && "
+            f"test \"$${{MSGBOX_MIC_CARD:-}}\" != {I2S_CARD} || "
+            "exec /usr/bin/python3 /usr/lib/messagebox/audio_config.py --check-i2s-application'\n")
+
+
 def render_i2s_alsa_config(gain_db=DEFAULT_I2S_GAIN_DB):
     if not 0 <= gain_db <= MAX_I2S_GAIN_DB:
         raise AudioConfigError(f"microphone gain must be 0 to {MAX_I2S_GAIN_DB:g} dB")
@@ -242,11 +296,29 @@ pcm.{I2S_PCM} {{
 def boot_config_with_i2s(text):
     """Return config.txt text with the managed overlay block, and if it changed."""
     lines = text.splitlines()
-    if BOOT_BLOCK_START in lines:
-        return text, False
-    active = {line.strip() for line in lines if not line.lstrip().startswith("#")}
-    if BOOT_LINES[2] in active:
-        # Already enabled by hand; do not load the overlay twice.
+    validate_boot_block(lines)
+    section = "all"
+    overlays = []
+    i2s_enabled = False
+    for line in lines:
+        value = line.split("#", 1)[0].strip()
+        if re.match(r"include(?:\s|$)", value):
+            raise AudioConfigError("cannot establish I2S overlay scope with config.txt includes")
+        if value.startswith("["):
+            section = value
+        if re.match(r"dtparam\s*=\s*i2s=", value):
+            if value != "dtparam=i2s=on" or section not in {"all", "[all]"}:
+                raise AudioConfigError("I2S parameter has unclear scope or value; resolve config.txt first")
+            i2s_enabled = True
+        if re.fullmatch(r"dtoverlay\s*=\s*googlevoicehat-soundcard(?:,.*)?", value):
+            if value != BOOT_LINES[2]:
+                raise AudioConfigError("unmanaged I2S overlay parameters; resolve config.txt first")
+            overlays.append(section)
+    if len(overlays) > 1 or any(section not in {"all", "[all]"} for section in overlays):
+        raise AudioConfigError("I2S overlay has conditional or duplicate scope; resolve config.txt first")
+    if BOOT_BLOCK_START in lines or overlays:
+        if not i2s_enabled:
+            raise AudioConfigError("unmanaged I2S overlay requires an unconditional dtparam=i2s=on")
         return text, False
     block = [BOOT_BLOCK_START, *BOOT_LINES, BOOT_BLOCK_END]
     prefix = text if not text or text.endswith("\n") else text + "\n"
@@ -256,16 +328,54 @@ def boot_config_with_i2s(text):
 def boot_config_without_i2s(text):
     lines = text.splitlines(keepends=True)
     stripped = [line.rstrip("\r\n") for line in lines]
-    if BOOT_BLOCK_START not in stripped or BOOT_BLOCK_END not in stripped:
+    validate_boot_block(stripped)
+    if BOOT_BLOCK_START not in stripped:
         return text, False
     start = stripped.index(BOOT_BLOCK_START)
     end = stripped.index(BOOT_BLOCK_END, start)
-    return "".join(lines[:start] + lines[end + 1:]), True
+    # Later settings were appended in the managed block's global scope.
+    return "".join(lines[:start]) + "[all]\n" + "".join(lines[end + 1:]), True
+
+
+def validate_boot_block(lines):
+    starts, ends = lines.count(BOOT_BLOCK_START), lines.count(BOOT_BLOCK_END)
+    if starts == ends == 0:
+        return
+    if starts == ends == 1:
+        start, end = lines.index(BOOT_BLOCK_START), lines.index(BOOT_BLOCK_END)
+        if lines[start + 1:end] == list(BOOT_LINES):
+            return
+    raise AudioConfigError("incomplete or modified managed I2S boot block; resolve config.txt first")
+
+
+def fsync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def sync_existing_file(path):
+    # An unchanged file may have just been edited outside this helper.
+    with Path(path).open("rb") as source:
+        os.fsync(source.fileno())
+    fsync_directory(Path(path).parent)
+
+
+def ensure_directory(path):
+    path = Path(path)
+    if not path.exists():
+        ensure_directory(path.parent)
+        path.mkdir(mode=0o755)
+        path.chmod(0o755)
+        fsync_directory(path)
+        fsync_directory(path.parent)
 
 
 def write_atomic(path, content, mode=0o644, owner=None):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(path.parent)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", dir=path.parent, text=True
     )
@@ -273,19 +383,27 @@ def write_atomic(path, content, mode=0o644, owner=None):
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             output.write(content)
             output.flush()
+            if owner is not None:
+                os.fchown(output.fileno(), *owner)
+            # The FAT boot partition cannot store modes; pass None there.
+            if mode is not None:
+                os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
-        if owner is not None:
-            os.chown(temporary_name, *owner)
-        # The FAT boot partition cannot store modes; pass None there.
-        if mode is not None:
-            os.chmod(temporary_name, mode)
         os.replace(temporary_name, path)
+        fsync_directory(path.parent)
     except BaseException:
         try:
             os.unlink(temporary_name)
         except FileNotFoundError:
             pass
         raise
+
+
+def delete_durable(path):
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    if path.parent.exists():
+        fsync_directory(path.parent)
 
 
 def set_env_value(path, key, value):
@@ -299,6 +417,8 @@ def set_env_value(path, key, value):
     if updated != lines:
         write_atomic(path, "\n".join(updated) + "\n", status.st_mode & 0o7777,
                      (status.st_uid, status.st_gid))
+    else:
+        sync_existing_file(path)
 
 
 def set_mic_type(
@@ -308,43 +428,51 @@ def set_mic_type(
     env_path=CONFIG_ENV,
     boot_config=BOOT_CONFIG,
     alsa_config=I2S_ALSA_CONFIG,
+    guard_path=I2S_GUARD,
+    capability_file=I2S_CAPABILITY,
 ):
     """Switch the box microphone type. Return True when a reboot is required."""
-    settings = read_settings(env_path)
-    boot_text = Path(boot_config).read_text(encoding="utf-8")
-    if kind == "i2s":
-        conflicts = i2s_pin_conflicts(settings)
-        if conflicts:
-            raise AudioConfigError(
-                "these pins are used by the I2S microphone: " + ", ".join(conflicts)
-                + "; rewire and change them in /etc/messagebox/env first"
-            )
-        write_atomic(alsa_config, render_i2s_alsa_config(gain_db))
-        boot_text, changed = boot_config_with_i2s(boot_text)
+    lock_path = Path(env_path).parent / ".audio-config.lock"
+    descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        settings = read_settings(env_path)
+        boot_text = Path(boot_config).read_text(encoding="utf-8")
+        if kind == "i2s":
+            validate_i2s_pins(settings)
+            check_i2s_application(capability_file)
+            alsa_text = render_i2s_alsa_config(gain_db)
+            boot_text, changed = boot_config_with_i2s(boot_text)
+            # Protect a later legacy install even if power is lost after the
+            # overlay is durable but before the configured type becomes I2S.
+            write_atomic(guard_path, render_i2s_guard())
+            # Boot and root may be different filesystems. Each prerequisite must be
+            # durable before the next one; the environment is the activation point.
+            if changed:
+                write_atomic(boot_config, boot_text, mode=None)
+            else:
+                sync_existing_file(boot_config)
+            write_atomic(alsa_config, alsa_text)
+            # Set the type last, so a failed step leaves the box on its old microphone.
+            set_env_value(env_path, "MSGBOX_MIC_TYPE", "i2s")
+            return changed
+        if kind != "usb":
+            raise AudioConfigError(f"MSGBOX_MIC_TYPE must be one of: {', '.join(MIC_TYPES)}")
+        set_env_value(env_path, "MSGBOX_MIC_TYPE", "usb")
+        boot_text, changed = boot_config_without_i2s(boot_text)
         if changed:
             write_atomic(boot_config, boot_text, mode=None)
-        # Set the type last, so a failed step leaves the box on its old microphone.
-        set_env_value(env_path, "MSGBOX_MIC_TYPE", "i2s")
+        else:
+            sync_existing_file(boot_config)
+        delete_durable(alsa_config)
         return changed
-    if kind != "usb":
-        raise AudioConfigError(f"MSGBOX_MIC_TYPE must be one of: {', '.join(MIC_TYPES)}")
-    set_env_value(env_path, "MSGBOX_MIC_TYPE", "usb")
-    boot_text, changed = boot_config_without_i2s(boot_text)
-    if changed:
-        write_atomic(boot_config, boot_text, mode=None)
-    Path(alsa_config).unlink(missing_ok=True)
-    return changed
 
 
-def configured_mic_type(env_path=CONFIG_ENV, alsa_config=I2S_ALSA_CONFIG):
+def configured_mic_type(env_path=CONFIG_ENV):
     try:
         kind = mic_type(read_settings(env_path))
     except FileNotFoundError:
         return "usb"
-    if kind == "i2s" and not Path(alsa_config).is_file():
-        raise AudioConfigError(
-            f"{alsa_config} is missing; run audio_config.py --set-mic-type i2s"
-        )
     return kind
 
 
@@ -357,12 +485,31 @@ def main(argv=None):
     parser.add_argument("--mic-type", choices=MIC_TYPES, default="usb",
                         help="microphone type for a rendered template")
     parser.add_argument("--mic-gain-db", type=float, default=DEFAULT_I2S_GAIN_DB)
+    parser.add_argument("--prepare-install", action="store_true",
+                        help="render a fresh environment without activating I2S yet")
+    parser.add_argument("--check-i2s-pins", metavar="ENV_PATH")
+    parser.add_argument("--check-i2s-application", action="store_true")
     options = parser.parse_args(arguments)
-    if sum(map(bool, (options.template, options.runtime_output, options.set_mic_type))) != 1:
-        parser.error("provide ENV_TEMPLATE, --runtime-output PATH or --set-mic-type TYPE")
+    if sum(map(bool, (options.template, options.runtime_output, options.set_mic_type,
+                      options.check_i2s_pins, options.check_i2s_application))) != 1:
+        parser.error("provide a template, runtime output, microphone switch or one check")
+    if options.prepare_install and not options.template:
+        parser.error("--prepare-install requires an environment template")
     try:
+        if options.check_i2s_pins:
+            validate_i2s_pins(read_settings(options.check_i2s_pins))
+            return 0
+        if options.check_i2s_application:
+            if (os.environ.get("MSGBOX_MIC_CARD") == I2S_CARD
+                    and os.environ.get("MSGBOX_MIC_PCM") != I2S_PCM):
+                raise AudioConfigError("I2S capture requires the processed microphone PCM; restart audio detection")
+            check_i2s_application(I2S_CAPABILITY)
+            return 0
         if options.set_mic_type:
-            reboot = set_mic_type(options.set_mic_type, options.mic_gain_db)
+            reboot = set_mic_type(options.set_mic_type, options.mic_gain_db,
+                                  env_path=CONFIG_ENV, boot_config=BOOT_CONFIG,
+                                  alsa_config=I2S_ALSA_CONFIG, guard_path=I2S_GUARD,
+                                  capability_file=I2S_CAPABILITY)
             print(f"Microphone type set to {options.set_mic_type}.")
             if reboot:
                 print(f"{BOOT_CONFIG} changed: reboot the box to apply it.")
@@ -372,7 +519,16 @@ def main(argv=None):
             # Setup can run before the overlay is active; the boot detector checks it.
             microphone_card, microphone_device = I2S_CARD, I2S_DEVICE
         else:
-            microphone_card, microphone_device = detect_microphone(kind=kind)
+            try:
+                microphone_card, microphone_device = detect_microphone(kind=kind)
+            except AudioConfigError:
+                if not options.runtime_output or kind != "i2s":
+                    raise
+                print("audio setup: I2S card unavailable; trying USB microphone detection", file=sys.stderr)
+                kind = "usb"
+                microphone_card, microphone_device = detect_microphone(kind=kind)
+            if options.runtime_output and kind == "i2s" and not I2S_ALSA_CONFIG.is_file():
+                raise AudioConfigError("I2S ALSA configuration is missing; run --set-mic-type i2s")
         speaker_card, speaker_device = detect_speaker()
         if options.runtime_output:
             write_atomic(
@@ -395,6 +551,7 @@ def main(argv=None):
                     speaker_card,
                     speaker_device,
                     kind,
+                    prepare_install=options.prepare_install,
                 )
             )
     except (AudioConfigError, OSError, UnicodeError) as exc:
