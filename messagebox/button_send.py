@@ -2,8 +2,10 @@
 """Button Box physical-button service with caregiver-selectable interaction."""
 
 import json
+import hashlib
 import os
 import queue
+import re
 import select
 import signal
 import subprocess
@@ -11,18 +13,27 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
+from contextlib import contextmanager, nullcontext
 from zoneinfo import ZoneInfo
 
 from gpiozero import Button, LED
 
+from messagebox import speaker, cloud_setup
+
+from messagebox.mic_capture import CaptureDenied, capture_session, require_permit, open_microphone
+
+from messagebox.event_log import append_event, UnavailableEvents
 from messagebox.guided_reply import (
     EnergyVAD,
     GuidedSession,
     OutboxStore,
     RecordingResult,
     claim_inbox_file,
+    cloud_outbox_lock,
+    cloud_upload_payload,
     discard_held_playback_press,
     invalid_prompt_files,
     raw_pcm_to_trimmed_wav,
@@ -30,22 +41,30 @@ from messagebox.guided_reply import (
     release_inbox_file,
     should_ring_after_unsent_session,
     voice_send_command,
+    valid_account_scope,
 )
+from messagebox.audio_requests import AudioRequests, OptionalAudioRequests, success_key
 from messagebox.played_history import archive_played_file, recent_reply_recipient
 from messagebox.listened_receipts import AnnouncementGate, ReceiptStore, parse_wacli_send_id
-from messagebox.contacts import ContactError, ContactStore
-from messagebox.nfc_state import AnnouncementStore, NfcError, active_selection, claim_selection
+from messagebox.contacts import _BOX_JID, ContactError, ContactStore
+from messagebox.nfc_state import AnnouncementStore, NfcError, SelectionStore, REANNOUNCE_COOLDOWN_S
 from messagebox.runtime_paths import APP_DIR, OUTBOX_DIR as DEFAULT_OUTBOX_DIR
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
 from messagebox.runtime_paths import (
-    CONTACTS_FILE,
+    CONTACTS_FILE as LOCAL_CONTACTS_FILE,
     NFC_ANNOUNCEMENT_FILE,
     NFC_HEALTH_FILE,
     NFC_SELECTION_FILE,
     RUNTIME_DIR,
     STATE_DIR as DEFAULT_STATE_DIR,
 )
-from messagebox.settings import SettingsReader, ringtone_path
+from messagebox.settings import (
+    normalize_recording_settings, morning_quiet_end,
+    in_quiet_hours, RINGTONES, SettingsReader, load_ring_lamp_schedule, normalize_ringtone_id, ringtone_path,
+)
+from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError, CloudSendRejected, CloudSendUncertain, CloudVoiceNotFound, atomic_json
+from messagebox import cloud_runtime, cloud_claim, cloud_quiet, message_age, sound_pack
+from messagebox.cloud_runtime import CloudRuntimeError
 
 
 MIC_DEV = os.environ.get("MSGBOX_MIC_DEV", "plughw:CARD=Device,DEV=0")
@@ -65,41 +84,45 @@ TEMP_DIR = os.path.join(str(RUNTIME_DIR), "guided-reply-tmp")
 EVENTS_FILE = os.path.join(STATE_DIR, "events.jsonl")
 LISTENED_DIR = os.path.join(STATE_DIR, "listened-receipts")
 LISTENED_FALLBACK_WAV = os.environ.get(
-    "MSGBOX_LISTENED_FALLBACK_WAV",
-    str(APP_DIR / "sounds" / "listen-receipts" / "someone-listened.wav"),
+    "MSGBOX_LISTENED_FALLBACK_WAV", str(sound_pack.voice_path("listened", "jessica")),
 )
-SEND_SUCCESS_WAV = str(APP_DIR / "sounds" / "feedback" / "sent-swoosh.wav")
+SEND_SUCCESS_WAV = str(sound_pack.cue_path("sent"))
 send_success_notices = queue.SimpleQueue()
+sending_notices = queue.SimpleQueue()
+sender_wake = threading.Event()
+_sending_feedback = None
+SENDING_FAILURE_GRACE_S = 0.15
+APPROVAL_CUE_TIMEOUT_S = 5
+START_CUE_SECONDS = 0.12
+RECORD_START_CUE_SECONDS = 0.27
+cloud_audio_requests = AudioRequests(cloud_runtime.STATE_FILE.parent / "audio-requests")
+cloud_optional_audio_requests = OptionalAudioRequests(cloud_runtime.STATE_FILE.parent / "optional-audio-requests")
+CONTACTS_FILE = (cloud_runtime.CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+                 else LOCAL_CONTACTS_FILE)
 
 LISTENED_POLL_S = float(os.environ.get("MSGBOX_LISTENED_POLL_S", "0.2"))
 LISTENED_RETRY_S = float(os.environ.get("MSGBOX_LISTENED_RETRY_S", "30"))
 RING_REQUEST_FILE = str(RUNTIME_DIR / "ring-request")
+MORNING_RING_FILE = DEFAULT_STATE_DIR / "morning-ring.json"
+MORNING_RING_GRACE_S = 30 * 60
 NFC_SELECTION_TTL_S = float(os.environ.get("MSGBOX_NFC_SELECTION_TTL_S", "30"))
 NFC_ANNOUNCEMENT_POLL_S = float(
     os.environ.get("MSGBOX_NFC_ANNOUNCEMENT_POLL_S", "0.1")
 )
 NFC_HEALTH_MAX_AGE_S = float(os.environ.get("MSGBOX_NFC_HEALTH_MAX_AGE_S", "5"))
-PLACE_TOKEN_WAV = os.environ.get(
-    "MSGBOX_PLACE_TOKEN_WAV",
-    str(APP_DIR / "sounds" / "nfc" / "place-token.wav"),
-)
+PLACE_TOKEN_WAV = os.environ.get("MSGBOX_PLACE_TOKEN_WAV", str(sound_pack.voice_path("card-needed", "jessica")))
 GUIDED_SILENCE_SECONDS = float(os.environ.get("MSGBOX_GUIDED_SILENCE_SECONDS", "20"))
-PROMPT_DIR = Path(
-    os.environ.get(
-        "MSGBOX_PROMPT_DIR",
-        str(APP_DIR / "sounds" / "guided-reply"),
-    )
-)
+PROMPT_DIR = Path(os.environ.get("MSGBOX_PROMPT_DIR", str(sound_pack.SOUND_DIR / "voice")))
 PROMPTS = {
-    "reply": PROMPT_DIR / "reply-countdown.wav",
-    "standalone": PROMPT_DIR / "standalone-countdown.wav",
-    "send": PROMPT_DIR / "press-to-send.wav",
-    "delete_warning": PROMPT_DIR / "delete-warning.wav",
-    "not_sent": PROMPT_DIR / "not-sent.wav",
+    "reply": PROMPT_DIR / "voice-count-reply.wav",
+    "standalone": PROMPT_DIR / "voice-count-new.wav",
+    "send": PROMPT_DIR / "voice-ask-send-1.wav",
+    "delete_warning": PROMPT_DIR / "voice-last-chance.wav",
+    "not_sent": PROMPT_DIR / "voice-not-sent.wav",
 }
 
 # Quiet hours: lamp dark, no ringtone (messages still queue; a deliberate press
-# still plays). Overnight arrivals do not ring when quiet hours end.
+# still plays). Waiting messages signal once when quiet hours end, when idle.
 RING_PHRASE = [
     (True, 1.2),
     (True, 1.6),
@@ -118,15 +141,13 @@ CONFIRM_PRESS_S = 0.08
 CONFIRM_RELEASE_S = 0.2
 LED_REFRESH_S = 0.5
 SEND_FAIL_BEEP_AT = 3
-BEEPS = {
-    # The press acknowledgement must survive room noise and the start of the
-    # following prompt. The old 70 ms tone at ffmpeg's default level was not
-    # audible in a real-box acoustic test.
-    "press": (str(RUNTIME_DIR / "beep-press.wav"), "880", "0.40", "12"),
-    "nfc": (str(RUNTIME_DIR / "beep-nfc.wav"), "880", "0.40", "12"),
-    "ready": (str(RUNTIME_DIR / "beep-ready.wav"), "1320", "0.24", "8"),
-    "fail": (str(RUNTIME_DIR / "beep-fail.wav"), "220", "0.6", "0"),
-}
+CUES = {name: sound_pack.cue_path(asset) for name, asset in {
+    "press": "press", "nfc": "card", "ready": "ready", "online": "connected", "fail": "oops",
+}.items()}
+stuck_notices = queue.SimpleQueue()
+
+# Registration failures share the unrecognized family-card tone.
+NFC_UNKNOWN_BEEP = "fail"
 
 
 def log(msg):
@@ -138,29 +159,44 @@ def log_event(event_type, **fields):
     try:
         fields["type"] = event_type
         fields["ts"] = time.time()
-        os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
-        with open(EVENTS_FILE, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(fields, sort_keys=True) + "\n")
+        append_event(EVENTS_FILE, fields)
     except Exception as exc:
         log(f"event log error: {exc}")
 
 
 def quiet_hours(settings=None, now=None):
     settings = settings or caregiver_settings()
-    quiet = settings["quiet_hours"]
-    if not quiet["enabled"]:
-        return False
-    current = now or datetime.now(ZoneInfo(settings["timezone"]))
-    minute = current.hour * 60 + current.minute
-    start_hour, start_minute = (int(value) for value in quiet["start"].split(":"))
-    end_hour, end_minute = (int(value) for value in quiet["end"].split(":"))
-    start = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-    if start == end:
-        return True
-    if start < end:
-        return start <= minute < end
-    return minute >= start or minute < end
+    if transport_mode() != "cloud":
+        return in_quiet_hours(settings, now)
+    state = cloud_quiet.silence_store.load()
+    return (state["muted"] or cloud_quiet.quiet_now(state, now.timestamp() if now else None)
+            or in_quiet_hours(settings, now, cloud=True))
+
+
+def box_muted():
+    return transport_mode() == "cloud" and cloud_quiet.muted()
+
+
+def start_player(args, **kwargs):
+    if transport_mode() == "cloud":
+        return cloud_quiet.start_player(args, **kwargs)
+    return speaker.start_player(args, popen=subprocess.Popen, **kwargs)
+
+
+def play_sound(path, *, timeout, allow_muted=False):
+    args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
+    if transport_mode() == "cloud":
+        return cloud_quiet.play(args, timeout=timeout, allow_muted=allow_muted)
+    return speaker.run(args, runner=subprocess.run, check=True, timeout=timeout)
+
+
+def play_update_sound(path, *, timeout):
+    """An owner-approved update ask or reminder. Mute never blocks it.
+
+    The owner tapped Install, so the box must be able to ask for the hold.
+    Only the approval flow uses this; automatic installs never speak.
+    """
+    return play_sound(path, timeout=timeout, allow_muted=True)
 
 
 _applied_volume_revision = None
@@ -185,40 +221,153 @@ def apply_master_volume(settings=None):
         check=False,
     )
     if result.returncode == 0:
+        if transport_mode() == "cloud":
+            try:
+                cloud_runtime.atomic_json(cloud_runtime.APPLIED_FILE, {
+                    "revision": settings["revision"], "settings": settings,
+                    "boot_id": cloud_audio_requests.boot_id,
+                    "applied_mono": time.monotonic(),
+                    "settings_sound": _applied_volume_revision is not None and not quiet_hours(settings),
+                })
+            except OSError:
+                return False
         _applied_volume_revision = settings["revision"]
         return True
     return False
 
 
-def make_beeps():
-    for path, frequency, duration, gain_db in BEEPS.values():
-        # These files are generated assets, so rewrite them at startup. Keeping
-        # an existing file would silently retain an older duration or gain after
-        # a software update.
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency={frequency}:duration={duration}",
-                "-filter:a",
-                f"volume={gain_db}dB",
-                path,
-            ],
-            check=True,
-        )
+def validate_sounds():
+    # Missing optional choices must not prevent Jessica fallback after restart.
+    sound_pack.validate_sounds(require_voice_packs=False)
 
 
 def beep(name):
-    return subprocess.run(["aplay", "-q", "-D", SPK_DEV, BEEPS[name][0]])
+    if box_muted() or (name == "fail" and transport_mode() == "cloud" and cloud_quiet.quiet_now()):
+        return subprocess.CompletedProcess([], 0)
+    return play_sound(CUES[name], timeout=5)
+
+
+def play_moment(cue=None, voice=None):
+    for path in ([sound_pack.cue_path(cue)] if cue else []) + ([sound_pack.voice_path(voice)] if voice else []):
+        play_audio_ordinary(path)
+
+
+def buttonbox_voice():
+    return transport_mode() == "cloud" and sound_pack.current_voice_pack() == "buttonbox"
+
+
+def message_intro_voice(settings=None):
+    """Cloud option: the pack's "A message for you!" line after the sparkle cue.
+
+    The sparkle stays first because it is the short, familiar "something is
+    coming" sound; the voice line then names it, and the message follows.
+    Off by default and never during quiet controls, so it adds no new sound
+    when the box should be quiet. wacli boxes never play it.
+    """
+    if transport_mode() != "cloud":
+        return None
+    settings = settings or caregiver_settings()
+    if settings.get("announce_messages_voice") is not True or quiet_hours(settings):
+        return None
+    return sound_pack.voice_path("msg-start", settings.get("voice_pack"))
+
+
+def message_age_voice(metadata, settings=None):
+    """Cloud: the pack's "This one's from last night!" line, or None.
+
+    Always on. It plays after the optional intro and before the message, and
+    only when the message is old enough by message_age.age_phrase. Silent
+    during quiet controls, when the send time is missing, or when the box
+    clock is not verified against Cloud. wacli boxes never play it.
+    """
+    if transport_mode() != "cloud" or not isinstance(metadata, dict):
+        return None
+    settings = settings or caregiver_settings()
+    if quiet_hours(settings):
+        return None
+    key = message_age.age_phrase(metadata.get("cloud_created_at"),
+                                 cloud_runtime.verified_now(), settings.get("timezone"))
+    return sound_pack.age_line_path(key, settings.get("voice_pack")) if key else None
+
+
+def play_message_start(metadata=None):
+    play_moment("msg_start")
+    for line in (message_intro_voice(), message_age_voice(metadata)):
+        if line is not None:
+            play_audio_ordinary(line)
+
+
+def announce_first_online():
+    if sound_pack.consume_moment("online"):
+        play_moment(voice="online")
+
+
+def announce_all_set():
+    if transport_mode() == "cloud":
+        guide = cloud_setup.SetupGuide()
+        guide.advance({"scan", "press"}, "names")
+        if guide.speak(play_setup_line, quiet=quiet_hours()):
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        return
+    if not quiet_hours() and sound_pack.ALL_SET_REQUEST.is_file() and sound_pack.consume_moment("all_set"):
+        play_moment("all_set", "all-set")
+
+
+def start_update_press_cue():
+    """Play the short press tap when an update hold starts; return a bounded waiter."""
+    return start_update_cue(sound_pack.cue_path("press"))
+
+
+def start_update_hold_cue():
+    """Play the short "yes" when an update hold reaches 3 s; return a bounded waiter."""
+    return start_update_cue(sound_pack.cue_path("card_saved"))
+
+
+def start_update_cue(path):
+    """Start one update cue ("yes" beep or "Got it!" line); return a bounded waiter.
+
+    The waiter also waits for the shared audio reservation, so the updater can
+    take the exclusive one right after it returns.
+    """
+    args = ["aplay", "-q", "-D", SPK_DEV, str(path)]
+    # Part of an owner-approved install or mode change: plays even when muted.
+    process = (start_player(args, allow_muted=True) if transport_mode() == "cloud"
+               else start_player(args))
+
+    def wait(timeout):
+        deadline = time.monotonic() + timeout
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.2)
+        released = getattr(process, "reservation_released", None)
+        if released is not None:
+            released.wait(max(0.25, deadline - time.monotonic()))
+
+    return wait
+
+
+def announce_update_installed():
+    """Play "all set" once after this release was installed by an owner hold."""
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed or quiet_hours():
+        return
+    from messagebox.cloud_update import install_announcer, installed_cue
+    operation_id = install_announcer.take()
+    # Receipt before playback: at most once per operation, across restarts.
+    if operation_id and sound_pack.consume_moment("update_installed", token=operation_id):
+        log_event("update_installed_cue")
+        play_idle_sound(installed_cue(), 10)
 
 
 def announce_runtime_ready():
     """Signal readiness once without making audio availability a boot gate."""
+    if quiet_hours():
+        return
     try:
         result = beep("ready")
         if result.returncode != 0:
@@ -227,6 +376,11 @@ def announce_runtime_ready():
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"runtime ready cue unavailable: {exc}")
         log_event("runtime_ready_cue_unavailable", error=type(exc).__name__)
+
+
+def runtime_readiness():
+    from messagebox.software import local_ready
+    local_ready('button', released=not button.is_pressed)
 
 
 def acknowledge_guided_press(action, session_id=None):
@@ -252,7 +406,25 @@ def legacy_outbox_files():
         return []
 
 
+def compatible_legacy_outbox_files():
+    mode = transport_mode()
+    scope = None
+    if mode == "cloud":
+        try:
+            scope = cloud_runtime.account_scope(fresh=True)
+        except (CloudRuntimeError, OSError):
+            return []
+    return [
+        name
+        for name in legacy_outbox_files()
+        if legacy_job_transport(os.path.join(OUTBOX_DIR, name)) == mode
+        and (mode != "cloud" or
+             (legacy_job_metadata(os.path.join(OUTBOX_DIR, name)) or {}).get("account_scope") == scope)
+    ]
+
+
 _recording = False
+_capture_permit = None
 _guided_active = False
 outbox_store = None
 receipt_store = None
@@ -266,125 +438,106 @@ def caregiver_settings():
     return settings_reader.snapshot()
 
 
-def current_recipient_context(*, claim=False):
-    """Resolve standalone routing from an authoritative contacts snapshot."""
+TRANSPORTS = frozenset({"wacli", "cloud"})
+# The Business bench adapter was removed. Its tag is still read from old
+# recordings so they stay on the box and are never sent through another account.
+RETIRED_TRANSPORTS = frozenset({"business"})
+PERSON_JID = re.compile(r"[1-9][0-9]{6,14}@s\.whatsapp\.net")
+
+
+def transport_mode():
+    mode = os.environ.get("MSGBOX_TRANSPORT", "wacli")
+    if mode not in TRANSPORTS:
+        raise ValueError("unsupported message transport")
+    return mode
+
+
+def card_recipient_context(document, *, check_idle_reader=True):
+    """Keep blocked NFC state distinct from an absent or expired choice."""
     try:
-        document = ContactStore(CONTACTS_FILE).load()
-        contacts = document["contacts"]
-        has_cards = any(contact["card_uids"] for contact in contacts.values())
-        if has_cards:
-            try:
-                if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
-                    log("recipient unavailable: NFC reader health is stale")
-                    return None
-            except OSError:
-                log("recipient unavailable: NFC reader health is unavailable")
+        state, context = SelectionStore(NFC_SELECTION_FILE).resolve(
+            document, max_age=NFC_SELECTION_TTL_S,
+        )
+        has_cards = any(contact["card_uids"] for contact in document["contacts"].values())
+        if state == "blocked":
+            return state, None
+        if (has_cards and check_idle_reader) or state == "selected":
+            if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
+                return "blocked", None
+            if state == "none" and nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
+                return "blocked", None
+        return state, context
+    except (NfcError, OSError):
+        return "blocked", None
+
+
+def current_recipient_context():
+    """Resolve a card or the configured default without guessing on a block."""
+    try:
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document)
+            if state == "selected":
+                return context
+            if state == "blocked":
                 return None
-            resolver = claim_selection if claim else active_selection
-            selection_existed = Path(NFC_SELECTION_FILE).exists()
-            context = resolver(
-                CONTACTS_FILE,
-                NFC_SELECTION_FILE,
-                max_age=NFC_SELECTION_TTL_S,
-            )
-            if context is not None:
-                return {
-                    "contact": context["contact"],
-                    "uid": context["uid"],
-                    "via_card": True,
-                }
-            if selection_existed:
-                log("recipient unavailable: stale card selection")
+            default = document["default_recipient"]
+            contact = document["contacts"].get(default)
+            if contact is None:
                 return None
-            if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
-                log("recipient unavailable: unrecognized card presentation")
-                return None
-        default_recipient = document["default_recipient"]
-        if default_recipient is None:
-            log("recipient unavailable: no default configured")
-            return None
-        contact = contacts.get(default_recipient)
-        if contact is None:
-            log("recipient unavailable: default is invalid")
-            return None
-        return {
-            "contact": {"jid": default_recipient, **contact},
-            "via_card": False,
-        }
-    except (ContactError, NfcError, OSError) as exc:
-        log(f"contact routing unavailable: {exc}")
+            return {"contact": {"jid": default, **contact}, "via_card": False}
+    except (ContactError, NfcError, OSError):
         return None
 
 
 def claim_fresh_card_intent():
-    """Claim a fresh card selection before choosing inbound playback.
-
-    The state distinguishes no scan, an already-stale scan, a claimed valid
-    scan, and a valid scan that became invalid during the claim. Callers use
-    that distinction to preserve normal playback while failing closed for
-    outbound routing and claim races.
-    """
-    if not Path(NFC_SELECTION_FILE).exists():
-        return "none", None
-    pending = current_recipient_context(claim=False)
-    if pending is None or not pending["via_card"]:
-        # Consume stale state so it cannot keep blocking later interactions.
-        current_recipient_context(claim=True)
-        return "stale", None
-    claimed = current_recipient_context(claim=True)
-    if claimed is None or not claimed["via_card"]:
-        log_event("nfc_selection_expired")
-        return "expired", None
-    return "claimed", claimed
-
-
-def nfc_idle_routing_is_safe(contacts):
-    """Reject recent/default routing while fitted NFC state is unsafe."""
-    if not any(contact["card_uids"] for contact in contacts.values()):
-        return True
+    """Read a card choice without consuming it before a recording is queued."""
     try:
-        if time.time() - os.stat(NFC_HEALTH_FILE).st_mtime > NFC_HEALTH_MAX_AGE_S:
-            log("recipient unavailable: NFC reader health is stale")
-            return False
-    except OSError:
-        log("recipient unavailable: NFC reader health is unavailable")
-        return False
-    if nfc_announcement_store.pending_action() in {"unknown", "invalid"}:
-        log("recipient unavailable: unrecognized card presentation")
-        return False
-    return True
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document, check_idle_reader=False)
+    except (ContactError, OSError):
+        return "expired", None
+    return {"none": "none", "blocked": "expired", "selected": "claimed"}[state], context
+
+
+def reconcile_card_selections():
+    if outbox_store is not None:
+        outbox_store.reconcile_card_selections()
+
+
+def recording_session_event(context, kind, **data):
+    global _sending_feedback
+    # GuidedSession emits approval only after the outbox job is durable, before
+    # review-audio cleanup. Unsent attempts and crashes leave the choice intact.
+    if kind == "guided_approved" and context and context["via_card"]:
+        SelectionStore(NFC_SELECTION_FILE).consume(context["selection"])
+    if kind == "guided_approved" and buttonbox_voice() and data.get("message_id"):
+        _sending_feedback = {"message_id": data["message_id"], "approved": time.monotonic(), "queued": False}
+        sender_wake.set()
+    log_event(kind, **data)
 
 
 def recording_recipient_context():
-    """Prefer the exact recently played sender, then the configured default."""
+    """Prefer the card, then the exact recent sender, then the default."""
     try:
-        document = ContactStore(CONTACTS_FILE).load()
-    except (ContactError, OSError):
+        with ContactStore(CONTACTS_FILE).locked_snapshot() as document:
+            state, context = card_recipient_context(document)
+            if state != "none":
+                return context
+            route_state, recipient = recent_reply_recipient(QUEUE_DIR, document["contacts"])
+            # A presentation during history lookup must still own the interaction.
+            state, context = card_recipient_context(document)
+            if state != "none":
+                return context
+            if route_state == "route":
+                return {
+                    "contact": {"jid": recipient, **document["contacts"][recipient]},
+                    "via_card": False, "via_recent_reply": True,
+                }
+            if route_state == "blocked":
+                return None
+        return current_recipient_context()
+    except (ContactError, NfcError, OSError):
         return None
-    contacts = document["contacts"]
-    # A presentation that arrives after the initial press check still owns the
-    # interaction. Invalid or unsafe card state must never fall through to a
-    # recent sender.
-    if Path(NFC_SELECTION_FILE).exists():
-        return current_recipient_context(claim=True)
-    if not nfc_idle_routing_is_safe(contacts):
-        return None
-
-    route_state, recipient = recent_reply_recipient(QUEUE_DIR, contacts)
-    if Path(NFC_SELECTION_FILE).exists():
-        return current_recipient_context(claim=True)
-    if not nfc_idle_routing_is_safe(contacts):
-        return None
-    if route_state == "route":
-        return {
-            "contact": {"jid": recipient, **contacts[recipient]},
-            "via_card": False,
-            "via_recent_reply": True,
-        }
-    if route_state == "blocked":
-        log("recipient unavailable: recent reply route is no longer valid")
-        return None
-    return current_recipient_context(claim=True)
 
 
 def routing_mode():
@@ -424,24 +577,25 @@ def wait_for_hold_intent(
 def acknowledge_and_classify_legacy_press(pressed_at=None):
     """Acknowledge the initial press, then classify it after the cue ends."""
     started = time.monotonic() if pressed_at is None else pressed_at
-    beep("press")
-    log_event("legacy_press")
-    return wait_for_hold_intent(
-        lambda: button.is_pressed,
-        MIN_HOLD_S,
-        POLL_S,
-        started_at=started,
-    )
+    with recording_start("hold", press_cue=True) if buttonbox_voice() else nullcontext():
+        if not buttonbox_voice():
+            beep("press")
+        log_event("legacy_press")
+        return wait_for_hold_intent(
+            lambda: button.is_pressed,
+            MIN_HOLD_S,
+            POLL_S,
+            started_at=started,
+        )
 
 
 def prompt_for_token():
     """Refuse outbound recording without leaking the previous selection."""
     log_event("nfc_token_required")
-    if os.path.isfile(PLACE_TOKEN_WAV):
-        subprocess.run(["aplay", "-q", "-D", SPK_DEV, PLACE_TOKEN_WAV], check=False)
+    if PLACE_TOKEN_WAV == str(sound_pack.voice_path("card-needed", "jessica")):
+        play_moment(voice="card-needed")
     else:
-        log(f"place-token prompt missing: {PLACE_TOKEN_WAV}")
-        beep("fail")
+        play_audio_ordinary(PLACE_TOKEN_WAV)
 
 
 def block_unavailable_recipient():
@@ -453,53 +607,141 @@ def block_unavailable_recipient():
             if mode == "card_selection":
                 prompt_for_token()
             else:
-                beep("fail")
+                play_moment("oops", "fail")
     else:
-        beep("fail")
+        play_moment("oops", "fail")
 
 
-def _play_nfc_prompt(uid, action, card_clip):
-    beeped = False
-    if caregiver_settings()["nfc_confirmation_beep"]:
-        beep("nfc")
-        beeped = True
-    card_clip = os.path.expanduser(card_clip)
-    if card_clip and os.path.isfile(card_clip):
-        played = subprocess.run(
-            ["aplay", "-q", "-D", SPK_DEV, card_clip], check=False
-        ).returncode == 0
-        mode = "spoken"
-    elif beeped and action in ("recognized", "selected", "enrolled"):
-        played = True
-        mode = "beep"
-    else:
-        played = False
-        mode = "missing"
-        log(f"NFC announcement clip missing: {card_clip or '(not configured)'}")
-    log_event("nfc_announced", action=action, played=played, mode=mode)
-    if played:
+# A reaction card that is lifted and placed again, or that the reader loses
+# for a moment, is read as a new tap. The Cloud send is idempotent per message
+# and card, so a repeat must not say "You just sent ..." a second time.
+REACTION_SETTLE_S = float(os.environ.get("MSGBOX_REACTION_SETTLE_S", "5"))
+REACTION_WINDOW_S = 600  # The Cloud accepts a reaction for ten minutes after playback.
+_accepted_reactions = {}
+
+
+def _send_reaction_card(card_id):
+    try:
+        return (cloud_runtime.react_with_heart() if card_id == "reaction_heart"
+                else cloud_runtime.react_with_card(card_id))
+    except Exception:  # noqa: BLE001 - a failed send must still give the oops cue.
+        return "failed"
+
+
+def _play_reaction_card(uid, card_id, settings):
+    """Confirm the read at once, then say what was sent once per accepted send."""
+    now = time.monotonic()
+    for operation, finished in list(_accepted_reactions.items()):
+        if now - finished > REACTION_WINDOW_S:
+            del _accepted_reactions[operation]
+    operation = cloud_runtime.reaction_operation(card_id)
+    cue = sound_pack.cue_path("card")
+    if operation is not None and operation in _accepted_reactions:
+        # Already sent for this message: no new send and no second line.
+        # A late, deliberate tap still hears that the card was read.
         nfc_announcement_store.acknowledge(uid)
+        if now - _accepted_reactions[operation] > REACTION_SETTLE_S:
+            play_idle_sound(cue, 5)
+        log_event("reaction_repeat_ignored")
+        return
+    # The card cue confirms the read while the Cloud sends the reaction.
+    outcome = {}
+    sender = threading.Thread(target=lambda: outcome.update(result=_send_reaction_card(card_id)),
+                              name="reaction-send", daemon=True)
+    sender.start()
+    cue_played = play_idle_sound(cue, 5)
+    sender.join()
+    result = outcome.get("result", "failed")
+    nfc_announcement_store.acknowledge(uid)
+    if result != "sent":
+        play_idle_sound(sound_pack.cue_path("oops"), 5)
+        return
+    # "You just sent a heart!" follows only after Cloud accepted it, when names are spoken.
+    line = (sound_pack.reaction_sent_path(cloud_runtime.reaction_card_emoji(card_id), settings.get("voice_pack"))
+            if settings.get("card_name_prompt", True) else None)
+    if line is not None and cue_played:
+        play_idle_sound(line, cloud_runtime._ringtone_preview_timeout(line))
+    if operation is not None:
+        _accepted_reactions[operation] = time.monotonic()
+    log_event("reaction_sent", spoken=line is not None)
+
+
+def _play_nfc_prompt(uid, action, card_clip, *, allow_recording=True):
+    if action == "unknown":
+        play_moment("oops")
+        play_audio_ordinary(card_clip or sound_pack.voice_path("card-unknown"))
+        nfc_announcement_store.acknowledge(uid)
+        log_event("nfc_announced", action=action, played=True, mode="spoken")
+        return True
+    settings = caregiver_settings()
+    if transport_mode() == "cloud" and action in {"recognized", "selected"}:
+        contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+        if contact and contact["jid"].startswith("box:reaction_"):
+            _play_reaction_card(uid, contact["jid"][4:], settings)
+            return True
+    paths = []
+    if action == "enrolled":
+        clip = ""
+        if transport_mode() == "cloud":
+            contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+            if contact and not contact["jid"].startswith("box:reaction_"):
+                clip = cloud_runtime.card_saved_clip(contact["jid"], settings.get("voice_pack"))
+        paths = [sound_pack.cue_path("card_saved"), clip or sound_pack.voice_path("card-saved")]
+    elif action in {"recognized", "selected"}:
+        if settings["nfc_confirmation_beep"]:
+            paths.append(sound_pack.cue_path("card"))
+        if settings.get("card_name_prompt", True):
+            clip = ""
+            if transport_mode() == "cloud":
+                contact = ContactStore(CONTACTS_FILE).resolve_card(uid)
+                if contact:
+                    clip = cloud_runtime.card_prompt_clip(contact["jid"], settings.get("voice_pack"))
+            paths.append(clip or sound_pack.voice_path("card-prompt", settings.get("voice_pack")))
     else:
-        nfc_announcement_store.clear_acknowledgement()
-        beep("fail")
-    return played
+        return False
+    interrupted = False
+    for path in paths:
+        if not play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path)):
+            interrupted = button.is_pressed
+            break
+    # An intentional interruption (and disabled feedback) still confirms the
+    # exact card. The player has reaped aplay before a recorder can be opened.
+    nfc_announcement_store.acknowledge(uid)
+    log_event("nfc_announced", action=action, played=not interrupted, mode="card")
+    if interrupted and allow_recording and action != "enrolled" and settings.get("card_name_prompt", True):
+        handle_confirmed_press(time.monotonic(), card_prompt_uid=uid)
+    return True
 
 
-def play_pending_nfc_announcement(*, force=False, expected_uid=None):
+def play_pending_nfc_announcement(*, force=False, expected_uid=None, allow_recording=True):
     """Play at most one reader request while this process exclusively owns audio."""
     global _last_nfc_announcement_poll
     now = time.monotonic()
     if not force and now - _last_nfc_announcement_poll < NFC_ANNOUNCEMENT_POLL_S:
         return False
     _last_nfc_announcement_poll = now
-    request = nfc_announcement_store.take()
+    request = nfc_announcement_store.take(keep_claimed=True)
     if request is None:
         return None
-    if expected_uid is not None and request["uid"] != expected_uid:
-        return None
-    return request["action"] if _play_nfc_prompt(
-        request["uid"], request["action"], request["prompt"]
-    ) else None
+    try:
+        if expected_uid is not None and request["uid"] != expected_uid:
+            return None
+        selection = request["action"] in {"selected", "recognized"}
+        if selection and transport_mode() == "cloud":
+            contact = ContactStore(CONTACTS_FILE).resolve_card(request["uid"])
+            selection = not (contact and contact["jid"].startswith("box:reaction_"))
+        # Catch a duplicate queued before the first playback acknowledged it.
+        # A deliberate A -> B -> A switch still gets its own immediate line.
+        if selection and nfc_announcement_store.reuse_confirmation(
+            request["uid"], now=now, cooldown=REANNOUNCE_COOLDOWN_S,
+            request_id=request["request_id"] if request["card_switch"] else None,
+        ):
+            return None
+        return request["action"] if _play_nfc_prompt(
+            request["uid"], request["action"], request["prompt"], allow_recording=allow_recording
+        ) else None
+    finally:
+        nfc_announcement_store.finish(request["request_id"])
 
 
 def ensure_nfc_confirmation(context):
@@ -507,22 +749,31 @@ def ensure_nfc_confirmation(context):
     uid = context.get("uid")
     if uid is None or nfc_announcement_store.is_acknowledged(uid):
         return True
-    if play_pending_nfc_announcement(force=True, expected_uid=uid):
+    if (play_pending_nfc_announcement(force=True, expected_uid=uid, allow_recording=False)
+            or nfc_announcement_store.is_acknowledged(uid)):
         return True
     contact = context["contact"]
-    return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""))
+    return _play_nfc_prompt(uid, "selected", contact.get("card_clip", ""), allow_recording=False)
+
+
+def legacy_job_metadata(path):
+    try:
+        with open(path + ".json", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        return metadata if isinstance(metadata, dict) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def legacy_job_recipient(path):
     """Use only the recipient snapshot bound at recording time."""
     try:
-        with open(path + ".json", encoding="utf-8") as handle:
-            recipient = json.load(handle).get("recipient")
+        recipient = (legacy_job_metadata(path) or {}).get("recipient")
         if (
             isinstance(recipient, str)
             and recipient
             and recipient.strip() == recipient
-            and "@" in recipient
+            and ("@" in recipient or _BOX_JID.fullmatch(recipient))
             and not any(character.isspace() for character in recipient)
         ):
             return recipient
@@ -531,12 +782,35 @@ def legacy_job_recipient(path):
     return None
 
 
-def bind_legacy_job_recipient(path, recipient):
+def legacy_job_transport(path):
+    metadata = legacy_job_metadata(path)
+    if metadata is None:
+        return None
+    # Sidecars deployed before transport metadata existed belong to wacli.
+    # Retired transports stay recognized so their recordings are kept, unsent.
+    transport = metadata.get("transport", "wacli")
+    return (
+        transport
+        if isinstance(transport, str) and transport in TRANSPORTS | RETIRED_TRANSPORTS
+        else None
+    )
+
+
+def bind_legacy_job_recipient(path, recipient, *, account_scope=None):
     """Persist routing before the WAV becomes visible to the sender thread."""
+    metadata = {"version": 1, "recipient": recipient, "transport": transport_mode()}
+    if metadata["transport"] == "cloud":
+        if not valid_account_scope(account_scope):
+            raise ValueError("cloud recording account is unavailable")
+        metadata["account_scope"] = account_scope
     metadata_path = path + ".json"
     temporary_path = metadata_path + ".part"
     with open(temporary_path, "w", encoding="utf-8") as handle:
-        json.dump({"version": 1, "recipient": recipient}, handle, sort_keys=True)
+        json.dump(
+            metadata,
+            handle,
+            sort_keys=True,
+        )
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary_path, metadata_path)
@@ -578,6 +852,9 @@ def send_legacy_outbox_file(fname):
     """Keep pre-feature durable WAV jobs working with the family-group target."""
     path = os.path.join(OUTBOX_DIR, fname)
     metadata_path = path + ".json"
+    if transport_mode() != "wacli" or legacy_job_transport(path) != "wacli":
+        log_event("send_blocked", flow="legacy", reason="transport")
+        return False
     recipient = legacy_job_recipient(path)
     if not recipient:
         log(f"legacy send blocked for {fname}: no bound recipient")
@@ -670,8 +947,89 @@ def send_legacy_outbox_file(fname):
     return False
 
 
+def stage_hold_release_cloud_job(fname):
+    """Move an approved hold-release WAV into the keyed, durable send queue.
+
+    The stable ID makes a crash after approving the job but before removing the
+    source harmless: the next attempt finds the same job and never changes its
+    recipient. The source WAV is removed before the sender can complete the job.
+    """
+    path = os.path.join(OUTBOX_DIR, fname)
+    mode = transport_mode()
+    if mode != "cloud" or legacy_job_transport(path) != mode:
+        log_event("send_blocked", flow="hold_release", reason="transport")
+        return False
+    recipient = legacy_job_recipient(path)
+    if recipient is None:
+        log_event("send_blocked", flow="hold_release", reason="missing_recipient")
+        return False
+    try:
+        if not (PERSON_JID.fullmatch(recipient) or _BOX_JID.fullmatch(recipient)):
+            raise ValueError("unsupported recipient")
+        milliseconds, _, raw_duration = fname[:-4].partition("-")
+        duration = float(raw_duration)
+        if not milliseconds.isdecimal() or duration <= 0:
+            raise ValueError("invalid hold-release filename")
+        message_id = "hold_" + hashlib.sha256(fname.encode("ascii")).hexdigest()[:48]
+        # Never adopt an older recording into the currently linked account.
+        scope = (legacy_job_metadata(path) or {}).get("account_scope")
+        outbox_store.approve(path, recipient, "hold_release", duration, message_id,
+                             account_scope=scope)
+    except (OSError, ValueError):
+        log_event("send_blocked", flow="hold_release", reason="staging")
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        # The approved job and the source coexist after an interrupted move.
+        # Keep the sender stopped until the source is removed on a later pass.
+        log_event("send_blocked", flow="hold_release", reason="source_cleanup")
+        return False
+    try:
+        Path(path + ".json").unlink(missing_ok=True)
+    except OSError:
+        # The WAV is gone and the durable job is the only sendable copy.
+        pass
+    return True
+
+
 def send_guided_job(job):
+    if transport_mode() == "cloud":
+        try:
+            with cloud_outbox_lock(job.path) as acquired:
+                return _send_guided_job(job) if acquired else False
+        except (OSError, ValueError, CloudDeviceError, subprocess.SubprocessError):
+            log_event("send_blocked", flow=job.flow_kind, reason="cloud_payload")
+            return False
+    return _send_guided_job(job)
+
+
+def _send_guided_job(job):
     """Send only to the recipient stored atomically with this approved audio."""
+    mode = transport_mode()
+    try:
+        durable_job = outbox_store.load(job.path)
+    except (AttributeError, OSError, ValueError, KeyError, json.JSONDecodeError):
+        log_event("send_blocked", flow=job.flow_kind, reason="metadata")
+        return False
+    if durable_job.message_id != job.message_id or durable_job.transport != mode:
+        log_event("send_blocked", flow=job.flow_kind, reason="transport")
+        return False
+    job = durable_job
+    if mode == "cloud":
+        try:
+            if (not valid_account_scope(job.account_scope)
+                    or job.account_scope != cloud_runtime.account_scope(fresh=True)):
+                raise CloudRuntimeError("recording belongs to another account")
+        except (CloudRuntimeError, OSError):
+            log_event("send_blocked", flow=job.flow_kind, reason="account_scope")
+            return False
+    if mode == "cloud" and job.state != "pending":
+        return True
+    if mode == "cloud":
+        metadata = json.loads((job.path / "job.json").read_text(encoding="utf-8"))
+        if "cloud_upload" in metadata:
+            return _send_cloud_upload(job)
     ogg = os.path.join(TEMP_DIR, f"guided-{uuid.uuid4().hex}.ogg")
     converted = subprocess.run(
         [
@@ -701,6 +1059,18 @@ def send_guided_job(job):
         log_event("outbox_failed", message_id=job.message_id, reason="convert")
         log(f"guided conversion failed {job.message_id}; retained for parent")
         return True
+
+    if mode == "cloud":
+        try:
+            target = cloud_runtime.recipient_id(job.recipient)
+            outbox_store.prepare_cloud_upload(job, ogg, target, cloud_runtime.outbox_retry_until())
+        except (CloudRuntimeError, CloudDeviceError, OSError, ValueError):
+            outbox_store.set_state(job, "failed", increment_attempts=True)
+            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_preflight")
+            return True
+        finally:
+            Path(ogg).unlink(missing_ok=True)
+        return _send_cloud_upload(job)
 
     # Persist 'sending' before crossing the external side-effect boundary.  A
     # crash from here until completion becomes uncertain on restart, never an
@@ -740,31 +1110,180 @@ def send_guided_job(job):
     return False
 
 
+def _send_cloud_upload(job):
+    metadata_path = job.path / "job.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    try:
+        ogg, upload = cloud_upload_payload(job.path, metadata)
+        if (upload["recipient_id"] != cloud_runtime.recipient_id(job.recipient)
+                or cloud_runtime.outbox_now() >= upload["retry_until"]):
+            raise CloudRuntimeError("cloud upload authorization changed")
+        client = CloudDeviceClient.from_environment()
+    except (CloudRuntimeError, CloudDeviceError, OSError, ValueError):
+        outbox_store.set_state(job, "uncertain" if metadata.get("attempts", 0) else "failed")
+        log_event("send_blocked", flow=job.flow_kind, reason="cloud_payload")
+        return True
+    # A delayed first request may have committed since recovery's 404. Read
+    # again before replaying; the server key still deduplicates the remaining race.
+    result = None
+    prior_attempts = metadata.get("attempts", 0)
+    if prior_attempts:
+        try:
+            result = client.voice_status(job.message_id)
+        except CloudVoiceNotFound:
+            pass
+        except CloudDeviceError:
+            return False
+    if result is None:
+        job = outbox_store.set_state(job, "sending", increment_attempts=True)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["cloud_send_started_at"] = int(cloud_runtime.outbox_now())
+        atomic_json(metadata_path, metadata)
+        feedback = _sending_feedback
+        if feedback and feedback["message_id"] == job.message_id and not feedback["queued"]:
+            feedback["queued"] = True
+            sending_notices.put((job, time.monotonic()))
+        try:
+            result = client.send_voice(ogg, upload["recipient_id"], upload["idempotency_key"],
+                                       upload["duration"], account_scope=upload["account_scope"])
+        except CloudSendRejected:
+            # A racing original request can still succeed after a rejected
+            # retry. Keep ambiguous attempts available to keyed reconciliation.
+            outbox_store.set_state(job, "uncertain" if prior_attempts else "failed")
+            log_event("outbox_failed", flow=job.flow_kind, reason="cloud_rejected")
+            return True
+        except CloudSendUncertain:
+            outbox_store.set_state(job, "uncertain")
+            log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_send")
+            return True
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    observed = metadata.get("cloud_status_checked_at", metadata.get("cloud_send_started_at"))
+    if (result["state"] in {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
+            and result.get("deleted") is not True
+            and result["server_time"] < result["expires_at"]
+            and type(observed) in (int, float)
+            and 0 <= result["server_time"] - observed <= 30):
+        try:
+            remaining = result["server_time"] + 30 - cloud_runtime.outbox_now()
+        except (CloudRuntimeError, OSError):
+            pass  # A stale heartbeat can suppress sound, never the accepted outcome.
+        else:
+            cloud_audio_requests.enqueue_for(success_key(job.account_scope, job.message_id),
+                "success", job.account_scope, remaining)
+    cloud_setup.SetupGuide().sent(job.message_id, job.account_scope, result,
+        ready=result["state"] in {"queued", "waiting_for_reply", "accepted", "delivered", "read"}
+        and result.get("deleted") is not True)
+    metadata.update({"state": "cloud_retained", "cloud_message_id": result["message_id"],
+                     "cloud_state": result["state"], "expires_at": result["expires_at"],
+                     "server_time": result["server_time"],
+                     "cloud_status_checked_at": result["server_time"]})
+    atomic_json(metadata_path, metadata)
+    if result["state"] == "delivery_uncertain":
+        log_event("outbox_uncertain", flow=job.flow_kind, reason="cloud_delivery")
+        return True
+    log_event("cloud_uploaded", flow=job.flow_kind, state=result["state"], dur=job.duration)
+    return True
+
+
+def compatible_guided_jobs():
+    jobs = outbox_store.jobs()
+    if transport_mode() != "cloud":
+        return jobs
+    try:
+        scope = cloud_runtime.account_scope(fresh=True)
+    except (CloudRuntimeError, OSError):
+        return []
+    # Preserve unbound/foreign jobs without starving this account's recordings.
+    return [job for job in jobs if job.account_scope == scope]
+
+
 def sender_loop():
     failures = 0
+    current = None
     while True:
-        guided = outbox_store.jobs()
-        if guided:
-            if send_guided_job(guided[0]):
-                failures = 0
+        if transport_mode() == "cloud":
+            staged = all(stage_hold_release_cloud_job(filename)
+                         for filename in compatible_legacy_outbox_files())
+            if not staged:
+                time.sleep(5)
                 continue
-            failures += 1
-            time.sleep(min(60, 5 * failures))
+        guided = compatible_guided_jobs()
+        legacy = compatible_legacy_outbox_files() if not guided else []
+        job = guided[0] if guided else (legacy[0] if legacy else None)
+        key = ("guided", job.message_id) if guided else (("legacy", job) if legacy else None)
+        if key != current:
+            current, failures = key, 0
+        if job is None:
+            if transport_mode() == "cloud":
+                sender_wake.wait(0.5)
+                sender_wake.clear()
+            else:
+                time.sleep(0.5)
             continue
-        legacy = legacy_outbox_files()
-        if legacy:
-            if send_legacy_outbox_file(legacy[0]):
-                failures = 0
-                continue
-            failures += 1
-            if failures == SEND_FAIL_BEEP_AT:
-                log_event("send_failed", flow="legacy", reason="send")
-                if not _recording and not _guided_active:
-                    beep("fail")
-            time.sleep(min(60, 5 * failures))
+        sent = send_guided_job(job) if guided else send_legacy_outbox_file(job)
+        if sent:
+            current, failures = None, 0
             continue
-        failures = 0
-        time.sleep(0.5)
+        failures += 1
+        if failures == SEND_FAIL_BEEP_AT:
+            stuck_notices.put(key)
+            log_event("send_failed", flow=key[0], reason="send")
+        time.sleep(min(60, 5 * failures))
+
+
+def maybe_play_still_trying():
+    if _recording or _guided_active or button.is_pressed or quiet_hours():
+        return False
+    try:
+        key = stuck_notices.get_nowait()
+    except queue.Empty:
+        return False
+    # Drop notices if this job has since succeeded; receipt survives restart.
+    jobs = compatible_guided_jobs() if key[0] == "guided" else compatible_legacy_outbox_files()
+    present = any(job.message_id == key[1] for job in jobs) if key[0] == "guided" else key[1] in jobs
+    digest = hashlib.sha256(str(key).encode()).hexdigest()
+    if not present or not sound_pack.consume_moment("stuck_" + digest):
+        return False
+    play_moment("still_trying", "stuck")
+    return True
+
+
+_offline_announced = False
+# Short heartbeat gaps (a slow or missed check-in) are normal. Only a gap of
+# ten minutes counts as an outage for the offline cue and the online line.
+CLOUD_OFFLINE_AFTER_S = 600
+
+
+def maybe_play_connectivity():
+    """Reuse persisted heartbeat age; never probe the network for a sound."""
+    global _offline_announced
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
+        return False
+    runtime = cloud_runtime.CloudRuntime(client=object(), state_path=cloud_runtime.STATE_FILE)
+    snapshot = runtime.state.get("snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("boot_id") != runtime.boot_id:
+        return False
+    verified = snapshot.get("verified_mono")
+    if type(verified) not in (int, float):
+        return False
+    age = time.monotonic() - verified
+    if 0 <= age <= 90:
+        _offline_announced = False
+        settings = caregiver_settings()
+        audible = not quiet_hours(settings) and settings["master_volume_percent"] > 0
+        if sound_pack.online_transition(runtime.boot_id, True, audible=audible):
+            play_moment("connected", "online-ready")
+            return True
+    if age < CLOUD_OFFLINE_AFTER_S:
+        return False
+    sound_pack.online_transition(runtime.boot_id, False)
+    if not _offline_announced and not quiet_hours():
+        token = f"{runtime.boot_id}:{verified}"
+        if sound_pack.consume_moment("offline", token=token):
+            play_moment("offline")
+            _offline_announced = True
+            return True
+    return False
 
 
 _led_last = 0.0
@@ -791,7 +1310,22 @@ def ring_windows():
 
 
 RING_WINS = ring_windows()
+
+
+@lru_cache(maxsize=len(RINGTONES))
+def ring_lamp_schedule(ringtone_id):
+    if ringtone_id not in RINGTONES:
+        return None
+    try:
+        return load_ring_lamp_schedule(APP_DIR / "ringtones" / f"{ringtone_id}.lamp.json", ringtone_id)
+    except (OSError, ValueError):
+        return None
+
+
 def ring_lamp_on(elapsed, ringtone_id):
+    schedule = ring_lamp_schedule(normalize_ringtone_id(ringtone_id))
+    if schedule is not None:
+        return any(start <= elapsed < end for start, end in schedule)
     if ringtone_id != "ding_dong":
         return (elapsed % 0.9) < 0.45
     return any(start <= elapsed < end for start, end in RING_WINS)
@@ -800,6 +1334,58 @@ def ring_lamp_on(elapsed, ringtone_id):
 _known = None
 _seen_ever = set()
 _ring_last = 0.0
+_morning_ring_window = None
+
+
+def maybe_morning_ring(settings, snapshot, now=None):
+    """Consume a local quiet-hours end once, before crossing the audio boundary."""
+    global _morning_ring_window
+    quiet = settings["quiet_hours"]
+    cloud = transport_mode() == "cloud"
+    if (not cloud or settings.get("quiet_schedules") is None) and (not quiet["enabled"] or quiet["start"] == quiet["end"]):
+        return False
+    zone = ZoneInfo(settings["timezone"])
+    current = now.astimezone(zone) if now is not None else datetime.now(zone)
+    if not cloud and in_quiet_hours(settings, current):
+        return False
+    if cloud:
+        end = morning_quiet_end(settings, current)
+        if end is None:
+            return False
+    else:
+        hour, minute = map(int, quiet["end"].split(":"))
+        end = current.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+        if end > current:
+            end -= timedelta(days=1)
+    if not 0 <= (current - end).total_seconds() < MORNING_RING_GRACE_S:
+        return False
+    window = f'{settings["timezone"]}:{quiet["start"]}:{end.isoformat()}'
+    if _morning_ring_window == window:
+        return False
+    try:
+        try:
+            saved = json.loads(MORNING_RING_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            saved = {}
+        if saved.get("window") == window:
+            _morning_ring_window = window
+            return False
+        signal = (bool(snapshot) and settings["arrival_signal"] != "silent"
+                  and (not cloud or settings.get("morning_ring", True) and not quiet_hours(settings, current)))
+        if (signal if cloud else snapshot) and (_recording or _guided_active or button.is_pressed):
+            return False
+        if signal and not apply_master_volume(settings):
+            return False
+        # Persist first: a crash during playback must never repeat the alert.
+        # This favors at-most-once delivery over retrying ambiguous audio.
+        atomic_json(MORNING_RING_FILE, {"window": window})
+    except (OSError, ValueError, AttributeError):
+        log_event("morning_ring_unavailable")
+        return False
+    _morning_ring_window = window
+    if signal:
+        ring_alert(source="quiet_hours_end", settings=settings)
+    return True
 
 
 def mark_queue_known():
@@ -817,6 +1403,10 @@ def maybe_ring():
         return
     _ring_last = now
     snapshot = set(queued())
+    settings = caregiver_settings()
+    # The button service polls here only from its idle loop. Playback and child
+    # flows own this same thread, so they cannot be interrupted by this alert.
+    morning_consumed = maybe_morning_ring(settings, snapshot)
     if _known is None:
         _known = snapshot
         _seen_ever.update(snapshot)
@@ -824,8 +1414,7 @@ def maybe_ring():
     fresh = (snapshot - _known) - _seen_ever
     _known = snapshot
     _seen_ever.update(snapshot)
-    settings = caregiver_settings()
-    if fresh and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
+    if fresh and not morning_consumed and not quiet_hours(settings) and settings["arrival_signal"] != "silent":
         ring_alert(settings=settings)
 
 
@@ -846,6 +1435,8 @@ def maybe_manual_ring():
 
 def ring_alert(source="new_message", settings=None):
     settings = settings or caregiver_settings()
+    if transport_mode() == "cloud" and quiet_hours(settings):
+        return True
     path = os.fspath(ringtone_path(settings))
     manual = source == "dashboard"
     signal = "ring_and_lamp" if manual else settings["arrival_signal"]
@@ -856,23 +1447,33 @@ def ring_alert(source="new_message", settings=None):
         return False
     log(f"ringing: {source}")
     log_event("ring", source=source)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, path]) if play_ring else None
     started = time.monotonic()
+    def wait_for_ring():
+        if process is not None and process.poll() is None:
+            process.wait()
     try:
         while (process is not None and process.poll() is None) or (
             process is None and time.monotonic() - started < 9
         ):
             elapsed = time.monotonic() - started
             (led.on if flash_lamp and ring_lamp_on(elapsed, settings["ringtone_id"]) else led.off)()
-            if button.is_pressed:
+            if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
+                closed_at = time.monotonic()
+                pressed = button.is_pressed
                 if process is not None:
                     process.terminate()
                 log("ring cut by press")
+                if (pressed and source in {"new_message", "quiet_hours_end", "queued_after_unsent"}
+                        and queued() and not _recording and not _guided_active):
+                    # Capture the physical press before waiting for ALSA to
+                    # close; then use the same routing and hold/tap handler.
+                    if handle_confirmed_press(closed_at, before_dispatch=wait_for_ring):
+                        wait_for_stable_open()
                 break
             time.sleep(0.02)
     finally:
-        if process is not None and process.poll() is None:
-            process.wait()
+        wait_for_ring()
         refresh_led(force=True)
     return process is None or process.returncode == 0
 
@@ -910,30 +1511,43 @@ def recover_inflight():
 
 
 def claim_oldest():
-    names = queued()
-    if not names:
-        return None
-    source = Path(QUEUE_DIR) / names[0]
-    metadata = queue_metadata(source)
-    claimed = claim_inbox_file(QUEUE_DIR, source.name)
-    return {"path": claimed, "meta": metadata}
+    for name in queued():
+        source = Path(QUEUE_DIR) / name
+        metadata = queue_metadata(source)
+        if not inbound_audio_authorized(metadata):
+            continue
+        claimed = claim_inbox_file(QUEUE_DIR, source.name)
+        return {"path": claimed, "meta": metadata}
+    return None
 
 
 def finish_claim(claim):
+    cloud = transport_mode() == "cloud" and (claim.get("meta") or {}).get("cloud") is True
     archive_played_file(
-        QUEUE_DIR,
-        claim["path"],
-        metadata=claim.get("meta"),
+        QUEUE_DIR, claim["path"], metadata=claim.get("meta"),
         played_at=claim.get("played_at"),
+        **({"retention_seconds": 91 * 86400, "metadata_limit": 1000000,
+            "media_limit": 1000000, "media_bytes_limit": 1 << 60} if cloud else {}),
     )
+    if cloud and claim.get("played_at"):
+        cloud_runtime.record_played(claim["meta"])
 
 
 def release_claim(claim):
     release_inbox_file(QUEUE_DIR, claim["path"])
 
 
+def inbound_audio_authorized(metadata):
+    if transport_mode() == "cloud":
+        return cloud_runtime.playable(metadata)
+    return not (isinstance(metadata, dict) and metadata.get("cloud") is True)
+
+
 def react_played(meta):
     if not meta or not meta.get("msgid") or not meta.get("chat"):
+        return
+    if transport_mode() == "cloud":
+        # The Cloud API played reaction is a separate, later integration.
         return
     try:
         command = [
@@ -962,6 +1576,9 @@ def wait_for_stable_open():
         time.sleep(0.05)
         if not _guided_active:
             refresh_led()
+            # Feedback can follow a released approval without waiting for the
+            # idle-loop release-settle interval. This never opens the mic.
+            maybe_play_sending()
         if not button.is_pressed:
             since = since or time.monotonic()
             if time.monotonic() - since >= SETTLE_OPEN_S:
@@ -987,65 +1604,186 @@ def wait_for_confirmed_press(timeout=None):
 
 def play_audio_ordinary(path):
     """Play all audio and discard every press made during it."""
-    subprocess.run(
-        ["aplay", "-q", "-D", SPK_DEV, str(path)],
-        check=True,
-        timeout=600,
-    )
+    play_sound(path, timeout=600)
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+
+
+def play_audio_after_cue(path):
+    """The shared speaker path adds the same lead-in to cues and messages."""
+    play_audio_ordinary(path)
 
 
 def play_pending_listened(limit=4):
     """Play durable acknowledgements while the button service owns audio."""
+    if quiet_hours():
+        receipt_store.expire_box_notices()
+        return 0
+    if _recording or _guided_active or button.is_pressed:
+        return 0
     played = 0
     for _ in range(max(0, limit)):
+        if quiet_hours():
+            receipt_store.expire_box_notices()
+            break
+        if _recording or _guided_active or button.is_pressed:
+            break
         notice = receipt_store.claim_next()
         if notice is None:
             break
-        clip = notice.clip or LISTENED_FALLBACK_WAV
+        box_listener = bool(getattr(notice, "cloud", None)
+                            and notice.cloud.get("listener_kind") == "box")
+        if quiet_hours() and not box_listener:
+            receipt_store.release(notice)
+            break
+        if getattr(notice, "cloud", None):
+            try:
+                status = (cloud_runtime.listened_status(notice.cloud)
+                          if transport_mode() == "cloud" else "pending")
+            except (CloudRuntimeError, OSError, ValueError):
+                status = "expired" if box_listener else "pending"
+            if box_listener and quiet_hours():
+                status = "expired"
+            if status in {"expired", "rejected"}:
+                receipt_store.complete(notice, cloud_result=status)
+                continue
+            if box_listener and status == "lamp_only":
+                try:
+                    ring_alert(source="listened", settings={**caregiver_settings(), "arrival_signal": "lamp_only"})
+                    receipt_store.complete(notice)
+                    played += 1
+                except Exception:
+                    receipt_store.release(notice)
+                    announcement_gate.blocked()
+                    break
+                continue
+            if status != "ready":
+                receipt_store.release(notice)
+                break
+        fallback = (str(sound_pack.voice_path("listened"))
+                    if getattr(notice, "cloud", None)
+                    or LISTENED_FALLBACK_WAV == str(sound_pack.voice_path("listened", "jessica"))
+                    else LISTENED_FALLBACK_WAV)
+        if getattr(notice, "cloud", None) and buttonbox_voice():
+            fallback = str(sound_pack.voice_path("listened-noname"))
+        clip = notice.clip or fallback
+        if getattr(notice, "cloud", None) and notice.cloud.get("voice_pack") != sound_pack.current_voice_pack():
+            clip = fallback
+        if getattr(notice, "cloud", None) and not os.path.isfile(clip):
+            # A bounded cache can evict a voice while its notice waits for idle.
+            clip = fallback
+        setup_notice = transport_mode() == "cloud" and cloud_setup.SetupGuide().listened(getattr(notice, "cloud", None))
+        if setup_notice:
+            guide = cloud_setup.SetupGuide()
+            clip = str(sound_pack.voice_path("listened-noname"))
+            state = guide.load()
+            if (state.get("listened_started") or not sound_pack._playable_wav(Path(clip))
+                    or not guide.change("fields", listened_started=True)):
+                receipt_store.complete(notice, cloud_result="rejected")
+                guide.advance({"await_listened"}, "done")
+                continue
+        # Pending receipts from prior releases persist the old bundled default.
+        if clip == str(APP_DIR / "sounds/listen-receipts/someone-listened.wav"):
+            clip = fallback
         if not os.path.isabs(clip) or not os.path.exists(clip):
             receipt_store.release(notice)
             announcement_gate.blocked()
-            log_event(
-                "listen_announcement_blocked",
-                listener=notice.listener_name,
-                reason="missing_clip",
-            )
-            log(f"listen announcement blocked: missing {clip}")
+            if unavailable_events.unavailable("listen_announcement"):
+                log_event("listen_announcement_blocked", reason="missing_clip")
+                log("listen announcement blocked: missing clip")
             break
         try:
-            play_audio_ordinary(clip)
+            play_moment("listened")
+            try:
+                play_audio_ordinary(clip)
+            except cloud_quiet.AudioSilenced:
+                raise  # Quiet controls must also suppress the fallback.
+            except (OSError, subprocess.SubprocessError, CloudRuntimeError) as exc:
+                if not getattr(notice, "cloud", None) or clip == fallback:
+                    raise
+                log_event("cloud_voice_fallback", error=type(exc).__name__)
+                play_audio_ordinary(fallback)
             receipt_store.complete(notice)
+            if setup_notice:
+                cloud_setup.SetupGuide().advance({"await_listened"}, "done")
             played += 1
-            log_event("listen_announced", listener=notice.listener_name)
-            log(f"announced listened receipt: {notice.listener_name}")
+            unavailable_events.available("listen_announcement")
+            log_event("listen_announced")
+            log("announced listened receipt")
         except Exception as exc:
+            if setup_notice:
+                receipt_store.complete(notice, cloud_result="rejected")
+                cloud_setup.SetupGuide().advance({"await_listened"}, "done")
+                continue
             receipt_store.release(notice)
             announcement_gate.blocked()
-            log_event(
-                "listen_announcement_blocked",
-                listener=notice.listener_name,
-                reason=type(exc).__name__,
-            )
-            log(f"listen announcement error: {exc}")
+            if unavailable_events.unavailable("listen_announcement"):
+                log_event("listen_announcement_blocked", reason=type(exc).__name__)
+                log("listen announcement audio unavailable")
             break
     return played
 
 
-def play_send_success_cue():
-    """Keep one audio owner, but yield to a new press without consuming it."""
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, SEND_SUCCESS_WAV])
-    deadline = time.monotonic() + 5
+VOLUME_PREVIEW_SECONDS = 3
+
+
+def play_ringtone_snippet(seconds=VOLUME_PREVIEW_SECONDS, ringtone_id=None):
+    """Play a ringtone at the current volume (whole when seconds is None), lamp in rhythm; a press stops it."""
+    ringtone_id = normalize_ringtone_id(ringtone_id or caregiver_settings().get("ringtone_id"))
+    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES.get(ringtone_id, "")
+    if ringtone_id not in cloud_runtime.RINGTONES or not path.is_file() or button.is_pressed:
+        return False
+    limit = ["-d", str(seconds)] if seconds else []
+    if transport_mode() == "cloud" and quiet_hours():
+        return False
+    process = start_player(["aplay", "-q", *limit, "-D", SPK_DEV, str(path)])
+    started = time.monotonic()
+    deadline = started + (seconds or cloud_runtime._ringtone_preview_timeout(path)) + 2
+    try:
+        while process.poll() is None:
+            if button.is_pressed or time.monotonic() >= deadline or (transport_mode() == "cloud" and quiet_hours()):
+                return False
+            # Previews flash the lamp to the ringtone's rhythm, like a real ring.
+            if led is not None:
+                (led.on if ring_lamp_on(time.monotonic() - started, ringtone_id) else led.off)()
+            time.sleep(POLL_S)
+        return process.returncode == 0
+    finally:
+        if led is not None:
+            led.off()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
+def play_idle_sound(path, timeout, lamp_ringtone=None):
+    """Yield to a press and release the speaker before recording can start."""
+    if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
+        return False
+    if transport_mode() == "cloud" and Path(path).name.startswith("voice-"):
+        play_audio_ordinary(path)
+        return True
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    deadline = time.monotonic() + timeout
     try:
         while (code := process.poll()) is None:
-            if button.is_pressed:
-                return
+            if button.is_pressed or (transport_mode() == "cloud" and quiet_hours()):
+                return False
             if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired("aplay", 5)
+                raise subprocess.TimeoutExpired("aplay", timeout)
+            if lamp_ringtone and led is not None:
+                # Ringtone previews flash the lamp to the ringtone's rhythm, like a real ring.
+                (led.on if ring_lamp_on(timeout - (deadline - time.monotonic()), lamp_ringtone) else led.off)()
             time.sleep(POLL_S)
         if code:
             raise subprocess.CalledProcessError(code, "aplay")
+        return True
     finally:
+        if lamp_ringtone and led is not None:
+            led.off()
         if process.poll() is None:
             process.terminate()
             try:
@@ -1053,6 +1791,154 @@ def play_send_success_cue():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=0.2)
+
+
+def play_send_success_cue():
+    played = False
+    if caregiver_settings().get("swoosh_sound_enabled", True):
+        played = play_idle_sound(SEND_SUCCESS_WAV, 5)
+    if buttonbox_voice():
+        played = play_idle_sound(sound_pack.voice_path("setup-sent"), 20) or played
+    return played
+
+
+unavailable_events = UnavailableEvents()
+
+
+def maybe_play_sending():
+    """Speak only for this approval's live upload, never a background retry."""
+    global _sending_feedback
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
+        return False
+    try:
+        job, started = sending_notices.get_nowait()
+    except queue.Empty:
+        return False
+    feedback = _sending_feedback
+    now = time.monotonic()
+    if not feedback or feedback["message_id"] != job.message_id or not 0 <= now - feedback["approved"] < 30:
+        return False
+    # A rejected preflight never queues a notice. Give an immediate HTTP
+    # rejection time to settle before saying anything about an in-flight send.
+    if now - started < SENDING_FAILURE_GRACE_S:
+        sending_notices.put((job, started))
+        return False
+    _sending_feedback = None
+    try:
+        current = outbox_store.load(job.path)
+        if (current.state != "sending" or not buttonbox_voice() or quiet_hours()
+                or current.account_scope != cloud_runtime.account_scope(fresh=True)):
+            return False
+        play_audio_ordinary(sound_pack.voice_path("sending"))
+    except (OSError, ValueError, CloudRuntimeError, subprocess.SubprocessError) as exc:
+        log_event("sending_cue_unavailable", error=type(exc).__name__)
+        return False
+    log_event("sending_cue")
+    return True
+
+
+def play_optional_greeting(path):
+    """A real note or press always preempts this optional setup line."""
+    def cancelled():
+        return button.is_pressed or bool(queued()) or quiet_hours()
+
+    if cancelled():
+        return False
+    try:
+        # Optional speech never holds the button owner behind another player.
+        process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)],
+                               cancel=cancelled, wait=False)
+    except speaker.SpeakerBusy:
+        return False
+    deadline = time.monotonic() + 60
+    try:
+        while process.poll() is None:
+            if cancelled() or time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_S)
+        return process.returncode == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
+def maybe_play_cloud_sound():
+    """Only this main-loop owner starts cloud sounds, never the poller."""
+    if transport_mode() != "cloud" or _recording or _guided_active or button.is_pressed:
+        return False
+    try:
+        if maybe_play_sending():
+            return True
+        scope = cloud_runtime.account_scope(fresh=True)
+        optional_owner = (cloud_optional_audio_requests.owner()
+                          if cloud_optional_audio_requests.directory.exists() else nullcontext(True))
+        with cloud_audio_requests.owner() as acquired, optional_owner as optional_acquired:
+            if not acquired or not optional_acquired:
+                unavailable_events.available("cloud_scope")
+                return False
+            requests = cloud_audio_requests
+            request = requests.claim_next(scope)
+            if request is None and cloud_optional_audio_requests.directory.exists():
+                requests = cloud_optional_audio_requests
+                request = requests.claim_next(scope)
+            unavailable_events.available("cloud_scope")
+            if request is None:
+                return False
+            try:
+                if request["kind"] == "success":
+                    guide = cloud_setup.SetupGuide()
+                    state = guide.load()
+                    if state and request["key"].endswith(":" + state.get("local_id", "!")):
+                        played = guide.speak(play_setup_line, quiet=quiet_hours())
+                    else:
+                        played = play_send_success_cue()
+                elif request["kind"] == "settings_saved":
+                    played = False
+                    if not quiet_hours() and apply_master_volume():
+                        path = sound_pack.voice_path("setting-saved")
+                        play_audio_ordinary(path)
+                        played = True
+                    if not played and not quiet_hours():
+                        requests.finish(request, "pending")
+                        return False
+                elif request["kind"] == "setup_greeting":
+                    path = Path(request["clip"])
+                    guide = cloud_setup.SetupGuide()
+                    state = guide.load()
+                    played = False
+                    if (request.get("voice_pack") == caregiver_settings()["voice_pack"]
+                            and not queued() and state and state["stage"] in {"names", "waiting_note"}
+                            and not state.get("greeting_spoken") and not quiet_hours() and path.parent == cloud_runtime.STATE_FILE.parent / "voice-lines"
+                            and sound_pack._playable_wav(path)):
+                        guide.change("fields", greeting_spoken=True)
+                        played = play_optional_greeting(path)
+                elif request["kind"] == "voice_preview":
+                    path = sound_pack.voice_path("msg-start", request["voice_pack"])
+                    led.off()
+                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path))
+                elif request["kind"] == "preview" and normalize_ringtone_id(request["ringtone_id"]) in cloud_runtime.RINGTONES:
+                    ringtone_id = normalize_ringtone_id(request["ringtone_id"])
+                    path = cloud_runtime.RINGTONE_DIR / cloud_runtime.RINGTONES[ringtone_id]
+                    played = play_idle_sound(path, cloud_runtime._ringtone_preview_timeout(path),
+                                             lamp_ringtone=ringtone_id)
+                else:
+                    played = False
+                requests.finish(request, "played" if played else "rejected")
+                unavailable_events.available("cloud_playback")
+                return played
+            except (OSError, subprocess.SubprocessError, CloudRuntimeError) as exc:
+                requests.finish(request, "rejected")
+                if unavailable_events.unavailable("cloud_playback"):
+                    log_event("cloud_sound_unavailable", error=type(exc).__name__)
+    except (OSError, ValueError, CloudRuntimeError) as exc:
+        if unavailable_events.unavailable("cloud_scope"):
+            log_event("cloud_sound_unavailable", error=type(exc).__name__)
+    return False
 
 
 def maybe_play_send_success():
@@ -1077,6 +1963,9 @@ def maybe_play_send_success():
 
 def maybe_play_pending_listened():
     """Announce new played receipts promptly whenever the speaker is idle."""
+    if quiet_hours():
+        receipt_store.expire_box_notices()
+        return 0
     busy = _recording or _guided_active or button.is_pressed
     if not announcement_gate.ready(busy=busy):
         return 0
@@ -1089,6 +1978,13 @@ def maybe_play_pending_listened():
 def wait_for_approval(timeout, session_id=None):
     if not wait_for_confirmed_press(timeout):
         return False
+    if buttonbox_voice():
+        start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path("press"))],
+                     lead_in_s=0, max_seconds=APPROVAL_CUE_TIMEOUT_S)
+        log_event("guided_press", action="approve", session_id=session_id)
+        # The normal main-loop release guard consumes this held press. Queue
+        # the approved audio now so conversion and upload do not wait for it.
+        return True
     acknowledge_guided_press("approve", session_id)
     wait_for_stable_open()
     return True
@@ -1097,7 +1993,7 @@ def wait_for_approval(timeout, session_id=None):
 def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
     """Consume only a fresh deliberate press in review or deletion warning."""
     discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
-    process = subprocess.Popen(["aplay", "-q", "-D", SPK_DEV, str(path)])
+    process = start_player(["aplay", "-q", "-D", SPK_DEV, str(path)])
     approved = False
     try:
         closed_since = None
@@ -1115,6 +2011,8 @@ def play_audio_for_approval(path, session_id=None, *, action="approve_warning"):
     finally:
         if process.poll() is None:
             process.wait()
+    if transport_mode() == "cloud" and not approved and process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, "aplay")
     if approved:
         acknowledge_guided_press(action, session_id)
     wait_for_stable_open()
@@ -1126,6 +2024,8 @@ def play_warning_for_approval(path, session_id=None):
 
 
 def presence(kind, recipient):
+    if transport_mode() == "cloud":
+        return
     subcommand = ["typing", "--media", "audio"] if kind == "recording" else ["paused"]
     subprocess.Popen(
         [WACLI_BIN, "presence", *subcommand, "--to", recipient, "--lock-wait", SEND_LOCK_WAIT],
@@ -1141,124 +2041,261 @@ def cleanup_temp_recordings():
             path.unlink()
 
 
-def capture_guided_recording(recipient, session_id=None, max_seconds=60):
-    global _recording
-    _recording = True
-    led.on()
-    capture_id = uuid.uuid4().hex
-    raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
-    wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
-    vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
-    process = subprocess.Popen(
-        [
-            "arecord",
-            "-q",
-            "-D",
-            MIC_DEV,
-            "-t",
-            "raw",
-            "-f",
-            "S16_LE",
-            "-r",
-            "16000",
-            "-c",
-            "1",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    started = time.monotonic()
-    vad.start(started)
-    presence("recording", recipient)
-    presence_last = started
-    closed_since = None
-    stopped_by_press = False
-    try:
-        with open(raw_path, "wb") as raw:
-            while True:
-                now = time.monotonic()
-                readable, _, _ = select.select([process.stdout], [], [], 0.02)
-                if readable:
-                    chunk = os.read(process.stdout.fileno(), 4096)
-                    if chunk:
-                        raw.write(chunk)
-                        vad.feed(chunk, now=now)
-                if button.is_pressed:
-                    closed_since = closed_since or now
-                    if now - closed_since >= CONFIRM_PRESS_S:
-                        stopped_by_press = True
-                        break
-                else:
-                    closed_since = None
-                if vad.silence_expired(now):
-                    break
-                if now - started >= max_seconds:
-                    break
-                if now - presence_last >= 8:
-                    presence("recording", recipient)
-                    presence_last = now
-                if process.poll() is not None:
-                    raise RuntimeError("arecord exited unexpectedly")
-            process.send_signal(signal.SIGINT)
-            try:
-                remainder, _ = process.communicate(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.terminate()
-                remainder, _ = process.communicate(timeout=3)
-            if remainder:
-                raw.write(remainder)
-                vad.feed(remainder, now=time.monotonic())
-            raw.flush()
-            os.fsync(raw.fileno())
-    except Exception:
-        if process.poll() is None:
-            process.terminate()
-            process.wait(timeout=3)
-        for path in (raw_path, wav_path):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        raise
-    finally:
-        presence("paused", recipient)
-        led.off()
-        _recording = False
-        if stopped_by_press:
-            acknowledge_guided_press("stop_recording", session_id)
-            wait_for_stable_open()
+class RecordingLimitCue:
+    def __init__(self, started, maximum):
+        self.started = started
+        self.maximum = maximum
+        self.process = None
+        self.intervals = []
+        self.played = False
 
-    bounds = vad.trim_bounds()
-    if bounds is None:
+    def update(self, now):
+        if not self.intervals and now - self.started >= self.maximum - 5:
+            self.intervals.append([now - self.started, None])
+            try:
+                if not box_muted() and not (hasattr(self, "path") and quiet_hours()):
+                    self.process = start_player(["aplay", "-q", "-D", SPK_DEV,
+                                                     str(getattr(self, "path", sound_pack.cue_path("rec_limit")))])
+                    self.played = True
+                else:
+                    self.intervals[-1][1] = now - self.started
+            except (OSError, cloud_quiet.AudioSilenced):
+                self.intervals[-1][1] = now - self.started
+                log_event("recording_limit_cue_unavailable")
+        if self.process is not None:
+            code = self.process.poll()
+            if code is not None:
+                self.intervals[-1][1] = now - self.started
+                self.process = None
+                if code:
+                    log_event("recording_limit_cue_unavailable")
+            elif now - self.started - self.intervals[-1][0] > 3:
+                self.finish(now)
+                log_event("recording_limit_cue_unavailable")
+
+    def finish(self, now):
+        if self.process is not None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=0.2)
+            self.process = None
+        if self.intervals and self.intervals[-1][1] is None:
+            self.intervals[-1][1] = now - self.started
+
+
+@contextmanager
+def recording_start(talk_mode, *, card_prompt=False, press_cue=False):
+    """Light the lamp first; finish one short cue before opening the mic."""
+    player = None
+    fast = buttonbox_voice()
+    try:
+        if fast:
+            led.on()
+            # Normal hold already used the press cue to classify the gesture.
+            if talk_mode != "hold" or card_prompt or press_cue:
+                cue = "press" if press_cue else "rec_start"
+                player = start_player(["aplay", "-q", "-D", SPK_DEV, str(sound_pack.cue_path(cue))],
+                                      lead_in_s=0, clip_seconds=START_CUE_SECONDS if press_cue else RECORD_START_CUE_SECONDS)
+                code = player.wait(timeout=5)
+                if code:
+                    raise subprocess.CalledProcessError(code, "aplay")
+        else:
+            play_sound(sound_pack.cue_path("rec_go"), timeout=5)
+        yield player
+    finally:
+        if player is not None and player.poll() is None:
+            player.terminate()
+            try:
+                player.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                player.kill()
+                player.wait(timeout=0.2)
+        if fast:
+            led.off()
+
+
+def capture_guided_recording(recipient, session_id=None, max_seconds=60, *, card_prompt=False, talk_mode="tap", press_token=None, setup_reply=False):
+    global _recording
+    require_permit(press_token)
+    with speaker.capture_owner(), recording_start(talk_mode, card_prompt=card_prompt):
+        if talk_mode == "hold" and not button.is_pressed:
+            return RecordingResult(None, 0, False)
+        capture_id = uuid.uuid4().hex
+        raw_path = Path(TEMP_DIR) / f"{capture_id}.raw"
+        wav_path = Path(TEMP_DIR) / f"{capture_id}.wav"
+        vad = EnergyVAD(silence_seconds=GUIDED_SILENCE_SECONDS)
+        started = time.monotonic()
+        vad.start(started)
+        warning = RecordingLimitCue(started, max_seconds)
+        if setup_reply or buttonbox_voice():
+            warning.maximum = min(max_seconds, 45)
+            warning.path = sound_pack.voice_path("setup-remind-stop")
+        presence_last = started
+        closed_since = None
+        stopped_by_press = False
+        timed_out = False
+        open_since = None
+        stop_armed = not button.is_pressed
+        process = open_microphone(press_token, MIC_DEV, popen=subprocess.Popen)
+        _recording = True
+        try:
+            if not buttonbox_voice():
+                led.on()
+            presence("recording", recipient)
+            with open(raw_path, "wb") as raw:
+                while True:
+                    now = time.monotonic()
+                    warning.update(now)
+                    readable, _, _ = select.select([process.stdout], [], [], 0.02)
+                    if readable:
+                        chunk = os.read(process.stdout.fileno(), 4096)
+                        if chunk:
+                            raw.write(chunk)
+                            vad.feed(chunk, now=now)
+                    if now - started >= max_seconds:
+                        timed_out = True
+                        break
+                    if talk_mode == "hold":
+                        if not button.is_pressed:
+                            open_since = open_since or now
+                            if now - open_since >= CONFIRM_RELEASE_S:
+                                break
+                        else:
+                            open_since = None
+                    elif warning.process is not None and setup_reply:
+                        stop_armed = False
+                        closed_since = None
+                    elif button.is_pressed and stop_armed:
+                        closed_since = closed_since or now
+                        if now - closed_since >= CONFIRM_PRESS_S:
+                            stopped_by_press = True
+                            break
+                    else:
+                        closed_since = None
+                        if not button.is_pressed:
+                            stop_armed = True
+                    if now - presence_last >= 8:
+                        presence("recording", recipient)
+                        presence_last = now
+                    if process.poll() is not None:
+                        raise RuntimeError("arecord exited unexpectedly")
+                process.send_signal(signal.SIGINT)
+                try:
+                    remainder, _ = process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                    remainder, _ = process.communicate(timeout=3)
+                if remainder:
+                    raw.write(remainder)
+                    vad.feed(remainder, now=time.monotonic())
+                raw.flush()
+                os.fsync(raw.fileno())
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+            for path in (raw_path, wav_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
+        finally:
+            try:
+                warning.finish(time.monotonic())
+                presence("paused", recipient)
+            finally:
+                try:
+                    led.off()
+                finally:
+                    _recording = False
+            if stopped_by_press:
+                acknowledge_guided_press("stop_recording", session_id)
+                wait_for_stable_open()
+
+        recorded_seconds = raw_path.stat().st_size / (16000 * 2)
+        # Playback can mask speech or resemble it. With no echo reference we
+        # cannot prove this window empty: preserve it for a deliberate review.
+        review_required = warning.played and recorded_seconds > 0
+        bounds = vad.trim_bounds()
+        if review_required or (bounds is not None and (setup_reply or buttonbox_voice() or warning.intervals)):
+            # VAD is only the empty-recording gate here. Never trim away words
+            # spoken during the reminder or the drained microphone tail.
+            bounds = (0, raw_path.stat().st_size // 2)
+        if bounds is None:
+            raw_path.unlink(missing_ok=True)
+            return RecordingResult(None, recorded_seconds, False, timed_out, recorded_seconds)
+        duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
         raw_path.unlink(missing_ok=True)
-        return RecordingResult(None, time.monotonic() - started, False)
-    duration = raw_pcm_to_trimmed_wav(str(raw_path), str(wav_path), bounds)
-    raw_path.unlink(missing_ok=True)
-    return RecordingResult(str(wav_path), duration, True)
+        return RecordingResult(str(wav_path), duration, True, timed_out, recorded_seconds,
+                               review_required=review_required)
 
 
 class PiGuidedIO:
-    def __init__(self, recipient, session_id, max_seconds):
+    def __init__(self, recipient, session_id, max_seconds, *, card_prompt=False, talk_mode="tap"):
+        self.press_token = _capture_permit
         self.recipient = recipient
         self.session_id = session_id
         self.max_seconds = max_seconds
+        self.card_prompt = card_prompt
+        self.talk_mode = talk_mode
+        self.setup_reply = False
+        self.limit_reached = False
 
     def play_ordinary(self, path):
-        play_audio_ordinary(path)
+        if self.setup_reply and Path(path) == sound_pack.cue_path("deleted"):
+            play_setup_line("setup-deleted")
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        else:
+            play_audio_ordinary(path)
 
-    def play_review_for_approval(self, path):
-        return play_audio_for_approval(path, self.session_id, action="approve_review")
+    def play_after_cue(self, path):
+        play_audio_after_cue(path)
+
+    def play_review(self, path):
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="review")
+        self.play_ordinary(path)
+
+    def play_deleted(self, path):
+        self.play_ordinary(path)
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="not-sent")
+
+    def play_empty(self, path):
+        self.play_ordinary(path)
+        if not self.setup_reply and buttonbox_voice():
+            play_moment(voice="empty")
 
     def record(self):
-        return capture_guided_recording(
-            self.recipient, self.session_id, self.max_seconds
+        result = capture_guided_recording(
+            self.recipient, self.session_id, self.max_seconds,
+            card_prompt=self.card_prompt, talk_mode=self.talk_mode, press_token=self.press_token,
+            setup_reply=self.setup_reply,
         )
+        self.limit_reached = result.timed_out
+        if self.setup_reply and result.timed_out:
+            return RecordingResult(result.path, result.duration, result.meaningful, False, result.recorded_seconds,
+                                   review_required=result.review_required)
+        return result
 
     def wait_for_approval(self, timeout):
-        return wait_for_approval(timeout, self.session_id)
-
-    def play_warning_for_approval(self, path):
-        return play_warning_for_approval(path, self.session_id)
+        if self.setup_reply:
+            cloud_setup.SetupGuide().advance({"recording"}, "review")
+            play_setup_line("setup-ask-send")
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        elif buttonbox_voice():
+            path = sound_pack.voice_path("setup-ask-send") if self.limit_reached else sound_pack.next_send_prompt()
+            play_audio_ordinary(path)
+        approved = wait_for_approval(timeout, self.session_id)
+        return approved
 
     def delete(self, path):
         try:
@@ -1272,18 +2309,34 @@ def play_next_legacy():
     names = queued()
     if not names:
         return
-    path = Path(QUEUE_DIR) / names[0]
-    meta = queue_metadata(path)
-    log(f"playing {names[0]} ({len(names)} waiting)")
+    selected = None
+    for name in names:
+        path = Path(QUEUE_DIR) / name
+        metadata = queue_metadata(path)
+        if inbound_audio_authorized(metadata):
+            selected = (path, metadata)
+            break
+    if selected is None:
+        return
+    path, meta = selected
+    log(f"playing {path.name} ({len(names)} waiting)")
     try:
-        subprocess.run(["aplay", "-q", "-D", SPK_DEV, str(path)], check=True, timeout=600)
+        play_message_start(meta)
+        play_sound(path, timeout=600)
+        if len(names) == 1:
+            play_moment("msg_end")
         played_at = time.time()
         archive_played_file(
-            QUEUE_DIR, path, metadata=meta, played_at=played_at
+            QUEUE_DIR, path, metadata=meta, played_at=played_at,
+            **({"retention_seconds": 91 * 86400, "metadata_limit": 1000000,
+                "media_limit": 1000000, "media_bytes_limit": 1 << 60}
+               if transport_mode() == "cloud" else {}),
         )
+        if transport_mode() == "cloud":
+            cloud_runtime.record_played(meta)
         react_played(meta)
         try:
-            wait_s = time.time() - int(names[0].split("-", 1)[0]) / 1000
+            wait_s = time.time() - int(path.name.split("-", 1)[0]) / 1000
         except ValueError:
             wait_s = None
         log_event("played", wait_s=wait_s)
@@ -1294,27 +2347,29 @@ def play_next_legacy():
     refresh_led(force=True)
 
 
-def record_and_send_legacy(settings=None, pressed_at=None):
-    global _recording
+def record_and_send_legacy(settings=None, pressed_at=None, *, card_prompt_uid=None):
+    reconcile_card_selections()
     settings = settings or caregiver_settings()
-    max_seconds = settings["max_recording_seconds"]
+    scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
-    intent = acknowledge_and_classify_legacy_press(pressed_at)
+    intent = "record" if card_prompt_uid else acknowledge_and_classify_legacy_press(pressed_at)
     if intent == "play":
         wait_for_stable_open()
         if card_state in {"claimed", "expired"}:
-            # Hold-to-record still needs a hold. A quick release consumes the
-            # one-shot choice without playing an unrelated queued message or
-            # creating a near-silent recording.
+            # A quick release keeps the card choice for a later hold, without
+            # playing an unrelated queued message or saving silent audio.
             log_event("nfc_recording_cancelled", reason="short_press")
             return
         play_next_legacy()
         return
-    if card_state in {"stale", "expired"}:
+    if card_state == "expired":
         block_unavailable_recipient()
         return
     if card_state == "none":
-        context = recording_recipient_context()
+        context = current_recipient_context() if card_prompt_uid else recording_recipient_context()
+    if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
+        block_unavailable_recipient()
+        return
     if context is None:
         block_unavailable_recipient()
         return
@@ -1324,80 +2379,84 @@ def record_and_send_legacy(settings=None, pressed_at=None):
         return
     if context["via_card"] and not button.is_pressed:
         return
-    _recording = True
-    led.on()
-    part = os.path.join(OUTBOX_DIR, f"{int(time.time() * 1000)}.part")
-    recorder = subprocess.Popen(
-        [
-            "arecord",
-            "-q",
-            "-D",
-            MIC_DEV,
-            "-t",
-            "wav",
-            "-f",
-            "S16_LE",
-            "-r",
-            "48000",
-            "-c",
-            "1",
-            "-d",
-            str(max_seconds + 2),
-            part,
-        ]
-    )
-    started = time.monotonic()
-    open_since = None
-    presence_last = None
-    try:
-        while True:
-            time.sleep(POLL_S)
-            now = time.monotonic()
-            if now - started >= MIN_HOLD_S and (
-                presence_last is None or now - presence_last >= 8
-            ):
-                presence("recording", recipient)
-                presence_last = now
-            if not button.is_pressed:
-                open_since = open_since or now
-                if now - open_since >= CONFIRM_RELEASE_S:
-                    break
-            else:
-                open_since = None
-            if now - started >= max_seconds:
-                break
-        held = min(time.monotonic() - started, max_seconds)
-        led.off()
-        recorder.send_signal(signal.SIGINT)
-        recorder.wait()
-        if presence_last:
-            presence("paused", recipient)
-        final_path = part[:-5] + f"-{held:.1f}.wav"
-        bind_legacy_job_recipient(final_path, recipient)
-        os.replace(part, final_path)
-    finally:
-        _recording = False
-
-
-def run_guided_once(settings=None):
+    session_id = uuid.uuid4().hex
+    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
+                    card_prompt=bool(card_prompt_uid), talk_mode="hold")
     global _guided_active
+    _guided_active = True
+    outcome = None
+    try:
+        outcome = GuidedSession(
+            io, outbox_store, lambda kind, **data: recording_session_event(context, kind, **data)
+        ).run(
+            recipient=recipient, flow_kind="standalone", session_id=session_id,
+            deleted_cue_path=str(sound_pack.cue_path("deleted")),
+            review_before_send=settings.get("review_before_send", False), account_scope=scope,
+            nfc_selection_id=context["selection"]["selection_id"] if context["via_card"] else None,
+        )
+    except Exception:
+        cleanup_temp_recordings()
+        raise
+    finally:
+        _guided_active = False
+        mark_queue_known()
+        refresh_led(force=True)
+        if should_ring_after_unsent_session(outcome, bool(queued()), quiet_hours(settings)):
+            ring_alert(source="queued_after_unsent")
+
+
+
+def _context_matches_card(context, uid):
+    """A press during the card prompt must use the card that was announced.
+
+    Selected card contexts carry the card uid but not the contact's full
+    card list, so compare the uid first and fall back to the list.
+    """
+    if context is None:
+        return False
+    if context.get("uid") == uid:
+        return True
+    return uid in context.get("contact", {}).get("card_uids", ())
+
+def run_guided_once(settings=None, *, card_prompt_uid=None, acknowledge_listening=False):
+    global _guided_active
+    reconcile_card_selections()
     settings = settings or caregiver_settings()
     session_id = uuid.uuid4().hex
+    scope = cloud_runtime.account_scope() if transport_mode() == "cloud" else None
     card_state, context = claim_fresh_card_intent()
     if card_state == "expired":
         block_unavailable_recipient()
         return
-    claim = None if card_state == "claimed" else claim_oldest()
-    if card_state == "stale" and not claim:
-        block_unavailable_recipient()
-        return
+    claim = None if card_state == "claimed" or card_prompt_uid else claim_oldest()
+    guide = cloud_setup.SetupGuide() if transport_mode() == "cloud" else None
+    first_reply = bool(guide and not claim and guide.first_reply())
+    if first_reply:
+        settings = {**settings, "max_recording_seconds": 60, "review_before_send": True, "talk_mode": "tap"}
+    setup_state = guide.load() if guide else None
+    first_note = bool(claim and setup_state and setup_state["stage"] in {"names", "waiting_note", "your_turn"})
     flow_kind = "reply" if claim else "standalone"
     metadata = claim["meta"] if claim else None
     if not claim and card_state == "none":
-        context = recording_recipient_context()
+        context = current_recipient_context() if card_prompt_uid else recording_recipient_context()
+    if card_prompt_uid and not _context_matches_card(context, card_prompt_uid):
+        block_unavailable_recipient()
+        return
     recipient = metadata.get("chat") if metadata else (
         context["contact"]["jid"] if context else None
     )
+    if first_reply and card_state == "none" and not card_prompt_uid:
+        saved = guide.load()
+        recipient = saved.get("recipient") if saved.get("scope") == scope else None
+        try:
+            allowed = ContactStore(CONTACTS_FILE).allowed_jids()
+        except (OSError, ContactError):
+            allowed = set()
+        if not recipient or recipient not in allowed:
+            block_unavailable_recipient()
+            return
+        context = {"via_card": False}
+
     if not claim:
         if context is None:
             block_unavailable_recipient()
@@ -1405,6 +2464,17 @@ def run_guided_once(settings=None):
         if context["via_card"] and not ensure_nfc_confirmation(context):
             log_event("nfc_confirmation_failed")
             return
+    elif acknowledge_listening and buttonbox_voice():
+        # An incoming note still acknowledges the listening press. A direct
+        # recording uses its single short recording cue instead.
+        try:
+            acknowledge_guided_press("start_session")
+            wait_for_stable_open()
+        except Exception:
+            # Feedback runs after the claim. Restore both files so the next
+            # press can play this note without waiting for process recovery.
+            release_claim(claim)
+            raise
     claim_recipient_allowed = False
     if claim and recipient:
         try:
@@ -1414,7 +2484,13 @@ def run_guided_once(settings=None):
     if claim and (not recipient or not claim_recipient_allowed):
         # The message may be heard, but a reply is never guessed or rerouted.
         try:
+            if not inbound_audio_authorized(metadata):
+                release_claim(claim)
+                return
+            play_message_start(metadata)
             play_audio_ordinary(claim["path"])
+            if not queued():
+                play_moment("msg_end")
             claim["played_at"] = time.time()
             finish_claim(claim)
             log_event("guided_unroutable_inbound")
@@ -1424,33 +2500,53 @@ def run_guided_once(settings=None):
         return
 
     led.off()
-    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"])
+    io = PiGuidedIO(recipient, session_id, settings["max_recording_seconds"],
+                    **({"card_prompt": True} if card_prompt_uid else {}))
+
+    io.setup_reply = first_reply
+    if first_reply:
+        guide.advance({"your_turn"}, "recording", scope=scope)
 
     def session_event(kind, **data):
         if kind == "guided_session_started" and claim:
             data["source_file"] = claim["path"].name
-        log_event(kind, **data)
+        recording_session_event(context, kind, **data)
         if kind == "guided_inbound_played":
             claim["played_at"] = time.time()
             react_played(metadata)
+            if first_note:
+                guide.advance({"names", "waiting_note", "your_turn"}, "your_turn", recipient=recipient, scope=scope)
+                guide.speak(play_setup_line, quiet=quiet_hours())
+                discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+        if first_reply and kind == "guided_approved":
+            guide.change("stage", stage="await_listened", local_id=data["message_id"], scope=scope)
+        elif first_reply and kind in {"guided_deleted", "guided_recording_empty"}:
+            guide.change("stage", stage="done")
 
-    session = GuidedSession(io, outbox_store, session_event)
+    session_store = cloud_setup.ReplyOutbox(outbox_store, guide) if first_reply else outbox_store
+    session = GuidedSession(io, session_store, session_event)
     _guided_active = True
     outcome = None
     try:
-        # Catch a receipt that arrived after the idle loop saw this press. The
-        # announcement finishes before the requested child interaction begins.
-        play_pending_listened()
+        if claim and not inbound_audio_authorized(metadata):
+            release_claim(claim)
+            return
+        intro = message_intro_voice(settings) if claim and not first_note else None
+        age = message_age_voice(metadata, settings) if claim and not first_note else None
         outcome = session.run(
             recipient=recipient,
             flow_kind=flow_kind,
-            countdown_path=str(PROMPTS["reply" if claim else "standalone"]),
-            send_prompt_path=str(PROMPTS["send"]),
-            delete_warning_path=str(PROMPTS["delete_warning"]),
-            not_sent_path=str(PROMPTS["not_sent"]),
+            deleted_cue_path=str(sound_pack.cue_path("deleted")),
+            review_before_send=settings.get("review_before_send", True),
             incoming_path=str(claim["path"]) if claim else None,
             session_id=session_id,
-            auto_record_after_incoming=settings["after_listening"] == "invite_reply",
+            auto_record_after_incoming=not first_note and settings["after_listening"] == "invite_reply",
+            account_scope=scope,
+            nfc_selection_id=context["selection"]["selection_id"] if context and context["via_card"] else None,
+            incoming_cue_path=str(sound_pack.cue_path("msg_start")),
+            incoming_voice_path=str(intro) if intro else None,
+            incoming_age_path=str(age) if age else None,
+            incoming_end_path=str(sound_pack.cue_path("msg_end")) if not queued() else None,
         )
         if claim:
             finish_claim(claim)
@@ -1474,25 +2570,214 @@ def run_guided_once(settings=None):
 
 
 def validate_prompts():
-    invalid = invalid_prompt_files(PROMPTS.values())
+    invalid = invalid_prompt_files(PROMPT_DIR / f"voice-{name}.wav" for name in sound_pack.VOICE_NAMES)
     if invalid:
         raise RuntimeError(
             "guided reply prompt assets missing/invalid: " + ", ".join(invalid)
         )
 
 
+def claim_beeps():
+    try:
+        validate_sounds()
+    except ValueError:
+        log("claim sound assets missing/invalid")
+    return {name: CUES[name] for name in ("press", "fail", "online")}
+
+
+def play_claim_cue(cues, name):
+    try:
+        play_sound(cues[name], timeout=5)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        log("claim audio playback unavailable")
+        return False
+
+
+def claim_button_press(cues):
+    play_claim_cue(cues, "press")
+    result = cloud_claim.claim_press_result()
+    if result in {cloud_claim.ClaimPressResult.NOT_ACTIVE, cloud_claim.ClaimPressResult.RETRY}:
+        play_claim_cue(cues, NFC_UNKNOWN_BEEP)
+
+
+def play_setup_line(name):
+    try:
+        if name == "setup-sent" and caregiver_settings().get("swoosh_sound_enabled", True):
+            play_sound(SEND_SUCCESS_WAV, timeout=5)
+        play_sound(sound_pack.voice_path(name), timeout=20)
+        if globals().get("button") is not None:
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
+def play_setup_online(cues):
+    if quiet_hours():
+        return False
+    guide = cloud_setup.SetupGuide()
+    try:
+        if cloud_claim.setup_online_cue(consume=True):
+            guide.change("start")
+            if guide.speak(play_setup_line):
+                return True
+        return guide.speak(play_setup_line)
+    except (OSError, ValueError, CloudDeviceError):
+        return False
+
+
+def claim_only_loop():
+    """Physical possession confirmation without any household audio/outbox work."""
+    cues = claim_beeps()
+    apply_master_volume()
+    switch = Button(BUTTON_PIN)
+    lamp = LED(LED_PIN)
+    lamp.off()
+    while True:
+        while switch.is_pressed:
+            time.sleep(POLL_S)
+        while not switch.is_pressed:
+            apply_master_volume()
+            if play_setup_online(cues):
+                # Every press made during speech belongs to that speech.
+                while switch.is_pressed:
+                    time.sleep(POLL_S)
+            time.sleep(POLL_S)
+        started = time.monotonic()
+        while switch.is_pressed and time.monotonic() - started < CONFIRM_PRESS_S:
+            time.sleep(POLL_S)
+        if switch.is_pressed:
+            state = cloud_setup.SetupGuide().load()
+            if state and state["stage"] == "scan":
+                cloud_setup.SetupGuide().speak(play_setup_line, replay=True, quiet=quiet_hours())
+            else:
+                claim_button_press(cues)
+        while switch.is_pressed:
+            time.sleep(POLL_S)
+
+
+def handle_confirmed_press(closed_at, *, card_prompt_uid=None, before_dispatch=None):
+    try:
+        reconcile_card_selections()
+    except (NfcError, OSError, ValueError):
+        log_event("button_flow_error", error="card_reconciliation")
+        return False
+    if transport_mode() == "cloud":
+        from messagebox.cloud_update import confirmation
+        if confirmation.intercept(button):
+            return True
+        from messagebox.maintenance import interaction
+        with interaction() as allowed:
+            if not allowed:
+                wait_for_stable_open()
+                return False
+            return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid, before_dispatch=before_dispatch)
+    return _capture_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid, before_dispatch=before_dispatch)
+
+
+def _capture_confirmed_press(closed_at, *, card_prompt_uid=None, before_dispatch=None):
+    global _capture_permit
+    try:
+        with capture_session(button) as permit:
+            _capture_permit = permit
+            if before_dispatch is not None:
+                before_dispatch()
+            return _handle_confirmed_press(closed_at, card_prompt_uid=card_prompt_uid)
+    except CaptureDenied:
+        return False
+    finally:
+        _capture_permit = None
+
+
+def _handle_confirmed_press(closed_at, *, card_prompt_uid=None):
+    """Dispatch a debounced press through the normal routing and audio flow."""
+    if speaker.is_busy():
+        wait_for_stable_open()
+        return True
+    if transport_mode() == "cloud" and cloud_claim.consume_claim_press():
+        log_event("cloud_claim_button_pressed")
+        wait_for_stable_open()
+        return True
+    if transport_mode() == "cloud":
+        cloud_runtime.play_reactions(lambda path: cloud_quiet.play(
+            ["aplay", "-q", "-D", SPK_DEV, str(path)], timeout=60, allow_muted=True), deliberate=True)
+    if transport_mode() == "cloud":
+        state = cloud_setup.SetupGuide().load()
+        if state and state["stage"] in {"names", "waiting_note"} and not queued():
+            wait_for_stable_open()
+            if state["stage"] == "names":
+                cloud_setup.SetupGuide().speak(play_setup_line, quiet=quiet_hours(), replay=True)
+            discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+            return True
+    interaction_settings = normalize_recording_settings(caregiver_settings())
+    if box_muted():
+        led.on()
+        time.sleep(0.15)
+        led.off()
+        wait_for_stable_open()
+        return True
+    try:
+        state = cloud_setup.SetupGuide().load() if transport_mode() == "cloud" else None
+        setup_action = state and state["stage"] in {"names", "waiting_note", "your_turn"}
+        if setup_action or interaction_settings["talk_mode"] == "tap":
+            # Cloud Button Box capture ignores the start press until release.
+            # Other modes retain their existing acknowledgement and release.
+            if card_prompt_uid:
+                run_guided_once(interaction_settings, card_prompt_uid=card_prompt_uid)
+            elif buttonbox_voice():
+                run_guided_once(interaction_settings, acknowledge_listening=True)
+            else:
+                acknowledge_guided_press("start_session")
+                wait_for_stable_open()
+                run_guided_once(interaction_settings)
+        else:
+            record_and_send_legacy(interaction_settings, pressed_at=closed_at,
+                                   **({"card_prompt_uid": card_prompt_uid} if card_prompt_uid else {}))
+    except speaker.SpeakerBusy:
+        return False
+    except Exception as exc:
+        log(f"button flow error: {exc}")
+        log_event(
+            "button_flow_error",
+            recording_mode=interaction_settings["recording_mode"],
+            error=type(exc).__name__,
+        )
+        if not _guided_active:
+            beep("fail")
+        return False
+    finally:
+        refresh_led(force=True)
+    return True
+
+
 def main():
     global button, led, outbox_store, receipt_store
-    make_beeps()
+    try:
+        transport_mode()
+    except ValueError as exc:
+        log(str(exc))
+        return 2
+    if transport_mode() == "cloud" and os.environ.get("MSGBOX_CLAIM_ONLY") == "1":
+        if "--drain" in sys.argv:
+            return 2
+        return claim_only_loop()
+    try:
+        validate_sounds()
+    except ValueError as exc:
+        log(str(exc))
+        return 2
     os.makedirs(QUEUE_DIR, exist_ok=True)
     os.makedirs(OUTBOX_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
-    outbox_store = OutboxStore(OUTBOX_DIR)
+    outbox_store = OutboxStore(OUTBOX_DIR, transport=transport_mode(), selection_path=NFC_SELECTION_FILE)
     receipt_store = ReceiptStore(LISTENED_DIR)
+    reconcile_card_selections()
     recover_inflight()
     for _ in range(receipt_store.recover_inflight()):
         log_event("listen_announcement_recovered")
     cleanup_temp_recordings()
+    if transport_mode() == "cloud":
+        cloud_setup.SetupGuide().advance({"recording", "review"}, "done")
     for partial in Path(OUTBOX_DIR).glob("*.part"):
         partial.unlink()
     for message_id in outbox_store.recover_startup():
@@ -1500,10 +2785,15 @@ def main():
 
     if "--drain" in sys.argv:
         ok = True
-        for job in outbox_store.jobs():
+        if transport_mode() == "cloud":
+            for filename in compatible_legacy_outbox_files():
+                if not stage_hold_release_cloud_job(filename):
+                    return 1
+        for job in compatible_guided_jobs():
             ok = send_guided_job(job) and ok
-        for filename in legacy_outbox_files():
-            ok = send_legacy_outbox_file(filename) and ok
+        if transport_mode() != "cloud":
+            for filename in compatible_legacy_outbox_files():
+                ok = send_legacy_outbox_file(filename) and ok
         return 0 if ok else 1
 
     try:
@@ -1514,6 +2804,13 @@ def main():
 
     threading.Thread(target=sender_loop, daemon=True).start()
     button = Button(BUTTON_PIN)
+    if transport_mode() == "cloud":
+        from messagebox.cloud_update import button_ready, confirmation, install_announcer
+        button_ready(button)
+        confirmation.on_press = start_update_press_cue
+        confirmation.on_hold = start_update_hold_cue
+        confirmation.on_confirmed = start_update_cue
+        threading.Thread(target=install_announcer.run, daemon=True).start()
     led = LED(LED_PIN)
     apply_master_volume()
     if button.is_pressed:
@@ -1526,53 +2823,47 @@ def main():
         f'after_listening={startup_settings["after_listening"]} '
         f"routing_mode={routing_mode()} "
         f"({len(queued())} queued, "
-        f"{len(outbox_store.jobs()) + len(legacy_outbox_files())} unsent)"
+        f"{len(outbox_store.jobs()) + len(compatible_legacy_outbox_files())} unsent)"
     )
     announce_runtime_ready()
+    runtime_readiness()
 
     while True:
         wait_for_stable_open()
         while not button.is_pressed:
             time.sleep(POLL_S)
+            runtime_readiness()
+            if transport_mode() == "cloud":
+                from messagebox.cloud_update import confirmation
+                confirmation.idle(button, play_update_sound)
             apply_master_volume()
             maybe_play_send_success()
+            maybe_play_cloud_sound()
+            if transport_mode() == "cloud" and button.is_pressed:
+                break
+            if transport_mode() == "cloud":
+                if cloud_setup.SetupGuide().speak(play_setup_line, quiet=quiet_hours()):
+                    discard_held_playback_press(lambda: button.is_pressed, wait_for_stable_open)
+            try:
+                maybe_play_connectivity()
+                announce_all_set()
+                announce_update_installed()
+                maybe_play_still_trying()
+                unavailable_events.available("sound_moments")
+            except (OSError, ValueError, CloudRuntimeError, subprocess.SubprocessError):
+                if unavailable_events.unavailable("sound_moments"):
+                    log_event("sound_moment_unavailable")
             if button.is_pressed:
                 break
             play_pending_nfc_announcement()
+            if transport_mode() == "cloud" and not _recording and not _guided_active and not button.is_pressed:
+                cloud_runtime.play_reactions(lambda path: play_idle_sound(path, 60))
             maybe_play_pending_listened()
             refresh_led()
             maybe_manual_ring()
             maybe_ring()
         closed_at = time.monotonic()
-        solid = True
-        while time.monotonic() - closed_at < CONFIRM_PRESS_S:
-            time.sleep(POLL_S)
-            if not button.is_pressed:
-                solid = False
-                break
-        if not solid:
-            continue
-        interaction_settings = caregiver_settings()
-        try:
-            if interaction_settings["recording_mode"] == "tap_review":
-                # The session starts from this press only after its release; it can
-                # never be carried into incoming audio, countdown, or recording.
-                acknowledge_guided_press("start_session")
-                wait_for_stable_open()
-                run_guided_once(interaction_settings)
-            else:
-                record_and_send_legacy(interaction_settings, pressed_at=closed_at)
-        except Exception as exc:
-            log(f"button flow error: {exc}")
-            log_event(
-                "button_flow_error",
-                recording_mode=interaction_settings["recording_mode"],
-                error=type(exc).__name__,
-            )
-            if not _guided_active:
-                beep("fail")
-        finally:
-            refresh_led(force=True)
+        handle_confirmed_press(closed_at)
 
 
 if __name__ == "__main__":

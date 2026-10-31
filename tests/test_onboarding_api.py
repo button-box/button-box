@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio, assert_padded_playback
 import io
 import json
 import subprocess
@@ -10,6 +11,7 @@ from urllib.parse import urlencode
 from unittest import mock
 
 from unittest.mock import patch
+from messagebox import software
 
 from messagebox.onboarding.app import create_app
 from messagebox.onboarding.comitup_adapter import ComitupError
@@ -313,6 +315,7 @@ def header(response, name):
 
 class OnboardingAPITests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.clock = Clock()
         self.state_path = Path(self.directory.name) / "state.json"
@@ -338,6 +341,53 @@ class OnboardingAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_wacli_setup_footer_uses_cached_release_without_cloud_calls(self):
+        release = Path(self.directory.name) / "release.json"
+        with patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"}), patch.object(
+            software, "RELEASE_FILE", release
+        ), patch("messagebox.onboarding.app.CloudClaim") as cloud:
+            try:
+                for payload, expected in (
+                    (None, None),
+                    ('{"version":"bad version","commit":"abc1234"}', None),
+                    ('{"version":"0.3.0","commit":"abc1234abcdef"}', b"Software 0.3.0 (abc1234)"),
+                ):
+                    if payload is not None:
+                        release.write_text(payload)
+                    software.installed_release.cache_clear()
+                    app = create_app(
+                        mode="HOTSPOT", config={"device_id": "A7K2"}, state_store=self.store,
+                        adapter=self.adapter, connectivity_checker=self.checker,
+                        caregiver_settings=self.settings,
+                    )
+                    release.write_text('{"version":"0.3.1","commit":"def5678"}')
+                    response = WSGIHarness(app).request("GET", "/")
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertNotIn(b"__SOFTWARE_FOOTER__", response["body"])
+                    self.assertNotIn(b"Software 0.3.1", response["body"])
+                    if expected:
+                        self.assertIn(expected, response["body"])
+                    else:
+                        self.assertNotIn(b'class="software-version"', response["body"])
+                    self.assertIn(b'id="whatsapp-form"', response["body"])
+                cloud.assert_not_called()
+                self.assertEqual(self.checker.calls, 0)
+            finally:
+                software.installed_release.cache_clear()
+
+    def test_each_new_ringtone_preview_uses_the_bundled_asset(self):
+        from messagebox.settings import RINGTONES
+        root = Path(__file__).resolve().parents[1] / "sounds"
+        with patch("messagebox.settings.APP_DIR", root), patch("messagebox.onboarding.app.subprocess.run") as run:
+            for ringtone_id, filename in RINGTONES.items():
+                with self.subTest(ringtone_id=ringtone_id):
+                    run.side_effect = lambda command, **kwargs: assert_padded_playback(
+                        self, command[-1], root / "ringtones" / filename)
+                    response = self.client.json("POST", "/api/ringtone-preview",
+                        {"ringtone_id": ringtone_id}, headers={"Origin": f"http://{HOST}"})
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
 
     def test_ringtone_preview_reports_speaker_success_and_failure(self):
         ringtone = Path(self.directory.name) / "ringtone.wav"
@@ -454,6 +504,18 @@ class OnboardingAPITests(unittest.TestCase):
         response = self.client.request("GET", "/api/state")
         return response, json.loads(response["body"])
 
+    def test_root_reads_color_per_request_without_changing_cached_html(self):
+        from messagebox.identity import BOX_COLORS
+
+        with mock.patch("messagebox.onboarding.app.read_box_color") as color_reader:
+            for color in BOX_COLORS:
+                with self.subTest(color=color):
+                    color_reader.return_value = color
+                    response = self.client.request("GET", "/")
+                    self.assertEqual(response["status"], "200 OK")
+                    self.assertIn(f'<html lang="en" data-box-color="{color}">'.encode(), response["body"])
+                    self.assertEqual(response["body"].count(b"data-box-color="), 1)
+
     def test_root_is_local_asset_page_with_security_headers(self):
         response = self.client.request("GET", "/")
         self.assertEqual(response["status"], "200 OK")
@@ -465,6 +527,60 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertEqual(header(response, "X-Frame-Options"), "DENY")
         self.assertNotIn(b"<style", response["body"])
         self.assertNotIn(b"<script>", response["body"])
+
+    def test_wifi_step_points_cloud_boxes_to_the_setup_card(self):
+        local = self.client.request("GET", "/")["body"]
+        self.assertIn(b'id="copy-setup-url"', local)
+        self.assertNotIn(b"scan the QR code on your setup card", local)
+        with mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "cloud"}):
+            app = create_app(
+                mode="HOTSPOT", config={"device_id": "A7K2"}, state_store=self.store,
+                adapter=self.adapter, connectivity_checker=self.checker,
+                caregiver_settings=self.settings, clock=self.clock,
+                sleep=self.sleeps.append, handoff_delay=0.25, start_claim_watcher=False,
+            )
+            cloud = WSGIHarness(app).request("GET", "/")["body"]
+        self.assertIn(b"Choose Wi-Fi for your box", cloud)
+        self.assertIn(b"scan the QR code on your setup card", cloud)
+        self.assertNotIn(b'id="copy-setup-url"', cloud)
+        self.assertNotIn(b"Copy this address first", cloud)
+        self.assertNotIn(b"SETUP-", cloud)
+
+    def test_cloud_handoff_words_do_not_change_wacli_setup(self):
+        reconnect = b"When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi."
+        for transport in ("cloud", "wacli"):
+            with self.subTest(transport=transport), mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": transport}):
+                app = create_app(
+                    mode="HOTSPOT", config={"device_id": "A7K2"},
+                    state_store=StateStore(Path(self.directory.name) / (transport + "-wording.json")),
+                    adapter=self.adapter, connectivity_checker=self.checker,
+                    caregiver_settings=self.settings, clock=self.clock,
+                    sleep=self.sleeps.append, handoff_delay=0.25, start_claim_watcher=False,
+                )
+                client = WSGIHarness(app)
+                page = client.request("GET", "/")["body"]
+                handoff = client.form("POST", "/wifi/connect", {
+                    "ssid": "Home", "security": "protected", "password": "synthetic-password",
+                }, close=False)
+                handoff["iterable"].close()
+                self.assertIn("Connecting…".encode(), handoff["body"])
+                self.assertIn("This usually takes 1–2 minutes. Keep the box plugged in. It talks when it's ready.".encode(), handoff["body"])
+                if transport == "cloud":
+                    for body in (page, handoff["body"]):
+                        self.assertIn(b"Connected!", body)
+                        self.assertIn(reconnect, body)
+                        self.assertIn(b"Go back to WhatsApp.", body)
+                        self.assertIn(b"scan the QR code on your setup card", body)
+                    self.assertIn(b"checkWifiHandoff", handoff["body"])
+                else:
+                    self.assertIn(b"Choose Wi-Fi for your box", page)
+                    self.assertIn(b"Copy this address first. Connecting will close the setup hotspot and may close this page.", page)
+                    self.assertIn(b"Join the same Wi-Fi", handoff["body"])
+                    self.assertIn(b"Join the Wi-Fi you chose for your Button Box, then open this link to continue:", handoff["body"])
+                    for body in (page, handoff["body"]):
+                        self.assertNotIn(reconnect, body)
+                        self.assertNotIn(b"Connected!", body)
+                        self.assertNotIn(b"checkWifiHandoff", body)
 
     def test_clipboard_asset_is_served_by_setup_and_runtime(self):
         from messagebox.dashboard.app import DASHBOARD_STATIC
@@ -610,6 +726,7 @@ class OnboardingAPITests(unittest.TestCase):
             if key not in {"version", "revision"}
         }
         candidate["max_recording_seconds"] = 120
+        candidate["swoosh_sound_enabled"] = False
         saved = self.client.json(
             "PUT",
             "/api/settings",
@@ -618,6 +735,8 @@ class OnboardingAPITests(unittest.TestCase):
             headers={"Origin": "http://10.41.0.1"},
         )
         self.assertEqual(saved["status"], "200 OK")
+        loaded_again = json.loads(self.client.request("GET", "/api/settings", host="10.41.0.1")["body"])["settings"]
+        self.assertFalse(loaded_again["swoosh_sound_enabled"])
         conflict = self.client.json(
             "PUT",
             "/api/settings",
@@ -740,6 +859,13 @@ class OnboardingAPITests(unittest.TestCase):
         )
         self.assertEqual(response["status"], "202 Accepted")
         self.assertIn(b"messagebox-handoff", response["body"])
+        self.assertIn(b"--background: #fbf9f4", response["body"])
+        self.assertIn(b"data-box-color=", response["body"])
+        self.assertIn(b"Join the Wi-Fi you chose for your Button Box", response["body"])
+        self.assertNotIn(b"setup card", response["body"])
+        self.assertNotIn(b"scan the QR", response["body"])
+        self.assertNotIn(b"checkWifiHandoff", response["body"])
+        self.assertNotIn(b"__STYLES__", response["body"])
         self.assertIn(f'href="http://{HOST}/"'.encode(), response["body"])
         self.assertEqual(self.adapter.calls, [])
         self.assertNotIn(password, self.state_path.read_text(encoding="utf-8"))

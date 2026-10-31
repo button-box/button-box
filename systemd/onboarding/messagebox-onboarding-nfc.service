@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box private NFC setup worker
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 PartOf=comitup.service
@@ -10,7 +11,7 @@ Conflicts=messagebox-nfc.service
 Type=simple
 User=messagebox
 Group=messagebox-onboarding
-SupplementaryGroups=messagebox i2c gpio audio
+SupplementaryGroups=messagebox messagebox-settings i2c gpio audio
 WorkingDirectory=/opt/messagebox
 Environment=HOME=/var/lib/messagebox
 Environment=MSGBOX_NFC_ONBOARDING_SOCKET_GROUP=messagebox-onboarding
@@ -27,6 +28,7 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/etc/messagebox-onboarding
+ReadWritePaths=/run/messagebox-speaker
 ReadWritePaths=/var/lib/messagebox /run/messagebox-onboarding-nfc
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes

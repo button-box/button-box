@@ -9,6 +9,7 @@ import math
 import os
 import socket
 import socketserver
+from messagebox import speaker
 import subprocess
 import tempfile
 import threading
@@ -16,6 +17,8 @@ import time
 import wave
 from pathlib import Path
 
+from messagebox import sound_pack
+from messagebox.settings import SettingsReader
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.nfc import PN532I2CReader
 from messagebox.nfc_state import NfcError, normalize_uid
@@ -76,91 +79,68 @@ def _load_state(path, *, clock=time.time):
     except FileNotFoundError:
         return _default_state()
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-        raise NfcOnboardingError("NFC setup state is unavailable") from exc
+        raise NfcOnboardingError("Family card setup is unavailable") from exc
     if not isinstance(document, dict) or set(document) != set(_default_state()):
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     if document["version"] != STATE_VERSION or document["status"] not in {
         "idle", *ACTIVE_STATUSES
     }:
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     if not isinstance(document["reassign_allowed"], bool) or not isinstance(
         document["sound_warning"], bool
     ):
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     uid = document["pending_uid"]
     captured = document["captured_at"]
     if uid is not None:
         try:
             document["pending_uid"] = normalize_uid(uid)
         except NfcError as exc:
-            raise NfcOnboardingError("NFC setup state is unavailable") from exc
+            raise NfcOnboardingError("Family card setup is unavailable") from exc
         if type(captured) not in (int, float) or not math.isfinite(captured) or captured < 0:
-            raise NfcOnboardingError("NFC setup state is unavailable")
+            raise NfcOnboardingError("Family card setup is unavailable")
         if clock() - captured > PENDING_TTL_S:
             document = _default_state()
             document["status"] = "waiting"
     elif captured is not None:
-        raise NfcOnboardingError("NFC setup state is unavailable")
+        raise NfcOnboardingError("Family card setup is unavailable")
     for key in ("recipient_label", "recipient_kind"):
         if document[key] is not None and not isinstance(document[key], str):
-            raise NfcOnboardingError("NFC setup state is unavailable")
+            raise NfcOnboardingError("Family card setup is unavailable")
     return document
 
 
 class TonePlayer:
-    """Generate simple local tones and play them without private audio assets."""
+    """Play validated bundled card cues; report failure without synthesis."""
 
-    def __init__(self, directory="/run/messagebox-onboarding-nfc", *, run=subprocess.run):
-        self.directory = Path(directory)
+    def __init__(self, directory=None, *, run=subprocess.run):
+        self.directory = Path(directory) if directory else sound_pack.SOUND_DIR / "cues"
         self.run = run
-
-    @staticmethod
-    def _write_tone(path, frequencies):
-        import math as _math
-        import struct
-
-        rate = 16000
-        samples = bytearray()
-        for frequency, duration in frequencies:
-            count = int(rate * duration)
-            for index in range(count):
-                envelope = min(1.0, index / 80, (count - index) / 80)
-                value = int(16000 * envelope * _math.sin(2 * _math.pi * frequency * index / rate))
-                samples.extend(struct.pack("<h", value))
-            samples.extend(b"\x00\x00" * int(rate * 0.04))
-        with wave.open(os.fspath(path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(rate)
-            output.writeframes(samples)
+        self.settings = SettingsReader()
 
     def __call__(self, kind):
-        self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / ("read-v3.wav" if kind == "read" else f"{kind}-v2.wav")
-        if not path.exists():
-            if kind == "read":
-                # Match the runtime button acknowledgement exactly, including
-                # gain and encoding. Keep setup's separate runtime directory.
-                self.run(
-                    ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-                     "-i", "sine=frequency=880:duration=0.40",
-                     "-filter:a", "volume=12dB", os.fspath(path)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                )
-            else:
-                self._write_tone(path, [(1320, 0.14), (1760, 0.22)])
-            os.chmod(path, 0o600)
+        name = {"read": "card", "success": "card_saved"}[kind]
+        path = self.directory / f"cue-{name}.wav"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("card cue missing/invalid")
+        try:
+            with wave.open(str(path), "rb") as sound:
+                if sound.getnframes() <= 0 or sound.getnchannels() != 1:
+                    raise ValueError("card cue missing/invalid")
+        except (EOFError, wave.Error) as exc:
+            raise ValueError("card cue missing/invalid") from exc
+        settings = self.settings.snapshot()
+        self.run(["amixer", "-q", "-c", os.environ.get("MSGBOX_SPEAKER_CARD", "Device"),
+                  "sset", os.environ.get("MSGBOX_SPEAKER_CONTROL", "PCM"),
+                  f'{settings["master_volume_percent"]}%', "unmute"], check=True,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         device = os.environ.get("MSGBOX_SPK_DEV", "plughw:CARD=Device,DEV=0")
-        self.run(
-            ["aplay", "-q", "-D", device, os.fspath(path)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
+        speaker.run(["aplay", "-q", "-D", device, os.fspath(path)], runner=self.run, check=True,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        if kind == "success":
+            voice = sound_pack.voice_path("card-saved", settings.get("voice_pack"))
+            speaker.run(["aplay", "-q", "-D", device, os.fspath(voice)], runner=self.run, check=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
 
 class NfcOnboardingEngine:
@@ -276,7 +256,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] != "already_paired" or state["pending_uid"] is None:
-                raise NfcOnboardingError("There is no mapped tag to reassign")
+                raise NfcOnboardingError("There is no saved card to reassign")
             state["status"] = "choose"
             state["reassign_allowed"] = True
             self._write(state)
@@ -286,7 +266,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] != "choose" or state["pending_uid"] is None:
-                raise NfcOnboardingError("Scan a tag before choosing a recipient")
+                raise NfcOnboardingError("Present a card before choosing a person")
             existing = self.contacts.resolve_card(state["pending_uid"])
             if existing is not None and not state["reassign_allowed"]:
                 raise NfcOnboardingError("Confirm reassignment first")
@@ -306,7 +286,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["status"] not in {"success", "already_paired"}:
-                raise NfcOnboardingError("Finish the current tag first")
+                raise NfcOnboardingError("Finish pairing the current card first")
             state = _default_state()
             state["status"] = "waiting"
             self._write(state)
@@ -322,7 +302,7 @@ class NfcOnboardingEngine:
         with self._lock:
             state = self._state()
             if state["pending_uid"] is not None or state["status"] == "choose":
-                raise NfcOnboardingError("Finish or cancel the detected tag first")
+                raise NfcOnboardingError("Finish or cancel pairing the detected card first")
             state = _default_state()
             self._write(state)
             return self.public_state(state)
@@ -393,18 +373,18 @@ class NfcOnboardingClient:
             connection.sendall(encoded)
             response = connection.makefile("rb").readline(MAX_MESSAGE_BYTES + 1)
         if len(response) > MAX_MESSAGE_BYTES:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         try:
             document = json.loads(response)
         except (ValueError, json.JSONDecodeError) as exc:
-            raise NfcOnboardingError("NFC setup response is invalid") from exc
+            raise NfcOnboardingError("Family card setup response is invalid") from exc
         if not isinstance(document, dict):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if document.get("ok") is not True:
-            raise NfcOnboardingError(str(document.get("error") or "NFC setup is unavailable"))
+            raise NfcOnboardingError(str(document.get("error") or "Family card setup is unavailable"))
         state = document.get("state")
         if not isinstance(state, dict):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         return state
 
     def status(self):
@@ -436,7 +416,7 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         raw = self.rfile.readline(MAX_MESSAGE_BYTES + 1)
         if len(raw) > MAX_MESSAGE_BYTES:
-            return self._respond({"ok": False, "error": "NFC setup request is invalid"})
+            return self._respond({"ok": False, "error": "Family card setup request is invalid"})
         try:
             request = json.loads(raw)
             if not isinstance(request, dict):
@@ -456,10 +436,10 @@ class _Handler(socketserver.StreamRequestHandler):
             elif action == "assign" and set(request) == {"action", "token"}:
                 state = self.server.engine.assign(request["token"])
             else:
-                raise NfcOnboardingError("NFC setup request is invalid")
+                raise NfcOnboardingError("Family card setup request is invalid")
             self._respond({"ok": True, "state": state})
         except (ContactError, NfcError, NfcOnboardingError, RecipientError, OSError, ValueError, json.JSONDecodeError):
-            self._respond({"ok": False, "error": "NFC setup could not be updated"})
+            self._respond({"ok": False, "error": "Family card setup could not be updated"})
 
     def _respond(self, document):
         self.wfile.write(json.dumps(document, separators=(",", ":")).encode() + b"\n")
@@ -477,7 +457,7 @@ def serve(socket_path=NFC_ONBOARDING_SOCKET_PATH):
     path = Path(socket_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
-        raise NfcOnboardingError("NFC setup socket is unsafe")
+        raise NfcOnboardingError("Family card setup is unavailable")
     path.unlink(missing_ok=True)
     engine = NfcOnboardingEngine()
     server = _Server(os.fspath(path), engine)

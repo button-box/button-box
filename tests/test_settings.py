@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import tempfile
@@ -5,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from messagebox.settings import RevisionConflict, SettingsError, SettingsStore, defaults
+from messagebox.settings import LEGACY_RINGTONES, RINGTONES, RevisionConflict, SettingsError, SettingsStore, defaults, validate
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -29,8 +30,6 @@ class SettingsStoreTests(unittest.TestCase):
         store = SettingsStore(
             self.path,
             environ={
-                "MSGBOX_GUIDED_REPLY": "0",
-                "MSGBOX_AUTO_RECORD_AFTER_INCOMING": "0",
                 "MSGBOX_MAX_SECONDS": "120",
                 "MSGBOX_RING_WAV": "/opt/messagebox/ringtones/ring4.wav",
                 "MSGBOX_SPEAKER_VOLUME": "65%",
@@ -42,13 +41,215 @@ class SettingsStoreTests(unittest.TestCase):
         )
         document, warning = store.load()
         self.assertFalse(warning)
-        self.assertEqual(document["recording_mode"], "hold_release")
+        self.assertEqual(document["recording_mode"], "tap_review")
         self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 120)
-        self.assertEqual(document["ringtone_id"], "cuckoo_clock")
+        self.assertEqual(document["ringtone_id"], "hello_piano")
         self.assertEqual(document["master_volume_percent"], 65)
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "21:00", "end": "06:00"})
         self.assertFalse(document["nfc_confirmation_beep"])
+        self.assertTrue(document["swoosh_sound_enabled"])
+
+    def test_fresh_store_uses_new_defaults_and_saved_choices_are_unchanged(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        fresh, warning = store.load()
+        self.assertFalse(warning)
+        self.assertEqual((fresh["recording_mode"], fresh["after_listening"]),
+                         ("tap_review", "play_only"))
+        saved = {**fresh, "revision": 7, "recording_mode": "tap_review",
+                 "after_listening": "invite_reply"}
+        self.path.write_text(json.dumps(saved), encoding="utf-8")
+        before = self.path.read_bytes()
+        loaded, warning = SettingsStore(self.path, environ={"TZ": "UTC"}).load()
+        self.assertFalse(warning)
+        self.assertEqual(loaded, saved)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_old_settings_document_keeps_existing_send_cue_enabled(self):
+        initial = defaults({"TZ": "UTC"})
+        initial.pop("swoosh_sound_enabled")
+        self.path.write_text(json.dumps(initial), encoding="utf-8")
+        document, warning = SettingsStore(self.path, environ={"TZ": "UTC"}).load()
+        self.assertFalse(warning)
+        self.assertTrue(document["swoosh_sound_enabled"])
+        self.assertEqual(document["revision"], initial["revision"])
+
+    def test_legacy_saved_modes_and_legacy_updates_keep_their_behavior(self):
+        for legacy, talk, review in (("tap_review", "tap", True), ("hold_release", "hold", False)):
+            with self.subTest(legacy=legacy):
+                saved = {key: value for key, value in defaults({}).items()
+                         if key not in {"talk_mode", "review_before_send"}}
+                saved.update(recording_mode=legacy, revision=7)
+                self.path.write_text(json.dumps(saved))
+                before = self.path.read_bytes()
+                store = SettingsStore(self.path, environ={})
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual((loaded["talk_mode"], loaded["review_before_send"]), (talk, review))
+                self.assertEqual(loaded["revision"], 7)
+                self.assertEqual(self.path.read_bytes(), before)
+                updated = store.update(self.candidate(saved), 7, desired_revision=9)
+                self.assertEqual((updated["talk_mode"], updated["review_before_send"]), (talk, review))
+                self.assertEqual(store.load(), (updated, False))
+
+    def test_all_new_combinations_round_trip_and_override_legacy_hint(self):
+        store = SettingsStore(self.path, environ={})
+        for talk in ("tap", "hold"):
+            for review in (False, True):
+                with self.subTest(talk=talk, review=review):
+                    initial, _ = store.load()
+                    candidate = self.candidate(initial, talk_mode=talk, review_before_send=review)
+                    candidate.pop("recording_mode")
+                    saved = store.update(candidate, initial["revision"])
+                    self.assertEqual((saved["talk_mode"], saved["review_before_send"]), (talk, review))
+                    self.assertEqual(saved["recording_mode"], "tap_review" if talk == "tap" else "hold_release")
+                    self.assertEqual(store.load(), (saved, False))
+                    opposite = "hold_release" if talk == "tap" else "tap_review"
+                    self.assertEqual(validate({**saved, "recording_mode": opposite}), saved)
+
+    def test_unrecoverable_saved_settings_keep_legacy_fallback_with_attention(self):
+        self.path.write_text("not json")
+        document, warning = SettingsStore(self.path, environ={}).load()
+        self.assertTrue(warning)
+        self.assertEqual((document["talk_mode"], document["review_before_send"]), ("hold", False))
+        self.assertEqual(self.path.read_text(), "not json")
+
+    def test_new_settings_reject_invalid_and_partial_known_values(self):
+        baseline = defaults({})
+        for changes in ({"talk_mode": "other"}, {"talk_mode": []},
+                        {"review_before_send": 1}, {"review_before_send": "false"},
+                        {"recording_mode": None}):
+            with self.subTest(changes=changes), self.assertRaises(SettingsError):
+                validate({**baseline, **changes})
+        for missing in ("talk_mode", "review_before_send"):
+            candidate = {key: value for key, value in baseline.items() if key != missing}
+            with self.subTest(missing=missing), self.assertRaises(SettingsError):
+                validate(candidate)
+
+    def test_each_legacy_ringtone_loads_and_cloud_update_maps_without_revision_loss(self):
+        for old_id in LEGACY_RINGTONES:
+            with self.subTest(old_id=old_id):
+                saved = {**defaults({"TZ": "UTC"}), "revision": 7,
+                         "ringtone_id": old_id, "master_volume_percent": 63}
+                self.path.write_text(json.dumps(saved))
+                store = SettingsStore(self.path, environ={"TZ": "UTC"})
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(loaded, {**saved, "ringtone_id": "hello_piano"})
+                updated = store.update(self.candidate(loaded, ringtone_id=old_id),
+                                       7, desired_revision=9)
+                self.assertEqual(updated["ringtone_id"], "hello_piano")
+                self.assertEqual(updated["revision"], 9)
+                self.assertEqual(SettingsStore(self.path).load(), (updated, False))
+
+    def test_each_new_ringtone_round_trips_and_unknown_id_is_rejected(self):
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for ringtone_id in RINGTONES:
+            current, _warning = store.load()
+            saved = store.update(self.candidate(current, ringtone_id=ringtone_id),
+                                 current["revision"])
+            self.assertEqual(SettingsStore(self.path).load(), (saved, False))
+        with self.assertRaises(SettingsError):
+            validate({**saved, "ringtone_id": "unknown"})
+
+    def test_voice_pack_migrates_defaults_normalizes_unknown_and_round_trips(self):
+        from messagebox.settings import VOICE_PACKS
+        initial = defaults({"TZ": "UTC"})
+        self.assertEqual(initial["voice_pack"], "buttonbox")
+        old = {key: value for key, value in initial.items() if key != "voice_pack"}
+        self.assertEqual(validate(old), initial)
+        for unknown in ("unavailable", None, [], 7):
+            self.assertEqual(validate({**initial, "voice_pack": unknown})["voice_pack"], "jessica")
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for pack in VOICE_PACKS:
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, voice_pack=pack), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertEqual(saved["voice_pack"], pack)
+
+    def test_cloud_and_wacli_fresh_defaults_and_saved_legacy_voice_rules(self):
+        for mode in ('cloud', 'wacli'):
+            with self.subTest(mode=mode):
+                path = self.path.with_name(mode + '.json')
+                store = SettingsStore(path, environ={'MSGBOX_TRANSPORT': mode, 'TZ': 'UTC'})
+                fresh, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(fresh['voice_pack'], 'buttonbox')
+                selected = store.update(self.candidate(fresh, voice_pack='jessica'), 0)
+                self.assertEqual(store.load(), (selected, False))
+                legacy = {key: value for key, value in selected.items() if key != 'voice_pack'}
+                path.write_text(json.dumps(legacy))
+                before = path.read_bytes()
+                loaded, warning = store.load()
+                self.assertFalse(warning)
+                self.assertEqual(loaded['voice_pack'], 'jessica' if mode == 'cloud' else 'buttonbox')
+                self.assertEqual(loaded['revision'], selected['revision'])
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_cloud_store_update_without_voice_keeps_current_choice(self):
+        store = SettingsStore(self.path, environ={'MSGBOX_TRANSPORT': 'cloud'})
+        fresh, _ = store.load()
+        selected = store.update(self.candidate(fresh, voice_pack='jessica'), 0)
+        candidate = self.candidate(selected, master_volume_percent=41)
+        candidate.pop('voice_pack')
+        updated = store.update(candidate, selected['revision'])
+        self.assertEqual(updated['voice_pack'], 'jessica')
+        self.assertEqual(store.load(), (updated, False))
+
+    def test_swoosh_setting_requires_boolean(self):
+        document = defaults({"TZ": "UTC"})
+        with self.assertRaises(SettingsError):
+            validate({**document, "swoosh_sound_enabled": 1})
+
+    def test_card_name_prompt_defaults_migrates_and_round_trips_with_future_keys(self):
+        initial = defaults({"TZ": "UTC"})
+        self.assertIs(initial["card_name_prompt"], True)
+        old = {key: value for key, value in initial.items() if key != "card_name_prompt"}
+        self.assertEqual(validate(old), initial)
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for enabled in (False, True):
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, card_name_prompt=enabled, future_key=True), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertIs(saved["card_name_prompt"], enabled)
+        for invalid in (1, "true", None, []):
+            with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
+                validate({**initial, "card_name_prompt": invalid})
+
+    def test_message_voice_intro_defaults_off_migrates_and_requires_boolean(self):
+        initial = defaults({"TZ": "UTC"})
+        self.assertIs(initial["announce_messages_voice"], False)
+        old = {key: value for key, value in initial.items() if key != "announce_messages_voice"}
+        self.assertEqual(validate(old), initial)  # Settings saved by v0.3.10 and earlier.
+        store = SettingsStore(self.path, environ={"TZ": "UTC"})
+        for enabled in (True, False):
+            current, _ = store.load()
+            saved = store.update(self.candidate(current, announce_messages_voice=enabled), current["revision"])
+            self.assertEqual(store.load(), (saved, False))
+            self.assertIs(saved["announce_messages_voice"], enabled)
+        # The local (wacli) settings form does not send the key; it stays off.
+        current, _ = store.load()
+        local = {key: value for key, value in self.candidate(current).items() if key != "announce_messages_voice"}
+        self.assertIs(store.update(local, current["revision"])["announce_messages_voice"], False)
+        for invalid in (1, "true", None, []):
+            with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
+                validate({**initial, "announce_messages_voice": invalid})
+
+    def test_unknown_keys_are_skipped_without_weakening_known_validation(self):
+        document = defaults({"TZ": "UTC"})
+        self.assertEqual(validate({**document, "future_setting": {"anything": True}}), document)
+        for changes in ({"master_volume_percent": 101}, {"timezone": "Invalid/Zone"},
+                        {"quiet_hours": {**document["quiet_hours"], "future_nested": True}},
+                        {"recording_mode": "unknown"}, {"swoosh_sound_enabled": 1}):
+            with self.subTest(changes=changes), self.assertRaises(SettingsError):
+                validate({**document, "future_setting": True, **changes})
+
+    def test_ignored_names_obey_acknowledgement_limits(self):
+        from messagebox.settings import ignored_settings
+        document = {**defaults({}), **{f"future_{index:02d}": True for index in range(40)},
+                    "invalid-name": True, "a" * 65: True}
+        self.assertEqual(ignored_settings(document), [f"future_{index:02d}" for index in range(32)])
+        self.assertEqual(validate(document), defaults({}))
 
     def test_revision_conflict_never_overwrites_newer_settings(self):
         store = SettingsStore(self.path, environ={"TZ": "UTC"})
@@ -113,9 +314,9 @@ class SettingsStoreTests(unittest.TestCase):
     def test_safe_defaults_match_caregiver_contract(self):
         document = defaults({"TZ": "UTC"})
         self.assertEqual(document["recording_mode"], "tap_review")
-        self.assertEqual(document["after_listening"], "invite_reply")
+        self.assertEqual(document["after_listening"], "play_only")
         self.assertEqual(document["max_recording_seconds"], 60)
-        self.assertEqual(document["ringtone_id"], "ding_dong")
+        self.assertEqual(document["ringtone_id"], "hello_piano")
         self.assertEqual(document["arrival_signal"], "ring_and_lamp")
         self.assertEqual(document["quiet_hours"], {"enabled": True, "start": "22:00", "end": "07:00"})
 

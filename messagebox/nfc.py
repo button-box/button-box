@@ -8,15 +8,19 @@ import json
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
+from messagebox import sound_pack
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.cloud_runtime import CONTACTS_FILE as CLOUD_CONTACTS_FILE
 from messagebox.nfc_state import (
     AnnouncementStore,
     DEFAULT_ENROLLMENT_TTL_S,
     EnrollmentStore,
     NfcError,
     NfcRouter,
+    REANNOUNCE_COOLDOWN_S,
     SelectionStore,
     normalize_uid,
     public_enrollment,
@@ -30,7 +34,10 @@ from messagebox.runtime_paths import (
 )
 
 
-UNKNOWN_TOKEN_WAV = os.environ.get("MSGBOX_UNKNOWN_TOKEN_WAV", "")
+def unknown_token_wav():
+    """Resolve per tap so a voice pack change applies without a service restart."""
+    override = os.environ.get("MSGBOX_UNKNOWN_TOKEN_WAV")
+    return override if override is not None else str(sound_pack.voice_path("card-unknown"))
 REMOVAL_GRACE_S = float(os.environ.get("MSGBOX_NFC_REMOVAL_GRACE_S", "0.8"))
 REFRESH_S = float(os.environ.get("MSGBOX_NFC_REFRESH_S", "0.75"))
 READ_TIMEOUT_S = float(os.environ.get("MSGBOX_NFC_READ_TIMEOUT_S", "0.2"))
@@ -84,16 +91,16 @@ class Announcer:
     def __init__(self, store=None):
         self.store = store or AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
 
-    def announce(self, result):
+    def announce(self, result, *, card_switch=False):
         if not result.announce or result.uid is None:
             return
         if result.contact is not None:
             prompt = result.contact.get("card_clip", "")
         elif result.action == "unknown":
-            prompt = UNKNOWN_TOKEN_WAV
+            prompt = unknown_token_wav()
         else:
             return
-        self.store.put(action=result.action, uid=result.uid, prompt=prompt)
+        self.store.put(action=result.action, uid=result.uid, prompt=prompt, card_switch=card_switch)
 
 
 class NfcRuntime:
@@ -106,17 +113,64 @@ class NfcRuntime:
         *,
         removal_grace=REMOVAL_GRACE_S,
         refresh=REFRESH_S,
+        reannounce_cooldown=REANNOUNCE_COOLDOWN_S,
     ):
         self.router = router
         self.announcer = announcer
         self.removal_grace = removal_grace
         self.refresh = refresh
-        self.uid = None
+        self.reannounce_cooldown = reannounce_cooldown
+        self.uid, self.resuming_presence = self.router.selection.presentation()
         self.last_seen = None
         self.last_refresh = None
+        self.absent_since = None
+        self.last_presented_uid = self.router.announcements.last_presentation()
+
+    def _announce(self, result, now, *, previous_uid=None):
+        # Routing still sees every presentation; only repeated selection audio
+        # is suppressed. Enrollment feedback must always reach the audio owner.
+        if not result.announce:
+            # A held card resumes silently after restart, but the button must
+            # also retain its confirmation before the next recording press.
+            if result.action in {"refreshed", "recognized"}:
+                self.router.announcements.reuse_confirmation(
+                    result.uid, now=now, cooldown=self.reannounce_cooldown
+                )
+            return result
+        # Cloud reaction handoffs trigger sends, with their own per-message
+        # deduplication in the audio owner, rather than selecting a recipient.
+        reaction = (
+            os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+            and result.contact is not None
+            and result.contact["jid"].startswith("box:reaction_")
+        )
+        if (
+            result.action in {"selected", "recognized"}
+            and not reaction
+            and previous_uid in (None, result.uid)
+            and (
+                self.router.announcements.reuse_confirmation(
+                    result.uid, now=now, cooldown=self.reannounce_cooldown
+                ) or self.router.announcements.pending_for(result.uid)
+            )
+        ):
+            return replace(result, announce=False)
+        self.announcer.announce(result, card_switch=previous_uid not in (None, result.uid))
+        return result
 
     def observe(self, raw_uid, now):
         if raw_uid is None:
+            if self.last_seen is None and (self.resuming_presence or self.router.selection.presentation()[1]):
+                # A restarted reader must prove absence before rearming a card.
+                if self.absent_since is None:
+                    self.absent_since = now
+                if now - self.absent_since >= self.removal_grace:
+                    result = self.router.card_absent()
+                    self.uid = None
+                    self.resuming_presence = False
+                    self.absent_since = None
+                    return result
+                return None
             if (
                 self.uid is not None
                 and self.last_seen is not None
@@ -124,30 +178,34 @@ class NfcRuntime:
             ):
                 result = self.router.card_absent()
                 self.uid = self.last_seen = self.last_refresh = None
-                self.announcer.announce(result)
                 return result
             return None
+        self.absent_since = None
         uid = normalize_uid(raw_uid)
-        if self.uid != uid:
-            result = self.router.card_seen(uid, new_presentation=True)
+        if self.uid != uid or self.resuming_presence:
+            new_presentation = self.uid != uid and not (self.resuming_presence and self.uid is None)
+            result = self.router.card_seen(uid, new_presentation=new_presentation)
+            previous_uid = self.last_presented_uid
+            if previous_uid != uid:
+                self.router.announcements.record_presentation(uid)
+                self.last_presented_uid = uid
+            self.resuming_presence = False
             self.uid = uid
             self.last_seen = self.last_refresh = now
-            self.announcer.announce(result)
-            return result
+            return self._announce(result, now, previous_uid=previous_uid)
         self.last_seen = now
         if self.last_refresh is None or now - self.last_refresh >= self.refresh:
             result = self.router.card_seen(uid, new_presentation=False)
             self.last_refresh = now
             if result.action == "unknown":
                 return None
-            self.announcer.announce(result)
-            return result
+            return self._announce(result, now)
         return None
 
 
 def router(announcement_store=None):
     return NfcRouter(
-        ContactStore(CONTACTS_FILE),
+        ContactStore(CLOUD_CONTACTS_FILE if os.environ.get("MSGBOX_TRANSPORT") == "cloud" else CONTACTS_FILE),
         SelectionStore(NFC_SELECTION_FILE),
         EnrollmentStore(NFC_ENROLLMENT_FILE),
         announcement_store,
@@ -155,17 +213,19 @@ def router(announcement_store=None):
 
 
 def run_daemon():
-    if REMOVAL_GRACE_S <= 0 or REFRESH_S <= 0 or READ_TIMEOUT_S <= 0:
+    if (
+        REMOVAL_GRACE_S <= 0 or REFRESH_S <= 0 or READ_TIMEOUT_S <= 0
+        or not 0 < REANNOUNCE_COOLDOWN_S < float("inf")
+    ):
         raise NfcError("NFC timing values must be positive")
     announcement_store = AnnouncementStore(NFC_ANNOUNCEMENT_FILE)
     nfc_router = router(announcement_store)
     announcer = Announcer(announcement_store)
     runtime = NfcRuntime(nfc_router, announcer)
-    nfc_router.selection.clear()
-    announcement_store.clear()
+    announcement_store.clear(preserve_claimed=True)
     try:
         reader = hardware_reader()
-        recovered = nfc_router.reconcile_enrollment()
+        recovered = nfc_router.reconcile_enrollment(new_presentation=False)
         print("NFC reader ready: transport=i2c", flush=True)
         if recovered is not None:
             print(f"NFC enrolled: {recovered.contact['label']}", flush=True)
@@ -173,7 +233,7 @@ def run_daemon():
         while True:
             now = time.monotonic()
             if now - last_health >= HEALTH_INTERVAL_S:
-                mark_healthy()
+                mark_healthy(NFC_HEALTH_FILE)
                 last_health = now
             uid = reader.read()
             result = runtime.observe(
@@ -187,8 +247,7 @@ def run_daemon():
             Path(NFC_HEALTH_FILE).unlink()
         except FileNotFoundError:
             pass
-        nfc_router.selection.clear()
-        announcement_store.clear()
+        announcement_store.clear(preserve_claimed=True)
 
 
 def print_json(payload):

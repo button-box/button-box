@@ -14,6 +14,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+from messagebox.event_log import append_event
 from messagebox.contacts import ContactError, ContactStore
 from messagebox.runtime_paths import CONTACTS_FILE
 from messagebox.runtime_paths import QUEUE_DIR as DEFAULT_QUEUE_DIR
@@ -92,15 +93,13 @@ def log_event(**ev):
     """Append an analytics event (best-effort; never breaks the pipeline)."""
     try:
         ev["ts"] = time.time()
-        os.makedirs(os.path.dirname(EVENTS_FILE), exist_ok=True)
-        with open(EVENTS_FILE, "a") as f:
-            f.write(json.dumps(ev) + "\n")
+        append_event(EVENTS_FILE, ev)
     except Exception:
         print("event log error", flush=True)
-# EQ for the small boxy speaker: cut low-mid mud, lift presence/highs, then
-# normalize loudness. Set to "" to disable, or override with any ffmpeg -af chain.
+# Gentle presence and bounded peaks for the small speaker. Set to "" to disable,
+# or override with any ffmpeg -af chain.
 EQ_FILTER = os.environ.get("MSGBOX_EQ_FILTER",
-    "highpass=f=150,treble=g=6:f=3000,loudnorm=I=-16:TP=-1.5")
+    "highpass=f=100,equalizer=f=2500:t=q:w=1:g=2,loudnorm=I=-16:TP=-2:LRA=11:linear=true,alimiter=limit=0.79:level=disabled")
 STATE_FILE = str(STATE_DIR / "seen.json")
 _last_queue_ms = 0
 
@@ -201,7 +200,8 @@ def download_path(message):
     return output_path
 
 
-def queue_message(message, source_path):
+def queue_message(message, source_path, *, queue_dir=None):
+    queue_dir = QUEUE_DIR if queue_dir is None else os.fspath(queue_dir)
     media_type = str(message.get("MediaType") or "").strip().lower()
     if media_type == "video":
         source_size = os.path.getsize(source_path)
@@ -211,9 +211,12 @@ def queue_message(message, source_path):
         if duration is not None and duration > VIDEO_MAX_DURATION_S:
             raise MediaRejected("video exceeds the configured duration limit")
 
-    os.makedirs(QUEUE_DIR, exist_ok=True)
+    os.makedirs(queue_dir, exist_ok=True)
     # Millisecond prefix keeps the queue sorted oldest-first.
-    qwav = os.path.join(QUEUE_DIR, f"{next_queue_ms()}-{message['MsgID']}.wav")
+    queue_name = message.get("QueueFilename") or f"{next_queue_ms()}-{message['MsgID']}.wav"
+    if os.path.basename(queue_name) != queue_name or not queue_name.endswith(".wav"):
+        raise MediaRejected("invalid queue filename")
+    qwav = os.path.join(queue_dir, queue_name)
     qtmp = qwav + ".part"
     qmeta = qwav + ".json"
     qmeta_tmp = qmeta + ".part"
@@ -249,12 +252,20 @@ def queue_message(message, source_path):
                 "msgid": message["MsgID"],
                 "sender_jid": message.get("SenderJID"),
                 "media_type": media_type,
+                **message.get("CloudMetadata", {}),
             }, f, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
         os.replace(qmeta_tmp, qmeta)
         metadata_published = True
+        with open(qtmp, "rb") as audio:
+            os.fsync(audio.fileno())
         os.replace(qtmp, qwav)  # WAV appears only after routing metadata
+        directory = os.open(queue_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
         return qwav, duration
     except subprocess.TimeoutExpired:
         raise
@@ -335,6 +346,12 @@ def poll_once(seen, authorizations):
 
 
 def main():
+    transport = os.environ.get("MSGBOX_TRANSPORT", "wacli")
+    if transport == "cloud":
+        from messagebox.cloud_runtime import CloudRuntime
+        return CloudRuntime().run()
+    if transport != "wacli":
+        raise ValueError("unsupported message transport")
     seen = load_seen()
     print(f"messagebox poller up: seen={len(seen)}", flush=True)
     while True:
@@ -343,6 +360,8 @@ def main():
             # A normal listing initializes wacli.db even before an account is
             # linked, making the empty pairing destination look occupied.
             poll_once(seen, authorizations)
+            from messagebox.software import local_ready
+            local_ready('heartbeat')
         except Exception:
             print("poll error: processing failed", flush=True)
         time.sleep(POLL_S)

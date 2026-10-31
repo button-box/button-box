@@ -69,3 +69,12 @@ test("returning to recipient manager resumes a pending attempt", async () => {
   expect(h.timers.length).toBeGreaterThan(before);
   expect(h.status()).toContain("Hold a card");
 });
+
+test("connected boxes are labelled beside people in recipient and family card lists", () => {
+  const h = harness();
+  h.run('recipientsData = {recipients: [{token: "box-a", label: "Example Box", configured: true, available: true, is_default: false, kind: "box", card_count: 1}]}');
+  h.run('renderRecipientManager(recipientsData)');
+  const row = h.node("configured-recipient-list").children[0];
+  expect(row.children[0].children[0].textContent).toBe("Example Box (connected box)");
+  expect(row.children[0].children[1].textContent).toContain("1 family card");
+});

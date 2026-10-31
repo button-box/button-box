@@ -157,6 +157,7 @@ def migrate(
     target_wants=TARGET_WANTS,
     run=subprocess.run,
     trusted_uid=0,
+    lock_already_held=False,
 ):
     generator = _load_generator(generator_source, trusted_uid=trusted_uid)
     marker_before = _marker_fingerprint(marker)
@@ -175,7 +176,7 @@ def migrate(
     target_wants_before = _snapshot_directory(target_wants)
     all_links_before = _snapshot_directory(legacy_dir)
 
-    with _lock(lock, trusted_uid=trusted_uid):
+    with (contextlib.nullcontext() if lock_already_held else _lock(lock, trusted_uid=trusted_uid)):
         if generator.read_mode(marker, trusted_uid=trusted_uid) != mode:
             raise MigrationError("onboarding marker changed during migration preflight")
         _remove_link(legacy_paths["setup" if mode == "runtime" else "runtime"])

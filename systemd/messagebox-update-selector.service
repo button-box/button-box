@@ -1,0 +1,12 @@
+[Unit]
+Description=Bounded independent controller readiness and fallback
+After=messagebox-update-recovery.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+UMask=0022
+ExecStart=/usr/bin/python3 -I /usr/lib/messagebox-selector/selector.py check
+TimeoutStartSec=500
+TimeoutStopSec=10
+KillMode=control-group

@@ -24,7 +24,7 @@ From a clean, reviewed repository checkout on a computer that can currently
 reach the Pi over LAN or Ethernet, run:
 
 ```sh
-./scripts/provision-tailscale.sh admin@button-box-001.local
+./scripts/provision-tailscale.sh admin@REPLACE_WITH_VERIFIED_HOST
 ```
 
 The helper:
@@ -59,7 +59,7 @@ Confirm both the remote path and the original LAN fallback before shipping.
 The helper also prints a stable private dashboard URL such as:
 
 ```text
-https://button-box-001.example-tailnet.ts.net/
+https://REPLACE_WITH_VERIFIED_TAILNET_HOST/
 ```
 
 On a phone or computer signed in to the authorized tailnet, open that URL in a

@@ -1,9 +1,11 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box guided button during setup
 After=network-online.target sound.target messagebox-audio-detect.service
 Requires=messagebox-audio-detect.service
 Wants=network-online.target
 PartOf=messagebox-onboarding-voice.target
+PartOf=comitup.service
 Conflicts=messagebox-button.service
 
 [Service]
@@ -24,8 +26,7 @@ Environment=HOME=/var/lib/messagebox
 Environment=PYTHONPATH=/opt/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 Environment=GPIOZERO_PIN_FACTORY=lgpio
-Environment=MSGBOX_GUIDED_REPLY=1
-Environment=MSGBOX_AUTO_RECORD_AFTER_INCOMING=1
+Environment=MSGBOX_CLAIM_ONLY=1
 SupplementaryGroups=gpio audio messagebox-settings
 UMask=0077
 ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_MIC_CARD} sset ${MSGBOX_MIC_CONTROL} ${MSGBOX_MIC_GAIN} cap

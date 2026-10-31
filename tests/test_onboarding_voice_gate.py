@@ -40,6 +40,13 @@ class VoiceGateTests(unittest.TestCase):
             result = voice_gate.main(run=run)
         return result, calls
 
+    def test_voice_path_preserves_wacli_request_without_watching_cloud_ledger_directory(self):
+        unit = Path(__file__).resolve().parents[1] / 'systemd/onboarding/messagebox-onboarding-voice.path'
+        watched = [line for line in unit.read_text().splitlines() if line.startswith('PathChanged=')]
+        self.assertIn('PathChanged=/var/lib/messagebox/state/onboarding-voice-request.json', watched)
+        self.assertIn('PathChanged=/var/lib/messagebox-cloud/claim.json', watched)
+        self.assertNotIn('PathChanged=/var/lib/messagebox-cloud', watched)
+
     def test_valid_fixed_request_and_default_start_only_fixed_target(self):
         self.enabled.write_text("enabled\n", encoding="ascii")
         self.request.write_text(
@@ -90,6 +97,20 @@ class VoiceGateTests(unittest.TestCase):
         os.chmod(self.request, 0o600)
         with self.assertRaisesRegex(RuntimeError, "default"):
             self.run_gate()
+
+    def test_cloud_claim_starts_button_without_legacy_recipient_gate(self):
+        self.enabled.write_text("enabled\n", encoding="ascii")
+        claim = self.root / "claim.json"
+        claim.write_text(json.dumps({"expires_at": 1_800_000_600,
+                                     "physical_confirmed": False}), encoding="utf-8")
+        claim.chmod(0o600)
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+            result, calls = self.run_gate()
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [(["systemctl", "start", "messagebox-onboarding-button.service"], {"check": True})])
+        claim.unlink()
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+            self.assertEqual(self.run_gate(), (result, calls))
 
 
 if __name__ == "__main__":

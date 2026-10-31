@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box continuous WhatsApp sync
 After=network-online.target
 Wants=network-online.target
@@ -13,6 +14,7 @@ Environment=HOME=/var/lib/messagebox
 Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
 Environment=WACLI_SYNC_MAX_DB_SIZE=2GB
 UMask=0077
+ExecCondition=/bin/sh -c 'test -z "$MSGBOX_TRANSPORT" || test "$MSGBOX_TRANSPORT" = wacli'
 ExecStartPre=/usr/bin/test -x /usr/local/bin/wacli
 ExecStart=/opt/messagebox/messagebox/syncloop.sh
 Restart=always

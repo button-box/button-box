@@ -57,10 +57,10 @@ For repeatable release and per-unit verification, use the
 | Board | Current status | What to expect |
 | --- | --- | --- |
 | **Raspberry Pi 4B** | Recommended for a first build | The public installation path has been physically exercised through Wi-Fi and WhatsApp readiness. |
-| **Raspberry Pi Zero 2 W** | Supported device target; public installation gap | It needs an OTG USB hub for the USB microphone and speaker. On current `main`, provisioning stops at the Pi-4-only Comitup installer, so the fresh-card community path still needs validation. |
+| **Raspberry Pi Zero 2 W** | Setup installer only; untested | It needs an OTG USB hub for the USB microphone and speaker. The setup installer accepts it, but a fresh-card installation has not been physically validated, and signed software updates do not support it yet. |
 
 Do not bypass a board-safety check on a working device. If you want to help
-finish the Zero 2 W path, please join the community or open a focused pull
+validate the Zero 2 W path, please join the community or open a focused pull
 request with the board and physical checks you performed.
 
 ### Parts with purchase links
@@ -281,10 +281,11 @@ exit
 ## Step 6 — Install Button Box
 
 > [!IMPORTANT]
-> Continue with the automated public installer on Raspberry Pi 4B. On current
-> `main`, the install stops on Pi Zero 2 W because `scripts/install/comitup.sh`
-> is explicitly validated only on Pi 4. Zero 2 W runtime support remains, but
-> its fresh-card installation path needs a tested repository change.
+> Continue with the automated public installer on Raspberry Pi 4B. The
+> installer (`scripts/install/comitup.sh`) also accepts Raspberry Pi 3
+> (A+/B/B+) and Pi Zero 2 W, but those fresh-card installations are not yet
+> physically validated. The signed software updater supports Raspberry Pi 4
+> Model B and Pi 3 Model A+ only; it does not support Pi Zero 2 W yet.
 
 From the repository root on your computer:
 
@@ -425,7 +426,7 @@ on the physical device.
 | --- | --- | --- |
 | Device runtime | **Experimental** | Recording, sending, receiving, playback, fail-closed recipient routing, and NFC support exist. |
 | Raspberry Pi 4B | **Supported** | A brand-new-card installation has been physically completed through Wi-Fi and WhatsApp onboarding. |
-| Raspberry Pi Zero 2 W | **Supported device target; install gap** | The device target is supported, but the current public provisioning path still contains a Pi-4-only Comitup gate and needs clean-install validation. |
+| Raspberry Pi Zero 2 W | **Setup installer only; untested** | The setup installer accepts it, but clean-install validation is still required. Signed software updates do not support it yet. |
 | Wi-Fi and WhatsApp browser onboarding | **Experimental** | The physical Pi 4B flow has reached verified WhatsApp readiness. |
 | Recipient and NFC browser onboarding | **Experimental** | Repository coverage is included; fresh-Pi NFC and final activation acceptance are still required. |
 | Enclosure | **Prototype** | Printable [top and bottom STL files](hardware/enclosure/README.md) are available. |
@@ -479,11 +480,11 @@ or with `ssh -i`.
 On macOS, confirm that `rsync --version` reports modern GNU rsync and rerun
 provisioning with Homebrew first in `PATH`.
 
-### The installer says Comitup is validated only on Raspberry Pi 4
+### The installer says Comitup supports Raspberry Pi 4, Pi 3, and Pi Zero 2 W only
 
-You are installing on a different Pi model. This is the current public Zero 2 W
-installation gap described above. Do not edit out the model check on a working
-device; follow or help with the clean-install validation work instead.
+You are installing on a Pi model that the setup installer does not accept. Do
+not edit out the model check on a working device; use a supported board or help
+with the validation work instead.
 
 ### The setup hotspot does not appear
 
@@ -581,8 +582,33 @@ Community contributions are welcome, especially:
 Before opening a pull request:
 
 ```sh
-make check
+MSGBOX_TEST_TRANSPORT=wacli make check
+MSGBOX_TEST_TRANSPORT=cloud make check
 ```
+
+CI runs the full check in both jobs. `MSGBOX_TEST_TRANSPORT` is a test-only
+selector: the runtime-mode contract starts a fresh interpreter with the matching
+`MSGBOX_TRANSPORT`, checks import-time contact paths, poller dispatch, outbox
+binding, presence, reactions, and inbound authorization. Existing transport-specific
+fixtures retain their own mode; the self-hosted contracts always select wacli in
+both jobs. Do not set the suite's ambient `MSGBOX_TRANSPORT=cloud`: legacy fixtures
+that assume wacli would then exercise the wrong transport. No test needs hardware
+or a live Cloud or WhatsApp account.
+
+On the Pi, services load `MSGBOX_TRANSPORT` from `/etc/messagebox/env`. An absent
+setting defaults to `wacli`; `cloud` selects the Cloud runtime and its separate
+contacts. `messageboxctl enter-cloud-claim` requires an already configured Cloud
+box and reopens claim setup; it does not switch transports. See
+[Cloud runtime](docs/cloud-runtime.md) and [configuration](config/env.example).
+
+PRs changing shared runtime modules, onboarding, sounds, or setup/install helpers
+must include a `## wacli impact` section stating the shared files, behavior changes
+(or "none"), and supporting tests. The metadata-only impact workflow checks the
+current PR body and applies `wacli-impact`, including for fork PRs. It uses the
+default token with workflow-scoped PR/issue write permissions and never checks out PR
+code. Repository or organization restrictions on that token still need verification
+on GitHub. The `pull_request_target` workflow becomes active once present on the
+base branch; editing the PR body reruns it.
 
 State clearly which checks were automated and which Pi, phone, network, audio,
 GPIO, NFC, Wi-Fi, or WhatsApp behaviors were physically tested.
@@ -610,3 +636,21 @@ Button Box uses [wacli](https://github.com/openclaw/wacli) and
 [Comitup](https://github.com/davesteele/comitup). It is not affiliated with or
 endorsed by WhatsApp or Meta.
 --- sha: f40a0195ab57e6bc33c950bdb755f7ea276145e4 ---
+
+### Recording a reply
+
+Choose **Tap to talk** or **Hold to talk**, with the independent
+**Let them hear it before sending** switch. Fresh settings use tap with review
+on; saved legacy settings retain their mode and review choice. Tap starts
+hands-free recording; the next tap stops it. Hold records while pressed and
+stops on release. With review off, stopping sends; with review on, the box plays
+it back and a fresh tap within 10 seconds sends it. Doing nothing after review,
+or missing the second tap before the tap recording limit, deletes it.
+Recordings shorter than 1.5 seconds or without detected voice are also deleted.
+Every deletion plays the same short descending tone, in all voice packs.
+
+The start cue finishes before the microphone opens. The soft limit tick stays
+five seconds before the selected 30, 60 or 120 second limit. Hold mode retains
+short-press playback and both modes retain card routing and quiet hours. See
+[settings compatibility](docs/cloud-settings.md#recording-modes) and
+[deletion cue/checksum](sounds/cues/README.md#deletion-cue).

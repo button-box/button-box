@@ -46,6 +46,8 @@ def _is_usb(card_path):
 
 def detect_microphone(sound_root=Path("/sys/class/sound")):
     candidates = []
+    playback_cards = {int(match[1]) for path in sound_root.glob("pcmC*D*p")
+                      if (match := PLAYBACK_NODE.fullmatch(path.name)) is not None}
     capture_found = False
     for capture_path in sound_root.glob("pcmC*D*c"):
         match = CAPTURE_NODE.fullmatch(capture_path.name)
@@ -55,14 +57,18 @@ def detect_microphone(sound_root=Path("/sys/class/sound")):
         card_number, device_number = (int(value) for value in match.groups())
         card_id = _card_id(sound_root, card_number)
         if card_id is not None:
-            candidates.append((card_number, device_number, card_id))
+            # USB speakers can expose a weak built-in capture device. Prefer
+            # a separate USB mic, using the card ID so boot order is irrelevant.
+            dedicated_usb = (card_number not in playback_cards
+                             and _is_usb(sound_root / f"card{card_number}"))
+            candidates.append((not dedicated_usb, card_number, device_number, card_id))
 
     if not candidates:
         if capture_found:
             raise AudioConfigError("could not read a valid ALSA capture card ID")
         raise AudioConfigError("no ALSA capture device detected; connect a microphone")
 
-    _, device_number, card_id = min(candidates)
+    _, _, device_number, card_id = min(candidates)
     return card_id, f"plughw:CARD={card_id},DEV={device_number}"
 
 

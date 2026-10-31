@@ -1,0 +1,271 @@
+"""Self-hosted contracts across contacts, NFC, queue, settings and receipts.
+
+Only subprocess/audio boundaries are faked; routing and durable state are real.
+These contracts always select wacli, including in the Cloud matrix job.
+"""
+
+from speaker_helpers import isolate_audio, assert_padded_playback
+
+import json
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from test_button_settings_behavior import FakeLed, button_send
+from test_cloud_runtime import write_pcm_wav
+from messagebox import nfc, voicepoll
+from messagebox.audio_requests import OptionalAudioRequests
+from messagebox.contacts import ContactStore
+from messagebox.listened_receipts import ReceiptStore, load_listener_profiles
+from messagebox.nfc_state import AnnouncementStore, SelectionStore
+from messagebox.settings import SettingsReader, SettingsStore, in_quiet_hours
+
+
+PERSON = "15551234567@s.whatsapp.net"
+OTHER = "15557654321@s.whatsapp.net"
+CARD = "04:A1:00:FF"
+
+
+class WacliContractTests(unittest.TestCase):
+    def setUp(self):
+        isolate_audio(self)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        for name in ("queue", "outbox", "tmp"):
+            (self.root / name).mkdir()
+        self.contacts_path = self.root / "contacts.json"
+        self.contacts = ContactStore(self.contacts_path)
+        self.contacts.add_contact(OTHER, "Default person", receive_after=100, make_default=True)
+        self.contacts.add_contact(PERSON, "Card person", receive_after=100)
+        self.receipts = ReceiptStore(str(self.root / "receipts"))
+        self.settings = SettingsStore(self.root / "settings.json", environ={"TZ": "UTC"})
+        self.set_quiet(False)
+        self.announcements = AnnouncementStore(self.root / "announcement.json")
+        self.now = datetime(2026, 10, 8, 23, tzinfo=timezone.utc)
+        self.tick = 100
+        patches = [mock.patch.dict("os.environ", {"MSGBOX_TRANSPORT": "wacli"})]
+        for module, values in (
+            (button_send, {
+                "CONTACTS_FILE": str(self.contacts_path), "QUEUE_DIR": str(self.root / "queue"),
+                "OUTBOX_DIR": str(self.root / "outbox"), "TEMP_DIR": str(self.root / "tmp"),
+                "NFC_SELECTION_FILE": self.root / "selection.json",
+                "NFC_HEALTH_FILE": self.root / "nfc-health",
+                "nfc_announcement_store": self.announcements, "receipt_store": self.receipts,
+                "settings_reader": SettingsReader(self.settings, refresh_seconds=0),
+                "button": SimpleNamespace(is_pressed=False), "led": FakeLed(),
+                "_recording": False, "_guided_active": False,
+                "_known": set(), "_seen_ever": set(), "_ring_last": 0,
+                "MORNING_RING_FILE": self.root / "morning-ring.json",
+                "_morning_ring_window": None, "_applied_volume_revision": None,
+                "SPEAKER_CARD": "contract-card", "SPEAKER_CONTROL": "contract-control",
+                "send_success_notices": button_send.queue.SimpleQueue(),
+            }),
+            (nfc, {
+                "CONTACTS_FILE": self.contacts_path, "NFC_SELECTION_FILE": self.root / "selection.json",
+                "NFC_ENROLLMENT_FILE": self.root / "enrollment.json",
+            }),
+            (voicepoll, {
+                "CONTACTS_FILE": self.contacts_path, "QUEUE_DIR": str(self.root / "queue"),
+                "STATE_FILE": str(self.root / "seen.json"),
+            }),
+        ):
+            patches.extend(mock.patch.object(module, name, value, create=True)
+                           for name, value in values.items())
+        for name in ("log", "log_event", "play_moment", "wait_for_stable_open", "refresh_led"):
+            patches.append(mock.patch.object(button_send, name))
+        patches.extend([
+            mock.patch.object(voicepoll, "log_event"),
+            mock.patch.object(button_send.time, "monotonic", side_effect=lambda: self.tick),
+            mock.patch.object(button_send, "in_quiet_hours",
+                              side_effect=lambda settings, now=None:
+                              in_quiet_hours(settings, now or self.now)),
+        ])
+        # Any attempted Cloud authorization or network use is a contract failure.
+        for name in ("account_scope", "playable", "record_played", "listened_status"):
+            patches.append(mock.patch.object(button_send.cloud_runtime, name,
+                                             side_effect=AssertionError("Cloud path used by wacli")))
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        clock = mock.patch.object(button_send, "datetime", wraps=datetime)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.clock.now.side_effect = lambda zone: self.now.astimezone(zone)
+
+    def test_wacli_poller_uses_wacli_and_never_polls_cloud(self):
+        from messagebox.cloud_device import CloudDeviceClient
+        class StopPoll(BaseException):
+            pass
+        with mock.patch.object(voicepoll, 'load_contact_authorizations', return_value={}), \
+             mock.patch.object(voicepoll, 'wacli', return_value=SimpleNamespace(stdout='{"data":{"messages":[]}}')) as local, \
+             mock.patch.object(voicepoll.time, 'sleep', side_effect=StopPoll), \
+             mock.patch.object(button_send.cloud_runtime, 'CloudRuntime', side_effect=AssertionError('Cloud runtime used')) as cloud, \
+             mock.patch.object(CloudDeviceClient, 'inbox', side_effect=AssertionError('Cloud inbox used')) as inbox, \
+             mock.patch('builtins.print'):
+            with self.assertRaises(StopPoll):
+                voicepoll.main()
+        local.assert_called_once_with('--read-only', 'messages', 'list', '--limit', '10', '--json', '--full')
+        cloud.assert_not_called()
+        inbox.assert_not_called()
+
+    def set_quiet(self, enabled):
+        current, _ = self.settings.load()
+        candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
+        candidate["quiet_hours"] = {"enabled": enabled, "start": "22:00", "end": "07:00"}
+        self.settings.update(candidate, current["revision"])
+
+    def test_local_unknown_settings_preserve_wacli_routing_and_quiet_hours(self):
+        current, _ = self.settings.load()
+        candidate = {key: value for key, value in current.items() if key not in {"version", "revision"}}
+        candidate.update(future_setting={"enabled": True}, master_volume_percent=37)
+        saved = self.settings.update(candidate, current["revision"])
+        # Also exercise a newer document read directly from local storage.
+        self.settings.path.write_text(json.dumps({**saved, "future_setting": True}))
+        self.assertEqual(button_send.transport_mode(), "wacli")
+        self.assertEqual(button_send.caregiver_settings(), saved)
+        self.assertEqual(saved["master_volume_percent"], 37)
+        self.assertFalse(button_send.quiet_hours())
+        self.send_to(PERSON)
+        self.set_quiet(True)
+        self.assertTrue(button_send.quiet_hours())
+
+    def send_to(self, recipient):
+        wav = self.root / "outbox" / "1000-2.0.wav"
+        write_pcm_wav(wav, 2)
+        button_send.bind_legacy_job_recipient(str(wav), recipient)
+        results = [SimpleNamespace(returncode=0),
+                   SimpleNamespace(returncode=0, stdout='{"sent":true,"id":"synthetic-sent"}', stderr="")]
+        with mock.patch.object(button_send.subprocess, "run", side_effect=results) as run:
+            self.assertTrue(button_send.send_legacy_outbox_file(wav.name))
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], [button_send.WACLI_BIN, "send", "voice"])
+        self.assertEqual(command[command.index("--to") + 1], recipient)
+        self.assertFalse(wav.exists())
+        self.assertFalse(Path(str(wav) + ".json").exists())
+
+    def test_family_card_selects_person_and_sends_exact_jid(self):
+        self.contacts.assign_card(PERSON, CARD)
+        button_send.NFC_HEALTH_FILE.touch()
+        reader = nfc.NfcRuntime(nfc.router(self.announcements), nfc.Announcer(self.announcements))
+        self.assertEqual(reader.observe(bytes.fromhex("04a100ff"), 0).action, "selected")
+        context = button_send.current_recipient_context()
+        self.assertTrue(context["via_card"])
+        self.assertEqual(context["contact"]["jid"], PERSON)
+        self.assertIsNotNone(SelectionStore(button_send.NFC_SELECTION_FILE).load())
+        self.send_to(context["contact"]["jid"])
+
+    def test_receive_authorized_person_play_and_preserve_reply_route(self):
+        optional = OptionalAudioRequests(self.root / 'optional-audio', clock=lambda: 0)
+        optional.enqueue_for('setup_greeting:cloud-only', 'setup_greeting', 'a' * 64, 30,
+                             clip='cloud-only.wav', voice_pack='buttonbox')
+        with mock.patch.object(button_send, 'cloud_optional_audio_requests', optional, create=True):
+            self.assertFalse(button_send.maybe_play_cloud_sound())
+        self.assertEqual(optional.outcome('setup_greeting:cloud-only'), 'pending')
+        message = {"MsgID": "synthetic-incoming", "ChatJID": PERSON, "SenderJID": PERSON,
+                   "Timestamp": 101, "MediaType": "audio", "FromMe": False}
+        denied = {**message, "MsgID": "synthetic-denied", "ChatJID": "15550000000@s.whatsapp.net"}
+
+        def wacli(*arguments):
+            if "messages" in arguments:
+                return SimpleNamespace(stdout=json.dumps({"data": {"messages": [denied, message]}}))
+            self.assertIn("--read-only", arguments)
+            self.assertEqual(arguments[arguments.index("--chat") + 1], PERSON)
+            self.assertEqual(arguments[arguments.index("--id") + 1], message["MsgID"])
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.write_bytes(b"synthetic download")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"success": True, "data": {"path": str(output)}}))
+
+        def convert(command, **kwargs):
+            write_pcm_wav(command[-1], 1)
+            return SimpleNamespace(returncode=0)
+
+        seen = set()
+        with mock.patch.object(voicepoll, "wacli", side_effect=wacli), \
+             mock.patch.object(voicepoll.subprocess, "run", side_effect=convert):
+            authorizations = voicepoll.load_contact_authorizations(self.contacts_path)
+            self.assertEqual(voicepoll.poll_once(seen, authorizations), 1)
+            self.assertEqual(voicepoll.poll_once(seen, authorizations), 0)
+        self.assertEqual(seen, {message["MsgID"]})
+        queued = self.root / "queue" / button_send.queued()[0]
+        metadata = button_send.queue_metadata(queued)
+        self.assertEqual((metadata["chat"], metadata["msgid"]), (PERSON, message["MsgID"]))
+        def play_audio(command, **kwargs):
+            assert_padded_playback(self, command[-1], queued)
+            return SimpleNamespace(returncode=0)
+        with mock.patch.object(button_send.subprocess, "run", side_effect=play_audio) as play, \
+             mock.patch.object(button_send.subprocess, "Popen") as react:
+            button_send.play_next_legacy()
+        self.assertEqual(play.call_count, 1)
+        self.assertEqual(react.call_args.args[0][4:8], [PERSON, "--id", message["MsgID"], "--reaction"])
+        archived = self.root / "queue" / ".played" / queued.name
+        self.assertTrue(archived.exists())
+        self.assertEqual(button_send.queue_metadata(archived)["chat"], PERSON)
+        self.assertEqual(button_send.queued(), [])
+
+    def enqueue_listened(self):
+        self.send_to(PERSON)
+        clip = self.root / "listened.wav"
+        write_pcm_wav(clip, 1)
+        self.contacts.upsert_listener(PERSON, "Card person")
+        payload = {"EventType": "receipt", "Chat": PERSON, "Sender": "",
+                   "MessageIDs": ["synthetic-sent"], "Type": "played", "IsFromMe": False}
+        profiles = load_listener_profiles(str(self.contacts_path))
+        self.assertEqual(len(self.receipts.ingest_played(payload, profiles, str(clip))), 1)
+        self.assertEqual(self.receipts.ingest_played(payload, profiles, str(clip)), [])
+        return payload, profiles, clip
+
+    def test_listened_notice_survives_restart_and_announces_once(self):
+        payload, profiles, clip = self.enqueue_listened()
+        self.receipts.claim_next()  # Crash after claim, before playback.
+        restarted = ReceiptStore(str(self.root / "receipts"))
+        self.assertEqual(restarted.recover_inflight(), 1)
+        def play_audio(command, **kwargs):
+            assert_padded_playback(self, command[-1], clip)
+            return SimpleNamespace(returncode=0)
+        with mock.patch.object(button_send, "receipt_store", restarted), \
+             mock.patch.object(button_send.subprocess, "run", side_effect=play_audio) as play:
+            self.assertEqual(button_send.play_pending_listened(), 1)
+            self.assertEqual(button_send.play_pending_listened(), 0)
+        self.assertEqual(play.call_count, 1)
+        self.assertEqual(restarted.ingest_played(payload, profiles, str(clip)), [])
+
+    def test_quiet_hours_block_arrival_and_listened_sounds_without_losing_notice(self):
+        self.enqueue_listened()
+        self.set_quiet(True)
+        self.assertTrue(button_send.quiet_hours())
+        write_pcm_wav(self.root / "queue" / "1000-new.wav", 1)
+        with mock.patch.object(button_send, "ring_alert") as ring, \
+             mock.patch.object(button_send.subprocess, "run") as play, \
+             mock.patch.object(button_send.subprocess, "Popen") as spawn:
+            button_send.maybe_ring()
+            self.assertEqual(button_send.play_pending_listened(), 0)
+            self.assertEqual(self.receipts.pending_count(), 1)
+            self.set_quiet(False)
+            self.tick += 2
+            self.now += timedelta(seconds=2)
+            button_send.maybe_ring()  # No delayed overnight arrival ring.
+            ring.assert_not_called()
+            play.assert_not_called()
+            spawn.assert_not_called()
+            play.return_value = SimpleNamespace(returncode=0)
+            self.assertEqual(button_send.play_pending_listened(), 1)
+
+    def test_morning_alert_applies_mixer_volume_once_at_the_same_contract_clock(self):
+        self.set_quiet(True)
+        self.now = datetime(2026, 10, 9, 7, 10, tzinfo=timezone.utc)
+        write_pcm_wav(self.root / 'queue' / '1000-overnight.wav', 1)
+        button_send._known = set(button_send.queued())
+        with mock.patch.object(button_send, 'ring_alert') as ring, \
+             mock.patch.object(button_send.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as mixer:
+            button_send.maybe_ring()
+            self.tick += 2
+            self.now += timedelta(seconds=2)
+            button_send.maybe_ring()
+        mixer.assert_called_once_with(
+            ['amixer', '-q', '-c', 'contract-card', 'sset', 'contract-control', '50%', 'unmute'], check=False)
+        ring.assert_called_once_with(source='quiet_hours_end', settings=button_send.caregiver_settings())
+        self.assertTrue(button_send.MORNING_RING_FILE.is_file())

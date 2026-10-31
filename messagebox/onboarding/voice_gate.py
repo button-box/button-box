@@ -34,8 +34,14 @@ def main(*, run=subprocess.run):
         raise RuntimeError("voice gate requires root")
     if not Path(ONBOARDING_ENABLED_PATH).is_file():
         run(["systemctl", "stop", VOICE_TARGET], check=True)
+        if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+            run(["systemctl", "stop", "messagebox-onboarding-button.service"], check=True)
         return 0
     request_path = Path(VOICE_REQUEST_FILE)
+    if os.environ.get("MSGBOX_TRANSPORT") == "cloud":
+        # The listener validates each press, including missing or expired requests.
+        run(["systemctl", "start", "messagebox-onboarding-button.service"], check=True)
+        return 0
     if not request_path.exists():
         run(["systemctl", "stop", VOICE_TARGET], check=True)
         return 0

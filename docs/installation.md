@@ -12,21 +12,20 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
 
 1. In Raspberry Pi Imager, install Raspberry Pi OS Lite 64-bit based on Debian
    13. Enable SSH and create a non-root sudo-capable administrator. Set the
-   hostname to the box's zero-padded number, such as `button-box-001`, and use
+   hostname to the box's zero-padded inventory number and use
    the same number on the physical label and in inventory.
-2. Review the included licensed guided-reply prompt set described in
-   [`sounds/README.md`](../sounds/README.md). These recordings are required for
-   the two-way voice proof.
+2. Review the included cue and Jessica voice packs described in
+   [`sounds/README.md`](../sounds/README.md). The manifests record format and checksums; confirm ElevenLabs terms before the
+   first customer shipment. These recordings are required for the two-way voice proof.
 3. From a repository clone on another computer, provision over SSH:
 
    ```sh
-   ./scripts/provision.sh admin@button-box-NNN.local
+   ./scripts/provision.sh admin@REPLACE_WITH_VERIFIED_HOST
    ```
 
    This transfers the installer's explicit source allowlist and runs setup on
-   the Pi. The installer validates every prompt before making system changes.
-   To use an alternate licensed prompt set, pass its directory with
-   `--guided-prompts DIR`. Alternatively, clone the repository onto the Pi and
+   the Pi. The installer validates both complete sound packs and their checksums
+   before making system changes. Alternatively, clone the repository onto the Pi and
    run `./scripts/setup.sh` there as a non-root sudo-capable administrator.
    Neither method transfers device runtime state, pairs WhatsApp, or starts
    Button Box services.
@@ -60,16 +59,30 @@ It is optional for operation; unassigned boxes show **Not assigned** in the supp
    maintenance, complete the [Tailscale remote-support procedure](remote-support.md)
    while LAN access is still available. Tailscale is independent of the Button
    Box application install and does not replace ordinary OpenSSH keys.
-4. Configure protected Wi-Fi onboarding with
+4. Set the box color to match the physical box shell:
+
+   ```sh
+   sudo messageboxctl set-color pink-red
+   ```
+
+   Values: `yellow`, `pink-red`, `green`, `blue`, `white`, `black`, `beige`.
+   The default is yellow. Updates and Wi-Fi reset keep the color.
+5. Configure protected Wi-Fi onboarding with
    `sudo messagebox-init-wifi-onboarding`.
-5. Print the displayed box number, hotspot name, password, and setup URL for the
+6. Print the displayed box number, box color, hotspot name, password, and setup URL for the
    matching box. Treat the hotspot password as a credential: do not commit it,
    put it in shared logs, or retain an unprotected digital copy.
-6. Run `sudo messageboxctl reset-wifi`. Verify the hotspot if needed, then run
+7. Run `sudo messageboxctl reset-wifi`. Verify the hotspot if needed, then run
    `sudo shutdown now` and package the printed insert with the powered-down box.
    Do not complete browser onboarding during manufacturing.
 
 ## Recipient setup
+
+Fresh boxes default to **Hold and release** recording and **play only** after
+listening. Existing saved interaction choices are retained. The guided two-way
+proof below is the standalone setup flow; it does not change saved runtime
+settings. For Cloud claiming and automatic server-side activation, see
+[Cloud runtime](cloud-runtime.md).
 
 1. Power on Button Box.
 2. Join its setup hotspot with the supplied password and open the printed URL.
@@ -153,3 +166,17 @@ and Comitup active; verify either its connected home portal or its setup
 hotspot portal before calling recovery usable. Do not recreate either legacy
 `multi-user.target.wants` link. The generator-owned link under `/run` is
 ephemeral and must match the marker after every daemon reload.
+
+## Sound pack v1 updates
+
+`make check` validates the 16 cues, 21 Jessica lines and 20 lines in every other
+voice pack without a network or
+speaker. The bounded release manifest includes every new WAV, manifest, cue
+catalog and README. Existing boxes can receive the pack through the bounded
+updater; full setup is unnecessary. The updater checks retired sound paths,
+includes those exact files in automatic program rollback, removes the old
+bundled prompts and swoosh while services are stopped, and restores them on
+rollback. It leaves custom family clips and device data alone.
+
+The press asset is exactly 0.40 seconds and preserves the tap/hold window.
+See [sound design](sound-design.md) for all new moments and recording exclusions.

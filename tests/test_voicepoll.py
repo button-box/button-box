@@ -1,7 +1,9 @@
 import io
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -23,6 +25,20 @@ from messagebox.voicepoll import (
 
 PERSON = "15551234567@s.whatsapp.net"
 GROUP = "120363123456789@g.us"
+
+
+class IncomingEQTests(unittest.TestCase):
+    def test_gentle_default_and_environment_override_in_both_modes(self):
+        expected = "highpass=f=100,equalizer=f=2500:t=q:w=1:g=2,loudnorm=I=-16:TP=-2:LRA=11:linear=true,alimiter=limit=0.79:level=disabled"
+        for mode in ("wacli", "cloud"):
+            for override in (None, "", "highpass=f=200"):
+                environment = {**os.environ, "MSGBOX_TRANSPORT": mode}
+                environment.pop("MSGBOX_EQ_FILTER", None)
+                if override is not None:
+                    environment["MSGBOX_EQ_FILTER"] = override
+                with self.subTest(mode=mode, override=override):
+                    result = subprocess.run([sys.executable, "-c", "from messagebox.voicepoll import EQ_FILTER; print(EQ_FILTER)"], env=environment, check=True, capture_output=True, text=True)
+                    self.assertEqual(result.stdout.rstrip("\n"), expected if override is None else override)
 
 
 class PollingStoreTests(unittest.TestCase):

@@ -13,6 +13,13 @@ minutes. An absent/expired/cancelled request alone never establishes success.
 The single receipt is overwritten by the next success; old tabs may therefore
 show an unconfirmed result instead of claiming success without evidence.
 
+Successful pairing plays `cue-card_saved.wav` then the current voice pack's
+`voice-card-saved.wav`. Onboarding owns this playback during setup; runtime
+dashboard and Cloud/WhatsApp enrollments use the NFC worker's existing `enrolled`
+handoff to the button audio owner. Pairing confirmation is independent of
+`card_name_prompt` and Family confirmation beep. A receipt proves the saved
+mapping; audible confirmation still needs a speaker check.
+
 Verify on a physical box: successful scan/reassignment, cancellation, two-minute
 expiry, disconnected reader, and retry. Browser tests cannot establish PN532 or
 phone-on-device acceptance. This change is independent of the portrait-layout fix.

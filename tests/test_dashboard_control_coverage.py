@@ -12,8 +12,6 @@ MATRIX = ROOT / "docs" / "box-acceptance.md"
 
 CONTROL_CASES = {
     "skip-link": ["BB-LAYOUT-01"],
-    "copy-box-id": ["BB-LAYOUT-01"],
-    "owner-community": ["BB-LAYOUT-01"],
     "manual-default-name": ["BB-RECIP-11"],
     "manual-allow-name": ["BB-RECIP-11"],
     "change-test-recipient": ["BB-RECIP-01"],
@@ -30,8 +28,9 @@ CONTROL_CASES = {
     "home-sound-settings": ["BB-NAV-01"],
     "home-connections-setup": ["BB-SETUP-01"],
     "ring-now": ["BB-HOME-02"],
-    "recording-mode-tap-review": ["BB-SET-02"],
-    "recording-mode-hold-release": ["BB-SET-02"],
+    "talk-mode-tap": ["BB-SET-02"],
+    "talk-mode-hold": ["BB-SET-02"],
+    "review-before-send": ["BB-SET-02"],
     "after-listening-play-only": ["BB-SET-02"],
     "after-listening-invite-reply": ["BB-SET-02"],
     "max-recording": ["BB-SET-02"],
@@ -44,9 +43,12 @@ CONTROL_CASES = {
     "quiet-end": ["BB-SET-02", "BB-VOICE-02"],
     "timezone": ["BB-SET-02", "BB-VOICE-02"],
     "nfc-beep": ["BB-SET-02", "BB-NFC-03"],
+    "card-name-prompt": ["BB-SET-02", "BB-NFC-03"],
+    "swoosh-sound": ["BB-SET-02"],
     "save-settings": ["BB-SET-01", "BB-SET-02"],
     "advanced-connections-setup": ["BB-SETUP-01"],
     "advanced-recipients-setup": ["BB-SETUP-01"],
+    "advanced-cloud-dashboard": ["BB-SETUP-01"],
     "manage-whatsapp": ["BB-NAV-02", "BB-WA-01"],
     "manage-recipients": ["BB-NAV-03"],
     "new-wifi-name": ["BB-WIFI-04"],
@@ -120,6 +122,12 @@ class InteractiveParser(HTMLParser):
 
 
 class DashboardControlCoverageTests(unittest.TestCase):
+    def test_wifi_setup_has_no_support_identity_or_community_footer(self):
+        markup = INDEX.read_text()
+        for removed in ("Need a hand?", "Not assigned", "copy-box-id", "owner-community"):
+            self.assertNotIn(removed, markup)
+        self.assertNotIn("renderIdentity", APP.read_text())
+
     def test_every_static_control_maps_to_a_canonical_case(self):
         parser = InteractiveParser()
         parser.feed(INDEX.read_text(encoding="utf-8"))

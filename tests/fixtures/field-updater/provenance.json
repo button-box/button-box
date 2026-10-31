@@ -1,0 +1,957 @@
+{
+  "schema": 1,
+  "snapshots": {
+    "shared": [
+      "messagebox/wifi_watchdog.py",
+      "scripts/dev/release-manifest.py",
+      "scripts/install/bounded_update.py",
+      "scripts/install/health-probe.py",
+      "scripts/install/messagebox-mode-migrate.py",
+      "scripts/install/release_verify.py",
+      "scripts/install/trust_update.py",
+      "scripts/install/update-bootstrap.sh",
+      "scripts/install/update_controller.py",
+      "scripts/install/update_discovery.py",
+      "systemd/messagebox-audio-detect.service",
+      "systemd/messagebox-button.service",
+      "systemd/messagebox-dash.service",
+      "systemd/messagebox-mode-generator",
+      "systemd/messagebox-mode-reconcile.path",
+      "systemd/messagebox-mode-reconcile.service",
+      "systemd/messagebox-nfc.service",
+      "systemd/messagebox-poller.service",
+      "systemd/messagebox-sync.service",
+      "systemd/messagebox-update-controller.service",
+      "systemd/messagebox-update-discovery.service",
+      "systemd/messagebox-update-discovery.timer",
+      "systemd/messagebox-update-install.service",
+      "systemd/messagebox-update-recovery.service",
+      "systemd/messagebox-update-supervisor.service",
+      "systemd/messagebox-update-supervisor.timer",
+      "systemd/messagebox-wifi-change.path",
+      "systemd/messagebox-wifi-change.service",
+      "systemd/messagebox-wifi-watchdog.service",
+      "systemd/messagebox-wifi-watchdog.timer",
+      "systemd/messagebox.target",
+      "systemd/messagebox.tmpfiles.conf",
+      "systemd/onboarding/comitup-web.service.d/messagebox.conf",
+      "systemd/onboarding/comitup.service.d/messagebox.conf",
+      "systemd/onboarding/messagebox-onboarding-button.service",
+      "systemd/onboarding/messagebox-onboarding-complete.path",
+      "systemd/onboarding/messagebox-onboarding-complete.service",
+      "systemd/onboarding/messagebox-onboarding-home.service",
+      "systemd/onboarding/messagebox-onboarding-nfc.service",
+      "systemd/onboarding/messagebox-onboarding-voice-gate.service",
+      "systemd/onboarding/messagebox-onboarding-voice.path",
+      "systemd/onboarding/messagebox-onboarding-voice.target",
+      "systemd/onboarding/messagebox-whatsapp-pairing.service",
+      "systemd/onboarding/messagebox-wifi-reset.service"
+    ]
+  },
+  "releases": {
+    "v0.3.9": {
+      "commit": "ae49eceeebd8049afe2f682b36b42f3aae9a771a",
+      "snapshot": "shared",
+      "files": {
+        "messagebox/wifi_watchdog.py": {
+          "sha256": "62ec582d7a53858e0652aa16e114ac9ead50002b8afda78409549a3a8d1fe545",
+          "git_blob": "3d2acbfe2d75aaf5ee1b43118b50a6cec4f356e3",
+          "mode": "100644"
+        },
+        "scripts/dev/release-manifest.py": {
+          "sha256": "706ea90678fcb7db4d7e11799cd87509a462249a897790e5cec0205e9d41bbd4",
+          "git_blob": "9a6ef2d114c90e58dce28207f8fa86db1caf8c94",
+          "mode": "100644"
+        },
+        "scripts/install/bounded_update.py": {
+          "sha256": "49c285b51f745a6894ee2533df516d681e9e9992fb72c84d5017b0cb799b8425",
+          "git_blob": "799ba3812f210af9a1578c2011eefac342ef2f9d",
+          "mode": "100644"
+        },
+        "scripts/install/health-probe.py": {
+          "sha256": "e9079c51a8c92e495012b516ba84357a8a221d759dcedeb94d58c970a29b324a",
+          "git_blob": "110087b565e0e6d76a84fb4ccc6a848c0c553c2c",
+          "mode": "100644"
+        },
+        "scripts/install/messagebox-mode-migrate.py": {
+          "sha256": "7a73bff609f2ce0c581ac992b54f0eebdcb46abce20da8d1c738831bbba2d24e",
+          "git_blob": "b51d94fc5e14ea45219a4a0dee5fb5f6d7f71b17",
+          "mode": "100755"
+        },
+        "scripts/install/release_verify.py": {
+          "sha256": "e1aa79e5564230e0503850f6a5c1540f71a70ef17910c83a253fcddc0781a9b2",
+          "git_blob": "b466b3f633575933ce2f1947980f4b7e6cc4c4ac",
+          "mode": "100644"
+        },
+        "scripts/install/trust_update.py": {
+          "sha256": "99502b79d0663c3d07e2a549c3c21d18cbaa31b28363b51f2f58de2d4878ca62",
+          "git_blob": "e55ae8efdcdf25706ea3876f3244c37646f4c024",
+          "mode": "100644"
+        },
+        "scripts/install/update-bootstrap.sh": {
+          "sha256": "2a46a5df941e2ff01b5dc122f0eed494f3aab64b1374ee0edc6332e8e2036741",
+          "git_blob": "e380f1e11d0363f749e6c961cec92b9158c82995",
+          "mode": "100755"
+        },
+        "scripts/install/update_controller.py": {
+          "sha256": "d9aac78e61ba538f847ff3145443dcae2b752fc3ba1b9693d51fbfafa6321a3f",
+          "git_blob": "0938ecfa9d64fbfe9148c94f539cf1ab58d85ed1",
+          "mode": "100644"
+        },
+        "scripts/install/update_discovery.py": {
+          "sha256": "f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540",
+          "git_blob": "b82fb70959aaab20a35173333cad1d16cc2fdcd0",
+          "mode": "100644"
+        },
+        "systemd/messagebox-audio-detect.service": {
+          "sha256": "5ddaee2b3dffa547d7c165684731963c9677f8b305f180ff651e3d6f7226d3df",
+          "git_blob": "9c17ec71d4f797e21b7e4ea9b37f4c17dd5d6e70",
+          "mode": "100644"
+        },
+        "systemd/messagebox-button.service": {
+          "sha256": "4cf519edf2ddc51d9e096f13810e5d18a2870f68518bdc879771ec88b4b7a255",
+          "git_blob": "28945b62a82fc85ad952ce1ec9dbcc077e358018",
+          "mode": "100644"
+        },
+        "systemd/messagebox-dash.service": {
+          "sha256": "af64608aee990eaa361a126e046eed5d9c92d2cd1b95bb1fbefc5090b1a424da",
+          "git_blob": "ab881d89ba604684f86d5735c4874c07f9d00963",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-generator": {
+          "sha256": "db2f3261b1bd7b074d983c0cbdc877eb07f313eefb3e1f7211b26f7c10de2fd5",
+          "git_blob": "e56b65d8da4d9606d922ce442eddc28b7d1b15ff",
+          "mode": "100755"
+        },
+        "systemd/messagebox-mode-reconcile.path": {
+          "sha256": "e65614dc574dc455a1746d52cf889a38019326f1f300cca0339b37a0b409ea11",
+          "git_blob": "8c4779159bb73dd8911db859dd19616ea604eea4",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-reconcile.service": {
+          "sha256": "2b3f4aa6b4af029efb46cf1b7b56ed32abd0124af48215e9b960442365a905ed",
+          "git_blob": "c29c9a5107c69c4561ce7a8f7ac2641ac9c923d3",
+          "mode": "100644"
+        },
+        "systemd/messagebox-nfc.service": {
+          "sha256": "00fe653b072bcf31a4dfeeb613fd5eca13d6865dc0819c4278c4421a50d774e4",
+          "git_blob": "8bc8d12f92ea2053264d74422ada59f9654eaf9b",
+          "mode": "100644"
+        },
+        "systemd/messagebox-poller.service": {
+          "sha256": "7a9090b41eb51fa856baf110dc0475221e05715d99b707093419f4ad0f26c8bd",
+          "git_blob": "1f6a7fbe07e6c17a7bb51417d3a33ba515e561f6",
+          "mode": "100644"
+        },
+        "systemd/messagebox-sync.service": {
+          "sha256": "320e82db2438f8e3a269938480d2a684654c9a8f9cc1e85cd1cdbd3856d78034",
+          "git_blob": "7221b87dcbc07724202685c1d70806a3e25390f7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-controller.service": {
+          "sha256": "1329e7e718d3f9b12b6049d3c4b5c5bc913153d74afd4b527e0179b57c5f0643",
+          "git_blob": "7c1142711139db02129fa9b4da306c56849cf998",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.service": {
+          "sha256": "c2594001cf9d21bedfdb8ecd6568b311a9af423f7b6c900c4b975da42cde7f11",
+          "git_blob": "6425803576a401260a79fc303a233c257f24bc93",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.timer": {
+          "sha256": "460400ed0bb0745f8638dbee0ef7d26e35ef9bc078b4419d8e590590dc44e2e5",
+          "git_blob": "8d02253ff8c23b6a704f3b9049f40f68a5d801e8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-install.service": {
+          "sha256": "5a15d0fa55439687c228474c36a3c65c69f6a4264f7ca7beec529eb70ff92a09",
+          "git_blob": "cd99ba2a37b385160bb061fac807fcef7dd50700",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-recovery.service": {
+          "sha256": "248cc26ff3add0701d98d5c8f0355dc5dbef83417e86f8d1e33e5ceea3a74863",
+          "git_blob": "e2498669aeb363cbce3b827561bab92965f6e20f",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.service": {
+          "sha256": "39123442b4f1c019627c288cd71bfb430e1c334d816e0a0ce132597a6b22e5d3",
+          "git_blob": "95671492edcaca7981da3b28ea9f56e30e358d8a",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.timer": {
+          "sha256": "b190e18046eab5a10b4a9f63b4c9dd1b50b0cecc6d3c69db5e7afee1aab00148",
+          "git_blob": "1cb3e62ecdb17b66522c0a436674750e1ec067b7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.path": {
+          "sha256": "87e33d22d208db29e0e65cbb3f811346dca55efe9e06a22acb43f1020661f560",
+          "git_blob": "e75b2f736c2a5722e03f3edbacc31b200b4eb3b8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.service": {
+          "sha256": "b9001ce3b2742e0be988dfa2b7c5d6ebe6a3d35178be7a4c73acf4884ec996ea",
+          "git_blob": "eb38a2d4a911054ba24b5c76007c0b4c4de59f96",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.service": {
+          "sha256": "ffee977f683e88aa286ec2154ca2c5720ffaf3b24aeab65f5695229b832ad11f",
+          "git_blob": "d18dde1d6cb40f9dc7811abe5bd6942ad53b5534",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.timer": {
+          "sha256": "10ccb76f8cc6783844307d0380faa77c57b35457152c3ef71f1fb6337c1a0daa",
+          "git_blob": "4c4c1b5823a4380a5edab9c4e0302b9c9b097af4",
+          "mode": "100644"
+        },
+        "systemd/messagebox.target": {
+          "sha256": "261f3c509959ebbe5dca4b13782cef042d736a573371c246c8e013763e8f0912",
+          "git_blob": "1e11897ba9905bf7b1bcacb8d4936458e80508af",
+          "mode": "100644"
+        },
+        "systemd/messagebox.tmpfiles.conf": {
+          "sha256": "85778a074ce34629e4fabd5925e12bb2dd56027bee4288ee1339ec75384db88e",
+          "git_blob": "a6f16995b4ab7e41654a73289a98dd448109e6dd",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup-web.service.d/messagebox.conf": {
+          "sha256": "8cdac1c2be407d8764bf20d82eeffedfbc2c4d317a03f5406c70bf24cf0f1945",
+          "git_blob": "ae26bb8b8fc21b2f9db30b45ec558812e05ed720",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup.service.d/messagebox.conf": {
+          "sha256": "58cb9ef0a5450b3215a4e9e5dc212e975222adcf31c53298c215a67c3fd57fe1",
+          "git_blob": "ea96a2c763ab594af35dc50206382a4d077595cc",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-button.service": {
+          "sha256": "6da576be98eecb7d3a4cb9bf7319a1e830d13833bece34835f39c199c4770d86",
+          "git_blob": "205c7bc248e5253fafe9e74d0e3be05411d48cb7",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.path": {
+          "sha256": "c46f1fe8047d9e08ba808bb363392c0dd23e50897351708007ee73cc2a5f1283",
+          "git_blob": "ed513a281f1296a9d20d4758016c5ea309615d75",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.service": {
+          "sha256": "f204ba0df2ecd9686d494a8d73e6a013213d648a19c01335ab11e880ee4678e5",
+          "git_blob": "689181f702b3422fc23742eae134413bf1507e29",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-home.service": {
+          "sha256": "503854ab931e563209194f56155fab3a11d919776fdbe77752261c7fd1062e24",
+          "git_blob": "8864764e754d9fc34bca16da074f749821161338",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-nfc.service": {
+          "sha256": "3ed4511582a92d4919696f50d4b8c7c4b5c81fe927908465a5874d4e87cd70a8",
+          "git_blob": "adc0d387be4a2cec0f0d7d019c497b44be39a77b",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice-gate.service": {
+          "sha256": "a26fdf8683c40d3d5c5d778578c3ac2260c11ca563c09afc63f9385771379649",
+          "git_blob": "c3052d441488b41ee6311b3b47d7ad01b56febaf",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.path": {
+          "sha256": "2ddd45a560a18052d4e452666477730bbf989b2b84195c2e0ee6b2a59b77de04",
+          "git_blob": "fa032bea55a8fc16f0a5c6516cc86f05cfc8c463",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.target": {
+          "sha256": "92c91486a79df2c76f9e7b6ae21bab76b11ab1927367a5dee3c0a616d03ff2ea",
+          "git_blob": "f39cdb2aca08b7a1e9e684e869eeccd3ff3f379e",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-whatsapp-pairing.service": {
+          "sha256": "f9df5a0a35530dbc7c912c0df8ec83e6590dda6b334a42474fee21e3828025fa",
+          "git_blob": "e1d511e013fd03b15e806b4b5cb4373ad7610d48",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-wifi-reset.service": {
+          "sha256": "293f465f80e6197ab60a0614ed74bf397882f966b6363aa8bb987ee3408db574",
+          "git_blob": "f302f27814b1bf1400873a2746d151641f38babc",
+          "mode": "100644"
+        }
+      }
+    },
+    "v0.3.10": {
+      "commit": "eb7f713788b4fc091695d03215602c507f4d641b",
+      "snapshot": "shared",
+      "files": {
+        "messagebox/wifi_watchdog.py": {
+          "sha256": "62ec582d7a53858e0652aa16e114ac9ead50002b8afda78409549a3a8d1fe545",
+          "git_blob": "3d2acbfe2d75aaf5ee1b43118b50a6cec4f356e3",
+          "mode": "100644"
+        },
+        "scripts/dev/release-manifest.py": {
+          "sha256": "706ea90678fcb7db4d7e11799cd87509a462249a897790e5cec0205e9d41bbd4",
+          "git_blob": "9a6ef2d114c90e58dce28207f8fa86db1caf8c94",
+          "mode": "100644"
+        },
+        "scripts/install/bounded_update.py": {
+          "sha256": "49c285b51f745a6894ee2533df516d681e9e9992fb72c84d5017b0cb799b8425",
+          "git_blob": "799ba3812f210af9a1578c2011eefac342ef2f9d",
+          "mode": "100644"
+        },
+        "scripts/install/health-probe.py": {
+          "sha256": "e9079c51a8c92e495012b516ba84357a8a221d759dcedeb94d58c970a29b324a",
+          "git_blob": "110087b565e0e6d76a84fb4ccc6a848c0c553c2c",
+          "mode": "100644"
+        },
+        "scripts/install/messagebox-mode-migrate.py": {
+          "sha256": "7a73bff609f2ce0c581ac992b54f0eebdcb46abce20da8d1c738831bbba2d24e",
+          "git_blob": "b51d94fc5e14ea45219a4a0dee5fb5f6d7f71b17",
+          "mode": "100755"
+        },
+        "scripts/install/release_verify.py": {
+          "sha256": "e1aa79e5564230e0503850f6a5c1540f71a70ef17910c83a253fcddc0781a9b2",
+          "git_blob": "b466b3f633575933ce2f1947980f4b7e6cc4c4ac",
+          "mode": "100644"
+        },
+        "scripts/install/trust_update.py": {
+          "sha256": "99502b79d0663c3d07e2a549c3c21d18cbaa31b28363b51f2f58de2d4878ca62",
+          "git_blob": "e55ae8efdcdf25706ea3876f3244c37646f4c024",
+          "mode": "100644"
+        },
+        "scripts/install/update-bootstrap.sh": {
+          "sha256": "2a46a5df941e2ff01b5dc122f0eed494f3aab64b1374ee0edc6332e8e2036741",
+          "git_blob": "e380f1e11d0363f749e6c961cec92b9158c82995",
+          "mode": "100755"
+        },
+        "scripts/install/update_controller.py": {
+          "sha256": "d9aac78e61ba538f847ff3145443dcae2b752fc3ba1b9693d51fbfafa6321a3f",
+          "git_blob": "0938ecfa9d64fbfe9148c94f539cf1ab58d85ed1",
+          "mode": "100644"
+        },
+        "scripts/install/update_discovery.py": {
+          "sha256": "f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540",
+          "git_blob": "b82fb70959aaab20a35173333cad1d16cc2fdcd0",
+          "mode": "100644"
+        },
+        "systemd/messagebox-audio-detect.service": {
+          "sha256": "5ddaee2b3dffa547d7c165684731963c9677f8b305f180ff651e3d6f7226d3df",
+          "git_blob": "9c17ec71d4f797e21b7e4ea9b37f4c17dd5d6e70",
+          "mode": "100644"
+        },
+        "systemd/messagebox-button.service": {
+          "sha256": "4cf519edf2ddc51d9e096f13810e5d18a2870f68518bdc879771ec88b4b7a255",
+          "git_blob": "28945b62a82fc85ad952ce1ec9dbcc077e358018",
+          "mode": "100644"
+        },
+        "systemd/messagebox-dash.service": {
+          "sha256": "af64608aee990eaa361a126e046eed5d9c92d2cd1b95bb1fbefc5090b1a424da",
+          "git_blob": "ab881d89ba604684f86d5735c4874c07f9d00963",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-generator": {
+          "sha256": "db2f3261b1bd7b074d983c0cbdc877eb07f313eefb3e1f7211b26f7c10de2fd5",
+          "git_blob": "e56b65d8da4d9606d922ce442eddc28b7d1b15ff",
+          "mode": "100755"
+        },
+        "systemd/messagebox-mode-reconcile.path": {
+          "sha256": "e65614dc574dc455a1746d52cf889a38019326f1f300cca0339b37a0b409ea11",
+          "git_blob": "8c4779159bb73dd8911db859dd19616ea604eea4",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-reconcile.service": {
+          "sha256": "2b3f4aa6b4af029efb46cf1b7b56ed32abd0124af48215e9b960442365a905ed",
+          "git_blob": "c29c9a5107c69c4561ce7a8f7ac2641ac9c923d3",
+          "mode": "100644"
+        },
+        "systemd/messagebox-nfc.service": {
+          "sha256": "00fe653b072bcf31a4dfeeb613fd5eca13d6865dc0819c4278c4421a50d774e4",
+          "git_blob": "8bc8d12f92ea2053264d74422ada59f9654eaf9b",
+          "mode": "100644"
+        },
+        "systemd/messagebox-poller.service": {
+          "sha256": "7a9090b41eb51fa856baf110dc0475221e05715d99b707093419f4ad0f26c8bd",
+          "git_blob": "1f6a7fbe07e6c17a7bb51417d3a33ba515e561f6",
+          "mode": "100644"
+        },
+        "systemd/messagebox-sync.service": {
+          "sha256": "320e82db2438f8e3a269938480d2a684654c9a8f9cc1e85cd1cdbd3856d78034",
+          "git_blob": "7221b87dcbc07724202685c1d70806a3e25390f7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-controller.service": {
+          "sha256": "1329e7e718d3f9b12b6049d3c4b5c5bc913153d74afd4b527e0179b57c5f0643",
+          "git_blob": "7c1142711139db02129fa9b4da306c56849cf998",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.service": {
+          "sha256": "c2594001cf9d21bedfdb8ecd6568b311a9af423f7b6c900c4b975da42cde7f11",
+          "git_blob": "6425803576a401260a79fc303a233c257f24bc93",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.timer": {
+          "sha256": "460400ed0bb0745f8638dbee0ef7d26e35ef9bc078b4419d8e590590dc44e2e5",
+          "git_blob": "8d02253ff8c23b6a704f3b9049f40f68a5d801e8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-install.service": {
+          "sha256": "5a15d0fa55439687c228474c36a3c65c69f6a4264f7ca7beec529eb70ff92a09",
+          "git_blob": "cd99ba2a37b385160bb061fac807fcef7dd50700",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-recovery.service": {
+          "sha256": "248cc26ff3add0701d98d5c8f0355dc5dbef83417e86f8d1e33e5ceea3a74863",
+          "git_blob": "e2498669aeb363cbce3b827561bab92965f6e20f",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.service": {
+          "sha256": "39123442b4f1c019627c288cd71bfb430e1c334d816e0a0ce132597a6b22e5d3",
+          "git_blob": "95671492edcaca7981da3b28ea9f56e30e358d8a",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.timer": {
+          "sha256": "b190e18046eab5a10b4a9f63b4c9dd1b50b0cecc6d3c69db5e7afee1aab00148",
+          "git_blob": "1cb3e62ecdb17b66522c0a436674750e1ec067b7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.path": {
+          "sha256": "87e33d22d208db29e0e65cbb3f811346dca55efe9e06a22acb43f1020661f560",
+          "git_blob": "e75b2f736c2a5722e03f3edbacc31b200b4eb3b8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.service": {
+          "sha256": "b9001ce3b2742e0be988dfa2b7c5d6ebe6a3d35178be7a4c73acf4884ec996ea",
+          "git_blob": "eb38a2d4a911054ba24b5c76007c0b4c4de59f96",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.service": {
+          "sha256": "ffee977f683e88aa286ec2154ca2c5720ffaf3b24aeab65f5695229b832ad11f",
+          "git_blob": "d18dde1d6cb40f9dc7811abe5bd6942ad53b5534",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.timer": {
+          "sha256": "10ccb76f8cc6783844307d0380faa77c57b35457152c3ef71f1fb6337c1a0daa",
+          "git_blob": "4c4c1b5823a4380a5edab9c4e0302b9c9b097af4",
+          "mode": "100644"
+        },
+        "systemd/messagebox.target": {
+          "sha256": "261f3c509959ebbe5dca4b13782cef042d736a573371c246c8e013763e8f0912",
+          "git_blob": "1e11897ba9905bf7b1bcacb8d4936458e80508af",
+          "mode": "100644"
+        },
+        "systemd/messagebox.tmpfiles.conf": {
+          "sha256": "85778a074ce34629e4fabd5925e12bb2dd56027bee4288ee1339ec75384db88e",
+          "git_blob": "a6f16995b4ab7e41654a73289a98dd448109e6dd",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup-web.service.d/messagebox.conf": {
+          "sha256": "8cdac1c2be407d8764bf20d82eeffedfbc2c4d317a03f5406c70bf24cf0f1945",
+          "git_blob": "ae26bb8b8fc21b2f9db30b45ec558812e05ed720",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup.service.d/messagebox.conf": {
+          "sha256": "58cb9ef0a5450b3215a4e9e5dc212e975222adcf31c53298c215a67c3fd57fe1",
+          "git_blob": "ea96a2c763ab594af35dc50206382a4d077595cc",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-button.service": {
+          "sha256": "6da576be98eecb7d3a4cb9bf7319a1e830d13833bece34835f39c199c4770d86",
+          "git_blob": "205c7bc248e5253fafe9e74d0e3be05411d48cb7",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.path": {
+          "sha256": "c46f1fe8047d9e08ba808bb363392c0dd23e50897351708007ee73cc2a5f1283",
+          "git_blob": "ed513a281f1296a9d20d4758016c5ea309615d75",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.service": {
+          "sha256": "f204ba0df2ecd9686d494a8d73e6a013213d648a19c01335ab11e880ee4678e5",
+          "git_blob": "689181f702b3422fc23742eae134413bf1507e29",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-home.service": {
+          "sha256": "503854ab931e563209194f56155fab3a11d919776fdbe77752261c7fd1062e24",
+          "git_blob": "8864764e754d9fc34bca16da074f749821161338",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-nfc.service": {
+          "sha256": "3ed4511582a92d4919696f50d4b8c7c4b5c81fe927908465a5874d4e87cd70a8",
+          "git_blob": "adc0d387be4a2cec0f0d7d019c497b44be39a77b",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice-gate.service": {
+          "sha256": "a26fdf8683c40d3d5c5d778578c3ac2260c11ca563c09afc63f9385771379649",
+          "git_blob": "c3052d441488b41ee6311b3b47d7ad01b56febaf",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.path": {
+          "sha256": "2ddd45a560a18052d4e452666477730bbf989b2b84195c2e0ee6b2a59b77de04",
+          "git_blob": "fa032bea55a8fc16f0a5c6516cc86f05cfc8c463",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.target": {
+          "sha256": "92c91486a79df2c76f9e7b6ae21bab76b11ab1927367a5dee3c0a616d03ff2ea",
+          "git_blob": "f39cdb2aca08b7a1e9e684e869eeccd3ff3f379e",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-whatsapp-pairing.service": {
+          "sha256": "f9df5a0a35530dbc7c912c0df8ec83e6590dda6b334a42474fee21e3828025fa",
+          "git_blob": "e1d511e013fd03b15e806b4b5cb4373ad7610d48",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-wifi-reset.service": {
+          "sha256": "293f465f80e6197ab60a0614ed74bf397882f966b6363aa8bb987ee3408db574",
+          "git_blob": "f302f27814b1bf1400873a2746d151641f38babc",
+          "mode": "100644"
+        }
+      }
+    },
+    "v0.3.11": {
+      "commit": "1aa2216f73586250e790c2f5745c0d09c1d4d145",
+      "snapshot": "shared",
+      "files": {
+        "messagebox/wifi_watchdog.py": {
+          "sha256": "62ec582d7a53858e0652aa16e114ac9ead50002b8afda78409549a3a8d1fe545",
+          "git_blob": "3d2acbfe2d75aaf5ee1b43118b50a6cec4f356e3",
+          "mode": "100644"
+        },
+        "scripts/dev/release-manifest.py": {
+          "sha256": "706ea90678fcb7db4d7e11799cd87509a462249a897790e5cec0205e9d41bbd4",
+          "git_blob": "9a6ef2d114c90e58dce28207f8fa86db1caf8c94",
+          "mode": "100644"
+        },
+        "scripts/install/bounded_update.py": {
+          "sha256": "49c285b51f745a6894ee2533df516d681e9e9992fb72c84d5017b0cb799b8425",
+          "git_blob": "799ba3812f210af9a1578c2011eefac342ef2f9d",
+          "mode": "100644"
+        },
+        "scripts/install/health-probe.py": {
+          "sha256": "e9079c51a8c92e495012b516ba84357a8a221d759dcedeb94d58c970a29b324a",
+          "git_blob": "110087b565e0e6d76a84fb4ccc6a848c0c553c2c",
+          "mode": "100644"
+        },
+        "scripts/install/messagebox-mode-migrate.py": {
+          "sha256": "7a73bff609f2ce0c581ac992b54f0eebdcb46abce20da8d1c738831bbba2d24e",
+          "git_blob": "b51d94fc5e14ea45219a4a0dee5fb5f6d7f71b17",
+          "mode": "100755"
+        },
+        "scripts/install/release_verify.py": {
+          "sha256": "e1aa79e5564230e0503850f6a5c1540f71a70ef17910c83a253fcddc0781a9b2",
+          "git_blob": "b466b3f633575933ce2f1947980f4b7e6cc4c4ac",
+          "mode": "100644"
+        },
+        "scripts/install/trust_update.py": {
+          "sha256": "99502b79d0663c3d07e2a549c3c21d18cbaa31b28363b51f2f58de2d4878ca62",
+          "git_blob": "e55ae8efdcdf25706ea3876f3244c37646f4c024",
+          "mode": "100644"
+        },
+        "scripts/install/update-bootstrap.sh": {
+          "sha256": "2a46a5df941e2ff01b5dc122f0eed494f3aab64b1374ee0edc6332e8e2036741",
+          "git_blob": "e380f1e11d0363f749e6c961cec92b9158c82995",
+          "mode": "100755"
+        },
+        "scripts/install/update_controller.py": {
+          "sha256": "d9aac78e61ba538f847ff3145443dcae2b752fc3ba1b9693d51fbfafa6321a3f",
+          "git_blob": "0938ecfa9d64fbfe9148c94f539cf1ab58d85ed1",
+          "mode": "100644"
+        },
+        "scripts/install/update_discovery.py": {
+          "sha256": "f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540",
+          "git_blob": "b82fb70959aaab20a35173333cad1d16cc2fdcd0",
+          "mode": "100644"
+        },
+        "systemd/messagebox-audio-detect.service": {
+          "sha256": "5ddaee2b3dffa547d7c165684731963c9677f8b305f180ff651e3d6f7226d3df",
+          "git_blob": "9c17ec71d4f797e21b7e4ea9b37f4c17dd5d6e70",
+          "mode": "100644"
+        },
+        "systemd/messagebox-button.service": {
+          "sha256": "4cf519edf2ddc51d9e096f13810e5d18a2870f68518bdc879771ec88b4b7a255",
+          "git_blob": "28945b62a82fc85ad952ce1ec9dbcc077e358018",
+          "mode": "100644"
+        },
+        "systemd/messagebox-dash.service": {
+          "sha256": "af64608aee990eaa361a126e046eed5d9c92d2cd1b95bb1fbefc5090b1a424da",
+          "git_blob": "ab881d89ba604684f86d5735c4874c07f9d00963",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-generator": {
+          "sha256": "db2f3261b1bd7b074d983c0cbdc877eb07f313eefb3e1f7211b26f7c10de2fd5",
+          "git_blob": "e56b65d8da4d9606d922ce442eddc28b7d1b15ff",
+          "mode": "100755"
+        },
+        "systemd/messagebox-mode-reconcile.path": {
+          "sha256": "e65614dc574dc455a1746d52cf889a38019326f1f300cca0339b37a0b409ea11",
+          "git_blob": "8c4779159bb73dd8911db859dd19616ea604eea4",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-reconcile.service": {
+          "sha256": "2b3f4aa6b4af029efb46cf1b7b56ed32abd0124af48215e9b960442365a905ed",
+          "git_blob": "c29c9a5107c69c4561ce7a8f7ac2641ac9c923d3",
+          "mode": "100644"
+        },
+        "systemd/messagebox-nfc.service": {
+          "sha256": "00fe653b072bcf31a4dfeeb613fd5eca13d6865dc0819c4278c4421a50d774e4",
+          "git_blob": "8bc8d12f92ea2053264d74422ada59f9654eaf9b",
+          "mode": "100644"
+        },
+        "systemd/messagebox-poller.service": {
+          "sha256": "7a9090b41eb51fa856baf110dc0475221e05715d99b707093419f4ad0f26c8bd",
+          "git_blob": "1f6a7fbe07e6c17a7bb51417d3a33ba515e561f6",
+          "mode": "100644"
+        },
+        "systemd/messagebox-sync.service": {
+          "sha256": "320e82db2438f8e3a269938480d2a684654c9a8f9cc1e85cd1cdbd3856d78034",
+          "git_blob": "7221b87dcbc07724202685c1d70806a3e25390f7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-controller.service": {
+          "sha256": "1329e7e718d3f9b12b6049d3c4b5c5bc913153d74afd4b527e0179b57c5f0643",
+          "git_blob": "7c1142711139db02129fa9b4da306c56849cf998",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.service": {
+          "sha256": "c2594001cf9d21bedfdb8ecd6568b311a9af423f7b6c900c4b975da42cde7f11",
+          "git_blob": "6425803576a401260a79fc303a233c257f24bc93",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.timer": {
+          "sha256": "460400ed0bb0745f8638dbee0ef7d26e35ef9bc078b4419d8e590590dc44e2e5",
+          "git_blob": "8d02253ff8c23b6a704f3b9049f40f68a5d801e8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-install.service": {
+          "sha256": "5a15d0fa55439687c228474c36a3c65c69f6a4264f7ca7beec529eb70ff92a09",
+          "git_blob": "cd99ba2a37b385160bb061fac807fcef7dd50700",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-recovery.service": {
+          "sha256": "248cc26ff3add0701d98d5c8f0355dc5dbef83417e86f8d1e33e5ceea3a74863",
+          "git_blob": "e2498669aeb363cbce3b827561bab92965f6e20f",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.service": {
+          "sha256": "39123442b4f1c019627c288cd71bfb430e1c334d816e0a0ce132597a6b22e5d3",
+          "git_blob": "95671492edcaca7981da3b28ea9f56e30e358d8a",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.timer": {
+          "sha256": "b190e18046eab5a10b4a9f63b4c9dd1b50b0cecc6d3c69db5e7afee1aab00148",
+          "git_blob": "1cb3e62ecdb17b66522c0a436674750e1ec067b7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.path": {
+          "sha256": "87e33d22d208db29e0e65cbb3f811346dca55efe9e06a22acb43f1020661f560",
+          "git_blob": "e75b2f736c2a5722e03f3edbacc31b200b4eb3b8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.service": {
+          "sha256": "b9001ce3b2742e0be988dfa2b7c5d6ebe6a3d35178be7a4c73acf4884ec996ea",
+          "git_blob": "eb38a2d4a911054ba24b5c76007c0b4c4de59f96",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.service": {
+          "sha256": "ffee977f683e88aa286ec2154ca2c5720ffaf3b24aeab65f5695229b832ad11f",
+          "git_blob": "d18dde1d6cb40f9dc7811abe5bd6942ad53b5534",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.timer": {
+          "sha256": "10ccb76f8cc6783844307d0380faa77c57b35457152c3ef71f1fb6337c1a0daa",
+          "git_blob": "4c4c1b5823a4380a5edab9c4e0302b9c9b097af4",
+          "mode": "100644"
+        },
+        "systemd/messagebox.target": {
+          "sha256": "261f3c509959ebbe5dca4b13782cef042d736a573371c246c8e013763e8f0912",
+          "git_blob": "1e11897ba9905bf7b1bcacb8d4936458e80508af",
+          "mode": "100644"
+        },
+        "systemd/messagebox.tmpfiles.conf": {
+          "sha256": "85778a074ce34629e4fabd5925e12bb2dd56027bee4288ee1339ec75384db88e",
+          "git_blob": "a6f16995b4ab7e41654a73289a98dd448109e6dd",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup-web.service.d/messagebox.conf": {
+          "sha256": "8cdac1c2be407d8764bf20d82eeffedfbc2c4d317a03f5406c70bf24cf0f1945",
+          "git_blob": "ae26bb8b8fc21b2f9db30b45ec558812e05ed720",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup.service.d/messagebox.conf": {
+          "sha256": "58cb9ef0a5450b3215a4e9e5dc212e975222adcf31c53298c215a67c3fd57fe1",
+          "git_blob": "ea96a2c763ab594af35dc50206382a4d077595cc",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-button.service": {
+          "sha256": "6da576be98eecb7d3a4cb9bf7319a1e830d13833bece34835f39c199c4770d86",
+          "git_blob": "205c7bc248e5253fafe9e74d0e3be05411d48cb7",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.path": {
+          "sha256": "c46f1fe8047d9e08ba808bb363392c0dd23e50897351708007ee73cc2a5f1283",
+          "git_blob": "ed513a281f1296a9d20d4758016c5ea309615d75",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.service": {
+          "sha256": "f204ba0df2ecd9686d494a8d73e6a013213d648a19c01335ab11e880ee4678e5",
+          "git_blob": "689181f702b3422fc23742eae134413bf1507e29",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-home.service": {
+          "sha256": "503854ab931e563209194f56155fab3a11d919776fdbe77752261c7fd1062e24",
+          "git_blob": "8864764e754d9fc34bca16da074f749821161338",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-nfc.service": {
+          "sha256": "3ed4511582a92d4919696f50d4b8c7c4b5c81fe927908465a5874d4e87cd70a8",
+          "git_blob": "adc0d387be4a2cec0f0d7d019c497b44be39a77b",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice-gate.service": {
+          "sha256": "a26fdf8683c40d3d5c5d778578c3ac2260c11ca563c09afc63f9385771379649",
+          "git_blob": "c3052d441488b41ee6311b3b47d7ad01b56febaf",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.path": {
+          "sha256": "2ddd45a560a18052d4e452666477730bbf989b2b84195c2e0ee6b2a59b77de04",
+          "git_blob": "fa032bea55a8fc16f0a5c6516cc86f05cfc8c463",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.target": {
+          "sha256": "92c91486a79df2c76f9e7b6ae21bab76b11ab1927367a5dee3c0a616d03ff2ea",
+          "git_blob": "f39cdb2aca08b7a1e9e684e869eeccd3ff3f379e",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-whatsapp-pairing.service": {
+          "sha256": "f9df5a0a35530dbc7c912c0df8ec83e6590dda6b334a42474fee21e3828025fa",
+          "git_blob": "e1d511e013fd03b15e806b4b5cb4373ad7610d48",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-wifi-reset.service": {
+          "sha256": "293f465f80e6197ab60a0614ed74bf397882f966b6363aa8bb987ee3408db574",
+          "git_blob": "f302f27814b1bf1400873a2746d151641f38babc",
+          "mode": "100644"
+        }
+      }
+    },
+    "v0.3.12": {
+      "commit": "3fb1c2a3a4e25fccee6a2454f02f0675579a11dc",
+      "snapshot": "shared",
+      "files": {
+        "messagebox/wifi_watchdog.py": {
+          "sha256": "62ec582d7a53858e0652aa16e114ac9ead50002b8afda78409549a3a8d1fe545",
+          "git_blob": "3d2acbfe2d75aaf5ee1b43118b50a6cec4f356e3",
+          "mode": "100644"
+        },
+        "scripts/dev/release-manifest.py": {
+          "sha256": "706ea90678fcb7db4d7e11799cd87509a462249a897790e5cec0205e9d41bbd4",
+          "git_blob": "9a6ef2d114c90e58dce28207f8fa86db1caf8c94",
+          "mode": "100644"
+        },
+        "scripts/install/bounded_update.py": {
+          "sha256": "49c285b51f745a6894ee2533df516d681e9e9992fb72c84d5017b0cb799b8425",
+          "git_blob": "799ba3812f210af9a1578c2011eefac342ef2f9d",
+          "mode": "100644"
+        },
+        "scripts/install/health-probe.py": {
+          "sha256": "e9079c51a8c92e495012b516ba84357a8a221d759dcedeb94d58c970a29b324a",
+          "git_blob": "110087b565e0e6d76a84fb4ccc6a848c0c553c2c",
+          "mode": "100644"
+        },
+        "scripts/install/messagebox-mode-migrate.py": {
+          "sha256": "7a73bff609f2ce0c581ac992b54f0eebdcb46abce20da8d1c738831bbba2d24e",
+          "git_blob": "b51d94fc5e14ea45219a4a0dee5fb5f6d7f71b17",
+          "mode": "100755"
+        },
+        "scripts/install/release_verify.py": {
+          "sha256": "e1aa79e5564230e0503850f6a5c1540f71a70ef17910c83a253fcddc0781a9b2",
+          "git_blob": "b466b3f633575933ce2f1947980f4b7e6cc4c4ac",
+          "mode": "100644"
+        },
+        "scripts/install/trust_update.py": {
+          "sha256": "99502b79d0663c3d07e2a549c3c21d18cbaa31b28363b51f2f58de2d4878ca62",
+          "git_blob": "e55ae8efdcdf25706ea3876f3244c37646f4c024",
+          "mode": "100644"
+        },
+        "scripts/install/update-bootstrap.sh": {
+          "sha256": "2a46a5df941e2ff01b5dc122f0eed494f3aab64b1374ee0edc6332e8e2036741",
+          "git_blob": "e380f1e11d0363f749e6c961cec92b9158c82995",
+          "mode": "100755"
+        },
+        "scripts/install/update_controller.py": {
+          "sha256": "d9aac78e61ba538f847ff3145443dcae2b752fc3ba1b9693d51fbfafa6321a3f",
+          "git_blob": "0938ecfa9d64fbfe9148c94f539cf1ab58d85ed1",
+          "mode": "100644"
+        },
+        "scripts/install/update_discovery.py": {
+          "sha256": "f1dbd4e0d5eaad0fe8a99e58c9b9e31e2407868dd0f09be96acc9f730685f540",
+          "git_blob": "b82fb70959aaab20a35173333cad1d16cc2fdcd0",
+          "mode": "100644"
+        },
+        "systemd/messagebox-audio-detect.service": {
+          "sha256": "5ddaee2b3dffa547d7c165684731963c9677f8b305f180ff651e3d6f7226d3df",
+          "git_blob": "9c17ec71d4f797e21b7e4ea9b37f4c17dd5d6e70",
+          "mode": "100644"
+        },
+        "systemd/messagebox-button.service": {
+          "sha256": "4cf519edf2ddc51d9e096f13810e5d18a2870f68518bdc879771ec88b4b7a255",
+          "git_blob": "28945b62a82fc85ad952ce1ec9dbcc077e358018",
+          "mode": "100644"
+        },
+        "systemd/messagebox-dash.service": {
+          "sha256": "af64608aee990eaa361a126e046eed5d9c92d2cd1b95bb1fbefc5090b1a424da",
+          "git_blob": "ab881d89ba604684f86d5735c4874c07f9d00963",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-generator": {
+          "sha256": "db2f3261b1bd7b074d983c0cbdc877eb07f313eefb3e1f7211b26f7c10de2fd5",
+          "git_blob": "e56b65d8da4d9606d922ce442eddc28b7d1b15ff",
+          "mode": "100755"
+        },
+        "systemd/messagebox-mode-reconcile.path": {
+          "sha256": "e65614dc574dc455a1746d52cf889a38019326f1f300cca0339b37a0b409ea11",
+          "git_blob": "8c4779159bb73dd8911db859dd19616ea604eea4",
+          "mode": "100644"
+        },
+        "systemd/messagebox-mode-reconcile.service": {
+          "sha256": "2b3f4aa6b4af029efb46cf1b7b56ed32abd0124af48215e9b960442365a905ed",
+          "git_blob": "c29c9a5107c69c4561ce7a8f7ac2641ac9c923d3",
+          "mode": "100644"
+        },
+        "systemd/messagebox-nfc.service": {
+          "sha256": "00fe653b072bcf31a4dfeeb613fd5eca13d6865dc0819c4278c4421a50d774e4",
+          "git_blob": "8bc8d12f92ea2053264d74422ada59f9654eaf9b",
+          "mode": "100644"
+        },
+        "systemd/messagebox-poller.service": {
+          "sha256": "7a9090b41eb51fa856baf110dc0475221e05715d99b707093419f4ad0f26c8bd",
+          "git_blob": "1f6a7fbe07e6c17a7bb51417d3a33ba515e561f6",
+          "mode": "100644"
+        },
+        "systemd/messagebox-sync.service": {
+          "sha256": "320e82db2438f8e3a269938480d2a684654c9a8f9cc1e85cd1cdbd3856d78034",
+          "git_blob": "7221b87dcbc07724202685c1d70806a3e25390f7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-controller.service": {
+          "sha256": "1329e7e718d3f9b12b6049d3c4b5c5bc913153d74afd4b527e0179b57c5f0643",
+          "git_blob": "7c1142711139db02129fa9b4da306c56849cf998",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.service": {
+          "sha256": "c2594001cf9d21bedfdb8ecd6568b311a9af423f7b6c900c4b975da42cde7f11",
+          "git_blob": "6425803576a401260a79fc303a233c257f24bc93",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-discovery.timer": {
+          "sha256": "460400ed0bb0745f8638dbee0ef7d26e35ef9bc078b4419d8e590590dc44e2e5",
+          "git_blob": "8d02253ff8c23b6a704f3b9049f40f68a5d801e8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-install.service": {
+          "sha256": "5a15d0fa55439687c228474c36a3c65c69f6a4264f7ca7beec529eb70ff92a09",
+          "git_blob": "cd99ba2a37b385160bb061fac807fcef7dd50700",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-recovery.service": {
+          "sha256": "248cc26ff3add0701d98d5c8f0355dc5dbef83417e86f8d1e33e5ceea3a74863",
+          "git_blob": "e2498669aeb363cbce3b827561bab92965f6e20f",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.service": {
+          "sha256": "39123442b4f1c019627c288cd71bfb430e1c334d816e0a0ce132597a6b22e5d3",
+          "git_blob": "95671492edcaca7981da3b28ea9f56e30e358d8a",
+          "mode": "100644"
+        },
+        "systemd/messagebox-update-supervisor.timer": {
+          "sha256": "b190e18046eab5a10b4a9f63b4c9dd1b50b0cecc6d3c69db5e7afee1aab00148",
+          "git_blob": "1cb3e62ecdb17b66522c0a436674750e1ec067b7",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.path": {
+          "sha256": "87e33d22d208db29e0e65cbb3f811346dca55efe9e06a22acb43f1020661f560",
+          "git_blob": "e75b2f736c2a5722e03f3edbacc31b200b4eb3b8",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-change.service": {
+          "sha256": "b9001ce3b2742e0be988dfa2b7c5d6ebe6a3d35178be7a4c73acf4884ec996ea",
+          "git_blob": "eb38a2d4a911054ba24b5c76007c0b4c4de59f96",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.service": {
+          "sha256": "ffee977f683e88aa286ec2154ca2c5720ffaf3b24aeab65f5695229b832ad11f",
+          "git_blob": "d18dde1d6cb40f9dc7811abe5bd6942ad53b5534",
+          "mode": "100644"
+        },
+        "systemd/messagebox-wifi-watchdog.timer": {
+          "sha256": "10ccb76f8cc6783844307d0380faa77c57b35457152c3ef71f1fb6337c1a0daa",
+          "git_blob": "4c4c1b5823a4380a5edab9c4e0302b9c9b097af4",
+          "mode": "100644"
+        },
+        "systemd/messagebox.target": {
+          "sha256": "261f3c509959ebbe5dca4b13782cef042d736a573371c246c8e013763e8f0912",
+          "git_blob": "1e11897ba9905bf7b1bcacb8d4936458e80508af",
+          "mode": "100644"
+        },
+        "systemd/messagebox.tmpfiles.conf": {
+          "sha256": "85778a074ce34629e4fabd5925e12bb2dd56027bee4288ee1339ec75384db88e",
+          "git_blob": "a6f16995b4ab7e41654a73289a98dd448109e6dd",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup-web.service.d/messagebox.conf": {
+          "sha256": "8cdac1c2be407d8764bf20d82eeffedfbc2c4d317a03f5406c70bf24cf0f1945",
+          "git_blob": "ae26bb8b8fc21b2f9db30b45ec558812e05ed720",
+          "mode": "100644"
+        },
+        "systemd/onboarding/comitup.service.d/messagebox.conf": {
+          "sha256": "58cb9ef0a5450b3215a4e9e5dc212e975222adcf31c53298c215a67c3fd57fe1",
+          "git_blob": "ea96a2c763ab594af35dc50206382a4d077595cc",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-button.service": {
+          "sha256": "6da576be98eecb7d3a4cb9bf7319a1e830d13833bece34835f39c199c4770d86",
+          "git_blob": "205c7bc248e5253fafe9e74d0e3be05411d48cb7",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.path": {
+          "sha256": "c46f1fe8047d9e08ba808bb363392c0dd23e50897351708007ee73cc2a5f1283",
+          "git_blob": "ed513a281f1296a9d20d4758016c5ea309615d75",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-complete.service": {
+          "sha256": "f204ba0df2ecd9686d494a8d73e6a013213d648a19c01335ab11e880ee4678e5",
+          "git_blob": "689181f702b3422fc23742eae134413bf1507e29",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-home.service": {
+          "sha256": "503854ab931e563209194f56155fab3a11d919776fdbe77752261c7fd1062e24",
+          "git_blob": "8864764e754d9fc34bca16da074f749821161338",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-nfc.service": {
+          "sha256": "3ed4511582a92d4919696f50d4b8c7c4b5c81fe927908465a5874d4e87cd70a8",
+          "git_blob": "adc0d387be4a2cec0f0d7d019c497b44be39a77b",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice-gate.service": {
+          "sha256": "a26fdf8683c40d3d5c5d778578c3ac2260c11ca563c09afc63f9385771379649",
+          "git_blob": "c3052d441488b41ee6311b3b47d7ad01b56febaf",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.path": {
+          "sha256": "2ddd45a560a18052d4e452666477730bbf989b2b84195c2e0ee6b2a59b77de04",
+          "git_blob": "fa032bea55a8fc16f0a5c6516cc86f05cfc8c463",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-onboarding-voice.target": {
+          "sha256": "92c91486a79df2c76f9e7b6ae21bab76b11ab1927367a5dee3c0a616d03ff2ea",
+          "git_blob": "f39cdb2aca08b7a1e9e684e869eeccd3ff3f379e",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-whatsapp-pairing.service": {
+          "sha256": "f9df5a0a35530dbc7c912c0df8ec83e6590dda6b334a42474fee21e3828025fa",
+          "git_blob": "e1d511e013fd03b15e806b4b5cb4373ad7610d48",
+          "mode": "100644"
+        },
+        "systemd/onboarding/messagebox-wifi-reset.service": {
+          "sha256": "293f465f80e6197ab60a0614ed74bf397882f966b6363aa8bb987ee3408db574",
+          "git_blob": "f302f27814b1bf1400873a2746d151641f38babc",
+          "mode": "100644"
+        }
+      }
+    }
+  }
+}

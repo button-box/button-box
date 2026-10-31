@@ -32,6 +32,7 @@ ENV_FILE = Path("/etc/messagebox/env")
 
 _GROUP_JID = re.compile(r"^[0-9]+(?:-[0-9]+)?@g\.us$")
 _PERSON_JID = re.compile(r"^[0-9]+@s\.whatsapp\.net$")
+_BOX_JID = re.compile(r"^box:[A-Za-z0-9:._-]{1,240}$")
 _UID = re.compile(r"^[0-9A-F]+$")
 _LEGACY_ROOT_KEYS = {"version", "revision", "contacts", "listeners"}
 _ROOT_KEYS = _LEGACY_ROOT_KEYS | {"default_recipient"}
@@ -63,6 +64,8 @@ def _empty_document() -> JsonObject:
 def _chat_kind(value: object) -> str:
     if not isinstance(value, str):
         raise ContactError("contact JID is invalid")
+    if _BOX_JID.fullmatch(value):
+        return "box"
     if _GROUP_JID.fullmatch(value):
         return "group"
     if _PERSON_JID.fullmatch(value):
@@ -311,6 +314,13 @@ class ContactStore:
         """Return a validated snapshot without creating a missing store."""
         return copy.deepcopy(self._read())
 
+    @contextmanager
+    def locked_snapshot(self):
+        """Keep a routing decision and its contact mappings in one snapshot."""
+        # Take this lock before the NFC selection lock, never in reverse order.
+        with self._locked():
+            yield self.load()
+
     def clear_for_whatsapp_relink(self) -> JsonObject:
         """Erase account-scoped contacts, listeners, defaults, and card mappings."""
 
@@ -369,12 +379,16 @@ class ContactStore:
 
         return self._mutate(add)
 
-    def remove_contact(self, jid) -> bool:
+    def remove_contact(self, jid, *, protect_default=False) -> bool:
         jid = _clean_chat_jid(jid)
+        if not isinstance(protect_default, bool):
+            raise ContactError("protect_default must be true or false")
 
         def remove(document):
             if jid not in document["contacts"]:
                 return False, False
+            if protect_default and document["default_recipient"] == jid:
+                raise ContactError("default recipient cannot be removed")
             del document["contacts"][jid]
             if document["default_recipient"] == jid:
                 document["default_recipient"] = None
@@ -534,12 +548,16 @@ class ContactStore:
 
         return self._mutate(enroll)
 
-    def remove_card(self, uid) -> bool:
+    def remove_card(self, uid, *, expected_jid=None) -> bool:
         uid = _normalize_uid(uid)
+        if expected_jid is not None:
+            expected_jid = _clean_chat_jid(expected_jid)
 
         def remove(document):
-            for contact in document["contacts"].values():
-                if uid in contact["card_uids"]:
+            contacts = ([document["contacts"].get(expected_jid)] if expected_jid is not None
+                        else document["contacts"].values())
+            for contact in contacts:
+                if contact is not None and uid in contact["card_uids"]:
                     contact["card_uids"].remove(uid)
                     return True, True
             return False, False

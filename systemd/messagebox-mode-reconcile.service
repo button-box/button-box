@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Converge Button Box process state to the selected mode
 After=local-fs.target
 StartLimitIntervalSec=60

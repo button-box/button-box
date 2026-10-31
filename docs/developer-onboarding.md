@@ -28,12 +28,12 @@ sharing on. Reconnect the cable or reboot the Pi to request a DHCP lease.
 Provision from the repository root on the development computer:
 
 ```sh
-./scripts/provision.sh admin@button-box-001.local
+./scripts/provision.sh admin@REPLACE_WITH_VERIFIED_HOST
 ```
 
-Provisioning refuses to connect to the Pi if any required prompt is absent.
-This keeps a clean card from reaching recipient onboarding with an unusable
-button service. Pass `--guided-prompts DIR` to test an alternate licensed set.
+Provisioning validates the cue and Jessica voice packs before connecting to the
+Pi. Missing or invalid audio fails truthfully. See `sounds/README.md` for the
+format, checksums and voice terms; see `docs/sound-design.md` for sound behavior.
 
 Use the Pi's `.local` hostname instead of assuming a fixed address. Turn
 Internet Sharing off before testing consumer Wi-Fi onboarding.
@@ -43,7 +43,7 @@ Internet Sharing off before testing consumer Wi-Fi onboarding.
 On a disposable test box reachable over SSH, run:
 
 ```sh
-./scripts/dev/reprovision.sh admin@button-box-001.local
+./scripts/dev/reprovision.sh admin@REPLACE_WITH_VERIFIED_HOST
 ```
 
 The helper requires confirmation. It preserves the operating system, packages,
@@ -77,7 +77,7 @@ messagebox-dev-onboard
 Or run it remotely:
 
 ```sh
-ssh -t admin@button-box-001.local messagebox-dev-onboard
+ssh -t admin@REPLACE_WITH_VERIFIED_HOST messagebox-dev-onboard
 ```
 
 The flow stops Button Box services before configuration and testing. If it
@@ -147,7 +147,9 @@ runtime NFC daemon.
 The hardware test checks network access, speaker, microphone, LED, button,
 PN532/card detection, and WhatsApp authentication. It does not send a message or
 display NFC IDs. Run it directly only in an interactive terminal as the
-`messagebox` service user:
+`messagebox` service user. The microphone step requires a fresh physical button
+press within 15 seconds; terminal Enter alone cannot start capture. Stop the
+normal button service first so the test has exclusive GPIO/audio access:
 
 ```sh
 sudo -u messagebox -H /opt/messagebox/dev/hardware-test.sh

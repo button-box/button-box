@@ -1,0 +1,11 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Watch Button Box boot-mode authority
+
+[Path]
+PathChanged=/etc/messagebox-onboarding/enabled
+PathExists=/run/messagebox-mode-reconcile.pending
+Unit=messagebox-mode-reconcile.service
+
+[Install]
+WantedBy=multi-user.target

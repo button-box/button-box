@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent controller readiness timer
+
+[Timer]
+OnBootSec=20
+OnUnitInactiveSec=5
+AccuracySec=1
+Unit=messagebox-update-selector.service
+
+[Install]
+WantedBy=timers.target

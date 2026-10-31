@@ -14,7 +14,7 @@ root access they require.
 | --- | --- |
 | `messagebox-button.service` | Record, play, and send voice messages |
 | `messagebox-poller.service` | Queue voice notes and ordinary video soundtracks from configured contacts |
-| `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized |
+| `messagebox-sync.service` | Keep one WhatsApp connection alive and the local store synchronized in wacli mode |
 | `messagebox-nfc.service` | Read recipient cards and maintain NFC selection state |
 | `messagebox-dash.service` | Serve the canonical household dashboard on the Wi-Fi interface |
 
@@ -27,7 +27,9 @@ the queue, in-flight, hold, or trash state. If that newest fresh route is invali
 or no longer allowed, recording fails closed; it never selects an older sender
 or the default. The explicit default is used only when played history is absent
 or expired. Unknown-card state and stale or missing NFC reader health also fail
-closed before recent-sender routing.
+closed before recent-sender routing. A held unknown card stays blocked after its
+announcement is consumed; the transient block clears only after reader removal
+grace or a recognized card presentation.
 
 Continuous sync owns the writable WhatsApp store. Outbound voice notes,
 played reactions, and recording presence use an immediate lock attempt so the
@@ -35,7 +37,14 @@ pinned client delegates them to the active sync connection immediately.
 Commands that require exclusive store access, such as recipient refresh, pause
 sync and retain their bounded lock wait.
 
-The poller accepts wacli media types `audio` and `video`, converts the first
+In cloud mode, the same physical runtime uses an authenticated device client.
+The service supplies scoped family membership, delivery permissions and bounded
+commands. The device owns recording, playback, NFC, durable local queues and
+command execution. Claiming requires both WhatsApp identity and a physical
+button press. Provider integration, accounts and billing live in the separate
+service. See [cloud runtime and acceptance](cloud-runtime.md).
+
+In the default transport, the poller accepts wacli media types `audio` and `video`, converts the first
 audio track to the same mono 48 kHz WAV queue format, and retains the exact
 originating chat and sender in the existing private routing sidecar. Ordinary
 videos are bounded by `MSGBOX_VIDEO_MAX_BYTES` and
@@ -54,12 +63,58 @@ and download support, and must not be claimed from poller tests alone.
 
 A fresh valid NFC selection reserves the next button interaction for a new
 outbound message before any unread incoming message is claimed. The incoming
-queue stays intact for the following ordinary press. The selection is one-shot
-and expires when that recording interaction completes or is abandoned. In
-hold-to-record mode, releasing before the hold threshold cancels the selected
-recording intent without playing the queue or saving a silent recording.
+queue stays intact until an ordinary press after the card message is queued.
+The selection is consumed only when the approved recording enters the durable
+outbox. Short presses, empty audio, cancelled or deleted recordings, recording
+timeouts, and audio errors keep the choice with its original selection time.
+The choice expires after `MSGBOX_NFC_SELECTION_TTL_S` (30 seconds by default),
+even while the card remains on the reader. A new presentation replaces it.
+A recording that starts within the window keeps its exact recipient.
+Removing a card is silent. Re-presenting the same card suppresses its selection
+announcement for 60 seconds after the last announcement, including reader gaps
+while moving it. `MSGBOX_NFC_REANNOUNCE_COOLDOWN_S` overrides this positive interval.
+A different card announces immediately; pairing feedback bypasses the cooldown.
+Cloud reaction cards keep their separate per-message send deduplication.
+The cooldown starts when the audio owner acknowledges played feedback (including
+intentional silent feedback during quiet time), not when a request is queued.
+Expired or dropped unplayed requests do not suppress the next presentation.
+Same-card reads coalesce while feedback is queued or playing. The audio owner
+retains the claimed request until acknowledgment, failure or a drop, and checks
+confirmed feedback again before playing a queued duplicate. A deliberate switch
+away and back keeps its own announcement. Coalescing does not renew the original
+request's ten-second expiry. NFC daemon cleanup preserves an active audio claim.
+The private mode-0600 `/run/messagebox/.nfc-announcement.json.confirmed` receipt
+retains the last confirmed card, boot ID and monotonic acknowledgment time across
+NFC daemon restarts. It also retains the most recently presented card, even if
+its feedback never played, so switching away and back still announces after a
+reader restart. A late acknowledgment preserves that newer presentation.
+A reboot may reset the receipt. Suppressed reads do not renew the cooldown.
+It does not change selection expiry, rearming, or quiet-time playback.
+In hold-to-record mode, a short release keeps the choice without playing the
+queue or saving silent audio. A button-service crash before approval leaves
+the choice available until expiry; there is no claim to recover. Invalid card
+state blocks outbound routing rather than selecting a recent sender or default.
 
-After successful playback, the private WAV and routing sidecar move into
+Each card recording saves its selection ID with the durable outbox job. Button
+startup and input reconcile committed jobs before routing another recording.
+Successful-send cleanup and all Cloud job deletion paths reconcile before
+removing that receipt. A crash after the queue commit therefore cannot leave
+an old card choice armed; a later presentation has a different ID and survives
+reconciliation of an older job. Reconciliation failure keeps input blocked and
+the job available for retry. The unknown-card block and selection are read
+together under the same lock used by the NFC writer; blocked state never means
+that the default or recent sender may be used.
+
+An NFC service restart preserves unused choices, consumed markers and their
+original timestamps. A held card is resumed as the same presentation until the
+reader confirms removal for the normal grace interval. An unrelated contacts
+revision refreshes the same person's mapping without renewing the choice. A
+changed mapping blocks that presentation until removal and a new scan.
+This check also applies to a held card after expiry or a successful send has
+consumed the choice. Routing and reader refresh hold the contacts lock through
+selection processing; the lock order is contacts, then NFC selection.
+
+In standalone mode, after successful playback, the private WAV and routing sidecar move into
 `queue/.played`. The dashboard shows up to 20 metadata records from the last 14
 days, newest first. Playable media is further bounded to the 10 newest files and
 128 MiB; a retained record whose media was pruned remains visible as
@@ -216,3 +271,67 @@ replaces the old profile. A failed candidate restores and rechecks the old
 profile; if that also fails, the worker reopens the protected setup hotspot.
 The password is supplied to `nmcli --ask` over stdin and is never placed in a
 process argument, response, status document, or log.
+
+
+## Cloud reaction cards
+
+Cloud boxes report `reaction_cards: 1`. Heartbeat can carry up to six reaction
+card IDs and emojis. Cloud contacts use `box:reaction_*`; they are NFC actions,
+not voice-message recipients. A tap sends the card ID for the last message
+played within ten minutes. Repeated taps use a stable operation ID. A removed
+card is rejected by Cloud and its contact is removed on the next heartbeat.
+The setup screens require no change. Add and remove cards in dashboard People.
+
+Boxes also report `reaction_sent_voice: 1`. The box plays the card cue as soon
+as it reads the card, while the Cloud request runs; the cue confirms the read,
+not the send. When Cloud accepts the reaction (`state: "sent"`), the box then
+says what was sent in the current voice, for example "You just sent a heart!".
+The line follows "Say the name when a card is tapped" (`card_name_prompt`); with
+it off, the box plays only the card cue. Any other result plays `cue-oops.wav`
+after the cue and never claims a send.
+
+The line plays once per accepted send. A card that is lifted and placed again,
+or that the reader loses for a moment, reads as a new tap. When that tap has the
+same operation ID as a send Cloud already accepted (same card, same message,
+within the ten-minute window), the box does not call Cloud again. Within
+`MSGBOX_REACTION_SETTLE_S` (default 5 s) of the first send it stays silent;
+later it plays only the card cue. A tap after a failed send asks Cloud again. The lines are bundled, so a tap never
+downloads or synthesizes audio: `voice-sent-<key>.wav` in `sounds/voice` and in
+every `sounds/voices/<pack>`, listed under `reaction_lines` in each manifest.
+Keys are `heart`, `big-laugh`, `applause`, `heart-eyes`, `thumbs-up`, `fire`,
+`celebration`, `kiss`, `surprise`, `tear`, `hooray` and `smile` (the dashboard's
+common emojis, using Cloud's emoji words). Any other emoji says "You just sent a
+reaction!". A missing or invalid file falls back to Jessica, then to the generic
+line, then to the card cue. These optional lines never block a voice pack.
+Signed releases that add them need `min_updater_version: "1.1.0"`.
+
+When Cloud omits the new section, the Pi keeps the old heart-only contact and
+request body. Malformed optional card reports do not invalidate heartbeat.
+The self-hosted wacli path stays unchanged and never calls the Cloud reaction API.
+Real NFC, speaker, and WhatsApp checks are required before physical acceptance.
+
+## Message age phrase
+
+Cloud boxes report `message_age_phrase: true`. When a message plays long after
+it was sent, the box says when it was sent: arrival cue, then the optional
+"A message for you!" intro, then the age phrase, then the message. It is always
+on; there is no setting. `messagebox/message_age.py` holds the rule as one pure
+function. The phrase plays only when the message is at least three hours old
+AND was sent in an earlier day part or on an earlier day, in the box's
+configured timezone. Day parts are morning 05:00-12:00, afternoon 12:00-17:00,
+evening 17:00-21:00 and night 21:00-05:00. A night belongs to the day it
+started on: Tuesday 23:00 and Wednesday 02:00 are both "Tuesday night", and on
+Wednesday morning both are "from last night". Day counts compare those day
+anchors as calendar dates, so DST changes do not shift them; the three hours
+are real elapsed time. Keys: `this-morning`, `this-afternoon`, `this-evening`,
+`last-night`, `yesterday`, `2-days-ago` to `6-days-ago`, `last-week` (7-13
+days) and `a-while-ago` (14 days or more).
+
+The send time is the audio payload's `message_created_at`, stored in the queue
+sidecar as `cloud_created_at`. Cloud sets it when the message is sent, and a
+quiet-hours hold, a held queue or an offline box does not change it. The box
+says nothing when the send time is missing, invalid or in the future, when the
+clock is not verified by a recent heartbeat (`cloud_runtime.verified_now()`),
+and during Mute, Quiet now and quiet schedules. Lines are bundled
+(`voice-age-<key>.wav`, `age_lines` in each manifest) and fall back to Jessica,
+then to silence. wacli boxes never play the phrase.

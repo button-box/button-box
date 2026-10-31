@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Apply one transactional Button Box Wi-Fi change
 After=NetworkManager.service
 Requires=NetworkManager.service

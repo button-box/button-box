@@ -1,0 +1,65 @@
+def poll_once(self):
+    inbox = self.client.inbox(self.state["cursor"])
+    deletion_only = inbox.get("deleted") is True
+    if deletion_only:
+        self.state["snapshot"] = None
+        self._save()
+        self._prune_listened_clips()
+    elif inbox.get("box_id") != self._snapshot()["box_id"]:
+        raise CloudRuntimeError("cloud inbox box does not match")
+    if not _valid_time(inbox.get("server_time")) or not isinstance(inbox.get("items"), list):
+        raise CloudRuntimeError("cloud inbox is invalid")
+    items = inbox["items"]
+    deletion_ids = {item.get("operation_id") for item in items if isinstance(item, dict)
+                    and item.get("kind") == "delete_message"}
+    self.flush_acks(deletion_ids if deletion_only else None)
+    if not deletion_only:
+        self._finish_listened()
+        self._finish_previews()
+        self._finish_nfc()
+        self._finish_settings()
+        self.flush_acks()
+    # Silence must not wait behind media downloads. Deletion still precedes
+    # all other work; cursors remain hints until each operation is ACKed.
+    for item in sorted(items, key=lambda entry: (
+            {"mute": 0, "quiet_now": 0, "delete_message": 1}.get(entry.get("kind"), 2),
+            entry.get("sequence", 0))):
+        if (not isinstance(item, dict) or not _valid_id(item.get("operation_id"))
+                or type(item.get("sequence")) is not int or item["sequence"] < 0
+                or item.get("kind") not in {"reaction", "audio", "listened", "card_prompt", "settings", "preview_ringtone", "voice_preview", "nfc_enroll", "nfc_cancel", "nfc_unpair", "queue_hold", "delete_message", "quiet_now", "mute", "install_update", "set_update_mode"}
+                or not _valid_time(item.get("created_at")) or not _valid_time(item.get("expires_at"))
+                or not isinstance(item.get("payload"), dict)
+                or item.get("kind") == "nfc_unpair" and item["payload"] and (
+                    set(item["payload"]) != {"card_ref", "recipient_id", "inventory_revision"}
+                    or not isinstance(item["payload"].get("card_ref"), str)
+                    or not re.fullmatch(r"[a-f0-9]{32}", item["payload"]["card_ref"])
+                    or not isinstance(item["payload"].get("recipient_id"), str)
+                    or not _ID.fullmatch(item["payload"]["recipient_id"])
+                    or type(item["payload"].get("inventory_revision")) is not int
+                    or item["payload"]["inventory_revision"] < 0)):
+            raise CloudRuntimeError("cloud inbox item is invalid")
+        if inbox.get("deleted") is True and item["kind"] != "delete_message":
+            continue
+        now = inbox["server_time"]
+        if not deletion_only:
+            self._snapshot()
+        if item["kind"] == "listened" and self._replay_completed(item["operation_id"]):
+            pass  # Expiry must not replace an already reported playback result.
+        elif now >= item["expires_at"] and item["kind"] != "delete_message":
+            self._ack(item["operation_id"], "expired")
+        else:
+            try:
+                self._command(item, now)
+            except CloudCommandDeferred:
+                # Inbox cursors are hints; the service returns all pending
+                # operations until ACKed, including work before the cursor.
+                continue
+            except (CloudRuntimeError, SettingsError, ContactError, NfcError, OSError, ValueError) as exc:
+                self._ack(item["operation_id"], "rejected",
+                          error_code=getattr(exc, "error_code", "device_command_rejected"))
+        self.state["cursor"] = max(self.state["cursor"], item["sequence"])
+        self._save()
+        self.flush_acks(deletion_ids if deletion_only else None)
+    if self.state.get("snapshot") is not None:
+        self.expire_local()
+    self.recover_outbox()

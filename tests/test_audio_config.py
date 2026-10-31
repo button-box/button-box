@@ -40,8 +40,8 @@ class AudioConfigTests(unittest.TestCase):
         pcm_path.touch()
         (self.sound_root / pcm_path.name).symlink_to(pcm_path)
 
-    def add_capture(self, card, device, card_id):
-        self.add_device(card, device, card_id, "c")
+    def add_capture(self, card, device, card_id, *, usb=False):
+        self.add_device(card, device, card_id, "c", usb=usb)
 
     def add_playback(self, card, device, card_id, *, usb=False):
         self.add_device(card, device, card_id, "p", usb=usb)
@@ -69,6 +69,33 @@ class AudioConfigTests(unittest.TestCase):
             audio_config.AudioConfigError, "connect a microphone"
         ):
             audio_config.detect_microphone(self.sound_root)
+
+    def test_dedicated_usb_microphone_wins_in_either_card_order(self):
+        for mic, speaker in ((2, 1), (1, 2)):
+            with self.subTest(mic=mic, speaker=speaker):
+                # Give each order its own fake /sys/class/sound tree.
+                self.sound_root = self.root / str(mic) / 'class/sound'
+                self.sound_root.mkdir(parents=True)
+                self.add_capture(speaker, 0, 'UACDemoV10', usb=True)
+                self.add_playback(speaker, 1, 'UACDemoV10', usb=True)
+                self.add_capture(mic, 0, 'UACDemoV10_1', usb=True)
+                self.assertEqual(audio_config.detect_microphone(self.sound_root),
+                    ('UACDemoV10_1', 'plughw:CARD=UACDemoV10_1,DEV=0'))
+                self.assertEqual(audio_config.detect_speaker(self.sound_root),
+                    ('UACDemoV10', 'plughw:CARD=UACDemoV10,DEV=1'))
+
+    def test_single_combined_usb_device_remains_a_valid_microphone(self):
+        self.add_capture(3, 0, 'combined', usb=True)
+        self.add_playback(3, 0, 'combined', usb=True)
+        self.assertEqual(audio_config.detect_microphone(self.sound_root),
+                         ('combined', 'plughw:CARD=combined,DEV=0'))
+
+    def test_non_usb_capture_only_card_does_not_override_existing_fallback(self):
+        self.add_capture(1, 0, 'combined', usb=True)
+        self.add_playback(1, 0, 'combined', usb=True)
+        self.add_capture(2, 0, 'onboard')
+        self.assertEqual(audio_config.detect_microphone(self.sound_root),
+                         ('combined', 'plughw:CARD=combined,DEV=0'))
 
     def test_speaker_uses_lowest_usb_playback_and_ignores_hdmi(self):
         self.add_playback(0, 0, "hdmi")
@@ -148,6 +175,21 @@ class AudioConfigTests(unittest.TestCase):
                 audio_config.write_atomic(path, "new\n")
         self.assertEqual(path.read_text(), "previous\n")
         self.assertEqual(list(self.root.glob(".audio.env.*")), [])
+
+    def test_poller_loads_optional_detected_audio_after_canonical_environment(self):
+        unit = (ROOT / "systemd" / "messagebox-poller.service").read_text(encoding="utf-8")
+        lines = unit.splitlines()
+        environments = [line for line in lines if line.startswith("EnvironmentFile=")]
+        self.assertEqual(environments, [
+            "EnvironmentFile=/etc/messagebox/env",
+            "EnvironmentFile=-/run/messagebox-audio/audio.env",
+        ])
+        after = next(line.removeprefix("After=").split()
+                     for line in lines if line.startswith("After="))
+        self.assertIn("messagebox-audio-detect.service", after)
+        requires = {dependency for line in lines if line.startswith("Requires=")
+                    for dependency in line.removeprefix("Requires=").split()}
+        self.assertNotIn("messagebox-audio-detect.service", requires)
 
     def test_audio_services_require_detector_and_load_override_last(self):
         for name in (

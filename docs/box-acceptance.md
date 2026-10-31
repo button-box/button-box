@@ -15,7 +15,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | ID | Required evidence | Expected result |
 |---|---|---|
 | BB-BUILD-01 | PHYSICAL | The recorded unit identity and final parts match the assembled box. The enclosure closes, components stay retained, cables remain intact with clearance and strain relief, and the specified power supply is used. |
-| BB-HOME-01 | UI+API | Home reports Wi-Fi, WhatsApp, and runtime truthfully. |
+| BB-HOME-01 | UI+API | Home reports the active connection mode, Wi-Fi, WhatsApp, recipients, and runtime truthfully. Cloud readiness uses fresh cloud authorization; stale or missing authorization shows attention, and Cloud management opens the service dashboard. |
 | BB-HOME-02 | UI+LOG+ACOUSTIC | Ring control records one request and produces the selected signal. |
 | BB-SETUP-01 | UI | Required and optional setup tasks render and navigate correctly. |
 | BB-SETUP-02 | UI | A stale setup-only hash normalizes to the correct runtime view. |
@@ -41,7 +41,7 @@ This is the canonical, reusable definition of the checks required before a box i
 | BB-RECIP-10 | TEST+UI | Removing the default is rejected safely. |
 | BB-RECIP-11 | TEST+UI+API | Naming or renaming a recipient preserves chat identity, default selection, and NFC mappings; names persist after reload. |
 | BB-NFC-01 | UI | Waiting, back, skip, retry, and unavailable states remain coherent. |
-| BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. |
+| BB-NFC-02 | TEST+MOCK | Repeated, removed, alternating, stale, and unknown mock tags fail closed. A held unknown tag still blocks default/recent routing after its announcement is consumed; removal grace or a known tag restores normal routing. |
 | BB-NFC-03 | PHYSICAL | A real tag pairs, debounces, re-presents, reassigns, unpairs, and persists. |
 | BB-NFC-04 | TEST+PHYSICAL | A fresh card selection takes priority over queued playback and recent replies in both recording modes; stale, unknown, and raced selections never route to another recipient. |
 | BB-VOICE-01 | UI+LOG | One authorized voice note is received and queued once. |

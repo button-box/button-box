@@ -1,0 +1,505 @@
+{
+  "source": "ElevenLabs, Jessica box voice (cgSgspJ2msm6clMCkdW9), eleven_v3; 48 kHz mono 16-bit",
+  "lines": [
+    {
+      "file": "reaction.wav",
+      "text": "Someone reacted to your message!",
+      "sha256": "82eef4ccdb666a6804345ea9d60d2e177e760165e57bd0164fbe2d271dd558a4"
+    },
+    {
+      "file": "text-message.wav",
+      "text": "You have a written message.",
+      "sha256": "af9f04101c1ec5bcc6dda078acbe2d736a54b2a325b1a1430542e3b38bd31f47"
+    },
+    {
+      "file": "nothing.wav",
+      "text": "There's nothing to react to yet.",
+      "sha256": "2d0a5604248387d0593a2cf111d3d6ecbc76a97127a0e179adb8c7f57953247a"
+    },
+    {
+      "file": "more-1.wav",
+      "text": "And 1 more reaction!",
+      "sha256": "faa0a7714e5dfba8b95fb9e6ba24089efcc3ef32765c93a16eb867580505c7ba"
+    },
+    {
+      "file": "more-2.wav",
+      "text": "And 2 more reactions!",
+      "sha256": "945e95a3d41a9d050d720912efd53fc86ab461464c55e180e7307ef6dcb0c2b0"
+    },
+    {
+      "file": "more-3.wav",
+      "text": "And 3 more reactions!",
+      "sha256": "8bbd91d3351012e653ba7d9a5db0e1653b8e0485891369858194b38c89892293"
+    },
+    {
+      "file": "more-4.wav",
+      "text": "And 4 more reactions!",
+      "sha256": "3559aa96843b1486a302536a3fd3e91bbb12e0062f4cf415d7206348b6727a12"
+    },
+    {
+      "file": "more-5.wav",
+      "text": "And 5 more reactions!",
+      "sha256": "4a76eb3950a8bb0212768d95c7e23ee22d40499b8400fd33b2b5285ecbf9180f"
+    },
+    {
+      "file": "more-6.wav",
+      "text": "And 6 more reactions!",
+      "sha256": "0a68a68a3dbbf401ad6facbec562a6824eaf74c9d43fea652e92baf1a1a2e090"
+    },
+    {
+      "file": "more-7.wav",
+      "text": "And 7 more reactions!",
+      "sha256": "57fdbc04c5ddb425797ea0dd782ef7fbaa6241f53a1b18a1ffbda2ea64831c0d"
+    },
+    {
+      "file": "more-8.wav",
+      "text": "And 8 more reactions!",
+      "sha256": "dc9e46095b97f9fd1cf91bdfe7ded6230aad2dafd625718ac79a4786c51c9114"
+    },
+    {
+      "file": "more-9.wav",
+      "text": "And 9 more reactions!",
+      "sha256": "9fdaec206ec2cfa8c9ebea393cb87bc49d37b545e824f614f00886d379844281"
+    },
+    {
+      "file": "more-10.wav",
+      "text": "And 10 more reactions!",
+      "sha256": "82210949abff0996cbe99591e2e2e59365b51093438250ebef8cc50c485828cb"
+    },
+    {
+      "file": "more-11.wav",
+      "text": "And 11 more reactions!",
+      "sha256": "826a3c1b70a43bfe4fbe633d383d3b8d529a9fecaa1d1172a670ab027f648d19"
+    },
+    {
+      "file": "more-12.wav",
+      "text": "And 12 more reactions!",
+      "sha256": "2218f368633730f8c36e2dc6c4fbc9f0157c99dda0471419ec0a740c7a439f4d"
+    },
+    {
+      "file": "more-13.wav",
+      "text": "And 13 more reactions!",
+      "sha256": "54c9646f088dec77e96dbc22f51bb27ebde53d223785f3cc6c2aee53e7c66b8e"
+    },
+    {
+      "file": "more-14.wav",
+      "text": "And 14 more reactions!",
+      "sha256": "fd3311fd04e910f49bb3774bb11e6d9d0d84ba19a439b937d101065a62a60a5f"
+    },
+    {
+      "file": "more-15.wav",
+      "text": "And 15 more reactions!",
+      "sha256": "cfd6365db17a87a6e07da9c5471b0898b2e79d026396ef60606a560e7236af2d"
+    },
+    {
+      "file": "more-16.wav",
+      "text": "And 16 more reactions!",
+      "sha256": "17ece61c6c3ecf00f2b050af0781a1c3fbb3085645d37783af0c862bbc30345b"
+    },
+    {
+      "file": "more-17.wav",
+      "text": "And 17 more reactions!",
+      "sha256": "e0b7e1ee328c272868c8b179b0ab3ebb50ea287e0a3a3ac6ff6bb4b949449822"
+    },
+    {
+      "file": "more-18.wav",
+      "text": "And 18 more reactions!",
+      "sha256": "8804b7d6c650a587de920182f2c8e6dcc49c544439002686c01b716ef22cd651"
+    },
+    {
+      "file": "more-19.wav",
+      "text": "And 19 more reactions!",
+      "sha256": "69ae2bd4dc3469a8e9c69f75f6df96453aa72865c0f33842ed7754fa5cb86318"
+    },
+    {
+      "file": "more-20.wav",
+      "text": "And 20 more reactions!",
+      "sha256": "e0d411de9b1f99403063419e694e76c9f4aec968c974ac3a833c9ac660c69b9c"
+    },
+    {
+      "file": "more-21.wav",
+      "text": "And 21 more reactions!",
+      "sha256": "0352d470659e5ed72c8532e0a88bf571ef9674ce3eb372a3edeb9bff48661cde"
+    },
+    {
+      "file": "more-22.wav",
+      "text": "And 22 more reactions!",
+      "sha256": "bd597554640ddda0da5800b5ef7c0a66fd5c1c2dad9a60cfc8467f549c34bc1c"
+    },
+    {
+      "file": "more-23.wav",
+      "text": "And 23 more reactions!",
+      "sha256": "1294ec22171196bfe343e33809f9923365041423b5286b6ed279409b022834be"
+    },
+    {
+      "file": "more-24.wav",
+      "text": "And 24 more reactions!",
+      "sha256": "1c7f041c9879df4378070f358fa2e4bc54aeec980250772af5bd6602791b4a95"
+    },
+    {
+      "file": "more-25.wav",
+      "text": "And 25 more reactions!",
+      "sha256": "ef8d6d8c743110cff64b18ae1ed085e768206c922e03a3ef126852faad6d2e81"
+    },
+    {
+      "file": "more-26.wav",
+      "text": "And 26 more reactions!",
+      "sha256": "70170382e51412afd4f51bece3f4173a03dda140a39d5c66c8084ceb5c81d379"
+    },
+    {
+      "file": "more-27.wav",
+      "text": "And 27 more reactions!",
+      "sha256": "103147ea8033a765b065cce744b494e548912ad47a9cfa2da660c475070bcdc8"
+    },
+    {
+      "file": "more-28.wav",
+      "text": "And 28 more reactions!",
+      "sha256": "ef75597930c3532ed84b4dd6cfbf870a90b05a2124addc61b84db5a83dd31688"
+    },
+    {
+      "file": "more-29.wav",
+      "text": "And 29 more reactions!",
+      "sha256": "fbdc86004b79e67b8fab71b8f90e75f82fd581a9e685bb46f89536f55f6ce6fd"
+    },
+    {
+      "file": "more-30.wav",
+      "text": "And 30 more reactions!",
+      "sha256": "3a0ec70721937bccfdf024874e534ef41543b6926a97afdce836102466dcf7f2"
+    },
+    {
+      "file": "more-31.wav",
+      "text": "And 31 more reactions!",
+      "sha256": "877201ddbc7d184d90c4846ef9bcdfb5155382e925fc50b00aa97d172074d14f"
+    },
+    {
+      "file": "more-32.wav",
+      "text": "And 32 more reactions!",
+      "sha256": "466cbc50e7af443b7b2b6c6ff00c2e27545b1a5916f569e9c9973b12e8ab24f6"
+    },
+    {
+      "file": "more-33.wav",
+      "text": "And 33 more reactions!",
+      "sha256": "c6975e98d2862d8f3868f3dd1860b4857d87b775c68897e5988a555378995d34"
+    },
+    {
+      "file": "more-34.wav",
+      "text": "And 34 more reactions!",
+      "sha256": "c250c69345d708c53023f2a2174d81f2695f852946dbcb1194bfb840056ae055"
+    },
+    {
+      "file": "more-35.wav",
+      "text": "And 35 more reactions!",
+      "sha256": "c2f699ff3ec78f96193705162eec97b7bcb6c1922f3d6665b06cdb342baf4906"
+    },
+    {
+      "file": "more-36.wav",
+      "text": "And 36 more reactions!",
+      "sha256": "36b42fe687bf98d180c609a58a759247494fefe3a205135c751baede617245b0"
+    },
+    {
+      "file": "more-37.wav",
+      "text": "And 37 more reactions!",
+      "sha256": "ae66fc0798dc63a014766569bc2a5d75d693104754986a8475dcd0ffeb4c625b"
+    },
+    {
+      "file": "more-38.wav",
+      "text": "And 38 more reactions!",
+      "sha256": "e2172e29dff86df3553119e1c953f43decc43f737d90cf20c51f69576fb57aa3"
+    },
+    {
+      "file": "more-39.wav",
+      "text": "And 39 more reactions!",
+      "sha256": "4473fa16970e6d033cac0a0c2aba89eb588086c55f73efa57e7b97d6212c8e36"
+    },
+    {
+      "file": "more-40.wav",
+      "text": "And 40 more reactions!",
+      "sha256": "f26748ccaf76a193e665bc7d7b58c49ff5eb34ca7e30cfa77092af550abcd7dd"
+    },
+    {
+      "file": "more-41.wav",
+      "text": "And 41 more reactions!",
+      "sha256": "0c9a2368ae8a22ebc5c48cc3baa0e33639291f8037550f9c6bec02b3115a1bc7"
+    },
+    {
+      "file": "more-42.wav",
+      "text": "And 42 more reactions!",
+      "sha256": "a2b7ec6097d073fed3c385f669a1dfa3e1ceec33ad2b82646e921ef7898463a3"
+    },
+    {
+      "file": "more-43.wav",
+      "text": "And 43 more reactions!",
+      "sha256": "cd0269e17b66f36e809d1457453d9bee0156470e93f25d8567f2de013e81a3dd"
+    },
+    {
+      "file": "more-44.wav",
+      "text": "And 44 more reactions!",
+      "sha256": "a406900daffa13b4c97a2149020a46963857f673f014bedba22105320baf9e7e"
+    },
+    {
+      "file": "more-45.wav",
+      "text": "And 45 more reactions!",
+      "sha256": "69d6a212d221c061b2ee77b1cd8fc5056a211d310fd952c583225dc0b428065c"
+    },
+    {
+      "file": "more-46.wav",
+      "text": "And 46 more reactions!",
+      "sha256": "d3e527c040e4ca2c73207752a15feb95e0a6d5ce77bdadb41c5a712fa72f37f7"
+    },
+    {
+      "file": "more-47.wav",
+      "text": "And 47 more reactions!",
+      "sha256": "808b6ebdc9d8a87aa7bc04ad386f9f32d898b11478b54ab74a906d85c8affd02"
+    },
+    {
+      "file": "more-48.wav",
+      "text": "And 48 more reactions!",
+      "sha256": "bff2edacaadcc81cd313c65e8d30dc68b39f9d77ba1ee1715529496733f6a876"
+    },
+    {
+      "file": "more-49.wav",
+      "text": "And 49 more reactions!",
+      "sha256": "0c1d5c2796309d2851157f2e9e0d5de6d05cfb4398b0ac53fa801c820dfe6f53"
+    },
+    {
+      "file": "more-50.wav",
+      "text": "And 50 more reactions!",
+      "sha256": "75a78c4679a4f95c8ec2793362ec013fced2a8887b8e3f03b0076b905442da38"
+    },
+    {
+      "file": "more-51.wav",
+      "text": "And 51 more reactions!",
+      "sha256": "2290550dfdfd0ed814ea47bb6d1657c768251c44adf32ec201589ab4fd14d2be"
+    },
+    {
+      "file": "more-52.wav",
+      "text": "And 52 more reactions!",
+      "sha256": "735df84550a5d80193d25af6436cb7e5a7785799fd9c76a7b0b2541bf7e246b8"
+    },
+    {
+      "file": "more-53.wav",
+      "text": "And 53 more reactions!",
+      "sha256": "c46f36c78ce7a7cc2e4fb86ac382af3f23b492a90d5b695332c18659818e101a"
+    },
+    {
+      "file": "more-54.wav",
+      "text": "And 54 more reactions!",
+      "sha256": "83e80dabd86bafcbe84fbe8588aa176a6bb66678c67379ff911d93259ccb4164"
+    },
+    {
+      "file": "more-55.wav",
+      "text": "And 55 more reactions!",
+      "sha256": "37cd3211d04c95a6cee3d36baf8738827e0647c8cb613cf22e7d248d6a85e193"
+    },
+    {
+      "file": "more-56.wav",
+      "text": "And 56 more reactions!",
+      "sha256": "72158c2dda05bbd82f9792cb2ad4881e237ba2300309531f09ce51a6cd872a8f"
+    },
+    {
+      "file": "more-57.wav",
+      "text": "And 57 more reactions!",
+      "sha256": "4c2b189844a6e06bc87cd1a91106ab6b02802fa0cc9f04e41517d72b50180953"
+    },
+    {
+      "file": "more-58.wav",
+      "text": "And 58 more reactions!",
+      "sha256": "417a3636045bd23c6daf8b18107a70f2431c2df9077efb3f4833c1f49c8e5b9e"
+    },
+    {
+      "file": "more-59.wav",
+      "text": "And 59 more reactions!",
+      "sha256": "0b46088de385f2582ed0959b85f3b6b0c1b9ab9697adf11e28dea571b0e409d3"
+    },
+    {
+      "file": "more-60.wav",
+      "text": "And 60 more reactions!",
+      "sha256": "a101d9bba0db031c84fda94d18de3f39cc3e3043285a1ca36682cdac57b82f25"
+    },
+    {
+      "file": "more-61.wav",
+      "text": "And 61 more reactions!",
+      "sha256": "a92ede57bdd0658071c604fb07d64cb138d8728e1160cd93b1ee9affa134b4ed"
+    },
+    {
+      "file": "more-62.wav",
+      "text": "And 62 more reactions!",
+      "sha256": "b2c017eb8544d24782a6e52b28542be28ccee4db3d67728bb4067eec469da0b3"
+    },
+    {
+      "file": "more-63.wav",
+      "text": "And 63 more reactions!",
+      "sha256": "0fbebd27b0b2826299216b18757894b28b3b4c26c49181536a2d7d3bb321cc78"
+    },
+    {
+      "file": "more-64.wav",
+      "text": "And 64 more reactions!",
+      "sha256": "63e0c3c01142eb5ab4b80d1ac79ec7a88f73358646907819735b8c580970f36a"
+    },
+    {
+      "file": "more-65.wav",
+      "text": "And 65 more reactions!",
+      "sha256": "9d5626c40325cb786513a708c20e447f3d0db90564cf2a0df964f16a8bcdc4cb"
+    },
+    {
+      "file": "more-66.wav",
+      "text": "And 66 more reactions!",
+      "sha256": "701f300331e6edf5ec7b07b29071b47d3201930ba48d13d481c970e9ac4a6574"
+    },
+    {
+      "file": "more-67.wav",
+      "text": "And 67 more reactions!",
+      "sha256": "81d237f3034513d9e3e7ddeaddff2c159ab3b5e1fe6b315c05e2373fe73c4aa1"
+    },
+    {
+      "file": "more-68.wav",
+      "text": "And 68 more reactions!",
+      "sha256": "8d54d079c0a90e86f9710df64033b50b0518eb9b57865662b849eb1c931e3033"
+    },
+    {
+      "file": "more-69.wav",
+      "text": "And 69 more reactions!",
+      "sha256": "847f90c6a73c5439eb0e824f7f18521178616d6c04f7b05eeb1e7ace68f35cd1"
+    },
+    {
+      "file": "more-70.wav",
+      "text": "And 70 more reactions!",
+      "sha256": "e58633e6d30f158a1fdd6d6abae83da31b349079e1fc0387dd335b8e69fa9cff"
+    },
+    {
+      "file": "more-71.wav",
+      "text": "And 71 more reactions!",
+      "sha256": "0b9996ebb2de08a52aa195c5e0c504ac83536a464c2f7b2d55b46b5af971fc2d"
+    },
+    {
+      "file": "more-72.wav",
+      "text": "And 72 more reactions!",
+      "sha256": "642933a844c6012ccf03ba8bfceb7aa1ac72aad84212004861394514fb115570"
+    },
+    {
+      "file": "more-73.wav",
+      "text": "And 73 more reactions!",
+      "sha256": "4f2b184722360ed12615f1955026cd9842ecc461944cbe4c0b6336182fdf24cb"
+    },
+    {
+      "file": "more-74.wav",
+      "text": "And 74 more reactions!",
+      "sha256": "5d8ea5449e356c4572564efba8b656a0a412d1e9f3c0b0d749d0fe0b2280e2e3"
+    },
+    {
+      "file": "more-75.wav",
+      "text": "And 75 more reactions!",
+      "sha256": "eb5116342e0ab23c70c44142f7f90a97155335bf5010e22aa62e1fd949d1210f"
+    },
+    {
+      "file": "more-76.wav",
+      "text": "And 76 more reactions!",
+      "sha256": "abab49be10c7482846861c3b72fe47e61a9f708ce6ec7f3eba0b7883c4d98f84"
+    },
+    {
+      "file": "more-77.wav",
+      "text": "And 77 more reactions!",
+      "sha256": "3ba2c8bfe74d2f92f31c190f60eed4e620dc685fde891fa2b7a901f8798bb303"
+    },
+    {
+      "file": "more-78.wav",
+      "text": "And 78 more reactions!",
+      "sha256": "6d520fa4d9644a03276842d91ba3fca480a9d09787fcc7d4cb5bf3552c43f835"
+    },
+    {
+      "file": "more-79.wav",
+      "text": "And 79 more reactions!",
+      "sha256": "853e8e08d5905316da886852f4cd3d246755049bfe4f6067c497eece7cdcc370"
+    },
+    {
+      "file": "more-80.wav",
+      "text": "And 80 more reactions!",
+      "sha256": "3a3994af79374484d4b6c0a4bf42df00373895077e1ad4c86cffddcbdcd22ddd"
+    },
+    {
+      "file": "more-81.wav",
+      "text": "And 81 more reactions!",
+      "sha256": "33ddc016fc20458d2d398b82533eba6350393821e27e42fc6cc3d8a39ca5bd63"
+    },
+    {
+      "file": "more-82.wav",
+      "text": "And 82 more reactions!",
+      "sha256": "8ea72f153e3d0638243c4ec20cd21761bdd442479c37d8ce5a499d840dac8dc2"
+    },
+    {
+      "file": "more-83.wav",
+      "text": "And 83 more reactions!",
+      "sha256": "9274c875123aba9e4f708efc4f7733c64af55010d32acba3c950bf4ad8983860"
+    },
+    {
+      "file": "more-84.wav",
+      "text": "And 84 more reactions!",
+      "sha256": "266a15204ce8fa1bde6d9b30ea347e95cd2a6f37b39a35907e4943de6ae00fb2"
+    },
+    {
+      "file": "more-85.wav",
+      "text": "And 85 more reactions!",
+      "sha256": "e5e1e342d4a42272bbeef1964154c8e3e1376ccb8c0150bcf413cfdbac05e2e0"
+    },
+    {
+      "file": "more-86.wav",
+      "text": "And 86 more reactions!",
+      "sha256": "17b659bad3eed2fd8e3916e2dd1aeea1aedee8ad1416f664db41b5ae1d86132c"
+    },
+    {
+      "file": "more-87.wav",
+      "text": "And 87 more reactions!",
+      "sha256": "3d1cce165e2447e8efc38872f9e409e48e07e4238fd02d17e412142ff54dc7e2"
+    },
+    {
+      "file": "more-88.wav",
+      "text": "And 88 more reactions!",
+      "sha256": "124ac14669db88819dcbe67804bb733642dd857c9dc135afd415081cd653aee1"
+    },
+    {
+      "file": "more-89.wav",
+      "text": "And 89 more reactions!",
+      "sha256": "fa3aff9b2cc6c5f8b02bab1735868ac63abb1786df5b47a7fde38f89c50403a0"
+    },
+    {
+      "file": "more-90.wav",
+      "text": "And 90 more reactions!",
+      "sha256": "c65abcade00604aed8e17e4c61ab30009aa74eb0b846c83cc2155a7761a7843f"
+    },
+    {
+      "file": "more-91.wav",
+      "text": "And 91 more reactions!",
+      "sha256": "bdb4a04198a346259dd562794f9b969ef359f4b2e5ff3a3a1694f3b2002b9c2c"
+    },
+    {
+      "file": "more-92.wav",
+      "text": "And 92 more reactions!",
+      "sha256": "125baa901eeba6ae2eccff8da803d63c442c6835a9affff607d51a1d136689b3"
+    },
+    {
+      "file": "more-93.wav",
+      "text": "And 93 more reactions!",
+      "sha256": "71c0d55f6dfcaeca68bf21215df3bf621e193ee8c01615ec58b62ed5543c948b"
+    },
+    {
+      "file": "more-94.wav",
+      "text": "And 94 more reactions!",
+      "sha256": "a18ecfe4e0d7ef5f0ed8e4b6772808af1305e6742c6e11c7fde92619033c6c4d"
+    },
+    {
+      "file": "more-95.wav",
+      "text": "And 95 more reactions!",
+      "sha256": "38131b04e5f8f2098a21c4629b2ee5102534d34228cc10df0631d2e5bcd6b200"
+    },
+    {
+      "file": "more-96.wav",
+      "text": "And 96 more reactions!",
+      "sha256": "08a1b1234bb100146ad50cc6a8a2672ec53a759c7b04c15d3777a3a8909f12c7"
+    },
+    {
+      "file": "more-97.wav",
+      "text": "And 97 more reactions!",
+      "sha256": "43d34fc15ea8a8f7dd6f67c865caebb9312c0178ca3672e0e0406696a2d45d43"
+    }
+  ]
+}

@@ -30,7 +30,7 @@ class TailscaleProvisionTests(unittest.TestCase):
 
 case "$*" in
   *" hostname")
-    printf '%s\\n' "${REMOTE_HOSTNAME:-message-box-001}"
+    printf '%s\\n' "${REMOTE_HOSTNAME:-message-box-synthetic}"
     ;;
   *" sudo -n /bin/sh -s")
     cat >"$INSTALL_INPUT"
@@ -49,9 +49,9 @@ case "$*" in
     cat >/dev/null
     printf '%s\\n' https://button-box-a7.test-tailnet.ts.net/
     ;;
-  *"python3 - --expected-name=message-box-001"*)
+  *"python3 - --expected-name=message-box-synthetic"*)
     cat >/dev/null
-    printf '%s\\n' https://message-box-001.test-tailnet.ts.net/
+    printf '%s\\n' https://message-box-synthetic.test-tailnet.ts.net/
     ;;
 esac
 """,
@@ -84,14 +84,14 @@ esac
         )
 
     def test_installs_and_uses_interactive_browser_enrollment(self):
-        result = self._run("admin@message-box-001.local")
+        result = self._run("admin@message-box-synthetic.local")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.ssh_log.read_text(encoding="utf-8").splitlines()
         self.assertTrue(
             any(
-                "\t-t\tadmin@message-box-001.local\t"
-                "sudo -n tailscale up --hostname=message-box-001" in call
+                "\t-t\tadmin@message-box-synthetic.local\t"
+                "sudo -n tailscale up --hostname=message-box-synthetic" in call
                 for call in calls
             ),
             calls,
@@ -103,12 +103,12 @@ esac
         self.assertNotIn("--ssh", installer)
         self.assertIn("ssh admin@100.100.100.100", result.stdout)
         self.assertIn(
-            "https://message-box-001.test-tailnet.ts.net/", result.stdout
+            "https://message-box-synthetic.test-tailnet.ts.net/", result.stdout
         )
 
     def test_existing_enrollment_does_not_run_tailscale_up(self):
         result = self._run(
-            "admin@message-box-001.local",
+            "admin@message-box-synthetic.local",
             ALREADY_CONNECTED="1",
         )
 
@@ -117,7 +117,7 @@ esac
         self.assertFalse(any("tailscale up" in call for call in calls), calls)
         self.assertTrue(
             any(
-                "sudo -n tailscale set --hostname=message-box-001 "
+                "sudo -n tailscale set --hostname=message-box-synthetic "
                 "--auto-update=false --ssh=false --accept-routes=false "
                 "--advertise-routes= --advertise-exit-node=false "
                 "--exit-node= --webclient=false" in call
@@ -125,13 +125,13 @@ esac
             ),
             calls,
         )
-        self.assertIn("Device: message-box-001", result.stdout)
+        self.assertIn("Device: message-box-synthetic", result.stdout)
 
     def test_rejects_tailscale_hostname_that_differs_from_device(self):
         result = self._run(
             "--hostname",
             "message-box-beta",
-            "admin@message-box-001.local",
+            "admin@message-box-synthetic.local",
         )
 
         self.assertEqual(result.returncode, 1)
@@ -165,7 +165,7 @@ esac
 
     def test_cancellation_makes_no_remote_changes(self):
         result = self._run(
-            "admin@message-box-001.local", confirmation="no\n"
+            "admin@message-box-synthetic.local", confirmation="no\n"
         )
 
         self.assertEqual(result.returncode, 1)
@@ -175,7 +175,7 @@ esac
 
     def test_install_failure_does_not_attempt_enrollment(self):
         result = self._run(
-            "admin@message-box-001.local", INSTALL_FAIL="1"
+            "admin@message-box-synthetic.local", INSTALL_FAIL="1"
         )
 
         self.assertNotEqual(result.returncode, 0)

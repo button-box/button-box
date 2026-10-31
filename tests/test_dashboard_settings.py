@@ -1,3 +1,4 @@
+from speaker_helpers import isolate_audio, assert_padded_playback
 import io
 import json
 import subprocess
@@ -13,6 +14,7 @@ from messagebox.settings import SettingsError, SettingsStore
 
 class DashboardSettingsTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
         self.directory = tempfile.TemporaryDirectory()
         self.store = SettingsStore(
             Path(self.directory.name) / "settings.json", environ={"TZ": "UTC"}
@@ -94,6 +96,18 @@ class DashboardSettingsTests(unittest.TestCase):
                 self.assertEqual(payload["box_id"], value)
                 self.assertEqual(payload["mode"], "RUNTIME")
                 self.assertEqual(payload["health"]["runtime"], "attention")
+
+    def test_every_new_ringtone_preview_uses_its_asset_and_a_long_enough_bound(self):
+        from messagebox.settings import RINGTONES
+        root = Path(__file__).resolve().parents[1] / "sounds"
+        with patch("messagebox.settings.APP_DIR", root), patch.object(
+            dashboard, "settings_store", return_value=self.store
+        ), patch.object(dashboard.subprocess, "run") as run:
+            for ringtone_id, filename in RINGTONES.items():
+                run.side_effect = lambda command, **kwargs: assert_padded_playback(
+                    self, command[-1], root / "ringtones" / filename)
+                dashboard.preview_ringtone(ringtone_id)
+                self.assertGreaterEqual(run.call_args.kwargs["timeout"], 17)
 
     def test_ringtone_preview_reports_playback_failure(self):
         with patch.object(dashboard, "preview_ringtone", side_effect=SettingsError("Button Box audio could not play")):

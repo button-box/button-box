@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box setup portal on the home network
 ConditionPathExists=/etc/messagebox-onboarding/enabled
 BindsTo=comitup.service
@@ -8,6 +9,7 @@ Conflicts=comitup-web.service
 After=comitup.service network-online.target messagebox-whatsapp-pairing.service messagebox-onboarding-nfc.service comitup-web.service messagebox-audio-detect.service
 
 [Service]
+ExecStartPre=+/usr/bin/install -d -o messagebox -g messagebox-settings -m 2770 /var/lib/messagebox-cloud
 Type=simple
 User=messagebox-onboarding
 Group=messagebox-onboarding
@@ -20,7 +22,7 @@ EnvironmentFile=/run/messagebox-audio/audio.env
 UMask=0077
 # Idle browser connections wait in the selector, not the request pool.
 # Concurrent requests keep status and pages available during bounded I/O.
-ExecStart=/usr/bin/gunicorn --workers 1 --worker-class gthread --threads 4 --worker-connections 64 --timeout 60 --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
+ExecStart=/usr/bin/gunicorn --config python:messagebox.onboarding.app --workers 1 --worker-class gthread --threads 4 --worker-connections 64 --timeout 60 --bind 0.0.0.0:80 --error-logfile - messagebox.onboarding.app:app
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -31,5 +33,6 @@ PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/etc/messagebox-onboarding
-ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings
+ReadWritePaths=/run/messagebox-speaker
+ReadWritePaths=/var/lib/messagebox-onboarding /var/lib/messagebox-settings /var/lib/messagebox-cloud
 LimitCORE=0

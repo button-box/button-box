@@ -1,4 +1,5 @@
 [Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
 Description=Button Box physical Wi-Fi setup reset check
 After=local-fs.target NetworkManager.service
 Before=comitup.service messagebox.target messagebox-button.service messagebox-sync.service messagebox-poller.service messagebox-dash.service messagebox-nfc.service

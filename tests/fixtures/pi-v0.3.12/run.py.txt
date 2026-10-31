@@ -1,0 +1,81 @@
+def run(self, *, stop=None, events=None):
+    stop = stop if stop is not None else threading.Event()
+    if events is None and os.environ.get("MSGBOX_CLOUD_EVENTS", "1") == "1":
+        events = CloudWorkEvents(self.client)
+    wake = events.wake if events is not None else threading.Event()
+    failures = 0
+    last_heartbeat = float("-inf")
+    next_poll = 0
+    earliest_hint_poll = 0
+    next_local_check = 0
+    local_failures = 0
+    logged = {}
+    if events is not None:
+        events.start()
+    try:
+        while not stop.is_set():
+            now = self.monotonic()
+            hinted = wake.is_set()
+            if now >= next_poll or (hinted and not failures and now >= earliest_hint_poll):
+                # Clear before HTTP so a hint arriving during the request survives.
+                wake.clear()
+                try:
+                    if now - last_heartbeat >= 30 or not self.state.get("snapshot"):
+                        try:
+                            self.heartbeat()
+                        except CloudDeviceError as exc:
+                            # A revoked device may still receive deletion tombstones.
+                            _log_failure("heartbeat", exc, logged, self.monotonic())
+                        last_heartbeat = self.monotonic()
+                    self.poll_once()
+                    failures = 0
+                    retry_after = 0
+                except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
+                    _log_failure("poll", exc, logged, self.monotonic(), "; local work remains pending")
+                    failures += 1
+                    retry_after = getattr(exc, "retry_after", None) or 0
+                now = self.monotonic()
+                connected = events is not None and events.connected.is_set()
+                interval = 30 if connected else 2 + random.random()
+                if failures:
+                    interval = min(60, 2 * 2 ** min(failures, 5)) + random.random()
+                    # HTTP 429: wait at least as long as the Cloud asked.
+                    interval = max(interval, retry_after)
+                next_poll = now + interval
+                earliest_hint_poll = now + 0.25
+                next_local_check = now + (0.1 if self.state.get("pending_settings") else 2 + random.random())
+                local_failures = 0
+            now = self.monotonic()
+            # Heartbeats stay on their own 30-second cadence, including outages.
+            if now - last_heartbeat >= 30:
+                try:
+                    self.heartbeat()
+                except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
+                    _log_failure("heartbeat", exc, logged, self.monotonic())
+                last_heartbeat = self.monotonic()
+            connected = events is not None and events.connected.is_set()
+            if connected and not failures and self.monotonic() >= next_local_check:
+                retry_after = 0
+                try:
+                    self._maintain_local()
+                    local_failures = 0
+                except (CloudDeviceError, CloudRuntimeError, OSError, ValueError) as exc:
+                    local_failures += 1
+                    retry_after = getattr(exc, "retry_after", None) or 0
+                    print("cloud local work failed; receipts remain pending", flush=True)
+                delay = max(min(60, 2 * 2 ** min(local_failures, 5)) + random.random(), retry_after)
+                next_local_check = self.monotonic() + delay
+            deadline = min(next_poll, last_heartbeat + 30)
+            if connected and not failures:
+                deadline = min(deadline, next_local_check)
+            if wake.is_set() and not failures:
+                deadline = min(deadline, earliest_hint_poll)
+            # An external stop is observed within one second; socket shutdown is bounded.
+            timeout = max(0.01, min(1, deadline - self.monotonic()))
+            if wake.is_set():
+                stop.wait(timeout)  # Coalesced hints must not create a busy loop.
+            else:
+                wake.wait(timeout)
+    finally:
+        if events is not None:
+            events.stop()

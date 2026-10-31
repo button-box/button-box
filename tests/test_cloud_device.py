@@ -1,0 +1,364 @@
+import json
+import io
+import tempfile
+import unittest
+import urllib.error
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+from unittest import mock
+from messagebox import software
+
+from messagebox.cloud_device import (
+    capabilities,
+    CloudDeviceClient,
+    CloudDeviceError,
+    CloudRateLimited,
+    CloudSendRejected,
+    CloudSendUncertain,
+    CloudVoiceNotFound,
+    DeviceIdentityStore,
+)
+
+
+class CloudCapabilityTests(unittest.TestCase):
+    def test_unknown_settings_tolerance_is_advertised(self):
+        self.assertEqual(capabilities()["settings_unknown_keys"], "ignore")
+
+    def test_swoosh_capability_is_advertised(self):
+        self.assertIs(capabilities()["swoosh_sound_enabled"], True)
+
+
+class _Response:
+    status = 200
+
+    def __init__(self, payload, status=200):
+        self.payload = json.dumps(payload).encode("utf-8")
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, limit):
+        return self.payload[:limit]
+
+
+class CloudIdentityTests(unittest.TestCase):
+    def test_optional_media_has_a_total_deadline_even_with_regular_bytes(self):
+        now = [0.0]
+        class SlowResponse(io.BytesIO):
+            status = 200
+            def read1(self, size):
+                now[0] += 1.1
+                return super().read(1)
+        opener = mock.Mock(return_value=SlowResponse(b'abcdef'))
+        client = CloudDeviceClient('https://example.invalid/cloud-api/v1',
+            {'device_id': 'synthetic-device-001', 'credential': 'x' * 43}, opener=opener)
+        with mock.patch('messagebox.cloud_device.time.monotonic', side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(CloudDeviceError, 'deadline expired'):
+                client.media('https://example.invalid/cloud-api/v1/device/media/greeting', deadline=3)
+        self.assertEqual(opener.call_args.kwargs['timeout'], 3)
+        self.assertLess(now[0], 4)
+
+    def test_registration_and_heartbeat_use_only_installed_release_identity(self):
+        identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            software, "RELEASE_FILE", Path(directory) / "release.json"
+        ):
+            self.addCleanup(software.installed_release.cache_clear)
+            for document, expected in (
+                ({"version": "0.3.0", "commit": "abc1234" * 5},
+                 {"software_version": "0.3.0", "software_commit": "abc1234" * 5}),
+                (None, {}),
+                ({"version": "bad version", "commit": "not hex"}, {}),
+            ):
+                with self.subTest(document=document):
+                    software.RELEASE_FILE.unlink(missing_ok=True)
+                    if document is not None:
+                        software.RELEASE_FILE.write_text(json.dumps(document))
+                    software.installed_release.cache_clear()
+                    requests = []
+
+                    def opener(request, *, timeout):
+                        requests.append(request)
+                        return _Response({"ok": True})
+
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1",
+                                               identity, opener=opener)
+                    client.register({"audio": True})
+                    state = {"online": True, "software_version": "stale", "software_commit": "junk"}
+                    client.heartbeat(state)
+                    for request in requests:
+                        body = json.loads(request.data)
+                        actual = {key: value for key, value in body.items() if key.startswith("software_")}
+                        self.assertEqual(actual, expected)
+                    self.assertEqual(json.loads(requests[0].data)["capabilities"], {"audio": True})
+                    self.assertIs(json.loads(requests[1].data)["online"], True)
+                    self.assertEqual(state["software_version"], "stale")
+
+    def test_every_inbox_poll_declares_its_current_features_in_the_query(self):
+        requests = []
+        def opener(request, *, timeout):
+            requests.append(request)
+            return _Response({'items': []})
+        client = CloudDeviceClient('https://example.invalid/cloud-api/v1',
+            {'device_id': 'synthetic-device-001', 'credential': 'x' * 43}, opener=opener)
+        for cursor in (0, 7, 7):
+            self.assertEqual(client.inbox(cursor), {'items': []})
+        self.assertEqual(len(requests), 3)
+        for request, cursor in zip(requests, (0, 7, 7)):
+            parsed = urlsplit(request.full_url)
+            self.assertEqual(parsed.path, '/cloud-api/v1/device/inbox')
+            self.assertEqual(parse_qs(parsed.query),
+                             {'cursor': [str(cursor)], 'features': ['guided_setup_v1']})
+            self.assertEqual(request.get_method(), 'GET')
+        for invalid in (-1, True, '0'):
+            with self.assertRaises(CloudDeviceError):
+                client.inbox(invalid)
+        self.assertEqual(len(requests), 3)
+
+    def test_identity_survives_repeat_load_and_rejects_corruption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "device.json"
+            store = DeviceIdentityStore(path)
+            first = store.load_or_create()
+            self.assertEqual(first, store.load_or_create())
+            self.assertGreaterEqual(len(first["credential"]), 43)
+            self.assertEqual(path.stat().st_mode & 0o007, 0)
+            path.write_text('{"device_id":"bad","credential":"bad"}', encoding="utf-8")
+            with self.assertRaises(CloudDeviceError):
+                store.load_or_create()
+
+    def test_identity_rejects_symlink_and_public_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "device.json"
+            store = DeviceIdentityStore(path)
+            store.load_or_create()
+            path.chmod(0o664)
+            with self.assertRaises(CloudDeviceError):
+                store.load_or_create()
+            path.unlink()
+            path.symlink_to(root / "missing.json")
+            with self.assertRaises(CloudDeviceError):
+                store.load_or_create()
+
+    def test_existing_group_lock_is_not_chmoded_by_second_service_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = DeviceIdentityStore(Path(directory) / "device.json")
+            original = store.load_or_create()
+            with mock.patch("messagebox.cloud_device.os.fchmod", side_effect=PermissionError("other owner")):
+                self.assertEqual(store.load_or_create(), original)
+
+    def test_root_completion_can_reuse_group_lock_without_supplementary_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = DeviceIdentityStore(Path(directory) / "device.json")
+            original = store.load_or_create()
+            with mock.patch("messagebox.cloud_device.os.geteuid", return_value=0), \
+                 mock.patch("messagebox.cloud_device.os.getgroups", return_value=[]), \
+                 mock.patch("messagebox.cloud_device.os.getegid", return_value=-1), \
+                 mock.patch("messagebox.cloud_device.os.fchmod", side_effect=PermissionError("other owner")):
+                self.assertEqual(store.load_or_create(), original)
+
+    def test_client_scopes_all_requests_to_exact_api_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()
+            requests = []
+
+            def opener(request, *, timeout):
+                requests.append(request)
+                return _Response({"ok": True})
+
+            client = CloudDeviceClient(
+                "https://example.invalid/cloud-api/v1", identity, opener=opener
+            )
+            client.register({"audio": True})
+            client.ack({"operation_id": "synthetic", "state": "received"})
+            self.assertEqual(
+                [request.full_url for request in requests],
+                [
+                    "https://example.invalid/cloud-api/v1/device/register",
+                    "https://example.invalid/cloud-api/v1/device/ack",
+                ],
+            )
+            self.assertEqual(
+                requests[0].get_header("Authorization"),
+                "Bearer " + identity["credential"],
+            )
+            self.assertIn(identity["credential"].encode(), requests[0].data)
+            self.assertNotIn(identity["credential"].encode(), requests[1].data)
+            for unsafe in (
+                "http://example.invalid/cloud-api/v1",
+                "https://example.invalid/other/v1",
+                "https://user:pass@example.invalid/cloud-api/v1",
+            ):
+                with self.subTest(url=unsafe), self.assertRaises(CloudDeviceError):
+                    CloudDeviceClient(unsafe, identity)
+            for unsafe in (
+                "https://other.invalid/cloud-api/v1/device/media/a",
+                "https://other.invalid/cloud-api/v1/device/listened-media/a",
+                "https://example.invalid/cloud-api/v1/boxes/a",
+                "https://example.invalid/cloud-api/v1/device/media/a?token=x",
+                "https://example.invalid/cloud-api/v1/device/listened-media/a?token=x",
+                "https://example.invalid/cloud-api/v1/device/listened-media/a#fragment",
+            ):
+                with self.subTest(url=unsafe), self.assertRaises(CloudDeviceError):
+                    client.media(unsafe)
+
+            client.media("https://example.invalid/cloud-api/v1/device/listened-media/" + "a" * 64)
+            self.assertEqual(requests[-1].full_url,
+                "https://example.invalid/cloud-api/v1/device/listened-media/" + "a" * 64)
+            self.assertEqual(requests[-1].get_header("Authorization"), "Bearer " + identity["credential"])
+
+    def test_voice_upload_uses_one_scoped_target_and_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = DeviceIdentityStore(root / "device.json").load_or_create()
+            audio = root / "voice.ogg"
+            audio.write_bytes(b"OggSsynthetic")
+            requests = []
+
+            def opener(request, *, timeout):
+                requests.append(request)
+                return _Response({"message_id": "synthetic-mid", "state": "queued",
+                                  "expires_at": 1_800_604_800, "server_time": 1_800_000_000})
+
+            client = CloudDeviceClient(
+                "https://example.invalid/cloud-api/v1", identity, opener=opener
+            )
+            result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64)
+            self.assertEqual(result["state"], "queued")
+            [request] = requests
+            self.assertEqual(request.full_url, "https://example.invalid/cloud-api/v1/device/voice")
+            self.assertEqual(request.get_header("Idempotency-key"), "synthetic_key_12345")
+            self.assertIn(b'name="recipient_id"\r\n\r\nperson_1', request.data)
+            self.assertIn(b'name="idempotency_key"\r\n\r\nsynthetic_key_12345', request.data)
+            self.assertIn(b'name="account_scope"\r\n\r\n' + b"a" * 64, request.data)
+            self.assertIn(b"OggSsynthetic", request.data)
+            self.assertNotIn(b'name="box"', request.data)
+            with self.assertRaises(CloudSendRejected):
+                client.send_voice(audio, "other household", "synthetic_key_12345", 1.25, account_scope="a" * 64)
+            self.assertEqual(len(requests), 1)
+
+    def test_cancellation_is_authenticated_and_scoped_to_one_claim(self):
+        identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+        requests = []
+        def opener(request, *, timeout):
+            requests.append(request)
+            return _Response({"claim_id": "synthetic-claim-001", "claimed": False, "cancelled": True})
+        client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=opener)
+        self.assertTrue(client.cancel_claim("synthetic-claim-001")["cancelled"])
+        request = requests[0]
+        self.assertEqual(request.full_url, "https://example.invalid/cloud-api/v1/device/claim/cancel")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Authorization"), "Bearer " + identity["credential"])
+        self.assertEqual(json.loads(request.data), {"claim_id": "synthetic-claim-001"})
+        with self.assertRaises(CloudDeviceError):
+            client.cancel_claim("other/path")
+        self.assertEqual(len(requests), 1)
+
+    def test_voice_accepts_cloud_create_202_and_keyed_replay_200(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = DeviceIdentityStore(root / "device.json").load_or_create()
+            audio = root / "voice.ogg"
+            audio.write_bytes(b"OggSsynthetic")
+            responses = [
+                _Response({"message_id": "cloud-message", "state": "waiting_for_reply",
+                           "expires_at": 1_800_604_800, "server_time": 1_800_000_000}, 202),
+                _Response({"message_id": "cloud-message", "state": "waiting_for_reply",
+                           "expires_at": 1_800_604_800, "server_time": 1_800_000_100}, 200),
+            ]
+            client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity,
+                                       opener=lambda *_args, **_kwargs: responses.pop(0))
+            for _ in range(2):
+                result = client.send_voice(audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64)
+                self.assertEqual(result["state"], "waiting_for_reply")
+
+    def test_read_only_voice_status_binds_known_expiry_without_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()
+            requests = []
+            def opener(request, *, timeout):
+                requests.append(request)
+                return _Response({"message_id": "cloud-message", "state": "delivered",
+                                  "expires_at": 1_800_604_800, "server_time": 1_800_000_100,
+                                  "deleted": False})
+            client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=opener)
+            result = client.voice_status("original_key_123456")
+            self.assertEqual(result["expires_at"], 1_800_604_800)
+            self.assertEqual(requests[0].get_method(), "GET")
+            self.assertTrue(requests[0].full_url.endswith("/device/voice/status?idempotency_key=original_key_123456"))
+
+    def test_upload_replay_and_status_share_cloud_message_state_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "voice.ogg"
+            audio.write_bytes(b"OggSsynthetic")
+            identity = {"device_id": "synthetic-device-001", "credential": "x" * 43}
+            for state in ("queued", "waiting_for_reply", "held_for_review", "accepted", "uncertain",
+                          "delivered", "read", "failed", "expired", "deleted", "canceled"):
+                with self.subTest(state=state):
+                    response = {"message_id": "cloud-message", "state": state,
+                                "expires_at": 1_800_604_800, "server_time": 1_800_000_100,
+                                "deleted": state == "deleted"}
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity,
+                        opener=lambda *_args, **_kwargs: _Response(response))
+                    self.assertEqual(client.voice_status("original_key_123456")["state"], state)
+                    self.assertEqual(client.send_voice(audio, "person_1", "original_key_123456", 1.25,
+                                                      account_scope="a" * 64)["state"], state)
+            response["state"] = "unknown_server_state"
+            with self.assertRaises(CloudDeviceError):
+                client.voice_status("original_key_123456")
+            with self.assertRaises(CloudSendUncertain):
+                client.send_voice(audio, "person_1", "original_key_123456", 1.25, account_scope="a" * 64)
+
+    def test_voice_status_exact_not_found_is_distinct_from_network_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()
+            def missing(request, *, timeout):
+                payload = b'{"error":{"code":"voice_upload_not_found","message":"not found"}}'
+                raise urllib.error.HTTPError(request.full_url, 404, "not found", {}, io.BytesIO(payload))
+            client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=missing)
+            with self.assertRaises(CloudVoiceNotFound):
+                client.voice_status("original_key_123456")
+
+    def test_rate_limit_is_distinct_and_carries_bounded_retry_after(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = DeviceIdentityStore(Path(directory) / "device.json").load_or_create()
+            for header, expected in (({"Retry-After": "120"}, 120), ({}, 60),
+                                     ({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 60),
+                                     ({"Retry-After": "0"}, 1), ({"Retry-After": "999999"}, 3600)):
+                with self.subTest(header=header):
+                    def limited(request, *, timeout, header=header):
+                        raise urllib.error.HTTPError(request.full_url, 429, "slow down", header, io.BytesIO())
+                    client = CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=limited)
+                    with self.assertRaises(CloudRateLimited) as caught:
+                        client.voice_status("original_key_123456")
+                    self.assertEqual(caught.exception.retry_after, expected)
+                    # Callers that only know CloudDeviceError keep working.
+                    self.assertIsInstance(caught.exception, CloudDeviceError)
+
+    def test_voice_rejection_and_unknown_result_stay_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = DeviceIdentityStore(root / "device.json").load_or_create()
+            audio = root / "voice.ogg"
+            audio.write_bytes(b"OggSsynthetic")
+
+            def rejected(request, *, timeout):
+                raise urllib.error.HTTPError(request.full_url, 403, "rejected", {}, io.BytesIO())
+
+            def ambiguous(_request, *, timeout):
+                raise TimeoutError()
+
+            for opener, error in ((rejected, CloudSendRejected), (ambiguous, CloudSendUncertain)):
+                with self.subTest(error=error), self.assertRaises(error):
+                    CloudDeviceClient("https://example.invalid/cloud-api/v1", identity, opener=opener).send_voice(
+                        audio, "person_1", "synthetic_key_12345", 1.25, account_scope="a" * 64
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

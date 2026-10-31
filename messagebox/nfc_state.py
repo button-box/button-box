@@ -6,6 +6,8 @@ import copy
 import fcntl
 import json
 import os
+import re
+import secrets
 import tempfile
 import time
 import uuid
@@ -26,8 +28,10 @@ from messagebox.runtime_paths import NFC_ANNOUNCEMENT_FILE
 SELECTION_VERSION = 2
 ENROLLMENT_VERSION = 1
 ANNOUNCEMENT_VERSION = 1
+CARD_REFERENCES_VERSION = 1
 DEFAULT_SELECTION_TTL_S = 30.0
 DEFAULT_ENROLLMENT_TTL_S = 300
+REANNOUNCE_COOLDOWN_S = float(os.environ.get("MSGBOX_NFC_REANNOUNCE_COOLDOWN_S", "60"))
 
 
 class NfcError(ValueError):
@@ -120,6 +124,69 @@ def _contact_for_uid(document, uid):
     return None, None
 
 
+class CardReferenceStore:
+    """Keep random Cloud-safe references beside the private local card UIDs."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def sync(self, account_scope, cards):
+        if not isinstance(account_scope, str) or not re.fullmatch(r"[a-f0-9]{64}", account_scope):
+            raise NfcError("family card account scope is invalid")
+        with _locked_path(self.path):
+            try:
+                payload = _load_json(self.path)
+            except NfcError:
+                raise
+            if payload is None:
+                references = {}
+            elif (payload.get("version") != CARD_REFERENCES_VERSION
+                    or not isinstance(payload.get("account_scope"), str)
+                    or not isinstance(payload.get("references"), dict)):
+                raise NfcError("family card references have an invalid schema")
+            elif payload["account_scope"] != account_scope:
+                references = {}
+            else:
+                references = payload["references"]
+            uid_to_reference = {}
+            for reference, uid in references.items():
+                if (not isinstance(reference, str) or not re.fullmatch(r"[a-f0-9]{32}", reference)
+                        or not isinstance(uid, str) or normalize_uid(uid) != uid
+                        or uid in uid_to_reference):
+                    raise NfcError("family card references have an invalid schema")
+                uid_to_reference[uid] = reference
+            fresh = {}
+            result = []
+            seen = set()
+            for recipient_id, raw_uid in cards:
+                uid = normalize_uid(raw_uid)
+                if uid in seen:
+                    raise NfcError("a family card is mapped more than once")
+                seen.add(uid)
+                reference = uid_to_reference.get(uid)
+                if reference is None:
+                    reference = secrets.token_hex(16)
+                    while reference in fresh or reference in references:
+                        reference = secrets.token_hex(16)
+                fresh[reference] = uid
+                result.append({"recipient_id": recipient_id, "card_ref": reference})
+            _atomic_json(self.path, {"version": CARD_REFERENCES_VERSION,
+                                     "account_scope": account_scope, "references": fresh})
+            return result
+
+    def resolve(self, account_scope, reference):
+        if not isinstance(account_scope, str) or not re.fullmatch(r"[a-f0-9]{64}", account_scope):
+            raise NfcError("family card account scope is invalid")
+        if not isinstance(reference, str) or not re.fullmatch(r"[a-f0-9]{32}", reference):
+            raise NfcError("family card reference is invalid")
+        with _locked_path(self.path):
+            payload = _load_json(self.path)
+            if payload is None or payload.get("version") != CARD_REFERENCES_VERSION or payload.get("account_scope") != account_scope:
+                return None
+            uid = payload.get("references", {}).get(reference)
+            return normalize_uid(uid) if isinstance(uid, str) else None
+
+
 class SelectionStore:
     """A short-lived, one-shot snapshot of an exact contact mapping."""
 
@@ -131,10 +198,92 @@ class SelectionStore:
     def claimed_path(self):
         return self.path.with_name(f".{self.path.name}.claimed")
 
+    @property
+    def unknown_path(self):
+        return self.path.with_name(f".{self.path.name}.unknown")
+
+    def unknown_present(self):
+        try:
+            self.unknown_path.lstat()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def block_unknown(self, uid=None, *, new_presentation=True):
+        with self.locked():
+            block = _load_json(self.unknown_path) if not new_presentation else None
+            invalidated = not new_presentation and (
+                self.path.exists() or self._held_claim_locked() is not None
+                or (block is not None and block.get("state") == "invalid")
+            )
+            self._block_locked(uid, state="invalid" if invalidated else "unknown")
+
+    def _block_locked(self, uid, *, state="unknown"):
+        # Publish the block before clearing a previously selected route.
+        _atomic_json(self.unknown_path, {"version": 1, "state": state, "uid": uid, "present": True})
+        for path in (self.path, self.claimed_path):
+            path.unlink(missing_ok=True)
+
+    def clear_unknown(self):
+        with self.locked():
+            self.unknown_path.unlink(missing_ok=True)
+
+    def presentation(self):
+        """Resume a held presentation, including a consumed or unknown card."""
+        with self.locked():
+            if self.unknown_present():
+                if self.unknown_path.is_symlink():
+                    return None, True
+                block = _load_json(self.unknown_path)
+                if block is None:
+                    return None, True
+                if not block.get("present", True):
+                    return None, False
+                try:
+                    uid = normalize_uid(block["uid"]) if block.get("uid") is not None else None
+                except NfcError:
+                    uid = None
+                return uid, True
+            for path in (self.path, self.claimed_path):
+                payload = _load_json(path)
+                if payload is not None and payload.get("present", True):
+                    return normalize_uid(payload.get("uid")), True
+            return None, False
+
+    def card_absent(self):
+        with self.locked():
+            # Preserve the choice and its expiry, but remember confirmed removal
+            # so the next presentation can rearm it even after a service restart.
+            for path in (self.path, self.claimed_path):
+                payload = _load_json(path)
+                if payload is not None and payload.get("present", True):
+                    payload["present"] = False
+                    _atomic_json(path, payload)
+            block = None if self.unknown_path.is_symlink() else _load_json(self.unknown_path)
+            if block is not None and block.get("state") == "invalid":
+                block["present"] = False
+                _atomic_json(self.unknown_path, block)
+            else:
+                self.unknown_path.unlink(missing_ok=True)
+
     @contextmanager
     def locked(self):
         with _locked_path(self.path):
             yield
+
+    def _held_claim_locked(self):
+        payload = _load_json(self.claimed_path)
+        if payload is None:
+            return None
+        present = payload.get("present", True)
+        if not isinstance(present, bool):
+            raise NfcError("claimed card presence is invalid")
+        if not present:
+            return None
+        jid = payload.get("jid")
+        if payload.get("version") != SELECTION_VERSION or not isinstance(jid, str) or not jid:
+            raise NfcError("claimed card mapping is invalid")
+        return normalize_uid(payload.get("uid")), jid
 
     def select(self, uid, jid, contacts_revision, *, new_presentation=True):
         uid = normalize_uid(uid)
@@ -149,16 +298,20 @@ class SelectionStore:
                     self.claimed_path.unlink()
                 except FileNotFoundError:
                     pass
+            elif self.unknown_present():
+                return False
             elif self.claimed_path.exists():
+                held = self._held_claim_locked()
+                if held is not None and held != (uid, jid):
+                    self._block_locked(uid, state="invalid")
                 return False
             previous = self._load(max_age=None)
-            changed = (
-                new_presentation
-                or previous is None
-                or previous["uid"] != uid
-                or previous["jid"] != jid
-                or previous["contacts_revision"] != contacts_revision
-            )
+            if not new_presentation and (
+                previous is None or previous["uid"] != uid or previous["jid"] != jid
+            ):
+                self._block_locked(uid, state="invalid")
+                return False
+            changed = new_presentation
             _atomic_json(
                 self.path,
                 {
@@ -166,10 +319,13 @@ class SelectionStore:
                     "uid": uid,
                     "jid": jid,
                     "contacts_revision": contacts_revision,
+                    "selection_id": uuid.uuid4().hex if changed else previous.get("selection_id"),
                     "selected_at": now if changed else previous["selected_at"],
                     "last_seen_at": now,
+                    "present": True,
                 },
             )
+            self.unknown_path.unlink(missing_ok=True)
             return changed
 
     def claim(self, *, max_age=DEFAULT_SELECTION_TTL_S):
@@ -184,12 +340,81 @@ class SelectionStore:
             os.replace(self.path, self.claimed_path)
             return selection
 
-    def clear(self):
-        with self.locked():
-            self._clear_locked()
+    def consume(self, snapshot):
+        """Consume only the presentation whose recording was queued."""
+        return self.consume_id(snapshot["selection_id"], snapshot["jid"])
 
-    def _clear_locked(self):
-        for path in (self.path, self.claimed_path):
+    def consume_id(self, selection_id, recipient):
+        with self.locked():
+            # The queue receipt remains authoritative even after expiry or a
+            # clock correction. Routing-time timestamp checks must not undo it.
+            current = _load_json(self.path)
+            if current is None or current.get("selection_id") != selection_id or current.get("jid") != recipient:
+                return False
+            os.replace(self.path, self.claimed_path)
+            directory = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            return True
+
+    def resolve(self, document, *, max_age=DEFAULT_SELECTION_TTL_S):
+        """Resolve under the caller's locked contact snapshot, then this lock."""
+        with self.locked():
+            if self.unknown_present():
+                return "blocked", None
+            exists = self.path.exists()
+            snapshot = self._load(max_age=None)
+            if snapshot is None:
+                if exists:
+                    return "blocked", None
+                held = self._held_claim_locked()
+                if held is not None:
+                    jid, contact = _contact_for_uid(document, held[0])
+                    if jid != held[1] or contact is None:
+                        self._block_locked(held[0], state="invalid")
+                        return "blocked", None
+                return "none", None
+            jid, contact = _contact_for_uid(document, snapshot["uid"])
+            if jid != snapshot["jid"] or contact is None:
+                # Invalidation must survive expiry and later mapping repairs.
+                # Only a new presentation can clear this block.
+                self._block_locked(snapshot["uid"], state="invalid")
+                return "blocked", None
+            if self.clock() - snapshot["selected_at"] > max_age:
+                os.replace(self.path, self.claimed_path)
+                return "none", None
+            if document["revision"] != snapshot["contacts_revision"]:
+                return "blocked", None
+            if snapshot["selection_id"] is None:
+                # Existing deployed sidecars predate selection IDs. Assign one
+                # without renewing either timestamp.
+                snapshot["selection_id"] = uuid.uuid4().hex
+                payload = _load_json(self.path)
+                payload["selection_id"] = snapshot["selection_id"]
+                _atomic_json(self.path, payload)
+            return "selected", {
+                "contact": _public_contact(jid, contact), "uid": snapshot["uid"],
+                "selection": snapshot, "via_card": True,
+            }
+
+    def expire(self, *, max_age=DEFAULT_SELECTION_TTL_S):
+        with self.locked():
+            current = self._load(max_age=None)
+            if current is not None and self.clock() - current["selected_at"] > max_age:
+                # Keep the marker so a held card cannot renew an expired choice.
+                os.replace(self.path, self.claimed_path)
+
+    def clear(self, *, preserve_unknown=False):
+        with self.locked():
+            self._clear_locked(preserve_unknown=preserve_unknown)
+
+    def _clear_locked(self, *, preserve_unknown=False):
+        paths = (self.path, self.claimed_path)
+        if not preserve_unknown:
+            paths += (self.unknown_path,)
+        for path in paths:
             try:
                 path.unlink()
             except FileNotFoundError:
@@ -207,6 +432,9 @@ class SelectionStore:
             uid = normalize_uid(payload.get("uid"))
             jid = payload.get("jid")
             revision = payload.get("contacts_revision")
+            selection_id = payload.get("selection_id")
+            if selection_id is not None and (not isinstance(selection_id, str) or not re.fullmatch(r"[a-f0-9]{32}", selection_id)):
+                raise ValueError
             selected_at = float(payload.get("selected_at"))
             last_seen_at = float(payload.get("last_seen_at"))
             if not isinstance(jid, str) or not jid:
@@ -216,14 +444,15 @@ class SelectionStore:
         except (NfcError, TypeError, ValueError):
             return None
         now = self.clock()
-        if last_seen_at > now + 5:
+        if selected_at > now + 5 or last_seen_at > now + 5:
             return None
-        if max_age is not None and now - last_seen_at > max_age:
+        if max_age is not None and now - selected_at > max_age:
             return None
         return {
             "uid": uid,
             "jid": jid,
             "contacts_revision": revision,
+            "selection_id": payload.get("selection_id"),
             "selected_at": selected_at,
             "last_seen_at": last_seen_at,
         }
@@ -381,9 +610,19 @@ class EnrollmentStore:
 class AnnouncementStore:
     """Single-slot handoff to the process that owns audio playback."""
 
-    def __init__(self, path, *, clock: Callable[[], float] = time.time):
+    def __init__(self, path, *, clock: Callable[[], float] = time.time,
+                 monotonic=None, boot_id=None):
         self.path = Path(path)
         self.clock = clock
+        self.monotonic = monotonic or time.monotonic
+        if boot_id is None:
+            try:
+                boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            except OSError:
+                boot_id = None
+            if boot_id is not None and re.fullmatch(r"[0-9a-f-]{36}", boot_id) is None:
+                boot_id = None
+        self.boot_id = boot_id
 
     @property
     def claimed_path(self):
@@ -393,7 +632,39 @@ class AnnouncementStore:
     def acknowledged_path(self):
         return self.path.with_name(f".{self.path.name}.acknowledged")
 
-    def put(self, *, action, uid, prompt):
+    @property
+    def confirmed_path(self):
+        return self.path.with_name(f".{self.path.name}.confirmed")
+
+    def _receipt(self):
+        try:
+            payload = _load_json(self.confirmed_path)
+        except NfcError:
+            return {}
+        if (payload is None or payload.get("version") != ANNOUNCEMENT_VERSION
+                or payload.get("boot_id") != self.boot_id):
+            return {}
+        return payload
+
+    def last_presentation(self):
+        if not self.boot_id:
+            return None
+        with _locked_path(self.confirmed_path):
+            try:
+                return normalize_uid(self._receipt().get("presented_uid"))
+            except NfcError:
+                return None
+
+    def record_presentation(self, uid):
+        """Remember switches independently of whether their feedback played."""
+        uid = normalize_uid(uid)
+        with _locked_path(self.confirmed_path):
+            payload = self._receipt()
+            if payload.get("presented_uid") != uid:
+                payload.update(version=ANNOUNCEMENT_VERSION, boot_id=self.boot_id, presented_uid=uid)
+                _atomic_json(self.confirmed_path, payload)
+
+    def put(self, *, action, uid, prompt, card_switch=False):
         if not isinstance(action, str) or not action or len(action) > 32:
             raise NfcError("announcement action is invalid")
         if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
@@ -404,28 +675,90 @@ class AnnouncementStore:
             "uid": normalize_uid(uid),
             "prompt": prompt,
             "created_at": self.clock(),
+            "request_id": uuid.uuid4().hex,
+            "card_switch": card_switch,
         }
-        self.clear_acknowledgement()
-        _atomic_json(self.path, payload)
+        with _locked_path(self.confirmed_path):
+            self.clear_acknowledgement()
+            _atomic_json(self.path, payload)
         return payload
 
-    def clear(self):
-        for pending in (self.path, self.claimed_path):
+    def clear(self, *, preserve_claimed=False):
+        with _locked_path(self.confirmed_path):
+            for pending in ((self.path,) if preserve_claimed else (self.path, self.claimed_path)):
+                pending.unlink(missing_ok=True)
+            self.clear_acknowledgement()
+
+    def pending_for(self, uid, max_age=10):
+        """A queued or playing line coalesces repeats without starting cooldown."""
+        with _locked_path(self.confirmed_path):
+            for path in (self.path, self.claimed_path):
+                try:
+                    payload = _load_json(path)
+                    if (payload is not None and payload.get("version") == ANNOUNCEMENT_VERSION
+                            and payload.get("action") in {"selected", "recognized", "enrolled"}
+                            and normalize_uid(payload.get("uid")) == normalize_uid(uid)
+                            and -5 <= self.clock() - float(payload.get("created_at")) <= max_age):
+                        return True
+                except (NfcError, TypeError, ValueError):
+                    continue
+        return False
+
+    def finish(self, request_id):
+        """Release only this playback claim, including on failure or a drop."""
+        with _locked_path(self.confirmed_path):
             try:
-                pending.unlink()
-            except FileNotFoundError:
-                pass
-        self.clear_acknowledgement()
+                payload = _load_json(self.claimed_path)
+            except NfcError:
+                return
+            if payload is not None and payload.get("request_id") == request_id:
+                self.claimed_path.unlink(missing_ok=True)
 
     def acknowledge(self, uid):
-        _atomic_json(
-            self.acknowledged_path,
-            {
-                "version": ANNOUNCEMENT_VERSION,
-                "uid": normalize_uid(uid),
-                "announced_at": self.clock(),
-            },
-        )
+        payload = {
+            "version": ANNOUNCEMENT_VERSION,
+            "uid": normalize_uid(uid),
+            "announced_at": self.clock(),
+            "announced_mono": self.monotonic(),
+            "boot_id": self.boot_id,
+        }
+        # A late acknowledgment must retain any newer card presentation. Only
+        # the audio owner advances the confirmed line and its cooldown.
+        with _locked_path(self.confirmed_path):
+            presented_uid = self._receipt().get("presented_uid")
+            if presented_uid is not None:
+                payload["presented_uid"] = presented_uid
+            try:
+                claimed = _load_json(self.claimed_path)
+                if (claimed is not None and claimed.get("uid") == payload["uid"]
+                        and isinstance(claimed.get("request_id"), str)):
+                    payload["request_id"] = claimed["request_id"]
+            except NfcError:
+                pass
+            _atomic_json(self.confirmed_path, payload)
+            _atomic_json(self.acknowledged_path, payload)
+
+    def reuse_confirmation(self, uid, *, now, cooldown, request_id=None):
+        """Reuse feedback within this boot without renewing its cooldown."""
+        with _locked_path(self.confirmed_path):
+            try:
+                payload = _load_json(self.confirmed_path)
+                if (not self.boot_id or payload is None
+                        or payload.get("version") != ANNOUNCEMENT_VERSION
+                        or payload.get("boot_id") != self.boot_id
+                        or (request_id is not None and payload.get("request_id") != request_id)
+                        or normalize_uid(payload.get("uid")) != normalize_uid(uid)):
+                    return False
+                announced = payload.get("announced_mono")
+                if type(announced) not in (int, float) or not 0 <= now - announced < cooldown:
+                    return False
+            except NfcError:
+                return False
+            # The button owner still needs confirmation after the NFC daemon has
+            # cleared its handoff/ack files, or it would speak again on a press.
+            if not self.is_acknowledged(uid):
+                _atomic_json(self.acknowledged_path, payload)
+            return True
 
     def is_acknowledged(self, uid):
         payload = _load_json(self.acknowledged_path)
@@ -460,37 +793,42 @@ class AnnouncementStore:
             return action
         return None
 
-    def take(self, max_age=10):
-        try:
-            os.replace(self.path, self.claimed_path)
-        except FileNotFoundError:
-            if not self.claimed_path.exists():
-                return None
-        try:
-            payload = _load_json(self.claimed_path)
-            if payload is None or payload.get("version") != ANNOUNCEMENT_VERSION:
-                return None
-            created_at = float(payload.get("created_at"))
-            if created_at > self.clock() + 5 or self.clock() - created_at > max_age:
-                return None
-            action = payload.get("action")
-            prompt = payload.get("prompt", "")
-            if not isinstance(action, str) or not action or len(action) > 32:
-                return None
-            if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
-                return None
-            return {
-                "action": action,
-                "uid": normalize_uid(payload.get("uid")),
-                "prompt": prompt,
-            }
-        except (NfcError, TypeError, ValueError):
-            return None
-        finally:
+    def take(self, max_age=10, *, keep_claimed=False):
+        with _locked_path(self.confirmed_path):
             try:
-                self.claimed_path.unlink()
+                os.replace(self.path, self.claimed_path)
             except FileNotFoundError:
-                pass
+                if not self.claimed_path.exists():
+                    return None
+            retained = False
+            try:
+                payload = _load_json(self.claimed_path)
+                if payload is None or payload.get("version") != ANNOUNCEMENT_VERSION:
+                    return None
+                created_at = float(payload.get("created_at"))
+                if created_at > self.clock() + 5 or self.clock() - created_at > max_age:
+                    return None
+                action = payload.get("action")
+                prompt = payload.get("prompt", "")
+                if not isinstance(action, str) or not action or len(action) > 32:
+                    return None
+                if not isinstance(prompt, str) or len(prompt) > 1024 or "\x00" in prompt:
+                    return None
+                result = {"action": action, "uid": normalize_uid(payload.get("uid")), "prompt": prompt}
+                if keep_claimed:
+                    request_id = payload.get("request_id")
+                    if not isinstance(request_id, str) or re.fullmatch(r"[0-9a-f]{32}", request_id) is None:
+                        # A handoff from the previous installed build has no ID.
+                        payload["request_id"] = uuid.uuid4().hex
+                        _atomic_json(self.claimed_path, payload)
+                    result.update(request_id=payload["request_id"], card_switch=payload.get("card_switch") is True)
+                    retained = True
+                return result
+            except (NfcError, TypeError, ValueError):
+                return None
+            finally:
+                if not retained:
+                    self.claimed_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -558,21 +896,24 @@ class NfcRouter:
                 request["request_id"], new_presentation=new_presentation
             )
 
-        document = self.contacts.load()
-        jid, contact = _contact_for_uid(document, uid)
-        if contact is None:
-            self.selection.clear()
-            return ScanResult("unknown", uid, None, new_presentation)
-        public_contact = _public_contact(jid, contact)
-        if len(document["contacts"]) < 2:
-            self.selection.clear()
-            return ScanResult("recognized", uid, public_contact, new_presentation)
-        changed = self.selection.select(
-            uid,
-            jid,
-            document["revision"],
-            new_presentation=new_presentation,
-        )
+        with self.contacts.locked_snapshot() as document:
+            jid, contact = _contact_for_uid(document, uid)
+            if contact is None:
+                self.selection.block_unknown(uid, new_presentation=new_presentation)
+                return ScanResult("unknown", uid, None, new_presentation)
+            public_contact = _public_contact(jid, contact)
+            if len(document["contacts"]) < 2:
+                if new_presentation:
+                    self.selection.clear()
+                elif self.selection.path.exists() or self.selection.claimed_path.exists():
+                    self.selection.select(uid, jid, document["revision"], new_presentation=False)
+                return ScanResult("recognized", uid, public_contact, new_presentation)
+            changed = self.selection.select(
+                uid,
+                jid,
+                document["revision"],
+                new_presentation=new_presentation,
+            )
         return ScanResult(
             "selected" if changed else "refreshed",
             uid,
@@ -631,6 +972,7 @@ class NfcRouter:
         )
 
     def card_absent(self):
+        self.selection.card_absent()
         return ScanResult("removed")
 
     def active_contact(self, max_age=DEFAULT_SELECTION_TTL_S):
@@ -673,13 +1015,15 @@ def _load_valid_selection(contacts, selection, *, max_age, consume):
         or jid != snapshot["jid"]
         or contact is None
     ):
-        selection.clear()
+        if consume:
+            selection.clear(preserve_unknown=True)
         return None
     return {
         "uid": snapshot["uid"],
         "jid": jid,
         "contacts_revision": snapshot["contacts_revision"],
         "contact": _public_contact(jid, contact),
+        "selection": snapshot,
     }
 
 

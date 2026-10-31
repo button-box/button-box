@@ -19,9 +19,25 @@ UPDATER_SPEC.loader.exec_module(bounded_update)
 
 
 class ReleaseManifestTests(unittest.TestCase):
+    def test_payload_includes_fixed_trust_tools_without_installing_root_pins(self):
+        payload = (ROOT / 'scripts/release/payload.txt').read_text().splitlines()
+        self.assertEqual(len(payload), 705)
+        for name in ('scripts/install/trust_update.py', 'scripts/release/trust-update.py',
+                     'config/emergency-keys/README.md', 'scripts/install/health-probe.py',
+                     'messagebox/controller_selector.py', 'messagebox/controller_slots.py',
+                     'messagebox/cloud_boot_repair.py', 'sounds/cues/cue-rec_start.wav'):
+            self.assertIn(name, payload)
+        # Boot repair and the record-start cue bring the installed mapping to 690 files.
+        # Fixed trust code is staged separately in updater/; public pins are bootstrap-only.
+        paths = release_manifest.installed_paths(ROOT)
+        self.assertEqual(len(paths), 690)
+        self.assertFalse(any('/etc/button-box-update/' in target for target in paths.values()))
+
     def test_mapping_is_complete_for_runtime_and_excludes_private_state(self):
         paths = release_manifest.installed_paths(ROOT)
-        self.assertEqual(len(paths), 77)
+        self.assertEqual(len(paths), 690)
+        for name in ("cloud-local.html", "cloud-local.js"):
+            self.assertEqual(paths[f"messagebox/onboarding/static/{name}"], f"/opt/messagebox/messagebox/onboarding/static/{name}")
         self.assertEqual(len(paths.values()), len(set(paths.values())))
         self.assertEqual(paths["scripts/install/audio_config.py"], "/usr/lib/messagebox/audio_config.py")
         self.assertEqual(
@@ -34,7 +50,34 @@ class ReleaseManifestTests(unittest.TestCase):
         )
         self.assertIn("systemd/messagebox-audio-detect.service", paths)
         self.assertIn("messagebox/onboarding/static/clipboard.js", paths)
-        self.assertIn("sounds/feedback/sent-swoosh.wav", paths)
+        self.assertNotIn("messagebox/business_send.py", paths)
+        self.assertNotIn("messagebox/business_receive.py", paths)
+        self.assertEqual(paths["messagebox/cloud_boot_repair.py"], "/opt/messagebox/messagebox/cloud_boot_repair.py")
+        self.assertIn("messagebox/cloud_device.py", paths)
+        self.assertIn("messagebox/device_http.py", paths)
+        self.assertIn("messagebox/software.py", paths)
+        self.assertIn("messagebox/cloud_runtime.py", paths)
+        self.assertIn("messagebox/cloud_quiet.py", paths)
+        self.assertEqual(paths["messagebox/audio_requests.py"], "/opt/messagebox/messagebox/audio_requests.py")
+        self.assertIn("messagebox/cloud_events.py", paths)
+        self.assertIn("messagebox/cloud_voice.py", paths)
+        self.assertIn("sounds/cloud/reaction.wav", paths)
+        self.assertIn("sounds/cloud/text-message.wav", paths)
+        self.assertIn("messagebox/cloud_claim.py", paths)
+        self.assertIn("messagebox/qrcodegen.py", paths)
+        self.assertNotIn("sounds/feedback/sent-swoosh.wav", paths)
+        self.assertIn("sounds/cues/cue-press.wav", paths)
+        self.assertEqual(paths["sounds/cues/cue-rec_start.wav"], "/opt/messagebox/sounds/cues/cue-rec_start.wav")
+        self.assertEqual(paths["sounds/cues/cue-deleted.wav"], "/opt/messagebox/sounds/cues/cue-deleted.wav")
+        self.assertEqual(paths["sounds/cues/cue-card_saved.wav"], "/opt/messagebox/sounds/cues/cue-card_saved.wav")
+        self.assertEqual(paths["sounds/voices/buttonbox/voice-sending.wav"],
+                         "/opt/messagebox/sounds/voices/buttonbox/voice-sending.wav")
+        self.assertIn("sounds/voice/voice-online.wav", paths)
+        self.assertIn("sounds/voice/voice-setup-online.wav", paths)
+        for pack in ("voice", *(f"voices/{pack}" for pack in ("pirate", "alien", "dj", "robot", "french", "charlie", "tata", "buttonbox"))):
+            for line in ("card-prompt", "card-saved", "online-ready"):
+                source = f"sounds/{pack}/voice-{line}.wav"
+                self.assertEqual(paths[source], "/opt/messagebox/" + source)
         self.assertNotIn("messagebox/midi_ringtone.py", paths)
         for source, target in paths.items():
             with self.subTest(source=source):
@@ -47,6 +90,20 @@ class ReleaseManifestTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(bounded_update._expected_target(source), target)
                 self.assertTrue(bounded_update._rollback_target_allowed(target))
+
+    def test_generator_includes_additional_sounds_and_update_lines(self):
+        paths = release_manifest.installed_paths(ROOT)
+        for name in ('update-ready', 'auto-updates', 'update-done', 'update-reminder', 'update-installing', 'auto-updates-on'):
+            source = f'sounds/cues/{name}.wav'
+            self.assertEqual(paths[source], '/opt/messagebox/' + source)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            shutil.copytree(ROOT / 'sounds', source / 'sounds')
+            for pack in ('cues', 'cloud', 'voice', 'voices/pirate', 'ringtones'):
+                extra = source / 'sounds' / pack / 'extra.wav'
+                extra.write_bytes((ROOT / 'sounds/cues/cue-press.wav').read_bytes())
+                relative = extra.relative_to(source).as_posix()
+                self.assertEqual(release_manifest.installed_paths(source)[relative], '/opt/messagebox/' + relative)
 
     def test_canonical_manifest_passes_full_bounded_preflight(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -77,7 +134,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 source, manifest_path, device
             )
 
-            self.assertEqual(len(entries), 77)
+            self.assertEqual(len(entries), 690)
             self.assertEqual(manifest["commit"], expected_manifest["commit"])
             self.assertEqual(len(manifest_hash), 64)
             generator = next(

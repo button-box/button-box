@@ -36,17 +36,10 @@ def write_wav(path, seconds=0.25, level=1000, rate=16000):
 
 
 class PressPolicyTests(unittest.TestCase):
-    def test_feature_flag_defaults_off_and_rolls_back(self):
-        self.assertFalse(env_flag("MSGBOX_GUIDED_REPLY", environ={}))
-        self.assertTrue(env_flag("MSGBOX_GUIDED_REPLY", environ={"MSGBOX_GUIDED_REPLY": "1"}))
-        self.assertFalse(env_flag("MSGBOX_GUIDED_REPLY", environ={"MSGBOX_GUIDED_REPLY": "0"}))
-        self.assertFalse(env_flag("MSGBOX_AUTO_RECORD_AFTER_INCOMING", environ={}))
-        self.assertTrue(
-            env_flag(
-                "MSGBOX_AUTO_RECORD_AFTER_INCOMING",
-                environ={"MSGBOX_AUTO_RECORD_AFTER_INCOMING": "1"},
-            )
-        )
+    def test_env_flag_defaults_off_and_parses_boolean_values(self):
+        self.assertFalse(env_flag("FEATURE", environ={}))
+        self.assertTrue(env_flag("FEATURE", environ={"FEATURE": "1"}))
+        self.assertFalse(env_flag("FEATURE", environ={"FEATURE": "0"}))
 
     def test_prompt_gate_rejects_missing_and_non_audio_assets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -154,6 +147,25 @@ class OutboxTests(unittest.TestCase):
                     message_id="stable-id",
                 )
 
+    def test_cloud_approval_scope_is_immutable_and_missing_scope_keeps_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            store = OutboxStore(str(root / "outbox"), transport="cloud")
+            original = source.read_bytes()
+            with self.assertRaises(ValueError):
+                store.approve(str(source), "family@example.invalid", "reply", 0.25)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(store.root.iterdir()), [])
+            job = store.approve(str(source), "family@example.invalid", "reply", 0.25,
+                                message_id="same-recording", account_scope="a" * 64)
+            before = {p.name: p.read_bytes() for p in job.path.iterdir()}
+            with self.assertRaises(ValueError):
+                store.approve(str(source), job.recipient, "reply", 0.25,
+                              message_id=job.message_id, account_scope="b" * 64)
+            self.assertEqual({p.name: p.read_bytes() for p in job.path.iterdir()}, before)
+
     def test_send_command_uses_bound_recipient_without_fallback(self):
         command = voice_send_command(
             "/usr/local/bin/wacli",
@@ -182,6 +194,74 @@ class OutboxTests(unittest.TestCase):
             self.assertFalse(staging.exists())
             self.assertEqual(store.load(pending.path).state, "pending")
             self.assertEqual(store.load(sending.path).state, "uncertain")
+
+    def test_transport_scopes_pending_jobs_in_both_directions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            cloud = OutboxStore(str(root / "outbox"), transport="cloud")
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            cloud_job = cloud.approve(
+                str(source), "12025550101@s.whatsapp.net", "reply", 0.25,
+                message_id="cloud-job", account_scope="a" * 64,
+            )
+            self.assertEqual([job.message_id for job in cloud.jobs()], [cloud_job.message_id])
+            self.assertEqual(wacli.jobs(), [])
+            with self.assertRaises(ValueError):
+                wacli.approve(
+                    str(source), cloud_job.recipient, "reply", 0.25,
+                    message_id=cloud_job.message_id, account_scope="a" * 64,
+                )
+
+            wacli_job = wacli.approve(
+                str(source), "family@g.us", "standalone", 0.25,
+                message_id="wacli-job",
+            )
+            self.assertEqual([job.message_id for job in cloud.jobs()], [cloud_job.message_id])
+            self.assertEqual([job.message_id for job in wacli.jobs()], [wacli_job.message_id])
+
+    def test_missing_transport_remains_wacli_and_unknown_metadata_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            job = wacli.approve(str(source), "family@g.us", "standalone", 0.25)
+            metadata_path = job.path / "job.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.pop("transport")
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            self.assertEqual(wacli.jobs()[0].transport, "wacli")
+            self.assertEqual(OutboxStore(str(root / "outbox"), transport="cloud").jobs(), [])
+
+            metadata["transport"] = []
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            self.assertEqual(wacli.jobs(), [])
+            self.assertTrue(job.path.exists())
+            self.assertTrue(job.audio_path.exists())
+
+    def test_recovery_only_quarantines_current_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            write_wav(source)
+            cloud = OutboxStore(str(root / "outbox"), transport="cloud")
+            wacli = OutboxStore(str(root / "outbox"), transport="wacli")
+            cloud_job = cloud.set_state(
+                cloud.approve(str(source), "12025550101@s.whatsapp.net", "reply", 0.25, account_scope="a" * 64),
+                "sending",
+            )
+            wacli_job = wacli.set_state(
+                wacli.approve(str(source), "family@g.us", "standalone", 0.25),
+                "sending",
+            )
+
+            self.assertEqual(wacli.recover_startup(), [wacli_job.message_id])
+            self.assertEqual(cloud.load(cloud_job.path).state, "sending")
+            self.assertEqual(cloud.recover_startup(), [cloud_job.message_id])
+            self.assertEqual(wacli.load(wacli_job.path).state, "uncertain")
 
 
 class InboxRestartTests(unittest.TestCase):
@@ -254,149 +334,111 @@ class FakeIO:
 
 
 class SessionTests(unittest.TestCase):
-    def test_early_review_press_approves_once_without_prompt_or_warning(self):
-        for flow in ("reply", "standalone"):
-            with self.subTest(flow=flow), tempfile.TemporaryDirectory() as directory:
-                paths = self._paths(directory)
-                io = FakeIO([RecordingResult(paths["reply"], .25, True)], approve_review=True)
-                store = OutboxStore(str(Path(directory) / "outbox"))
-                events = []
-                session = GuidedSession(io, store, lambda kind, **data: events.append(kind))
-                result = session.run(recipient="origin@g.us", flow_kind=flow, countdown_path=paths["standalone"], send_prompt_path=paths["send"], delete_warning_path=paths["warning"], not_sent_path=paths["not-sent"], incoming_path=paths["incoming"] if flow == "reply" else None)
-                self.assertEqual(result, "approved")
-                self.assertEqual(len(store.jobs()), 1)
-                self.assertEqual(store.jobs()[0].recipient, "origin@g.us")
-                self.assertEqual(events.count("guided_approved"), 1)
-                self.assertNotIn(("ordinary", "send.wav"), io.calls)
-                self.assertFalse(any(c[0] in ("wait", "warning") for c in io.calls))
-                if flow == "reply":
-                    self.assertEqual(io.calls[0], ("ordinary", "incoming.wav"))
+    def run_session(self, root, recording, *, transport="wacli", review=True,
+                    approval=False, incoming=False):
+        io = FakeIO([recording], approve_initial=approval)
+        store = OutboxStore(root / "outbox", transport=transport)
+        events = []
+        result = GuidedSession(io, store, lambda kind, **data: events.append((kind, data))).run(
+            recipient="origin@example.invalid", flow_kind="reply" if incoming else "standalone",
+            deleted_cue_path="cue-deleted.wav", review_before_send=review,
+            incoming_path="incoming.wav" if incoming else None,
+            account_scope="a" * 64 if transport == "cloud" else None,
+            session_id="stable-session-id")
+        self.assertTrue(all(data["session_id"] == "stable-session-id" for _, data in events))
+        return result, io, store, events
 
-    def _paths(self, directory):
-        paths = {}
-        for name in ("incoming", "reply", "standalone", "send", "warning", "not-sent"):
-            path = Path(directory) / f"{name}.wav"
-            write_wav(path)
-            paths[name] = str(path)
-        return paths
+    def test_every_mode_review_row_and_exact_routing_in_both_transports(self):
+        for transport in ("wacli", "cloud"):
+            for talk in ("tap", "hold"):
+                for review in (False, True):
+                    for incoming in (False, True):
+                        with self.subTest(transport=transport, talk=talk, review=review, incoming=incoming), tempfile.TemporaryDirectory() as directory:
+                            root = Path(directory)
+                            source = root / "child.wav"
+                            write_wav(source, seconds=2)
+                            result, io, store, events = self.run_session(root,
+                                RecordingResult(str(source), 2, True), transport=transport,
+                                review=review, approval=True, incoming=incoming)
+                            self.assertEqual(result, "approved")
+                            self.assertEqual(len(store.jobs()), 1)
+                            self.assertEqual(store.jobs()[0].recipient, "origin@example.invalid")
+                            self.assertEqual(store.jobs()[0].transport, transport)
+                            prefix = [("ordinary", "incoming.wav")] if incoming else []
+                            expected = prefix + [("record",)]
+                            if review:
+                                expected += [("ordinary", "child.wav"), ("wait", 10.0)]
+                            self.assertEqual(io.calls, expected + [("delete", "child.wav")])
+                            self.assertEqual(sum(kind == "guided_approved" for kind, _ in events), 1)
 
-    def test_inbound_warning_press_approves_exact_origin(self):
+    def test_review_timeout_deletes_in_both_modes_and_transports(self):
+        for transport in ("wacli", "cloud"):
+            for talk in ("tap", "hold"):
+                with self.subTest(transport=transport, talk=talk), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source = root / "child.wav"
+                    write_wav(source, seconds=2)
+                    result, io, store, _ = self.run_session(root, RecordingResult(str(source), 2, True), transport=transport)
+                    self.assertEqual(result, "deleted")
+                    self.assertEqual(io.calls, [("record",), ("ordinary", "child.wav"), ("wait", 10.0),
+                                               ("delete", "child.wav"), ("ordinary", "cue-deleted.wav")])
+                    self.assertFalse(store.jobs())
+
+    def test_recording_limit_reviews_then_approves_or_deletes_in_both_transports(self):
+        for transport in ("wacli", "cloud"):
+            for review in (False, True):
+                for approved in (False, True):
+                    with self.subTest(transport=transport, review=review, approved=approved), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        source = root / "child.wav"
+                        write_wav(source, seconds=2)
+                        result, io, store, events = self.run_session(root,
+                            RecordingResult(str(source), 60, True, timed_out=True),
+                            transport=transport, review=review, approval=approved)
+                        self.assertEqual(result, "approved" if approved else "deleted")
+                        expected = [("record",), ("ordinary", "child.wav"), ("wait", 10.0), ("delete", "child.wav")]
+                        if not approved:
+                            expected.append(("ordinary", "cue-deleted.wav"))
+                        self.assertEqual(io.calls, expected)
+                        self.assertEqual(len(store.jobs()), int(approved))
+                        self.assertIn("guided_review_played", [kind for kind, _ in events])
+
+    def test_short_or_silent_deletion_in_every_mode_review_row_and_transport(self):
+        for transport in ("wacli", "cloud"):
+            for talk in ("tap", "hold"):
+                for review in (False, True):
+                    for duration, meaningful in ((1.499, True), (2, False)):
+                        with self.subTest(transport=transport, talk=talk, review=review, duration=duration, meaningful=meaningful), tempfile.TemporaryDirectory() as directory:
+                            root = Path(directory)
+                            source = root / "child.wav"
+                            write_wav(source, seconds=2)
+                            result, io, store, events = self.run_session(root,
+                                RecordingResult(str(source), duration, meaningful), transport=transport, review=review, approval=True)
+                            self.assertEqual(result, "empty")
+                            self.assertEqual(io.calls, [("record",), ("delete", "child.wav"), ("ordinary", "cue-deleted.wav")])
+                            self.assertFalse(store.jobs())
+                            self.assertIn("guided_recording_empty", [kind for kind, _ in events])
+
+    def test_minimum_is_inclusive_and_measured_before_silence_trimming(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = self._paths(directory)
-            io = FakeIO(
-                [RecordingResult(paths["reply"], 0.25, True)],
-                approve_initial=False,
-                approve_warning=True,
-            )
-            events = []
-            store = OutboxStore(str(Path(directory) / "outbox"))
-            session = GuidedSession(io, store, lambda kind, **data: events.append((kind, data)))
-            result = session.run(
-                recipient="origin@g.us",
-                flow_kind="reply",
-                countdown_path=paths["reply"],
-                send_prompt_path=paths["send"],
-                delete_warning_path=paths["warning"],
-                not_sent_path=paths["not-sent"],
-                incoming_path=paths["incoming"],
-            )
+            root = Path(directory)
+            source = root / "child.wav"
+            write_wav(source)
+            result, _, store, _ = self.run_session(root,
+                RecordingResult(str(source), .5, True, recorded_seconds=1.5), review=False)
             self.assertEqual(result, "approved")
-            self.assertEqual(store.jobs()[0].recipient, "origin@g.us")
-            self.assertEqual(io.calls[0], ("ordinary", "incoming.wav"))
-            self.assertEqual(io.calls[-1], ("delete", "reply.wav"))
+            self.assertEqual(len(store.jobs()), 1)
 
-    def test_inbound_playback_does_not_record_when_auto_record_is_off(self):
+    def test_inbound_play_only_does_not_record(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = self._paths(directory)
             io = FakeIO([])
-            events = []
-            store = OutboxStore(str(Path(directory) / "outbox"))
-            session = GuidedSession(
-                io, store, lambda kind, **data: events.append((kind, data))
-            )
-            result = session.run(
-                recipient="origin@g.us",
-                flow_kind="reply",
-                countdown_path=paths["reply"],
-                send_prompt_path=paths["send"],
-                delete_warning_path=paths["warning"],
-                not_sent_path=paths["not-sent"],
-                incoming_path=paths["incoming"],
-                auto_record_after_incoming=False,
-            )
+            store = OutboxStore(directory)
+            result = GuidedSession(io, store, lambda *a, **kw: None).run(
+                recipient="origin@example.invalid", flow_kind="reply", deleted_cue_path="cue-deleted.wav",
+                incoming_path="incoming.wav", auto_record_after_incoming=False)
             self.assertEqual(result, "played")
             self.assertEqual(io.calls, [("ordinary", "incoming.wav")])
             self.assertFalse(store.jobs())
-            self.assertIn("guided_playback_only", [kind for kind, _ in events])
-
-    def test_no_press_deletes_and_consecutive_session_still_works(self):
-        with tempfile.TemporaryDirectory() as directory:
-            paths = self._paths(directory)
-            io = FakeIO(
-                [
-                    RecordingResult(paths["reply"], 0.25, True),
-                    RecordingResult(paths["standalone"], 0.25, True),
-                ],
-                approve_initial=False,
-                approve_warning=False,
-            )
-            store = OutboxStore(str(Path(directory) / "outbox"))
-            session = GuidedSession(io, store, lambda *args, **kwargs: None)
-            common = dict(
-                recipient="family@g.us",
-                countdown_path=paths["standalone"],
-                send_prompt_path=paths["send"],
-                delete_warning_path=paths["warning"],
-                not_sent_path=paths["not-sent"],
-            )
-            self.assertEqual(session.run(flow_kind="standalone", **common), "deleted")
-            io.approve_initial = True
-            self.assertEqual(session.run(flow_kind="standalone", **common), "approved")
-            self.assertEqual(len(store.jobs()), 1)
-
-    def test_empty_recording_returns_without_review_or_outbox(self):
-        with tempfile.TemporaryDirectory() as directory:
-            paths = self._paths(directory)
-            io = FakeIO([RecordingResult(None, 20.0, False)])
-            store = OutboxStore(str(Path(directory) / "outbox"))
-            session = GuidedSession(io, store, lambda *args, **kwargs: None)
-            result = session.run(
-                recipient="family@g.us",
-                flow_kind="standalone",
-                countdown_path=paths["standalone"],
-                send_prompt_path=paths["send"],
-                delete_warning_path=paths["warning"],
-                not_sent_path=paths["not-sent"],
-            )
-            self.assertEqual(result, "empty")
-            self.assertFalse(store.jobs())
-            self.assertFalse(any(call[0] == "wait" for call in io.calls))
-
-    def test_caller_supplied_session_id_correlates_every_session_event(self):
-        with tempfile.TemporaryDirectory() as directory:
-            paths = self._paths(directory)
-            io = FakeIO(
-                [RecordingResult(paths["standalone"], 0.25, True)],
-                approve_initial=True,
-            )
-            store = OutboxStore(str(Path(directory) / "outbox"))
-            events = []
-            session = GuidedSession(
-                io, store, lambda kind, **data: events.append((kind, data))
-            )
-            session.run(
-                recipient="family@g.us",
-                flow_kind="standalone",
-                countdown_path=paths["standalone"],
-                send_prompt_path=paths["send"],
-                delete_warning_path=paths["warning"],
-                not_sent_path=paths["not-sent"],
-                session_id="stable-session-id",
-            )
-            self.assertTrue(events)
-            self.assertTrue(
-                all(data["session_id"] == "stable-session-id" for _, data in events)
-            )
 
 
 if __name__ == "__main__":

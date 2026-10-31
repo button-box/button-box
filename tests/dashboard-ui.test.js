@@ -54,29 +54,29 @@ test("Home reports runtime attention when the button service is down", () => {
   expect(h.node("home-summary").textContent).not.toContain("Connected and set up");
 });
 
-test("Footer never copies missing or invalid identity; reassignment clears stale feedback", async () => {
+test("Cloud Home directs management to the service and keeps message acceptance outstanding", () => {
   const h = harness();
-  for (const id of [null, "hostname", "BOX-0", "<script>", 42]) {
-    h.run(`renderIdentity({box_id:${JSON.stringify(id)}})`);
-    expect(h.node("box-id").textContent).toBe("Not assigned");
-    await h.node("copy-box-id").handlers.click();
-    expect(h.copied).toBe(null);
+  h.run('renderHome({mode:"RUNTIME",transport:"cloud",health:{runtime:"running"},setup:{wifi:"complete",whatsapp:"complete",recipient:"attention",first_message:"attention"}})');
+  for (const id of ["home-continue-setup", "home-button-settings", "home-sound-settings", "home-connections-setup"]) {
+    expect(h.node(id).href).toBe("https://button.box/dashboard");
   }
-  h.run('renderIdentity({box_id:"BOX-42"})');
-  await h.node("copy-box-id").handlers.click();
-  expect(h.copied).toBe("BOX-42");
-  expect(h.node("box-id-status").textContent).toBe("Box ID copied.");
-  h.run('renderIdentity({box_id:null})');
-  expect(h.node("copy-box-id").disabled).toBe(true);
-  expect(h.node("box-id-status").textContent).toBe("");
+  expect(h.node("home-whatsapp").textContent).toBe("Linked");
+  expect(h.node("home-runtime").textContent).toBe("Needs attention");
+  expect(h.node("home-summary").textContent).toContain("still needs verification");
+  expect(h.node("home-continue-setup").textContent).toBe("Open Button Box Cloud");
+  h.run('renderHome({mode:"RUNTIME",health:{runtime:"running"},setup:{wifi:"complete",whatsapp:"complete",recipient:"complete",first_message:"complete"}})');
+  expect(h.node("home-continue-setup").href).toBe("#setup");
+  expect(h.node("home-button-settings").href).toBe("#settings");
+  expect(h.node("home-continue-setup").textContent).toBe("Continue setup");
+  expect(h.node("home-runtime").textContent).toBe("Ready");
 });
 
-test("Copy failure leaves selectable ID and manual-copy guidance", async () => {
-  const h = harness(); h.fail = true;
-  h.run('renderIdentity({box_id:"BOX-42"})');
-  await h.node("copy-box-id").handlers.click();
-  expect(h.node("box-id").textContent).toBe("BOX-42");
-  expect(h.node("box-id-status").textContent).toContain("manually");
+test("Setup does not register identity or community footer controls", () => {
+  const h = harness();
+  expect(h.node("copy-box-id").handlers.click).toBeUndefined();
+  const markup = fs.readFileSync(`${__dirname}/../messagebox/onboarding/static/index.html`, "utf8");
+  expect(markup).not.toContain("support-footer");
+  expect(markup).not.toContain("owner-community");
 });
 
 test("Ringtone is runtime-only, reports requested not played, and surfaces failure", async () => {

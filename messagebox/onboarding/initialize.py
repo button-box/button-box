@@ -22,6 +22,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from messagebox.identity import read_box_color
 from messagebox.onboarding.paths import INITIALIZER_PATHS
 from messagebox.onboarding.state import StateStore
 
@@ -328,6 +329,7 @@ def _make_candidates(paths, temporary_dir, dependencies):
 def _display_and_confirm(device_id, hostname, password, stdin, stdout):
     print(
         f"\nDevice ID:        {device_id}\n"
+        f"Box color:        {read_box_color()}\n"
         f"Hotspot:          {hostname}\n"
         f"Hotspot password: {password}\n"
         f"Setup URL:        http://{hostname}.local/\n",

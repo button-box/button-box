@@ -11,22 +11,26 @@ ONBOARDING_USER=messagebox-onboarding
 ONBOARDING_GROUP=messagebox-onboarding
 SETTINGS_GROUP=messagebox-settings
 APP_DIR=/opt/messagebox
+if [ -L "$APP_DIR" ]; then
+  echo "Versioned installations require the signed updater; setup cannot overwrite them." >&2
+  exit 1
+fi
 PACKAGE_DIR=$APP_DIR/messagebox
 CONFIG_DIR=/etc/messagebox
 DATA_DIR=/var/lib/messagebox
 ONBOARDING_CONFIG_DIR=/etc/messagebox-onboarding
 ONBOARDING_DATA_DIR=/var/lib/messagebox-onboarding
 SETTINGS_DIR=/var/lib/messagebox-settings
+CLOUD_DIR=/var/lib/messagebox-cloud
 SSH_TARGET=${MESSAGEBOX_SSH_TARGET:-}
-PACKAGE_PYTHON="__init__.py button_send.py contacts.py guided_reply.py identity.py listened_receipts.py played_history.py
-make_ringtones.py nfc.py nfc_state.py runtime_paths.py settings.py tailnet.py voicepoll.py wifi_change.py"
+PACKAGE_PYTHON="controller_selector.py controller_slots.py __init__.py device_http.py software.py cloud_update.py maintenance.py cloud_boot_repair.py cloud_device.py cloud_claim.py cloud_runtime.py cloud_quiet.py audio_requests.py cloud_events.py cloud_voice.py cloud_setup.py speaker.py sound_pack.py qrcodegen.py button_send.py mic_capture.py contacts.py guided_reply.py identity.py listened_receipts.py message_age.py played_history.py
+nfc.py nfc_state.py runtime_paths.py remote_access.py settings.py tailnet.py voicepoll.py wifi_change.py wifi_watchdog.py event_log.py"
 DASHBOARD_PYTHON="dashboard/__init__.py dashboard/app.py"
 ONBOARDING_PYTHON="onboarding/__init__.py onboarding/app.py onboarding/activity.py
 onboarding/comitup_adapter.py onboarding/connectivity.py onboarding/initialize.py
 onboarding/completion.py onboarding/mode.py onboarding/nfc.py onboarding/paths.py onboarding/recipients.py onboarding/reset.py onboarding/state.py
 onboarding/voice_gate.py onboarding/whatsapp.py"
-STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/index.html onboarding/static/styles.css"
-GUIDED_PROMPT_DIR=$REPO_DIR/sounds/guided-reply
+STATIC_ASSETS="onboarding/static/app.js onboarding/static/clipboard.js onboarding/static/wifi-handoff.js onboarding/static/cloud-connect.html onboarding/static/cloud-connect.js onboarding/static/cloud-local.html onboarding/static/cloud-local.js onboarding/static/index.html onboarding/static/styles.css"
 
 case "$SSH_TARGET" in
   '') ;;
@@ -50,11 +54,13 @@ done
 for path in \
   config/env.example \
   config/requirements-nfc.txt \
+  config/journald.conf.d/messagebox.conf \
   config/onboarding/comitup.conf.template \
   config/onboarding/comitup-dbus.conf \
   config/onboarding/firewall.nft \
   scripts/install/comitup.sh \
   scripts/install/audio_config.py \
+  scripts/install/ringtones.py \
   scripts/install/messagebox-mode-migrate.py \
   scripts/install/nfc.sh \
   scripts/install/wacli.sh \
@@ -65,6 +71,10 @@ for path in \
   scripts/dev/hardware-test.sh \
   scripts/messageboxctl \
   messagebox/syncloop.sh \
+  systemd/messagebox-update-selector.service \
+  systemd/messagebox-update-selector.timer \
+  systemd/messagebox-update-bootstrap.service \
+  systemd/messagebox-update-supervisor.service.d/messagebox.conf \
   systemd/messagebox-button.service \
   systemd/messagebox-audio-detect.service \
   systemd/messagebox-sync.service \
@@ -72,6 +82,8 @@ for path in \
   systemd/messagebox-dash.service \
   systemd/messagebox-wifi-change.service \
   systemd/messagebox-wifi-change.path \
+  systemd/messagebox-wifi-watchdog.service \
+  systemd/messagebox-wifi-watchdog.timer \
   systemd/messagebox-nfc.service \
   systemd/messagebox-mode-generator \
   systemd/messagebox-mode-reconcile.service \
@@ -96,40 +108,10 @@ for path in \
   fi
 done
 
-PYTHONDONTWRITEBYTECODE=1 python3 - "$GUIDED_PROMPT_DIR" <<'PY'
-import sys
-import wave
-from pathlib import Path
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 -m messagebox.sound_pack "$REPO_DIR/sounds"
 
-root = Path(sys.argv[1])
-invalid = []
-for name in (
-    "reply-countdown.wav",
-    "standalone-countdown.wav",
-    "press-to-send.wav",
-    "delete-warning.wav",
-    "not-sent.wav",
-):
-    path = root / name
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise OSError
-        with wave.open(str(path), "rb") as prompt:
-            if prompt.getnframes() <= 0 or prompt.getnchannels() != 1:
-                raise wave.Error
-    except (OSError, EOFError, wave.Error):
-        invalid.append(name)
-if invalid:
-    print(
-        "Missing or invalid guided-reply prompts: " + ", ".join(invalid),
-        file=sys.stderr,
-    )
-    print(
-        "Supply a complete licensed prompt set before running setup.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-PY
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_DIR" python3 \
+  "$SCRIPT_DIR/install/ringtones.py" "$REPO_DIR/sounds/ringtones"
 
 for destination in \
   /usr/local/bin/messagebox-contact \
@@ -246,7 +228,7 @@ echo "Installing Button Box in $APP_DIR as $SERVICE_USER"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   alsa-utils ca-certificates curl ffmpeg gunicorn=23.0.0-1 i2c-tools nftables \
-  liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv swig
+  liblgpio-dev python3-dev python3-gpiozero python3-lgpio python3-venv python3-websocket swig
 
 if ! getent group "$SETTINGS_GROUP" >/dev/null; then
   sudo groupadd --system "$SETTINGS_GROUP"
@@ -267,14 +249,13 @@ sudo install -d -o root -g root -m 0755 \
   "$PACKAGE_DIR/onboarding" \
   "$PACKAGE_DIR/onboarding/static" \
   "$APP_DIR/ringtones" \
-  "$APP_DIR/sounds/guided-reply" \
-  "$APP_DIR/sounds/listen-receipts" \
-  "$APP_DIR/sounds/nfc" \
-  "$APP_DIR/sounds/feedback"
+  "$APP_DIR/sounds/cues" \
+  "$APP_DIR/sounds/voice"
 sudo install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
 sudo install -d -o root -g "$ONBOARDING_GROUP" -m 0750 "$ONBOARDING_CONFIG_DIR"
 sudo install -d -o "$ONBOARDING_USER" -g "$ONBOARDING_GROUP" -m 0700 "$ONBOARDING_DATA_DIR"
 sudo install -d -o root -g "$SETTINGS_GROUP" -m 2770 "$SETTINGS_DIR"
+sudo install -d -o "$SERVICE_USER" -g "$SETTINGS_GROUP" -m 2770 "$CLOUD_DIR"
 sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
   "$DATA_DIR" \
   "$DATA_DIR/assets" \
@@ -318,13 +299,20 @@ sudo rm -f "$ONBOARDING_DATA_DIR/session.key"
 
 sudo install -o root -g root -m 0644 \
   "$REPO_DIR/config/requirements-nfc.txt" "$APP_DIR/config/requirements-nfc.txt"
-for directory in guided-reply listen-receipts nfc feedback; do
+for directory in cloud cues voice voices voices/pirate voices/alien voices/dj voices/robot voices/french voices/charlie voices/tata voices/buttonbox; do
+  sudo install -d -o root -g root -m 0755 "$APP_DIR/sounds/$directory"
   for source in "$REPO_DIR/sounds/$directory"/*; do
     if [ -f "$source" ]; then
       sudo install -o root -g root -m 0644 "$source" "$APP_DIR/sounds/$directory/$(basename "$source")"
     fi
   done
 done
+
+# Retired bundled prompts; custom family media is never removed.
+for name in reply-countdown standalone-countdown press-to-send delete-warning not-sent; do
+  sudo rm -f "$APP_DIR/sounds/guided-reply/$name.wav"
+done
+sudo rm -f "$APP_DIR/sounds/feedback/sent-swoosh.wav"
 
 sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   "$REPO_DIR/config/env.example" "$CONFIG_DIR/env.example"
@@ -356,8 +344,9 @@ else
   printf '%s\n' 'MSGBOX_DASH_PORT=80' | sudo tee -a "$CONFIG_DIR/env" >/dev/null
 fi
 
-(cd "$APP_DIR" && sudo /usr/bin/python3 -m messagebox.make_ringtones)
-sudo chmod 0644 "$APP_DIR"/ringtones/*.wav
+for source in "$REPO_DIR/sounds/ringtones"/*.wav "$REPO_DIR/sounds/ringtones"/*.lamp.json "$REPO_DIR/sounds/ringtones/manifest.json"; do
+  sudo install -o root -g root -m 0644 "$source" "$APP_DIR/ringtones/$(basename "$source")"
+done
 "$SCRIPT_DIR/install/wacli.sh"
 
 # Stage the selector inputs before Comitup installation. The package installer
@@ -440,6 +429,16 @@ for name in messagebox-onboarding-voice.path messagebox-onboarding-voice.target 
   sudo install -o root -g root -m 0644 \
     "$REPO_DIR/systemd/onboarding/$name" "/etc/systemd/system/$name"
 done
+sudo install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d /var/log/journal
+sudo install -o root -g root -m 0644 "$REPO_DIR/config/journald.conf.d/messagebox.conf" /etc/systemd/journald.conf.d/messagebox.conf
+sudo systemctl restart systemd-journald.service
+sudo journalctl --flush
+sudo env PYTHONPATH=/opt/messagebox python3 -m messagebox.wifi_watchdog --configure
+for name in messagebox-wifi-watchdog.service messagebox-wifi-watchdog.timer; do
+  sudo install -o root -g root -m 0644 "$REPO_DIR/systemd/$name" "/etc/systemd/system/$name"
+done
+sudo systemctl daemon-reload
+sudo systemctl enable messagebox-wifi-watchdog.timer
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/messagebox.conf
 sudo systemctl daemon-reload
 sudo systemctl start messagebox-mode-reconcile.path
@@ -456,6 +455,8 @@ sudo systemd-analyze verify \
   /etc/systemd/system/messagebox-dash.service \
   /etc/systemd/system/messagebox-wifi-change.service \
   /etc/systemd/system/messagebox-wifi-change.path \
+  /etc/systemd/system/messagebox-wifi-watchdog.service \
+  /etc/systemd/system/messagebox-wifi-watchdog.timer \
   /etc/systemd/system/messagebox-nfc.service \
   /usr/lib/systemd/system/comitup-web.service \
   /etc/systemd/system/messagebox-onboarding-home.service \

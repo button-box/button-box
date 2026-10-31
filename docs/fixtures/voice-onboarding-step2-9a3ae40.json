@@ -1,0 +1,228 @@
+{
+  "build": "9a3ae40",
+  "capabilities": {
+    "announce_messages_voice": true,
+    "audio": true,
+    "box_link": true,
+    "card_name_prompt": true,
+    "guided_setup_v1": true,
+    "holiday_mode": true,
+    "kit_cards": 1,
+    "listened_announcements": true,
+    "message_age_phrase": true,
+    "morning_ring": true,
+    "mute": true,
+    "nfc": false,
+    "quiet_now": true,
+    "quiet_periods": 3,
+    "quiet_schedules": true,
+    "reaction_cards": 1,
+    "reaction_sent_voice": 1,
+    "reactions": 1,
+    "recording_modes": [
+      "tap_review",
+      "hold_release"
+    ],
+    "review_before_send": true,
+    "ringtones": [
+      "hello_piano",
+      "sunshine",
+      "bouncy",
+      "sing_along",
+      "island",
+      "hello",
+      "ukulele"
+    ],
+    "settings_unknown_keys": "ignore",
+    "settings_version": 1,
+    "software_update": {
+      "modes": [
+        "auto",
+        "ask"
+      ],
+      "physical_confirmation": true,
+      "protocol": 1
+    },
+    "swoosh_sound_enabled": true,
+    "talk_modes": [
+      "tap",
+      "hold"
+    ],
+    "text_to_voice": 1,
+    "voice_lines": 1,
+    "voice_packs": [
+      "jessica",
+      "pirate",
+      "alien",
+      "dj",
+      "robot",
+      "french",
+      "charlie",
+      "tata",
+      "buttonbox"
+    ],
+    "weekend_days": true
+  },
+  "command_kinds": [
+    "audio",
+    "card_prompt",
+    "delete_message",
+    "install_update",
+    "listened",
+    "mute",
+    "nfc_cancel",
+    "nfc_enroll",
+    "nfc_unpair",
+    "preview_ringtone",
+    "queue_hold",
+    "quiet_now",
+    "reaction",
+    "set_update_mode",
+    "settings",
+    "setup_greeting",
+    "voice_preview"
+  ],
+  "keys": {
+    "after_listening": {
+      "type": "enum",
+      "values": [
+        "invite_reply",
+        "play_only"
+      ]
+    },
+    "announce_messages_voice": {
+      "type": "bool"
+    },
+    "arrival_signal": {
+      "type": "enum",
+      "values": [
+        "lamp_only",
+        "ring_and_lamp",
+        "ring_only",
+        "silent"
+      ]
+    },
+    "card_name_prompt": {
+      "type": "bool"
+    },
+    "holiday_until": {
+      "format": "YYYY-MM-DD",
+      "nullable": true,
+      "type": "string"
+    },
+    "master_volume_percent": {
+      "max": 100,
+      "min": 0,
+      "type": "int"
+    },
+    "max_recording_seconds": {
+      "type": "enum",
+      "values": [
+        30,
+        60,
+        120
+      ]
+    },
+    "morning_ring": {
+      "type": "bool"
+    },
+    "nfc_confirmation_beep": {
+      "type": "bool"
+    },
+    "quiet_hours": {
+      "type": "object"
+    },
+    "quiet_schedules": {
+      "keys": [
+        "school_days",
+        "weekend"
+      ],
+      "nullable": true,
+      "period_keys": [
+        "start",
+        "end"
+      ],
+      "periods_max": 3,
+      "time_format": "HH:MM",
+      "type": "object"
+    },
+    "recording_mode": {
+      "type": "enum",
+      "values": [
+        "hold_release",
+        "tap_review"
+      ]
+    },
+    "review_before_send": {
+      "type": "bool"
+    },
+    "revision": {
+      "min": 0,
+      "type": "int"
+    },
+    "ringtone_id": {
+      "type": "enum",
+      "values": [
+        "bouncy",
+        "cuckoo_clock",
+        "ding_dong",
+        "gentle_music_box",
+        "hello",
+        "hello_piano",
+        "island",
+        "playful_chiptune",
+        "sing_along",
+        "sunshine",
+        "ukulele"
+      ]
+    },
+    "say_reactions": {
+      "type": "bool"
+    },
+    "swoosh_sound_enabled": {
+      "type": "bool"
+    },
+    "talk_mode": {
+      "type": "enum",
+      "values": [
+        "hold",
+        "tap"
+      ]
+    },
+    "timezone": {
+      "max": 64,
+      "type": "string"
+    },
+    "version": {
+      "type": "enum",
+      "values": [
+        1
+      ]
+    },
+    "voice_pack": {
+      "type": "enum",
+      "values": [
+        "jessica",
+        "pirate",
+        "alien",
+        "dj",
+        "robot",
+        "french",
+        "charlie",
+        "tata",
+        "buttonbox"
+      ]
+    },
+    "weekend_days": {
+      "items": "int",
+      "max": 6,
+      "max_items": 7,
+      "min": 0,
+      "nullable": true,
+      "type": "array",
+      "unique": true
+    }
+  },
+  "settings_version": 1,
+  "unknown_keys": "ignore"
+}

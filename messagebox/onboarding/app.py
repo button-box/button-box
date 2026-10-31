@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from messagebox import speaker
 import subprocess
 import threading
 import time
@@ -12,12 +14,15 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from messagebox.identity import read_box_id
+from messagebox.identity import read_box_color, read_box_id
+from messagebox.software import software_footer
+from messagebox.cloud_claim import CloudClaim, CloudClaimError, CloudClaimClockError, setup_online_cue
+from messagebox.cloud_device import CloudDeviceError
 from messagebox.onboarding.comitup_adapter import ComitupAdapter, ComitupError
 from messagebox.onboarding.connectivity import ConnectivityChecker
 from messagebox.onboarding.completion import request_completion
 from messagebox.onboarding.nfc import NfcOnboardingClient, NfcOnboardingError
-from messagebox.onboarding.paths import ONBOARDING_CONFIG_PATH, ONBOARDING_STATE_PATH
+from messagebox.onboarding.paths import ONBOARDING_CONFIG_PATH, ONBOARDING_STATE_PATH, ONBOARDING_ENABLED_PATH
 from messagebox.onboarding.state import (
     PROOFS,
     SAFE_ERRORS,
@@ -37,7 +42,7 @@ from messagebox.onboarding.whatsapp import (
     normalize_pair_code,
     normalize_phone,
 )
-from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path
+from messagebox.settings import RINGTONES, RevisionConflict, SettingsError, SettingsStore, ringtone_path, normalize_ringtone_id
 from messagebox.tailnet import normalize_tailscale_host, request_origin
 
 
@@ -85,51 +90,79 @@ _HANDOFF_HTML = b"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Connecting | Button Box</title>
-  <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede,.status{color:#adb7b0}.pulse{width:34px;height:34px;border:4px solid #363b3d;border-top-color:#69c5a5;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.pulse{animation:none;border-color:#69c5a5}}.button{display:inline-block;color:#07120e;background:#69c5a5;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:700}</style>
+  <style nonce="messagebox-handoff">__STYLES__</style>
 </head>
 <body>
-  <main class="shell">
-    <section class="card handoff" aria-labelledby="handoff-title">
-      <p class="eyebrow">Wi-Fi setup</p>
-      <div class="pulse" aria-hidden="true"></div>
-      <h1 id="handoff-title">Join the same Wi-Fi</h1>
-      <p class="lede">The box is trying to connect. Its setup hotspot will disappear and your phone may close this page.</p>
-      <ol class="steps">
-        <li>In your phone's Wi-Fi settings, join the network you selected for the box, even if it is a separate IoT network.</li>
-        <li>Open <strong>__MESSAGEBOX_URL__</strong> in Safari or Chrome to continue setup.</li>
-      </ol>
-      <p class="status" id="handoff-status">This page cannot confirm the connection. If the address does not open, check your phone's Wi-Fi and retry.</p>
-      <a class="button secondary" href="__MESSAGEBOX_URL__">Try the setup URL now</a>
-      <p class="status">If the setup hotspot returns, reopen it and check the Wi-Fi details.</p>
-    </section>
-  </main>
+  <div class="shell">
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Button Box</span>
+    </header>
+    <main>
+      <section class="card handoff" aria-labelledby="handoff-title">
+        <p class="eyebrow">Wi-Fi setup</p>
+        <div class="pulse" aria-hidden="true"></div>
+        __HANDOFF_CONTENT__
+      </section>
+    </main>
+  </div>
 </body>
 </html>
 """
+
+_QR_WIFI_NEXT = b"""        <aside class="notice">
+          <strong>Next</strong>
+          <span>Your phone leaves this page when Button Box joins your Wi-Fi. That is normal.</span>
+          <span>When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</span>
+        </aside>
+"""
+_CONNECTING_STATUS = "This usually takes 1–2 minutes. Keep the box plugged in. It talks when it's ready.".encode("utf-8")
+_QR_HANDOFF_CONTENT = """<div class="wifi-handoff" role="status" aria-live="polite">
+<h1 id="handoff-title">Connecting…</h1>
+<p id="handoff-status" class="lede">__CONNECTING_STATUS__</p>
+<p id="handoff-next" class="lede">When your box beeps or says it's online (or the setup page says Connected!), reconnect your phone to home Wi-Fi. Go back to WhatsApp. To start the chat, scan the QR code on your setup card.</p>
+</div>
+<p class="field-help">If the connection fails, rejoin the setup hotspot and try again.</p>
+<p class="field-help">No card? Join the same Wi-Fi and open <a href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a>.</p>
+<script nonce="messagebox-handoff">__HANDOFF_SCRIPT__</script>""".encode("utf-8")
+
+_LOCAL_HANDOFF_CONTENT = """<h1 id="handoff-title">Connecting…</h1>
+<p id="handoff-status" class="lede">__CONNECTING_STATUS__</p>
+<h2>Join the same Wi-Fi</h2>
+<p class="lede">Join the Wi-Fi you chose for your Button Box, then open this link to continue:</p>
+<p><a class="button" href="__MESSAGEBOX_URL__">__MESSAGEBOX_URL__</a></p>""".encode("utf-8")
 
 _CHANGE_HTML = b"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Changing Wi-Fi | Button Box</title>
-  <style nonce="messagebox-handoff">body{margin:0;background:#05070a;color:#f5f1e8;font:18px/1.5 system-ui,sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.card{max-width:34rem;background:#171a1d;border:1px solid #363b3d;border-radius:20px;padding:28px}.eyebrow{color:#69c5a5;text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;font-weight:700}h1{line-height:1.1}.lede{color:#adb7b0}</style>
+  <style nonce="messagebox-handoff">__STYLES__</style>
 </head>
 <body>
-  <main class="shell">
-    <section class="card" aria-labelledby="change-title">
-      <p class="eyebrow">Wi-Fi setup</p>
-      <h1 id="change-title">Returning to setup mode</h1>
-      <p class="lede">The Button Box setup hotspot may take up to five minutes to return.</p>
-      <ol class="steps">
-        <li>Open Wi-Fi settings on this phone.</li>
-        <li>Join the printed Button Box hotspot when it appears.</li>
-        <li>Open the printed Button Box address to continue.</li>
-      </ol>
-      <a class="button secondary" href="/">Return if the hotspot does not come back</a>
-    </section>
-  </main>
+  <div class="shell">
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Button Box</span>
+    </header>
+    <main>
+      <section class="card" aria-labelledby="change-title">
+        <p class="eyebrow">Wi-Fi setup</p>
+        <h1 id="change-title">Returning to setup mode</h1>
+        <p class="lede">The Button Box setup hotspot may take up to five minutes to return.</p>
+        <ol class="steps">
+          <li>Open Wi-Fi settings on this phone.</li>
+          <li>Join the printed Button Box hotspot when it appears.</li>
+          <li>Open the printed Button Box address to continue.</li>
+        </ol>
+        <a class="button secondary" href="/">Return if the hotspot does not come back</a>
+      </section>
+    </main>
+  </div>
 </body>
 </html>
 """
@@ -318,6 +351,43 @@ def _require_same_origin(environ, expected_origin):
         raise RequestError("403 Forbidden", "Cross-site request rejected")
 
 
+def watch_cloud_claim(request, *, setup_pending, sleep=time.sleep,
+                      interval=5, retry_delay=60, max_requests=3):
+    """Check in without a browser, backing off failures up to thirty seconds."""
+    def pending():
+        try:
+            return setup_pending()
+        except OSError:
+            logging.getLogger(__name__).warning("Cloud setup state unavailable")
+            return True  # Root still owns the fail-closed setup-mode gate.
+
+    def attempt():
+        try:
+            return request()
+        except RequestError:
+            return False  # HOME/phase is not ready yet; no Cloud request.
+        except Exception as exc:
+            # This thread is the only completion path; an identity or client
+            # error must not end it. Log the type only, never server data.
+            logging.getLogger(__name__).warning("Cloud setup completion unavailable: %s", type(exc).__name__)
+            return None
+
+    delay = interval
+    while pending():
+        result = attempt()
+        if result:
+            # Stop normal Cloud polling after the request. Only retry the same
+            # guarded handoff if root has not removed the setup marker in time.
+            for _ in range(max_requests - 1):
+                sleep(retry_delay)
+                if not pending():
+                    return
+                attempt()
+            return
+        delay = min(delay * 2, 30) if result is None else interval
+        sleep(delay)
+
+
 def create_app(
     mode=None,
     *,
@@ -328,9 +398,13 @@ def create_app(
     adapter=None,
     connectivity_checker=None,
     whatsapp_client=None,
+    cloud_claim=None,
+    start_claim_watcher=False,
+    setup_pending=lambda: ONBOARDING_ENABLED_PATH.exists(),
     nfc_client=None,
     caregiver_settings=None,
     completion_request=request_completion,
+    online_cue=setup_online_cue,
     clock=time.time,
     sleep=time.sleep,
     handoff_delay=HANDOFF_DELAY,
@@ -366,6 +440,22 @@ def create_app(
     comitup = adapter or ComitupAdapter()
     checker = connectivity_checker or ConnectivityChecker()
     whatsapp = whatsapp_client or WhatsAppPairingClient()
+    cloud = cloud_claim
+    cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+
+    def claim_client():
+        nonlocal cloud
+        if cloud is None:
+            cloud = CloudClaim()
+        return cloud
+
+    def request_cloud_completion():
+        if selected_mode != "HOME" or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+        if claim_client().status().get("status") != "claimed":
+            raise RequestError("409 Conflict", "Cloud connection is incomplete")
+        completion_request(transport="cloud")
+
     nfc = nfc_client or NfcOnboardingClient()
     settings = caregiver_settings or SettingsStore()
 
@@ -403,17 +493,23 @@ def create_app(
 
     if selected_mode == "HOTSPOT":
         store.reconcile_hotspot()
-    # Home connectivity checks belong to /api/state, not application startup:
-    # the page and static files must load even while internet checks are slow.
+    # Connectivity checks run in /api/state and the background setup watcher,
+    # never on the thread loading the page or static files.
 
     static_files = {}
     for name, content_type in (
         ("index.html", "text/html; charset=utf-8"),
+        ("cloud-connect.html", "text/html; charset=utf-8"),
+        ("cloud-connect.js", "text/javascript; charset=utf-8"),
         ("app.js", "text/javascript; charset=utf-8"),
         ("clipboard.js", "text/javascript; charset=utf-8"),
+        ("wifi-handoff.js", "text/javascript; charset=utf-8"),
         ("styles.css", "text/css; charset=utf-8"),
     ):
-        static_files[name] = (STATIC_DIR.joinpath(name).read_bytes(), content_type)
+        body = STATIC_DIR.joinpath(name).read_bytes()
+        if name.endswith(".html"):
+            body = body.replace(b"__SOFTWARE_FOOTER__", software_footer())
+        static_files[name] = (body, content_type)
 
     def safe_whatsapp_state(state):
         if selected_mode != "HOME" or state["phase"] not in {
@@ -483,6 +579,14 @@ def create_app(
         }
 
     def safe_state(state):
+        if cloud_mode:
+            return {
+                "phase": state["phase"],
+                "box_id": read_box_id(),
+                "safe_error": state["safe_error"],
+                "mode": selected_mode,
+                "transport": "cloud",
+            }
         whatsapp_state = safe_whatsapp_state(state)
         if whatsapp_state["status"] == "ready" and state["phase"] == WHATSAPP_PENDING:
             state = store.load()
@@ -567,7 +671,7 @@ def create_app(
                     )
                 )
                 or recipient["metadata_status"] not in {"ready", "unavailable"}
-                or recipient["kind"] not in {"person", "group"}
+                or recipient["kind"] not in {"person", "group", "box"}
                 or any(
                     not isinstance(recipient[key], bool)
                     for key in ("configured", "is_default", "available")
@@ -611,7 +715,7 @@ def create_app(
             "sound_warning",
         }
         if not isinstance(document, dict) or set(document) != expected:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if document["status"] not in {
             "idle",
             "waiting",
@@ -620,28 +724,28 @@ def create_app(
             "success",
             "unavailable",
         }:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         recipients = document["recipients"]
         if not isinstance(recipients, list) or len(recipients) > 20:
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         cleaned = []
         for recipient in recipients:
             if not isinstance(recipient, dict) or set(recipient) != {
                 "token", "label", "kind", "is_default", "card_count"
             }:
-                raise NfcOnboardingError("NFC setup response is invalid")
+                raise NfcOnboardingError("Family card setup response is invalid")
             if (
                 not isinstance(recipient["token"], str)
                 or not _RECIPIENT_TOKEN.fullmatch(recipient["token"])
                 or not isinstance(recipient["label"], str)
                 or not recipient["label"].strip()
                 or len(recipient["label"]) > 80
-                or recipient["kind"] not in {"person", "group"}
+                or recipient["kind"] not in {"person", "group", "box"}
                 or not isinstance(recipient["is_default"], bool)
                 or type(recipient["card_count"]) is not int
                 or recipient["card_count"] < 0
             ):
-                raise NfcOnboardingError("NFC setup response is invalid")
+                raise NfcOnboardingError("Family card setup response is invalid")
             cleaned.append(dict(recipient))
         selected = document["recipient"]
         if selected is not None and (
@@ -650,16 +754,16 @@ def create_app(
             or not isinstance(selected["label"], str)
             or not selected["label"].strip()
             or len(selected["label"]) > 80
-            or selected["kind"] not in {"person", "group"}
+            or selected["kind"] not in {"person", "group", "box"}
         ):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         if (
             type(document["mapped_count"]) is not int
             or document["mapped_count"] < 0
             or not isinstance(document["remove_tag"], bool)
             or not isinstance(document["sound_warning"], bool)
         ):
-            raise NfcOnboardingError("NFC setup response is invalid")
+            raise NfcOnboardingError("Family card setup response is invalid")
         result = {
             "status": document["status"],
             "mapped_count": document["mapped_count"],
@@ -673,9 +777,17 @@ def create_app(
 
     def handoff(start_response, callback=None, body=None):
         if body is None:
-            body = _HANDOFF_HTML.replace(
-                b"__MESSAGEBOX_URL__", canonical_url.encode("ascii")
-            )
+            body = _HANDOFF_HTML
+            body = body.replace(b"__HANDOFF_CONTENT__", _QR_HANDOFF_CONTENT if cloud_mode else _LOCAL_HANDOFF_CONTENT)
+            if cloud_mode:
+                body = body.replace(b"__MESSAGEBOX_URL__", (canonical_url + "cloud-connect").encode("ascii"))
+                body = body.replace(b"__HANDOFF_SCRIPT__", static_files["wifi-handoff.js"][0])
+        # Embed the shared styles before the hotspot can disappear.
+        body = body.replace(b"__CONNECTING_STATUS__", _CONNECTING_STATUS)
+        body = body.replace(b"__MESSAGEBOX_URL__", canonical_url.encode("ascii"))
+        body = body.replace(b"__STYLES__", static_files["styles.css"][0])
+        body = body.replace(b'<html lang="en">',
+                            f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"), 1)
         headers = [
             header for header in _SECURITY_HEADERS
             if header[0].lower() != "content-security-policy"
@@ -706,6 +818,7 @@ def create_app(
                 pass
 
     def preview_ringtone(ringtone_id):
+        ringtone_id = normalize_ringtone_id(ringtone_id)
         if ringtone_id not in RINGTONES:
             raise RequestError("400 Bad Request", "Ringtone is invalid")
         document, _warning = settings.load()
@@ -716,11 +829,15 @@ def create_app(
             raise RequestError("409 Conflict", "Button Box audio is busy")
 
         try:
-            subprocess.run(
-                ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
-                check=True,
-                timeout=30,
-            )
+            from messagebox.maintenance import interaction
+            with interaction() as allowed:
+                if not allowed:
+                    raise RequestError("409 Conflict", "Software installation in progress")
+                speaker.run(
+                    ["aplay", "-q", "-D", os.environ.get("MSGBOX_SPK_DEV", "default"), os.fspath(path)],
+                    check=True,
+                    timeout=30,
+                )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RequestError(
                 "503 Service Unavailable", "Button Box audio could not play"
@@ -777,8 +894,28 @@ def create_app(
                     )(start_response)
                 raise RequestError("400 Bad Request", "Use the printed Button Box address")
 
+            if cloud_mode and (
+                path in {"/api/data", "/api/recipients", "/api/nfc"}
+                or path.startswith(("/whatsapp/", "/recipients/", "/nfc/"))
+            ):
+                raise RequestError(
+                    "409 Conflict", "Manage your connection and people in Button Box Cloud"
+                )
+
             if method == "GET" and path == "/":
+                # Read the durable proof only; connectivity probes must not delay page loading.
+                if cloud_mode and selected_mode == "HOME" and store.load()["phase"] in {
+                    WHATSAPP_PENDING, WHATSAPP_READY,
+                }:
+                    return Response(
+                        b"", "302 Found", [("Location", "/cloud-connect")]
+                    )(start_response)
                 body, content_type = static_files["index.html"]
+                body = body.replace(
+                    b'<html lang="en">',
+                    f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"),
+                    1,
+                )
                 displayed_url = (
                     expected_origin + "/"
                     if tailscale_host
@@ -788,8 +925,64 @@ def create_app(
                 body = body.replace(
                     b"__MESSAGEBOX_URL__", displayed_url.encode("ascii")
                 )
+                # Cloud boxes finish from the setup card QR code; only wacli boxes need the local address.
+                if cloud_mode:
+                    body = re.sub(rb"<!--SETUP-LOCAL-->.*?<!--/SETUP-LOCAL-->\n", _QR_WIFI_NEXT, body, count=1, flags=re.S)
+                body = body.replace(
+                    b"__CLOUD_CONNECT_LINK__",
+                    (b'<p><a class="button" href="/cloud-connect">Connect your box to WhatsApp</a></p>'
+                     if cloud_mode and selected_mode == "HOME" else b""),
+                )
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
-            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/styles.css"}:
+            if method == "GET" and path == "/cloud-connect" and cloud_mode and selected_mode == "HOME":
+                body, content_type = static_files["cloud-connect.html"]
+                body = body.replace(
+                    b'<html lang="en">',
+                    f'<html lang="en" data-box-color="{read_box_color()}">'.encode("ascii"),
+                    1,
+                )
+                return Response(body, headers=[("Content-Type", content_type)])(start_response)
+            if method == "GET" and path == "/api/cloud-claim" and cloud_mode and selected_mode == "HOME":
+                try:
+                    return _json_response(claim_client().status())(start_response)
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "GET" and path == "/api/cloud-claim/qr" and cloud_mode and selected_mode == "HOME":
+                try:
+                    body = claim_client().qr_svg()
+                except CloudClaimError as exc:
+                    raise RequestError("404 Not Found", str(exc)) from exc
+                return Response(body, headers=[("Content-Type", "image/svg+xml; charset=utf-8")])(start_response)
+            if method == "POST" and path == "/api/cloud-claim/start" and cloud_mode and selected_mode == "HOME":
+                _require_same_origin(environ, expected_origin)
+                if store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+                    raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+                try:
+                    return _json_response(claim_client().start())(start_response)
+                except CloudClaimClockError as exc:
+                    raise RequestError("503 Service Unavailable", "clock_not_ready") from exc
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "POST" and path == "/api/cloud-claim/cancel" and cloud_mode and selected_mode == "HOME":
+                _require_same_origin(environ, expected_origin)
+                document = _form(environ, body_limit)
+                if set(document) != {"claim_id"}:
+                    raise RequestError("400 Bad Request", "Invalid cancellation request")
+                try:
+                    return _json_response(claim_client().cancel(document["claim_id"]))(start_response)
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+            if method == "POST" and path == "/onboarding/complete" and cloud_mode:
+                _require_same_origin(environ, expected_origin)
+                document = _form(environ, body_limit)
+                if document != {"intent": "done"}:
+                    raise RequestError("400 Bad Request", "Invalid completion request")
+                try:
+                    request_cloud_completion()
+                except CloudClaimError as exc:
+                    raise RequestError("503 Service Unavailable", str(exc)) from exc
+                return _json_response({"status": "complete"}, "202 Accepted")(start_response)
+            if method == "GET" and path in {"/static/app.js", "/static/clipboard.js", "/static/cloud-connect.js", "/static/styles.css"}:
                 name = path.rsplit("/", 1)[-1]
                 body, content_type = static_files[name]
                 return Response(body, headers=[("Content-Type", content_type)])(start_response)
@@ -850,7 +1043,7 @@ def create_app(
 
             if method == "GET" and path == "/api/nfc":
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
-                    raise RequestError("409 Conflict", "NFC setup requires linked WhatsApp")
+                    raise RequestError("409 Conflict", "Family card setup requires linked WhatsApp")
                 recipient_state = safe_recipient_state(whatsapp.recipient_state())
                 if recipient_state["status"] != "complete":
                     raise RequestError("409 Conflict", "Complete recipient setup first")
@@ -1061,7 +1254,7 @@ def create_app(
             }:
                 _require_same_origin(environ, expected_origin)
                 if selected_mode != "HOME" or store.load()["phase"] != WHATSAPP_READY:
-                    raise RequestError("409 Conflict", "NFC setup requires linked WhatsApp")
+                    raise RequestError("409 Conflict", "Family card setup requires linked WhatsApp")
                 recipient_state = safe_recipient_state(whatsapp.recipient_state())
                 if recipient_state["status"] != "complete":
                     raise RequestError("409 Conflict", "Complete recipient setup first")
@@ -1071,7 +1264,7 @@ def create_app(
                         if set(document) != {"token"} or not _RECIPIENT_TOKEN.fullmatch(
                             document["token"]
                         ):
-                            raise RequestError("400 Bad Request", "Invalid NFC recipient")
+                            raise RequestError("400 Bad Request", "Invalid family card recipient")
                         result = nfc.assign(document["token"])
                     elif path == "/onboarding/complete":
                         if set(document) != {"intent"} or document["intent"] not in {
@@ -1092,7 +1285,7 @@ def create_app(
                         )(start_response)
                     else:
                         if document:
-                            raise RequestError("400 Bad Request", "Invalid NFC request")
+                            raise RequestError("400 Bad Request", "Invalid family card request")
                         operation = {
                             "/nfc/start": nfc.start,
                             "/nfc/retry": nfc.retry,
@@ -1107,6 +1300,10 @@ def create_app(
 
             if path in {
                 "/api/state",
+                "/api/cloud-claim",
+                "/api/cloud-claim/start",
+                "/api/cloud-claim/cancel",
+                "/api/cloud-claim/qr",
                 "/api/settings",
                 "/api/ringtone-preview",
                 "/api/networks",
@@ -1146,12 +1343,44 @@ def create_app(
                 {"error": "Onboarding state is unavailable"}, "503 Service Unavailable"
             )(start_response)
 
+    def setup_checkin():
+        state = store.load()
+        if state["phase"] in {WIFI_CONNECTING, WIFI_ASSOCIATED, WIFI_FAILED}:
+            state = reconcile_home()
+        if state["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            raise RequestError("409 Conflict", "Home Wi-Fi setup is not ready")
+        client = claim_client()
+        if client.registration_needed():
+            client.start()  # Recheck under the claim lock if a phone or poll raced us.
+        result = client.setup_checkin()
+        # A Wi-Fi change or completion can race the bounded Cloud request.
+        if not setup_pending() or store.load()["phase"] not in {WHATSAPP_PENDING, WHATSAPP_READY}:
+            return False
+        try:
+            online_cue()
+        except (OSError, ValueError, CloudClaimError, CloudDeviceError) as exc:
+            logging.getLogger(__name__).warning("Setup online cue unavailable: %s", type(exc).__name__)
+        if result["claimed"]:
+            completion_request(transport="cloud")
+            return True
+        return False
+
+    if start_claim_watcher and cloud_mode and selected_mode == "HOME":
+        threading.Thread(
+            target=watch_cloud_claim,
+            kwargs={"request": setup_checkin, "setup_pending": setup_pending, "sleep": sleep},
+            name="cloud-claim-watcher", daemon=True,
+        ).start()
     return application
 
 
 def _allowed_methods(path):
     return {
         "/api/state": "GET",
+        "/api/cloud-claim": "GET",
+        "/api/cloud-claim/start": "POST",
+        "/api/cloud-claim/cancel": "POST",
+        "/api/cloud-claim/qr": "GET",
         "/api/settings": "GET, PUT",
         "/api/ringtone-preview": "POST",
         "/api/networks": "GET",
@@ -1187,12 +1416,21 @@ class _LazyApplication:
         self._application = None
         self._lock = threading.Lock()
 
-    def __call__(self, environ, start_response):
+    def initialize(self):
         if self._application is None:
             with self._lock:
                 if self._application is None:
-                    self._application = create_app()
+                    self._application = create_app(start_claim_watcher=True)
+
+    def __call__(self, environ, start_response):
+        self.initialize()
         return self._application(environ, start_response)
 
 
 app = _LazyApplication()
+
+
+def post_worker_init(worker):
+    """Gunicorn starts the watcher even if no browser ever visits the portal."""
+    if worker.wsgi is app:
+        app.initialize()

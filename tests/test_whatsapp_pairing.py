@@ -745,7 +745,8 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
             'whatsapp.status === "ready"',
         ):
             self.assertIn(status, script)
-        self.assertIn('taskStatus("Link WhatsApp", progress.whatsapp, "#whatsapp")', script)
+        # Mode-specific destinations are exercised by onboarding-ui.test.js.
+        self.assertIn('taskStatus(cloud ? "Press the button and name your box" : "Link WhatsApp", progress.whatsapp,', script)
         self.assertIn('if (routeName === "whatsapp")', script)
         self.assertIn('routeName === "continue"', script)
         self.assertIn('location.replace("#home")', script)
@@ -798,11 +799,11 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn('formRequest("/nfc/start")', script)
         self.assertIn('formRequest("/nfc/assign", { token: recipient.token })', script)
         self.assertIn('formRequest("/onboarding/complete", { intent })', script)
-        self.assertIn("Skip NFC setup", html)
+        self.assertIn("Skip pairing", html)
         self.assertIn("Reassign", html)
-        self.assertIn("Pair another tag", html)
+        self.assertIn("Pair another card", html)
         self.assertIn(
-            "recipients, NFC mappings, listener profiles, and voice-test state", html
+            "recipients, Family card mappings, listener profiles, and voice-test state", html
         )
         self.assertNotIn("QR code", html)
         self.assertNotIn("qr_code", script.lower())
@@ -847,7 +848,7 @@ class WhatsAppFrontendAndServiceContractTests(unittest.TestCase):
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", web)
         self.assertIn("Requires=messagebox-whatsapp-pairing.service", nfc_worker)
         self.assertIn("User=messagebox\n", nfc_worker)
-        self.assertIn("SupplementaryGroups=messagebox i2c gpio audio", nfc_worker)
+        self.assertIn("SupplementaryGroups=messagebox messagebox-settings i2c gpio audio", nfc_worker)
         self.assertIn("EnvironmentFile=/etc/messagebox/env", nfc_worker)
         self.assertIn("RestrictAddressFamilies=AF_UNIX", nfc_worker)
         self.assertIn("User=root\n", completion)

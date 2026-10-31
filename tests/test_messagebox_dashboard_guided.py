@@ -120,7 +120,7 @@ class GuidedOutboxDashboardTests(unittest.TestCase):
                 "ts": 100,
                 "file": "100-private-message-id.wav",
                 "chat": "private-family@g.us",
-                "sender": "Rachel",
+                "sender": "Synthetic sender A",
             },
             {
                 "type": "guided_session_started",
@@ -200,7 +200,7 @@ class GuidedOutboxDashboardTests(unittest.TestCase):
         self.assertEqual(behavior["avg_wait_to_play_s"], 30)
 
         reply = result["interactions"][1]
-        self.assertEqual(reply["sender"], "Rachel")
+        self.assertEqual(reply["sender"], "Synthetic sender A")
         self.assertEqual(reply["chat"], "Family")
         self.assertEqual(reply["outcome"], "delivered")
         self.assertEqual(
@@ -235,7 +235,7 @@ class GuidedOutboxDashboardTests(unittest.TestCase):
                 "ts": 300,
                 "file": "old.wav",
                 "chat": "origin@g.us",
-                "sender": "Anael",
+                "sender": "Synthetic sender B",
             },
             {
                 "type": "guided_session_started",
@@ -263,7 +263,7 @@ class GuidedOutboxDashboardTests(unittest.TestCase):
             now=360,
         )
         interaction = result["interactions"][0]
-        self.assertEqual(interaction["sender"], "Anael")
+        self.assertEqual(interaction["sender"], "Synthetic sender B")
         self.assertEqual(interaction["source_confidence"], "oldest_first")
         self.assertEqual(interaction["outcome"], "queued")
         self.assertEqual(interaction["outcome_label"], "Approved · waiting")
@@ -276,7 +276,7 @@ class GuidedOutboxDashboardTests(unittest.TestCase):
                 "ts": 100,
                 "file": "incoming.wav",
                 "chat": "origin@g.us",
-                "sender": "Rachel",
+                "sender": "Synthetic sender A",
             },
             {
                 "type": "guided_session_started",

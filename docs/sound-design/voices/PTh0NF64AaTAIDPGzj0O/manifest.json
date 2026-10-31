@@ -1,0 +1,21 @@
+{
+  "voice": "Button Box",
+  "format": "48 kHz mono 16-bit PCM WAV, -16 LUFS",
+  "temporary_placeholder": false,
+  "lines": [
+    {
+      "file": "voice-sending.wav",
+      "text": "Sending!",
+      "seconds": 1.18997917,
+      "sha256": "de03fa7da0bee8022a1eb6b635c65f8c20c1c2868334eaea4ae379b9a33af6de",
+      "replacement": {
+        "voice_id": "PTh0NF64AaTAIDPGzj0O",
+        "model": "eleven_v3",
+        "seed": 7,
+        "post_chain": "loudnorm=I=-16:TP=-1.5:LRA=11"
+      },
+      "temporary_placeholder": false,
+      "source": "ElevenLabs"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=Button Box local software update broker
+Requires=messagebox-update-recovery.service
+After=messagebox-update-recovery.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/lib/messagebox-update/update_controller.py serve
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=messagebox-update
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+SupplementaryGroups=messagebox-update
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/button-box-update /run/messagebox-update /etc/button-box-update
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN
+
+[Install]
+WantedBy=multi-user.target

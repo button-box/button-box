@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest import mock
 
 from messagebox.onboarding.completion import complete, request_completion
+from messagebox import cloud_setup
+from speaker_helpers import isolate_audio
 from test_nfc_pairing_onboarding import CARD_A, PERSON, completed_recipients
 
 
@@ -17,6 +19,10 @@ class Clock:
 
 class CompletionTests(unittest.TestCase):
     def setUp(self):
+        isolate_audio(self)
+        sound = mock.patch("messagebox.onboarding.completion.request_all_set_sound")
+        self.sound_request = sound.start()
+        self.addCleanup(sound.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.enabled = self.root / "enabled"
@@ -213,6 +219,32 @@ class CompletionTests(unittest.TestCase):
             json.loads(self.request.read_text(encoding="utf-8")),
             {"version": 1, "complete": True},
         )
+
+    @mock.patch("messagebox.onboarding.completion.os.geteuid", return_value=0)
+    def test_cloud_handoff_requires_verified_claim_without_legacy_recipients(self, _geteuid):
+        guide = cloud_setup.SetupGuide()
+        guide.pending_claim('synthetic-claim-id', 4_000_000_000)
+        request_completion(self.request, transport="cloud")
+        client = mock.Mock()
+        client.claim.return_value = {"claimed": False}
+        with mock.patch.dict(os.environ, {"MSGBOX_TRANSPORT": "cloud"}):
+            with self.assertRaisesRegex(RuntimeError, "cloud claim is incomplete"):
+                self.complete(request_path=self.request, enabled_path=self.enabled,
+                              contacts_path=self.root / "absent.json", cloud_client=client,
+                              run=self.command_runner, sleep=lambda _: None)
+            self.assertTrue(self.enabled.exists())
+            self.assertEqual(guide.load()['stage'], 'press')
+            client.claim.return_value = {"claimed": True}
+            result = self.complete(request_path=self.request, enabled_path=self.enabled,
+                                   contacts_path=self.root / "absent.json", cloud_client=client,
+                                   run=self.command_runner, sleep=lambda _: None)
+            play = mock.Mock()
+            self.assertTrue(cloud_setup.SetupGuide().speak(play))
+            play.assert_called_once_with('setup-names')
+        self.assertEqual(result, {"has_cards": False})
+        self.assertFalse(self.enabled.exists())
+        self.assertFalse(self.request.exists())
+        self.assertEqual(client.claim.call_count, 2)
 
 
 if __name__ == "__main__":

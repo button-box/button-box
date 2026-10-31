@@ -11,6 +11,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from messagebox.onboarding import initialize
 from messagebox.onboarding.paths import InitializerPaths
@@ -33,6 +34,13 @@ class InspectingTTY(TTY):
 
 
 class InitializeTests(unittest.TestCase):
+    def test_printed_insert_includes_box_color(self):
+        output = io.StringIO()
+        with patch.object(initialize, "read_box_color", return_value="pink-red"):
+            initialize._display_and_confirm("EXAMPLE", "button-box-example", "synthetic-password",
+                                            io.StringIO("yes\n"), output)
+        self.assertIn("Box color:        pink-red\n", output.getvalue())
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)

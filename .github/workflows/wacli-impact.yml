@@ -1,0 +1,59 @@
+name: wacli impact
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # Metadata only: never check out or execute code from the pull request.
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            // GitHub caps this endpoint at 3000 files; do not approve partial coverage.
+            if (files.length >= 3000) {
+              core.setFailed('Changed-file coverage is incomplete; review wacli impact manually.');
+              return;
+            }
+            const shared = path =>
+              /^messagebox\/(button_send|contacts|listened_receipts|settings|nfc)\.py$/.test(path) ||
+              path.startsWith('messagebox/onboarding/') ||
+              /^messagebox\/(sound_pack|acoustic_cue|ringtones)\.py$/.test(path) ||
+              path.startsWith('sounds/') ||
+              ['scripts/setup.sh', 'scripts/provision.sh'].includes(path) ||
+              path.startsWith('scripts/install/');
+            if (!files.some(file => shared(file.filename) ||
+                                    (file.previous_filename && shared(file.previous_filename)))) return;
+
+            // Fetch the current body rather than a possibly stale event payload.
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const body = (pr.body || '').replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gm, '');
+            if (!/^(?:#{1,6}\s+wacli impact\s*:?(?:\s+#+)?|\*\*wacli impact\s*:?\*\*\s*:?)\s*$/im.test(body)) {
+              core.setFailed('Shared files changed: add a "wacli impact" section describing behavior and tests.');
+            }
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: 'wacli-impact' });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner, repo, name: 'wacli-impact', color: 'd4c5f9',
+                description: 'Changes shared with the self-hosted wacli runtime',
+              });
+            }
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number: pull_number, labels: ['wacli-impact'],
+            });

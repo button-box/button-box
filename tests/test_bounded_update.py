@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +33,19 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def add_sound(fixture, source="sounds/cues/extra.wav", *, channels=1, width=2, rate=48000):
+    path = fixture.source / source
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as sound:
+        sound.setparams((channels, width, rate, 0, "NONE", "not compressed"))
+        sound.writeframes(b"\0" * 480 * channels * width)
+    path.chmod(0o644)
+    entry = {"source": source, "installed": "/opt/messagebox/" + source, "sha256": sha256(path)}
+    fixture.manifest_data["files"].append(entry)
+    fixture.write_manifest()
+    return path, entry
+
+
 class Systemctl:
     def __init__(self, fixture):
         self.fixture = fixture
@@ -39,6 +53,7 @@ class Systemctl:
             unit: {"active": "inactive", "enabled": "static"}
             for unit in bounded_update.UNITS
         }
+        self.states["messagebox-wifi-watchdog.timer"]["enabled"] = "disabled"
         if fixture.mode == "runtime":
             self.states["messagebox.target"] = {"active": "active", "enabled": "enabled"}
             self.states["messagebox-dash.service"] = {
@@ -59,6 +74,21 @@ class Systemctl:
         self.ever_activated = []
         self.fail_start_once = None
         self.fail_operation_once = None
+        self.part_of = {}
+        self.comitup_portal = "messagebox-onboarding-home.service" if fixture.mode == "setup" else None
+        # systemd Result per unit; "success" unless a test sets a failure.
+        self.results = {}
+        # unit -> callable(states) run after a successful start of that unit.
+        self.after_start = {}
+        # Model the mode generator's runtime wants link (enabled-runtime).
+        self.generator_enables = False
+
+    def _generated_enablement(self):
+        if not self.generator_enables:
+            return
+        selected = "comitup.service" if self.fixture.marker.exists() else "messagebox.target"
+        if self.states[selected]["enabled"] == "disabled":
+            self.states[selected]["enabled"] = "enabled-runtime"
 
     def _reload_generator(self):
         if self.fixture.generated.exists():
@@ -96,8 +126,22 @@ class Systemctl:
             unit = command[2]
             value = self.states[unit]["enabled"]
             return subprocess.CompletedProcess(command, 0 if value == "enabled" else 1, value + "\n")
+        if command[:4] == ["systemctl", "show", "--property=ConsistsOf", "--value"]:
+            unit = command[4]
+            dependents = [name for name, parent in self.part_of.items() if parent == unit]
+            return subprocess.CompletedProcess(command, 0, " ".join(dependents) + "\n")
         if command == ["systemctl", "daemon-reload"]:
             self._reload_generator()
+            self._generated_enablement()
+            return subprocess.CompletedProcess(command, 0)
+        if command[:4] == ["systemctl", "show", "--property=Result", "--value"]:
+            unit = command[4]
+            return subprocess.CompletedProcess(command, 0, self.results.get(unit, "success") + "\n")
+        if command[:2] == ["systemctl", "reset-failed"]:
+            for unit in command[2:]:
+                if self.states[unit]["active"] == "failed":
+                    self.states[unit]["active"] = "inactive"
+                self.results.pop(unit, None)
             return subprocess.CompletedProcess(command, 0)
         if command[:3] == ["systemctl", "enable", "--now"]:
             unit = command[3]
@@ -108,8 +152,11 @@ class Systemctl:
             link.symlink_to(f"/etc/systemd/system/{unit}")
             return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "stop"]:
-            for unit in command[2:]:
+            stopped = list(command[2:])
+            for unit in stopped:
                 self.states[unit]["active"] = "inactive"
+                stopped.extend(name for name, parent in self.part_of.items()
+                               if parent == unit and name not in stopped)
             return subprocess.CompletedProcess(command, 0)
         if command[:3] == [
             "systemctl",
@@ -117,12 +164,21 @@ class Systemctl:
             "start",
         ]:
             unit = command[3]
+            if (unit in {"comitup-web.service", "messagebox-onboarding-home.service"}
+                    and self.states["comitup.service"]["active"] == "active"):
+                # Installed ComItUp replaces these jobs during its startup.
+                raise subprocess.CalledProcessError(1, command, stderr="Job canceled")
             if self.fail_start_once == unit:
                 self.fail_start_once = None
                 raise subprocess.CalledProcessError(1, command)
             self.states[unit]["active"] = "active"
             self.started.append(unit)
             self.ever_activated.append(unit)
+            if unit in self.after_start:
+                self.after_start[unit](self.states)
+            if unit == "comitup.service" and self.comitup_portal:
+                self.states[self.comitup_portal]["active"] = "active"
+                self.ever_activated.append(self.comitup_portal)
             return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "start"]:
             units = command[2:]
@@ -164,6 +220,8 @@ class Systemctl:
                         else f"/etc/systemd/system/{unit}"
                     )
                     link.symlink_to(target)
+            # enable/disable reload systemd, which reruns the mode generator.
+            self._generated_enablement()
             return subprocess.CompletedProcess(command, 0)
         if command[:2] == ["systemctl", "mask"]:
             offset = 3 if command[2] == "--runtime" else 2
@@ -284,7 +342,436 @@ class Fixture:
         self.assert_private_unchanged(test_case)
 
 
+class FakeTime:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 class BoundedUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeTime()
+        patcher = mock.patch.object(bounded_update, "time", self.clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_extra_signed_sound_installs_and_legacy_rollback_restores_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            path, entry = add_sound(fixture)
+            target = fixture.root / entry["installed"].lstrip("/")
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"previous sound")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(target.read_bytes(), path.read_bytes())
+            bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(target.read_bytes(), b"previous sound")
+
+    def test_invalid_extra_sound_rejected_before_mutation(self):
+        cases = ("header", "stereo", "width", "rate", "truncated", "size", "symlink",
+                 "parent_symlink", "traversal", "name", "long_name", "nested", "folder", "code", "target", "hash")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                source = {
+                    "traversal": "sounds/cues/../extra.wav", "name": "sounds/cues/Extra.wav",
+                    "long_name": "sounds/cues/" + "a" * 82 + ".wav",
+                    "nested": "sounds/cues/nested/extra.wav", "folder": "sounds/custom/extra.wav",
+                    "code": "scripts/install/extra.py",
+                }.get(case, "sounds/cues/extra.wav")
+                path, entry = add_sound(fixture, source, channels=2 if case == "stereo" else 1,
+                                        width=1 if case == "width" else 2, rate=44100 if case == "rate" else 48000)
+                if case == "header":
+                    path.write_bytes(b"invalid WAV")
+                elif case == "truncated":
+                    path.write_bytes(path.read_bytes()[:-2])
+                elif case == "size":
+                    with path.open("ab") as sound:
+                        sound.truncate(bounded_update.MAX_SOUND_FILE + 1)
+                elif case == "symlink":
+                    path.unlink()
+                    path.symlink_to(fixture.source / "sounds/cues/cue-press.wav")
+                elif case == "parent_symlink":
+                    moved = fixture.source / "moved-cues"
+                    path.parent.rename(moved)
+                    path.parent.symlink_to(moved)
+                elif case == "target":
+                    entry["installed"] = "/etc/extra.wav"
+                entry["sha256"] = "0" * 64 if case == "hash" else sha256(path)
+                fixture.write_manifest()
+                with self.assertRaises(bounded_update.UpdateError):
+                    bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                         root=fixture.root, run=fixture.systemctl)
+                self.assertFalse(fixture.backup.exists())
+                self.assertFalse(fixture.systemctl.commands)
+
+    def test_missing_required_sound_rejected_even_with_extra(self):
+        for missing in ("sounds/cues/cue-press.wav", "sounds/ringtones/hello.wav"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                add_sound(fixture)
+                (fixture.source / missing).unlink()
+                fixture.manifest_data["files"] = [row for row in fixture.manifest_data["files"] if row["source"] != missing]
+                fixture.write_manifest()
+                with self.assertRaisesRegex(bounded_update.UpdateError, "sound pack is incomplete"):
+                    bounded_update.load_candidate(fixture.source, fixture.manifest, fixture.root)
+
+    def test_sound_total_and_count_limits(self):
+        for limit in ("MAX_SOUND_TOTAL", "MAX_SOUND_FILES"):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                with mock.patch.object(bounded_update, limit, 1), self.assertRaisesRegex(
+                        bounded_update.UpdateError, "sound pack exceeds"):
+                    bounded_update.load_candidate(fixture.source, fixture.manifest, fixture.root)
+
+    def test_retired_audio_removed_and_restored_without_touching_family_media(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            retired = [fixture.root / path.removeprefix("/") for path in bounded_update.RETIRED_SOUNDS]
+            for path in retired:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"old bundled audio")
+            custom = fixture.root / "opt/messagebox/sounds/nfc/family.wav"
+            custom.parent.mkdir(parents=True)
+            custom.write_bytes(b"synthetic family clip")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertTrue(all(not path.exists() for path in retired))
+            self.assertEqual(custom.read_bytes(), b"synthetic family clip")
+            for relative in bounded_update.SOUND_SOURCES:
+                self.assertEqual((fixture.root / "opt/messagebox" / relative).read_bytes(), (ROOT / relative).read_bytes())
+            bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+            self.assertTrue(all(path.read_bytes() == b"old bundled audio" for path in retired))
+            self.assertFalse((fixture.root / "opt/messagebox/sounds/cues/cue-press.wav").exists())
+            self.assertEqual(custom.read_bytes(), b"synthetic family clip")
+
+    def test_retired_symlink_rejected_before_service_or_file_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            retired = fixture.root / bounded_update.RETIRED_SOUNDS[0].removeprefix("/")
+            retired.parent.mkdir(parents=True)
+            retired.symlink_to(fixture.private_files[0])
+            with self.assertRaisesRegex(bounded_update.UpdateError, "retired sound"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertFalse(fixture.backup.exists())
+            self.assertFalse(fixture.systemctl.commands)
+            fixture.assert_private_unchanged(self)
+
+    def add_auxiliary(self, fixture, *, active="active", nested=False):
+        unit = "example-analytics.service"
+        parent = "messagebox.target"
+        fixture.systemctl.part_of[unit] = parent
+        fixture.systemctl.states[unit] = {"active": active, "enabled": "enabled"}
+        if nested:
+            fixture.systemctl.part_of["example-metrics.service"] = unit
+            fixture.systemctl.states["example-metrics.service"] = {
+                "active": "active", "enabled": "static",
+            }
+        unit_file = fixture.root / "etc/systemd/system" / unit
+        unit_file.write_text("[Unit]\nPartOf=messagebox.target\n")
+        link = fixture.root / "etc/systemd/system/messagebox.target.wants" / unit
+        link.symlink_to(unit_file)
+        return unit, unit_file, link
+
+    def test_active_reverse_part_of_closure_restored_on_apply_and_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, unit_file, link = self.add_auxiliary(fixture, nested=True)
+            original = copy.deepcopy(fixture.systemctl.states)
+            original_file = unit_file.read_bytes()
+            original_link = os.readlink(link)
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            state = json.loads((fixture.backup / "state.json").read_text())
+            self.assertEqual(state["format"], 2)
+            self.assertEqual(state["auxiliary_units"],
+                             [unit, "example-metrics.service"])
+            self.assertEqual(fixture.systemctl.states[unit], original[unit])
+            self.assertEqual(fixture.systemctl.states["example-metrics.service"],
+                             original["example-metrics.service"])
+            self.assertEqual(unit_file.read_bytes(), original_file)
+            self.assertEqual(os.readlink(link), original_link)
+            self.assertFalse(any(command[1] in {"enable", "disable"} and unit in command
+                                 for command in fixture.systemctl.commands))
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states, original)
+            self.assertEqual(unit_file.read_bytes(), original_file)
+            self.assertEqual(os.readlink(link), original_link)
+
+    def test_inactive_auxiliary_is_never_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture, active="inactive")
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(json.loads((fixture.backup / "state.json").read_text())
+                             ["auxiliary_units"], [])
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states[unit]["active"], "inactive")
+            self.assertNotIn(unit, fixture.systemctl.started)
+
+    def test_inactive_intermediate_still_discovers_active_descendant(self):
+        for managed in (False, True):
+            with self.subTest(managed=managed), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                unit, _, _ = self.add_auxiliary(fixture)
+                if managed:
+                    bridge = "messagebox-button.service"
+                else:
+                    bridge = "example-bridge.target"
+                    fixture.systemctl.states[bridge] = {
+                        "active": "inactive", "enabled": "static",
+                    }
+                fixture.systemctl.part_of[bridge] = "messagebox.target"
+                fixture.systemctl.part_of[unit] = bridge
+                fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+                state = json.loads((fixture.backup / "state.json").read_text())
+                self.assertEqual(state["auxiliary_units"], [unit])
+                self.assertEqual(fixture.systemctl.states[bridge]["active"], "inactive")
+                self.assertEqual(fixture.systemctl.states[unit]["active"], "active")
+                self.assertNotIn(bridge, fixture.systemctl.started)
+
+                bounded_update.rollback(fixture.backup, root=fixture.root,
+                                        run=fixture.systemctl)
+                fixture.assert_original_state(self)
+
+    def test_failed_apply_restores_active_auxiliary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture)
+            fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+            fixture.systemctl.fail_start_once = unit
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "recorded state was restored"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertEqual(fixture.systemctl.states[unit]["active"], "active")
+            fixture.assert_original_state(self)
+
+    def test_failed_auxiliary_verification_triggers_automatic_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit, _, _ = self.add_auxiliary(fixture)
+            fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+            failed_once = False
+
+            def failed_health(command, **options):
+                nonlocal failed_once
+                if (command == ["systemctl", "is-active", unit]
+                        and unit in fixture.systemctl.started and not failed_once):
+                    failed_once = True
+                    return subprocess.CompletedProcess(command, 3, "failed\n")
+                return fixture.systemctl(command, **options)
+
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "recorded state was restored"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=failed_health)
+            self.assertTrue(failed_once)
+            fixture.assert_original_state(self)
+
+    def test_auxiliary_discovery_rejects_transition_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            self.add_auxiliary(fixture, active="activating")
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "auxiliary unit is still transitioning"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertFalse(fixture.backup.exists())
+            self.assertTrue(all(command[1] in {"show", "is-active", "is-enabled"}
+                                for command in fixture.systemctl.commands))
+
+    def test_auxiliary_discovery_rejects_invalid_name_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+
+            def invalid_relation(command, **options):
+                if command == ["systemctl", "show", "--property=ConsistsOf",
+                               "--value", "messagebox.target"]:
+                    return subprocess.CompletedProcess(command, 0, "--bad.service\n")
+                return fixture.systemctl(command, **options)
+
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "invalid auxiliary unit name"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=invalid_relation)
+            self.assertFalse(fixture.backup.exists())
+            self.assertTrue(all(command[1] in {"show", "is-active", "is-enabled"}
+                                for command in fixture.systemctl.commands))
+
+    def test_backup_rejects_invalid_auxiliary_names_before_mutation(self):
+        invalid = ("--bad.service", "bad/name.service", "bad service",
+                   "messagebox.target", "example-analytics.service", None, 7, {})
+        for name in invalid:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                unit, _, _ = self.add_auxiliary(fixture)
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+                state_path = fixture.backup / "state.json"
+                state = json.loads(state_path.read_text())
+                state["auxiliary_units"] = [unit, name] if name == unit else [name]
+                state_path.write_text(json.dumps(state))
+                fixture.systemctl.commands.clear()
+                with self.assertRaisesRegex(bounded_update.UpdateError,
+                                            "backup auxiliary unit state is invalid"):
+                    bounded_update.rollback(fixture.backup, root=fixture.root,
+                                            run=fixture.systemctl)
+                self.assertEqual(fixture.systemctl.commands, [])
+
+    def test_version_one_backup_remains_rollback_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            state_path = fixture.backup / "state.json"
+            state = json.loads(state_path.read_text())
+            state["format"] = 1
+            del state["auxiliary_units"]
+            state_path.write_text(json.dumps(state))
+            bounded_update.rollback(fixture.backup, root=fixture.root,
+                                    run=fixture.systemctl)
+            fixture.assert_original_state(self)
+
+    def test_restored_setup_waits_through_inactive_and_transitional_bounces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory, "setup")
+            home = "messagebox-onboarding-home.service"
+            voice = "messagebox-onboarding-voice-gate.service"
+            fixture.systemctl.states[voice]["active"] = "active"
+            expected = copy.deepcopy(fixture.systemctl.states)
+            samples = [
+                {home: "inactive", voice: "activating"},
+                {home: "active", voice: "active"},
+                {home: "deactivating", voice: "reloading"},
+                {home: "active", voice: "active"},
+            ]
+            reads = 0
+
+            def restored_state(command, **options):
+                nonlocal reads
+                if command == ["systemctl", "is-active", bounded_update.UNITS[0]]:
+                    sample = samples[min(reads, len(samples) - 1)]
+                    for unit, state in sample.items():
+                        fixture.systemctl.states[unit]["active"] = state
+                    reads += 1
+                return fixture.systemctl(command, **options)
+
+            bounded_update._verify_active(expected, restored_state)
+            self.assertGreaterEqual(self.clock.now, 3.5)
+            self.assertEqual(fixture.systemctl.states, expected)
+            self.assertTrue(all(command[1] in {"is-active", "is-enabled"}
+                                for command in fixture.systemctl.commands))
+
+    def test_restored_state_rejects_persistent_missing_extra_and_transitioning_units(self):
+        cases = [("messagebox-dash.service", "inactive"),
+                 ("comitup.service", "active"),
+                 ("messagebox-dash.service", "activating")]
+        for unit, observed in cases:
+            with self.subTest(unit=unit, observed=observed), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory)
+                fixture.systemctl.states[unit]["active"] = observed
+                started = self.clock.now
+                with self.assertRaises(bounded_update.UpdateError) as caught:
+                    bounded_update._verify_active(fixture.original_units, fixture.systemctl)
+                self.assertIn("did not settle within 30s", str(caught.exception))
+                self.assertIn(unit, str(caught.exception))
+                self.assertIn(f"observed {observed}", str(caught.exception))
+                self.assertEqual(self.clock.now - started, bounded_update.UNIT_SETTLE_TIMEOUT)
+
+    def test_new_failed_unit_is_rejected_without_waiting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            unit = "messagebox-dash.service"
+            fixture.systemctl.states[unit]["active"] = "failed"
+            with self.assertRaisesRegex(bounded_update.UpdateError, f"restored managed unit failed: {unit}"):
+                bounded_update._verify_active(fixture.original_units, fixture.systemctl)
+            self.assertEqual(self.clock.now, 0)
+
+    def test_transitional_initial_snapshot_is_rejected_before_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.systemctl.states["messagebox-dash.service"]["active"] = "activating"
+            with self.assertRaisesRegex(bounded_update.UpdateError, "still transitioning"):
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+            self.assertFalse(fixture.backup.exists())
+            self.assertEqual(fixture.sample.read_text(), "VALUE = 'old'\n")
+            fixture.assert_private_unchanged(self)
+
+    def test_rollback_stops_units_mid_transition_before_restoring(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                 root=fixture.root, run=fixture.systemctl)
+            unit = "messagebox-dash.service"
+            fixture.systemctl.states[unit]["active"] = "activating"
+            fixture.systemctl.commands.clear()
+            bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+            self.assertTrue(any(command[:2] == ["systemctl", "stop"] and unit in command[2:]
+                                for command in fixture.systemctl.commands))
+            fixture.assert_original_state(self)
+
+    def test_verification_queries_share_the_bounded_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            options_seen = []
+
+            def slow_query(command, **options):
+                options_seen.append(options)
+                self.clock.now += bounded_update.UNIT_SETTLE_TIMEOUT + 1
+                return fixture.systemctl(command, **options)
+
+            with self.assertRaisesRegex(bounded_update.UpdateError, "timed out reading managed unit state"):
+                bounded_update._verify_active(fixture.original_units, slow_query)
+            self.assertEqual(len(options_seen), 1)
+            self.assertEqual(options_seen[0]["timeout"], bounded_update.UNIT_SETTLE_TIMEOUT)
+
+    def test_final_query_crossing_deadline_cannot_report_stable_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            scans = 0
+
+            def final_query_overruns(command, **options):
+                nonlocal scans
+                if command == ["systemctl", "is-active", bounded_update.UNITS[0]]:
+                    scans += 1
+                result = fixture.systemctl(command, **options)
+                if scans == 2 and command == ["systemctl", "is-enabled", bounded_update.UNITS[-1]]:
+                    self.clock.now = bounded_update.UNIT_SETTLE_TIMEOUT + 0.1
+                return result
+
+            with self.assertRaisesRegex(bounded_update.UpdateError,
+                                        "verification finished after its deadline"):
+                bounded_update._verify_active(fixture.original_units, final_query_overruns)
+            self.assertEqual(scans, 2)
+            self.assertEqual(fixture.systemctl.states, fixture.original_units)
+
+    def test_unsupported_state_and_raw_errors_do_not_leak_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.systemctl.states["messagebox-dash.service"]["active"] = "private unexpected output"
+            with self.assertRaises(bounded_update.UpdateError) as caught:
+                bounded_update._verify_active(fixture.original_units, fixture.systemctl)
+            self.assertNotIn("private unexpected output", str(caught.exception))
+            self.assertIn("messagebox-dash.service", str(caught.exception))
+            self.assertEqual(bounded_update._failure_cause(OSError("private path")), "OSError")
+            self.assertEqual(bounded_update._failure_cause(bounded_update.UpdateError("safe unit failure")),
+                             "safe unit failure")
+
     def test_apply_and_rollback_restore_both_boot_modes(self):
         for mode in ("runtime", "setup"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -301,6 +788,12 @@ class BoundedUpdateTests(unittest.TestCase):
                     root=fixture.root,
                     run=fixture.systemctl,
                 )
+
+                for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele"):
+                    for suffix in (".wav", ".lamp.json"):
+                        installed = fixture.root / f"opt/messagebox/ringtones/{name}{suffix}"
+                        self.assertEqual(installed.read_bytes(), (ROOT / f"sounds/ringtones/{name}{suffix}").read_bytes())
+                        self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o644)
 
                 self.assertEqual(
                     fixture.sample.read_text(), '"""Synthetic updated package."""\n'
@@ -320,12 +813,17 @@ class BoundedUpdateTests(unittest.TestCase):
                     stat.S_IMODE((fixture.backup / "state.json").stat().st_mode),
                     0o600,
                 )
+                added_runtime_units = {"messagebox-wifi-watchdog.timer"} if mode == "runtime" else set()
+                expected_direct_starts = expected_active | added_runtime_units
+                expected_direct_starts -= (
+                    {fixture.systemctl.comitup_portal} if mode == "setup" else set()
+                )
                 self.assertEqual(
-                    set(fixture.systemctl.started), expected_active
+                    set(fixture.systemctl.started), expected_direct_starts
                 )
                 self.assertEqual(
                     set(fixture.systemctl.ever_activated),
-                    expected_active | {"messagebox-mode-reconcile.path"},
+                    expected_active | {"messagebox-mode-reconcile.path"} | added_runtime_units,
                 )
                 direct_start_commands = [
                     command
@@ -358,11 +856,92 @@ class BoundedUpdateTests(unittest.TestCase):
                     root=fixture.root,
                     run=fixture.systemctl,
                 )
+                self.assertEqual(list((fixture.root / "opt/messagebox/ringtones").iterdir()), [])
                 fixture.assert_original_state(self)
-                self.assertEqual(set(fixture.systemctl.started), expected_active)
+                self.assertEqual(set(fixture.systemctl.started), expected_direct_starts - added_runtime_units)
                 self.assertEqual(
                     set(fixture.systemctl.ever_activated), expected_active
                 )
+
+    def test_comitup_exclusively_restores_home_or_hotspot_portal(self):
+        portals = {"messagebox-onboarding-home.service", "comitup-web.service"}
+        for portal in sorted(portals):
+            with self.subTest(portal=portal), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory, "setup")
+                fixture.systemctl.comitup_portal = portal
+                for unit in portals:
+                    fixture.systemctl.states[unit]["active"] = "active" if unit == portal else "inactive"
+                fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+                bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                     root=fixture.root, run=fixture.systemctl)
+                expected = {unit: state["active"] for unit, state in fixture.original_units.items()}
+                expected["messagebox-mode-reconcile.path"] = "active"
+                self.assertEqual({unit: state["active"] for unit, state in fixture.systemctl.states.items()},
+                                 expected)
+                bounded_update.rollback(fixture.backup, root=fixture.root, run=fixture.systemctl)
+                fixture.assert_original_state(self)
+                self.assertTrue(portals.isdisjoint(fixture.systemctl.started))
+                self.assertIn(portal, fixture.systemctl.ever_activated)
+
+    def test_required_setup_services_still_require_exact_healthy_states(self):
+        cases = [("messagebox-onboarding-home.service", "inactive"),
+                 ("messagebox-onboarding-home.service", "failed"),
+                 ("comitup.service", "failed")]
+        for unit, observed in cases:
+            with self.subTest(unit=unit, observed=observed), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(directory, "setup")
+                bounded_update._restore_active(fixture.original_units, fixture.systemctl)
+                fixture.systemctl.states[unit]["active"] = observed
+                with self.assertRaises(bounded_update.UpdateError) as caught:
+                    bounded_update._verify_active(fixture.original_units, fixture.systemctl)
+                self.assertIn(unit, str(caught.exception))
+                fixture.assert_private_unchanged(self)
+
+    def test_setup_wifi_apply_and_rollback_accept_state_dependent_web_ui(self):
+        for before in ("inactive", "active"):
+            for after in ("inactive", "failed"):
+                with self.subTest(before=before, after=after), tempfile.TemporaryDirectory() as directory:
+                    fixture = Fixture(directory, "setup")
+                    web = "comitup-web.service"
+                    fixture.systemctl.states[web]["active"] = before
+                    fixture.original_units = copy.deepcopy(fixture.systemctl.states)
+
+                    def connected_comitup(command, **options):
+                        result = fixture.systemctl(command, **options)
+                        if command == ["systemctl", "--job-mode=ignore-dependencies", "start", "comitup.service"]:
+                            # Connected ComItUp cancels/stops the hotspot UI.
+                            fixture.systemctl.states[web]["active"] = after
+                        return result
+
+                    bounded_update.apply(fixture.source, fixture.manifest, fixture.backup,
+                                         root=fixture.root, run=connected_comitup)
+                    recorded = json.loads((fixture.backup / "state.json").read_text())
+                    self.assertEqual(recorded["units"][web]["active"], before)
+                    self.assertEqual(json.loads(fixture.metadata.read_text())["commit"], "a" * 40)
+                    bounded_update.rollback(fixture.backup, root=fixture.root, run=connected_comitup)
+                    self.assertEqual(fixture.systemctl.states["comitup.service"]["active"], "active")
+                    self.assertEqual(fixture.systemctl.states[web]["active"], after)
+                    self.assertNotIn(web, fixture.systemctl.started)
+                    fixture.assert_private_unchanged(self)
+
+    def test_manually_active_web_ui_without_comitup_must_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.original_units["comitup-web.service"]["active"] = "active"
+            fixture.systemctl.states["comitup-web.service"]["active"] = "failed"
+            with self.assertRaisesRegex(bounded_update.UpdateError, "restored managed unit failed: comitup-web.service"):
+                bounded_update._verify_active(fixture.original_units, fixture.systemctl)
+
+    def test_portal_without_active_comitup_retains_recorded_manual_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            portal = "messagebox-onboarding-home.service"
+            fixture.systemctl.states[portal]["active"] = "active"
+            expected = copy.deepcopy(fixture.systemctl.states)
+            fixture.systemctl.states[portal]["active"] = "inactive"
+            bounded_update._restore_active(expected, fixture.systemctl)
+            self.assertIn(portal, fixture.systemctl.started)
+            bounded_update._verify_active(expected, fixture.systemctl)
 
     def test_failure_after_install_rolls_back_files_links_and_units(self):
         for mode in ("runtime", "setup"):
@@ -371,7 +950,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 failing_unit = (
                     "messagebox-dash.service"
                     if mode == "runtime"
-                    else "messagebox-onboarding-home.service"
+                    else "comitup.service"
                 )
                 fixture.systemctl.fail_start_once = failing_unit
                 with self.assertRaisesRegex(
@@ -460,7 +1039,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 mutating = [
                     command
                     for command in fixture.systemctl.commands
-                    if command[1] not in {"is-active", "is-enabled"}
+                    if command[1] not in {"show", "is-active", "is-enabled"}
                 ]
                 self.assertEqual(mutating, [])
 

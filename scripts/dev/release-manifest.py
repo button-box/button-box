@@ -21,7 +21,7 @@ def installed_paths(root):
         if not source.is_file():
             continue
         relative = source.relative_to(root).as_posix()
-        if source.suffix in {".service", ".target", ".path"}:
+        if source.suffix in {".service", ".target", ".path", ".timer"}:
             paths[relative] = "/etc/systemd/system/" + source.name
         elif source.name == "messagebox.tmpfiles.conf":
             paths[relative] = "/etc/tmpfiles.d/messagebox.conf"
@@ -29,11 +29,28 @@ def installed_paths(root):
             paths[relative] = "/usr/local/lib/systemd/system-generators/messagebox-mode-generator"
         elif source.name == "messagebox.conf" and source.parent.name.endswith(".service.d"):
             paths[relative] = "/etc/systemd/system/" + source.parent.name + "/messagebox.conf"
-    for name in ("reply-countdown", "standalone-countdown", "press-to-send", "delete-warning", "not-sent"):
-        source = f"sounds/guided-reply/{name}.wav"
-        paths[source] = "/opt/messagebox/" + source
+    for pack in ("cloud", "cues", "voice", "voices", "voices/pirate", "voices/alien",
+                 "voices/dj", "voices/robot", "voices/french", "voices/charlie", "voices/tata", "voices/buttonbox"):
+        # The Cloud-only fallbacks were introduced after the legacy release layout.
+        if pack == "cloud" and not (root / "sounds" / pack).exists():
+            continue
+        for source in sorted((root / "sounds" / pack).iterdir()):
+            if source.is_file() and source.suffix in {".wav", ".json", ".md"}:
+                relative = source.relative_to(root).as_posix()
+                paths[relative] = "/opt/messagebox/" + relative
+    for source in sorted((root / "sounds/ringtones").iterdir()):
+        if not source.is_file() or source.suffix not in {".wav", ".json"}:
+            continue
+        relative = source.relative_to(root).as_posix()
+        legacy = {"manifest.json"} | {
+            name + suffix
+            for name in ("hello_piano", "sunshine", "bouncy", "sing_along", "island", "hello", "ukulele")
+            for suffix in (".wav", ".lamp.json")
+        }
+        paths[relative] = ("/opt/messagebox/ringtones/" + source.name if source.name in legacy
+                           else "/opt/messagebox/" + relative)
     paths.update({
-        "sounds/feedback/sent-swoosh.wav": "/opt/messagebox/sounds/feedback/sent-swoosh.wav",
+        "config/journald.conf.d/messagebox.conf": "/etc/systemd/journald.conf.d/messagebox.conf",
         "scripts/install/audio_config.py": "/usr/lib/messagebox/audio_config.py",
         "scripts/install/messagebox-mode-migrate.py": "/usr/lib/messagebox/messagebox-mode-migrate.py",
         "scripts/messageboxctl": "/usr/local/bin/messageboxctl",
@@ -52,7 +69,7 @@ def manifest(root=ROOT):
     return {
         "version": (root / "VERSION").read_text().strip(),
         "commit": revision,
-        "scope": "Installed program files and bundled prompts only; excludes user state, generated audio, OS packages and private configuration.",
+        "scope": "Installed program files and bundled sounds only; excludes user state, generated audio, OS packages and private configuration.",
         "files": [{"source": source, "installed": target,
                    "sha256": hashlib.sha256((root / source).read_bytes()).hexdigest()}
                   for source, target in sorted(installed_paths(root).items())],

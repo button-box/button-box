@@ -1,0 +1,36 @@
+[Unit]
+ConditionPathExists=!/var/lib/button-box-update/install-inhibit
+Description=Button Box physical button interaction
+After=network-online.target sound.target messagebox-audio-detect.service
+Requires=messagebox-audio-detect.service
+Wants=network-online.target
+PartOf=messagebox.target
+
+[Service]
+User=messagebox
+Group=messagebox
+RuntimeDirectory=messagebox-button
+RuntimeDirectoryMode=0700
+WorkingDirectory=/run/messagebox-button
+Environment=MSGBOX_MIC_CARD=mic
+Environment=MSGBOX_MIC_CONTROL=Mic
+Environment=MSGBOX_MIC_GAIN=100%%
+Environment=MSGBOX_SPEAKER_CARD=Device
+Environment=MSGBOX_SPEAKER_CONTROL=PCM
+Environment=MSGBOX_SPEAKER_VOLUME=50%%
+EnvironmentFile=/etc/messagebox/env
+EnvironmentFile=/run/messagebox-audio/audio.env
+Environment=HOME=/var/lib/messagebox
+Environment=PYTHONPATH=/opt/messagebox
+Environment=WACLI_STORE_DIR=/var/lib/messagebox/wacli
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+SupplementaryGroups=gpio audio messagebox-settings
+UMask=0077
+ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_MIC_CARD} sset ${MSGBOX_MIC_CONTROL} ${MSGBOX_MIC_GAIN} cap
+ExecStartPre=-/usr/bin/amixer -c ${MSGBOX_SPEAKER_CARD} sset ${MSGBOX_SPEAKER_CONTROL} ${MSGBOX_SPEAKER_VOLUME} unmute
+ExecStart=/usr/bin/python3 -u -m messagebox.button_send
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=messagebox.target

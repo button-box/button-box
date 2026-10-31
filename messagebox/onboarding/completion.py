@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import grp
+import logging
 import os
 import stat
 import subprocess
@@ -10,7 +12,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from messagebox import cloud_setup, sound_pack
 from messagebox.contacts import ContactError, ContactStore
+from messagebox.cloud_device import CloudDeviceClient, CloudDeviceError
 from messagebox.onboarding.paths import (
     MODE_RECONCILE_PENDING_PATH,
     MODE_TRANSITION_LOCK_PATH,
@@ -59,8 +63,13 @@ def _atomic_json(path, document):
             temporary.unlink(missing_ok=True)
 
 
-def request_completion(path=ONBOARDING_COMPLETION_REQUEST_PATH):
-    _atomic_json(path, {"version": 1, "complete": True})
+def request_completion(path=ONBOARDING_COMPLETION_REQUEST_PATH, *, transport="legacy"):
+    if transport not in {"legacy", "cloud"}:
+        raise ValueError("completion transport is invalid")
+    document = {"version": 1, "complete": True}
+    if transport == "cloud":
+        document["transport"] = "cloud"
+    _atomic_json(path, document)
 
 
 def _valid_request(path=ONBOARDING_COMPLETION_REQUEST_PATH):
@@ -68,8 +77,11 @@ def _valid_request(path=ONBOARDING_COMPLETION_REQUEST_PATH):
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
         raise RuntimeError("completion request is unsafe")
-    if json.loads(path.read_text(encoding="utf-8")) != {"version": 1, "complete": True}:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document not in ({"version": 1, "complete": True},
+                        {"version": 1, "complete": True, "transport": "cloud"}):
         raise RuntimeError("completion request is invalid")
+    return document.get("transport", "legacy")
 
 
 def _restore_onboarding(enabled_path, *, run):
@@ -77,6 +89,14 @@ def _restore_onboarding(enabled_path, *, run):
     run(["systemctl", "daemon-reload"], check=False)
     run(["systemctl", "stop", RUNTIME_TARGET], check=False)
     run(["systemctl", "start", "comitup.service"], check=False)
+
+
+def request_all_set_sound():
+    # Shared settings group lets the runtime read the root gate's receipt.
+    path = sound_pack.ALL_SET_REQUEST
+    _atomic_json(path, {"complete": True})
+    os.chown(path, 0, grp.getgrnam("messagebox-settings").gr_gid)
+    os.chmod(path, 0o640)
 
 
 def complete(
@@ -92,21 +112,35 @@ def complete(
     pending_path=MODE_RECONCILE_PENDING_PATH,
     marker_uid=0,
     lock_uid=None,
+    cloud_client=None,
 ):
     if os.geteuid() != 0:
         raise RuntimeError("completion gate requires root")
     with transition_lock(lock_path, trusted_uid=lock_uid):
-        _valid_request(request_path)
+        requested_transport = _valid_request(request_path)
         enabled_path = Path(enabled_path)
         if read_mode(enabled_path, trusted_uid=marker_uid) is not Mode.SETUP:
             raise RuntimeError("onboarding gate is unavailable")
-        recipient_setup = recipients or RecipientSetup(contacts_path=contacts_path)
-        recipient_state = recipient_setup.public_state()
-        contacts = ContactStore(contacts_path).load()
-        default = contacts["default_recipient"]
-        if recipient_state["status"] != "complete" or default not in contacts["contacts"]:
-            raise RuntimeError("recipient setup is incomplete")
-        has_cards = any(contact["card_uids"] for contact in contacts["contacts"].values())
+        cloud_mode = os.environ.get("MSGBOX_TRANSPORT") == "cloud"
+        if cloud_mode != (requested_transport == "cloud"):
+            raise RuntimeError("completion transport does not match device configuration")
+        if cloud_mode:
+            try:
+                claim = (cloud_client or CloudDeviceClient.from_environment()).claim()
+            except CloudDeviceError as exc:
+                raise RuntimeError("cloud claim cannot be verified") from exc
+            if claim.get("claimed") is not True:
+                raise RuntimeError("cloud claim is incomplete")
+            cloud_setup.SetupGuide().advance({"scan", "press"}, "names")
+            has_cards = False
+        else:
+            recipient_setup = recipients or RecipientSetup(contacts_path=contacts_path)
+            recipient_state = recipient_setup.public_state()
+            contacts = ContactStore(contacts_path).load()
+            default = contacts["default_recipient"]
+            if recipient_state["status"] != "complete" or default not in contacts["contacts"]:
+                raise RuntimeError("recipient setup is incomplete")
+            has_cards = any(contact["card_uids"] for contact in contacts["contacts"].values())
         sleep(response_grace)
         queue_reconcile(run=run, pending_path=pending_path, reason="completion")
         removed_gate = False
@@ -132,6 +166,10 @@ def complete(
             # hostname before the dashboard takes over, including its IPv4 record.
             run(["systemctl", "restart", "avahi-daemon.service"], check=True)
             run(["systemctl", "start", RUNTIME_TARGET], check=True)
+            try:
+                request_all_set_sound()
+            except (OSError, KeyError):
+                logging.getLogger(__name__).warning("Setup completion sound unavailable")
             Path(request_path).unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError):
             if removed_gate:
