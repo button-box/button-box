@@ -37,6 +37,8 @@ the existing `D20`/`D16` NFC defaults.
 - The audio detector loads `dtparam i2s=on` and
   `dtoverlay googlevoicehat-soundcard` at runtime whenever the card is absent,
   including each cold boot. It never reads or writes `config.txt` or its includes.
+  Selection uses the ALSA card name, so changing numeric card indices do not
+  change the microphone or USB speaker selection.
   The ALSA card is
   `sndrpigooglevoi`: 48 kHz, S32_LE, two channels, signal in the left slot only.
 - `/etc/alsa/conf.d/60-button-box-i2s-mic.conf` defines the ALSA PCM
@@ -58,14 +60,24 @@ the existing `D20`/`D16` NFC defaults.
 - A USB box never selects the I2S card, even if the overlay is enabled.
 - During OTA activation and boot, an I2S configuration validates the pins and
   application capability, persists the service guards and ALSA
-  PCM, and requires the I2S capture card. Existing gain configuration is kept.
+  PCM, and checks for the I2S capture card. Existing gain configuration is kept.
   If the card is not already present, it runs `/usr/bin/dtparam i2s=on` and
   `/usr/bin/dtoverlay googlevoicehat-soundcard`, each with a 10-second timeout,
-  then waits at most five seconds for enumeration. It never opens the microphone.
-- Missing tools, loader errors or a missing card fail audio detection; there is
-  no USB fallback in the candidate. The existing updater health reports the
-  failed audio service or missing capture device and restores the prior
-  application. Root-filesystem ALSA configuration and guards survive rollback.
+  and uses one monotonic 45-second hardware activation budget. It polls every
+  250 ms and retries failed loader commands after two seconds, with each command
+  bounded by the remaining budget. A successful overlay load is never repeated
+  while waiting for enumeration. After a failed overlay command, it checks
+  `dtoverlay -l` before retrying, because a timeout may have applied the overlay
+  already. Failed or unrecognized listing output never permits a blind reload.
+  It never opens the microphone.
+- If hardware activation exhausts the 45-second budget, detection logs the
+  unavailable microphone but completes with the I2S raw card name and processed
+  PCM. This lets the button start through its existing `Requires=` / `After=`
+  dependency and keep the physical OTA approval path available on a committed
+  box. There is no USB or raw-audio fallback. The existing health probe reports
+  `FAIL audio:MSGBOX_MIC_DEV:enumerated` while the card is absent. During OTA,
+  that still fails probation and restores the prior application. Root-filesystem
+  ALSA configuration and guards survive rollback.
   A previous USB application may use its working USB microphone; a previous
   application selecting raw I2S is blocked. With no working previous microphone,
   the box stays visibly unhealthy rather than recording raw audio.
@@ -97,18 +109,26 @@ overlay in the running boot if necessary. Enumeration and service readiness
 must pass the existing updater probation before the release commits. No SSH
 command or manual reboot is part of family OTA activation. On the next boot,
 detection revalidates the prerequisites, loads the runtime overlay again if
-needed, and writes the processed PCM runtime settings.
+needed, and writes the processed PCM runtime settings. The 45-second activation
+budget fits within the existing 300-second transaction deadline and 330-second
+install service limit, including the 60-second healthy stability interval.
+The detector remains a oneshot; bounded hardware failure completes successfully
+so its dependent button is started, rather than leaving a failed dependency job.
 
 A reboot during updater probation is deliberately **not** requested: the
 existing controller treats that as an interrupted update and rolls back.
-If this kernel/overlay cannot load live, activation fails and rolls back; there
-is no unsafe reboot fallback. Successful live loading on the supported Pi and
-kernel remains a physical release acceptance requirement. Until that passes,
-OTA support is software-tested, not hardware-accepted.
+If this kernel/overlay cannot load live, the microphone stays unhealthy and
+OTA probation rolls back; there is no reboot fallback. A committed installation
+keeps its button available for repair OTA. The next application update restarts
+its active detector and retries activation without SSH or manual service commands.
+A card which appears late works through the already selected ALSA card name.
+Bench measurements on a Pi 3 A+ confirmed runtime loading and left-channel audio,
+including one 12.654-second enumeration outlier. The revised retry and degraded
+startup behavior still needs repeated physical cold-boot and repair-OTA acceptance.
 
 For developer setup, `MSGBOX_MIC_TYPE=i2s ./scripts/setup.sh` (or provisioning
-with the same variable) prepares the ALSA configuration, guards and safe explicit pins. Fresh
-setup retains its existing request pin `D27`; GPIO 5 wiring must explicitly
+with the same variable) prepares the ALSA configuration, guards and safe explicit
+pins. Fresh setup retains its existing request pin `D27`; GPIO 5 wiring must explicitly
 set `MSGBOX_NFC_REQUEST_PIN=D5` in the installed environment before use.
 
 Operator-only gain adjustment remains available:
@@ -123,7 +143,8 @@ to USB, reconnect its USB microphone, run the helper with `--set-mic-type usb`,
 and restart audio detection and the button service. The helper removes the ALSA
 file. Any existing firmware overlay entry stays untouched and still loads at
 boot; retain conflict-free GPIO assignments while that entry remains. A runtime
-overlay remains until reboot; USB detection excludes that card and does not load it. Persistent service guards permit
+overlay remains until reboot; USB detection excludes that card and does not load
+it. Persistent service guards permit
 USB capture but still reject a legacy application selecting raw I2S.
 
 ## Interrupted configuration and manual boot settings
@@ -146,8 +167,10 @@ switch. Detection checks the actual enumerated card rather than interpreting
 firmware sections or includes. An already corrupt boot volume is not repaired.
 
 Runtime loading must succeed after every cold boot without a firmware overlay
-entry. Failure remains visible through failed audio detection and updater
-health; there is no reboot fallback. Kernel/driver runtime loading, cold boot,
+entry. Exhausted hardware activation remains visible in microphone enumeration health;
+the button stays available for OTA repair. Invalid pins, incompatible applications,
+or failed guard/ALSA writes still fail detection before hardware activation;
+these unsafe configuration failures are never converted into degraded success. Kernel/driver runtime loading, cold boot,
 and actual power-loss recovery still require physical Pi acceptance.
 
 ## Install and verify checklist

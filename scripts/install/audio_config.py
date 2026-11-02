@@ -34,6 +34,7 @@ I2S_GUARD = Path("/etc/systemd/system/messagebox-button.service.d/zz-i2s-microph
 I2S_ALSA_CONFIG = Path("/etc/alsa/conf.d/60-button-box-i2s-mic.conf")
 DEFAULT_I2S_GAIN_DB = 30.0
 MAX_I2S_GAIN_DB = 40.0
+I2S_ACTIVATION_TIMEOUT = 45.0
 # BCM pins taken by I2S (18 clock, 19 frame, 20 data in, 21 data out) and by
 # the overlay's amplifier SD_MODE output (16).
 I2S_RESERVED_GPIOS = frozenset({16, 18, 19, 20, 21})
@@ -48,6 +49,10 @@ I2S_INSTALL_PINS = dict(PIN_SETTINGS, MSGBOX_NFC_RESET_PIN="D4", MSGBOX_NFC_REQU
 
 class AudioConfigError(RuntimeError):
     pass
+
+
+class I2SUnavailable(AudioConfigError):
+    """Hardware unavailable after retrying; keep the button repair path alive."""
 
 
 def _card_id(sound_root, card_number):
@@ -429,7 +434,7 @@ def configured_mic_type(env_path=CONFIG_ENV):
     return kind
 
 
-def activate_i2s(*, run=subprocess.run, sleep=time.sleep):
+def activate_i2s(*, run=subprocess.run, sleep=time.sleep, monotonic=time.monotonic):
     """Prepare root-filesystem settings, then require the card in this boot.
 
     A reboot during updater probation is an interrupted install, not a resume.
@@ -437,10 +442,10 @@ def activate_i2s(*, run=subprocess.run, sleep=time.sleep):
     No microphone is opened here.
     """
     with audio_lock(CONFIG_ENV):
-        return _activate_i2s(run, sleep)
+        return _activate_i2s(run, sleep, monotonic)
 
 
-def _activate_i2s(run, sleep):
+def _activate_i2s(run, sleep, monotonic):
     # Preserve a gain selected by the operator; do not reset it each boot.
     settings = read_settings(CONFIG_ENV)
     if mic_type(settings) != "i2s":
@@ -455,24 +460,57 @@ def _activate_i2s(run, sleep):
         write_atomic(I2S_ALSA_CONFIG, render_i2s_alsa_config())
     else:
         sync_existing_file(I2S_ALSA_CONFIG)
-    try:
-        return detect_microphone(kind="i2s")
-    except AudioConfigError:
-        pass
-    try:
-        for command in (["/usr/bin/dtparam", "i2s=on"],
-                        ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]):
-            run(command, check=True, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=10)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise AudioConfigError("I2S activation failed; update must roll back") from exc
-    for attempt in range(21):
+    deadline = monotonic() + I2S_ACTIVATION_TIMEOUT
+    loaded = False
+    check_overlay = False
+    retry_at = monotonic()
+    while True:
         try:
             return detect_microphone(kind="i2s")
         except AudioConfigError:
-            if attempt == 20:
-                raise AudioConfigError("I2S card unavailable after activation; update must roll back") from None
-            sleep(0.25)
+            pass
+        now = monotonic()
+        if now >= deadline:
+            raise I2SUnavailable(f"I2S microphone unavailable after {I2S_ACTIVATION_TIMEOUT:g} seconds; microphone health failed")
+        if not loaded and now >= retry_at:
+            try:
+                if check_overlay:
+                    # A timed-out loader may already have applied the overlay.
+                    # Establish absence before risking another application.
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        continue
+                    result = run(["/usr/bin/dtoverlay", "-l"], check=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 text=True, timeout=min(10, remaining))
+                    if "googlevoicehat-soundcard" in result.stdout:
+                        loaded = True
+                        continue
+                    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                    absent = lines == ["No overlays loaded"] or (
+                        bool(lines) and lines[0] == "Overlays (in load order):"
+                        and all(re.fullmatch(r"[0-9]+:\s+\S+(?:\s+.*)?", line) for line in lines[1:]))
+                    if not absent:
+                        retry_at = monotonic() + 2
+                        continue
+                    check_overlay = False
+                for command in (["/usr/bin/dtparam", "i2s=on"],
+                                ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]):
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        break
+                    if command[0] == "/usr/bin/dtoverlay":
+                        check_overlay = True
+                    run(command, check=True, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=min(10, remaining))
+                else:
+                    # Loading twice can create duplicate overlays. Once accepted,
+                    # only poll: slow enumeration is not another loader failure.
+                    loaded = True
+            except (OSError, subprocess.SubprocessError):
+                retry_at = monotonic() + 2
+            continue
+        sleep(min(0.25, deadline - now))
 
 
 def main(argv=None):
@@ -518,7 +556,14 @@ def main(argv=None):
             microphone_card, microphone_device = I2S_CARD, I2S_DEVICE
         else:
             if options.runtime_output and kind == "i2s":
-                microphone_card, microphone_device = activate_i2s()
+                try:
+                    microphone_card, microphone_device = activate_i2s()
+                except I2SUnavailable as exc:
+                    # Keep the physical approval path alive on a committed box.
+                    # The raw card remains absent in the existing health probe,
+                    # so probation still rolls back an unhealthy candidate.
+                    print(f"audio setup: {exc}; keeping button repair available", file=sys.stderr)
+                    microphone_card, microphone_device = I2S_CARD, I2S_DEVICE
             else:
                 microphone_card, microphone_device = detect_microphone(kind=kind)
         speaker_card, speaker_device = detect_speaker()

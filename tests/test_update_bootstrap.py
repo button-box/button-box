@@ -5,6 +5,7 @@ real. Root ownership, Pi identity, accounts, and systemd are host substitutes.
 """
 import importlib.util
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -441,6 +442,176 @@ exec /usr/bin/install "${args[@]}"
         self.assertEqual(post[-1], 'complete')
         future.complete_bootstrap(self.root)
         return True
+
+    def test_committed_i2s_cold_boot_recovers_delays_and_keeps_signed_ota_after_exhaustion(self):
+        from test_i2s_application import I2SApplicationTests
+
+        self.assertEqual(self.run_bootstrap('cloud').returncode, 0)
+        self.commit_application()
+        slots.bootstrap(self.root, platform=PLATFORM, run=self.host)
+        self.application_health = lambda *a: None  # Establish the committed source.
+        for unit in ('messagebox-audio-detect.service', 'messagebox-button.service'):
+            self.box.states[unit]['active'] = 'active'
+        self.install_signed_application(self.signed_application('v0.3.18', 'c' * 40, 2))
+        env = write(self.root / 'etc/messagebox/env', b'MSGBOX_TRANSPORT=cloud\nMSGBOX_MIC_TYPE=i2s\n'
+                    b'MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D5\n', 0o640)
+        firmware = write(self.root / 'boot/firmware/config.txt', b'[all]\n')
+        hardware = {'available': True, 'loaded': False, 'delay': 0, 'fail_once': False, 'card': 1}
+        loads, boot_started = [], [0]
+        host_run = self.box.run
+        button_pid = [100]
+
+        def identity():
+            release = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/')
+            value = json.loads((release / 'release.json').read_text())
+            return {'software_version': value['version'], 'software_commit': value['commit']}
+
+        def enumerated():
+            return hardware['available'] and hardware['loaded'] and self.box.now - boot_started[0] >= hardware['delay']
+
+        def detector():
+            helper = self.root / 'usr/lib/messagebox/audio_config.py'
+            spec = importlib.util.spec_from_file_location('cold_boot_audio', helper)
+            audio = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(audio)
+            audio.CONFIG_ENV = env
+            audio.I2S_ALSA_CONFIG = self.root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf'
+            audio.I2S_GUARD = self.root / 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf'
+            audio.I2S_CAPABILITY = self.root / os.readlink(self.root / 'opt/messagebox').lstrip('/') / 'messagebox/mic_capture.py'
+            audio.configured_mic_type = lambda: 'i2s'
+            def detect(**options):
+                self.assertEqual(options['kind'], 'i2s')
+                if not enumerated():
+                    raise audio.AudioConfigError('not enumerated')
+                return audio.I2S_CARD, audio.I2S_DEVICE
+            def load(command, **options):
+                loads.append(command)
+                if hardware['fail_once']:
+                    hardware['fail_once'] = False
+                    raise subprocess.CalledProcessError(1, command)
+                if command[0].endswith('dtoverlay'):
+                    hardware['loaded'] = True
+            audio.detect_microphone = detect
+            audio.detect_speaker = lambda: ('D188A', 'plughw:CARD=D188A,DEV=0')
+            activate = audio.activate_i2s
+            audio.activate_i2s = lambda: activate(run=load, sleep=self.box.worker.time.sleep,
+                                                 monotonic=self.box.worker.time.monotonic)
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                result = audio.main(['--runtime-output', str(self.root / 'run/messagebox-audio/audio.env')])
+            return result, error.getvalue()
+
+        def run(command, **options):
+            if command[:3] == ['systemctl', '--job-mode=ignore-dependencies', 'start']:
+                if command[3] == 'messagebox-audio-detect.service':
+                    result, _error = detector()
+                    self.assertEqual(result, 0)
+                elif command[3] == 'messagebox-button.service':
+                    self.assertEqual(self.box.states['messagebox-audio-detect.service']['active'], 'active')
+                    values = dict(line.split('=', 1) for line in (self.root / 'run/messagebox-audio/audio.env').read_text().splitlines())
+                    self.assertEqual(I2SApplicationTests.execute_guard(self, self.root, values).returncode, 0)
+                    button_pid[0] += 1
+            if command[:2] == ['systemctl', 'show'] and command[3] == '--property=ActiveState,MainPID,NRestarts':
+                pid = button_pid[0] if command[2] == 'messagebox-button.service' else 200
+                return subprocess.CompletedProcess(command, 0, 'ActiveState=' + self.box.states[command[2]]['active'] +
+                                                   f'\nMainPID={pid}\nNRestarts=0\n')
+            if command[0] == 'runuser':
+                tool = command[4]
+                if tool in {'arecord', 'aplay'}:
+                    card = hardware['card'] if tool == 'arecord' else 2
+                    name = 'sndrpigooglevoi' if tool == 'arecord' else 'D188A'
+                    listing = '' if tool == 'arecord' and not enumerated() else f'card {card}: {name} [Synthetic audio], device 0: synthetic\n'
+                    return subprocess.CompletedProcess(command, 0, listing)
+                self.assertEqual(tool, 'test')
+                return subprocess.CompletedProcess(command, 0, '')
+            return host_run(command, **options)
+        self.box.run = run
+
+        # No updater rollback is involved: each case starts with committed software
+        # and no firmware overlay. Only GPIO/process/ALSA/clock edges are modeled.
+        for delay, fail_once, available, card in ((6, True, True, 1), (12.654, False, True, 3), (0, False, False, 1)):
+            with self.subTest(delay=delay, fail_once=fail_once, available=available):
+                self.box.now = 0
+                boot_started[0] = 0
+                loads.clear()
+                hardware.update(delay=delay, fail_once=fail_once, available=available, loaded=False, card=card)
+                (self.root / 'run/messagebox-audio/audio.env').unlink(missing_ok=True)
+                self.box.states['messagebox-audio-detect.service']['active'] = 'inactive'
+                self.box.states['messagebox-button.service']['active'] = 'inactive'
+                self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'committed')
+                run(['systemctl', '--job-mode=ignore-dependencies', 'start', 'messagebox-audio-detect.service'])
+                run(['systemctl', '--job-mode=ignore-dependencies', 'start', 'messagebox-button.service'])
+                self.assertEqual(self.box.states['messagebox-button.service']['active'], 'active')
+                self.assertEqual(self.box.now, 45 if not available else (6 if delay == 6 else 12.75))
+                self.assertEqual(sum(c[0].endswith('dtoverlay') for c in loads), 1)
+                self.assertEqual(firmware.read_bytes(), b'[all]\n')
+                self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'committed')
+
+        later = self.signed_application('v0.3.19', 'd' * 40, 3)
+        with self.installed_controller(selector.selected(self.root)['slot']) as controller:
+            worker = controller.update
+            broker = controller.Controller()
+            native_run, native_installed = subprocess.run, controller.installed
+            def os_run(command, **options):
+                if command == ['systemctl', 'is-active', 'messagebox-update-recovery.service'] or command == [
+                        'systemctl', 'start', '--no-block', 'messagebox-update-install.service']:
+                    return subprocess.CompletedProcess(command, 0, '')
+                return native_run(command, **options)
+            def device_path(path):
+                if path == '/usr/lib/messagebox-update/bounded_update.py':
+                    return self.root / selector.selected(self.root)['slot'] / 'bounded_update.py'
+                if path == '/etc/systemd/system/messagebox-update-recovery.service':
+                    return self.root / path.lstrip('/')
+                return Path(path)
+            def installed():
+                with mock.patch.object(controller, 'Path', side_effect=device_path):
+                    return native_installed()
+            def send(command, **fields):
+                return broker.dispatch({'command': command, **fields}, (button_pid[0], 100, 100))
+            with mock.patch.object(controller, 'INSTALLED', self.root / 'etc/button-box-update/installed'), \
+                 mock.patch.object(controller, 'installed_identity', side_effect=identity), \
+                 mock.patch.object(controller, 'installed', side_effect=installed), \
+                 mock.patch.object(controller, 'unit_pid', side_effect=lambda unit: button_pid[0]), \
+                 mock.patch.object(worker, '_process_token', return_value='synthetic-button-token'), \
+                 mock.patch.object(controller.pwd, 'getpwnam', side_effect=lambda name: types.SimpleNamespace(pw_uid=100 if name == 'messagebox' else 101)), \
+                 mock.patch.object(subprocess, 'run', side_effect=os_run):
+                send('button', released=True, **identity())
+                broker.evidence('heartbeat', identity(), 200)
+                self.assertTrue(controller.installed())  # Actual live approval predicate.
+                spec = importlib.util.spec_from_file_location('cold_boot_health', self.root / selector.selected(self.root)['slot'] / 'health-probe.py')
+                probe = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(probe)
+                current = dict(worker.health_checks(self.root, probe.current_journal(self.root), run)[0])
+                self.assertEqual([name for name, passed in current.items() if not passed],
+                                 ['audio:MSGBOX_MIC_DEV:enumerated'])
+                self.assertTrue(current['unit:messagebox-button.service:active'])
+                bundle = mkdir(controller.STATE / 'downloads' / ('d' * 32), 0o700)
+                for path in later.iterdir():
+                    write(bundle / path.name, path.read_bytes(), 0o600)
+                controller.save('available.json', {'version': 'v0.3.19', 'bundle': str(bundle),
+                                'manifest_sha256': build.digest(bundle / 'release-manifest.json')})
+                operation = send('install', operation_id='i2s-repair', version='v0.3.19', remaining=300)
+                self.assertEqual(operation['state'], 'waiting_for_button')
+                send('arm', binding=operation['binding'], released=True)
+                send('button', released=False, **identity())
+                self.box.sleep(3.1)
+                send('confirm', binding=operation['binding'], released=True)
+                self.assertEqual(controller.read('ticket.json')['operation_id'], 'i2s-repair')
+                # Restore the hardware boundary; OTA itself restarts detection.
+                hardware.update(available=True, loaded=False, delay=12.654)
+                boot_started[0] = self.box.now
+                def health(root, journal, run):
+                    for name, pid in (('button', button_pid[0]), ('heartbeat', 200)):
+                        broker.evidence(name, identity(), pid)
+                    checks = dict(worker.health_checks(root, journal, run)[0])
+                    self.assertTrue(all(checks.values()), [k for k,v in checks.items() if not v])
+                    self.assertLess(self.box.now + worker.HEALTH_STABLE, journal['deadline_mono'])
+                self.application_health = health
+                with mock.patch.object(sys, 'argv', sys.argv[:]):
+                    exec(selector.install_program(self.root, selector.selected(self.root)['slot']), {})
+                self.assertEqual(controller.read('journal.json')['phase'], 'committed')
+                self.assertEqual(controller.read('result.json')['state'], 'installed')
+                self.assertEqual(identity()['software_version'], 'v0.3.19')
+                self.assertTrue(enumerated())
 
     def test_signed_future_ota_automatically_replaces_controller_and_survives_failed_trial(self):
         result = self.run_bootstrap('cloud')

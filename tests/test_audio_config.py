@@ -425,16 +425,108 @@ class AudioConfigTests(unittest.TestCase):
             self.assertEqual(len(commands), 4)
             self.assertIn("44.6684", paths["alsa_config"].read_text())
 
-    def test_activation_missing_loader_timeout_and_missing_card_fail_closed(self):
+    def test_slow_enumeration_and_first_loader_failure_recover_by_card_name(self):
+        from test_bounded_update import FakeTime
+
+        for delay, card in ((6, 1), (12.654, 3), (35, 1)):
+            with self.subTest(delay=delay, card=card), self.activation_box():
+                clock = FakeTime()
+                calls = []
+                def load(command, **options):
+                    calls.append(command)
+                    if len(calls) == 1:
+                        raise subprocess.CalledProcessError(1, command)
+                def sleep(seconds):
+                    clock.sleep(seconds)
+                    if clock.now >= delay and not (self.sound_root / f"pcmC{card}D0c").exists():
+                        self.add_capture(card, 0, audio_config.I2S_CARD)
+                self.assertEqual(audio_config.activate_i2s(run=load, sleep=sleep, monotonic=clock.monotonic),
+                                 (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
+                self.assertGreaterEqual(clock.now, delay)
+                self.assertLessEqual(clock.now, delay + 0.25)
+                self.assertEqual(sum(c[0].endswith("dtoverlay") for c in calls), 1)
+                (self.sound_root / f"pcmC{card}D0c").unlink()
+
+    def test_failed_overlay_is_checked_before_retry_and_timeout_after_apply_is_not_duplicated(self):
+        from test_bounded_update import FakeTime
+
+        for applied in (False, True):
+            with self.subTest(applied=applied), self.activation_box():
+                clock = FakeTime()
+                calls = []
+                overlays = []
+                def load(command, **options):
+                    calls.append(command)
+                    if command[-1] == "-l":
+                        return subprocess.CompletedProcess(command, 0,
+                            "0: googlevoicehat-soundcard\n" if applied else "No overlays loaded\n")
+                    if command[0].endswith("dtoverlay"):
+                        overlays.append(command)
+                        if len(overlays) == 1:
+                            if applied:
+                                clock.sleep(options["timeout"])
+                                raise subprocess.TimeoutExpired(command, options["timeout"])
+                            raise subprocess.CalledProcessError(1, command)
+                def sleep(seconds):
+                    clock.sleep(seconds)
+                    if clock.now >= 12.654 and not (self.sound_root / "pcmC3D0c").exists():
+                        self.add_capture(3, 0, audio_config.I2S_CARD)
+                self.assertEqual(audio_config.activate_i2s(run=load, sleep=sleep, monotonic=clock.monotonic),
+                                 (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
+                self.assertEqual(len(overlays), 1 if applied else 2)
+                self.assertEqual(calls.count(["/usr/bin/dtoverlay", "-l"]), 1)
+                (self.sound_root / "pcmC3D0c").unlink()
+
+    def test_failed_overlay_with_unknown_listing_never_reloads_blindly(self):
+        from test_bounded_update import FakeTime
+
+        with self.activation_box():
+            clock = FakeTime()
+            overlays = []
+            def load(command, **options):
+                if command[-1] == "-l":
+                    return subprocess.CompletedProcess(command, 0, "unrecognized listing format\n")
+                if command[0].endswith("dtoverlay"):
+                    overlays.append(command)
+                    raise subprocess.CalledProcessError(1, command)
+            with self.assertRaises(audio_config.I2SUnavailable):
+                audio_config.activate_i2s(run=load, sleep=clock.sleep, monotonic=clock.monotonic)
+            self.assertEqual(clock.now, 45)
+            self.assertEqual(len(overlays), 1)
+
+    def test_activation_missing_loader_timeout_and_missing_card_exhaust_one_bounded_budget(self):
+        from test_bounded_update import FakeTime
+
         for failure in (FileNotFoundError(), subprocess.TimeoutExpired("dtoverlay", 10),
                         subprocess.CalledProcessError(1, "dtoverlay"), None):
             with self.subTest(failure=type(failure).__name__), self.activation_box():
-                run = mock.Mock(side_effect=failure)
-                sleep = mock.Mock()
-                with self.assertRaisesRegex(audio_config.AudioConfigError, "activation|after activation"):
-                    audio_config.activate_i2s(run=run, sleep=sleep)
-                self.assertLessEqual(run.call_count, 2)
-                self.assertEqual(sleep.call_count, 20 if failure is None else 0)
+                clock = FakeTime()
+                def load(command, **options):
+                    self.assertLessEqual(options["timeout"], 10)
+                    self.assertLessEqual(options["timeout"], 45 - clock.now)
+                    if isinstance(failure, subprocess.TimeoutExpired):
+                        clock.sleep(options["timeout"])
+                    if failure is not None:
+                        raise failure
+                run = mock.Mock(side_effect=load)
+                with self.assertRaisesRegex(audio_config.I2SUnavailable, "45 seconds"):
+                    audio_config.activate_i2s(run=run, sleep=clock.sleep, monotonic=clock.monotonic)
+                self.assertEqual(clock.now, 45)
+                self.assertGreater(run.call_count, 2 if failure else 1)
+
+    def test_exhausted_i2s_runtime_keeps_processed_pcm_and_button_dependency_successful(self):
+        output = self.root / "audio.env"
+        with mock.patch.object(audio_config, "configured_mic_type", return_value="i2s"), \
+             mock.patch.object(audio_config, "activate_i2s", side_effect=audio_config.I2SUnavailable("45 seconds")), \
+             mock.patch.object(audio_config, "detect_speaker", return_value=("D188A", "plughw:CARD=D188A,DEV=0")), \
+             mock.patch.object(audio_config, "detect_microphone", side_effect=AssertionError("USB fallback")), \
+             mock.patch("sys.stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(audio_config.main(["--runtime-output", str(output)]), 0)
+        self.assertIn("button repair available", error.getvalue())
+        values = audio_config.read_settings(output)
+        self.assertEqual(values["MSGBOX_MIC_DEV"], audio_config.I2S_DEVICE)
+        self.assertEqual(values["MSGBOX_MIC_PCM"], audio_config.I2S_PCM)
+        self.assertEqual(values["MSGBOX_SPEAKER_CARD"], "D188A")
 
     def test_activation_rejects_conflicting_pins_before_any_write_or_hardware_command(self):
         with self.activation_box() as paths:

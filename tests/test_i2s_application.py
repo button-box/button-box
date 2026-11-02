@@ -165,7 +165,7 @@ raise SystemExit(module.main(sys.argv[2:]))
                         if hasattr(module, 'activate_i2s'):
                             module.configured_mic_type = lambda: module.mic_type(module.read_settings(root / 'etc/messagebox/env'))
                             activation = module.activate_i2s
-                            module.activate_i2s = lambda: activation(run=load, sleep=lambda seconds: None)
+                            module.activate_i2s = lambda: activation(run=load, sleep=worker.time.sleep, monotonic=worker.time.monotonic)
                         real_mkstemp = module.tempfile.mkstemp
                         def no_guard_space(*args, **kwargs):
                             if configured and Path(kwargs['dir']) in [p.parent for p in guards]:
@@ -212,8 +212,9 @@ raise SystemExit(module.main(sys.argv[2:]))
                         # Hardware/ALSA are synthetic; evidence validation and
                         # failed-service health use the actual updater checks.
                         checks = dict(worker.health_checks(root, journal, run)[0])
-                        code = 'unit:messagebox-audio-detect.service:' + ('active' if available else 'failed')
-                        self.assertEqual(checks[code], available)
+                        self.assertTrue(checks['unit:messagebox-audio-detect.service:active'])
+                        if not available:
+                            self.assertFalse(checks['audio:MSGBOX_MIC_DEV:enumerated'])
                         if available:
                             self.assertTrue(checks['unit:messagebox-button.service:active'])
                             button = {k: v for k, v in checks.items() if k.startswith('evidence:button:')}
@@ -226,7 +227,7 @@ raise SystemExit(module.main(sys.argv[2:]))
                         self.assertEqual(worker.read_state(root, 'result.json')['state'], 'installed')
                         self.assertIn('MSGBOX_MIC_PCM=buttonbox_mic', (root / 'run/messagebox-audio/audio.env').read_text())
                     else:
-                        with self.assertRaisesRegex(worker.UpdateError, 'install_failed'):
+                        with self.assertRaisesRegex(worker.UpdateError, 'health_timeout'):
                             self.install(worker, health)
                         self.assertEqual(worker.controlled_release(root), self.old)
                         self.assertEqual(helper.read_bytes(), legacy)
