@@ -4,6 +4,9 @@ import contextlib
 import io
 import json
 import tempfile
+import os
+import sys
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,6 +27,25 @@ class ReaderStopped(BaseException):
 
 
 class NfcAnnouncementTests(unittest.TestCase):
+    def test_request_pin_override_uses_d5_and_default_remains_d16(self):
+        for configured, expected in ((None, "D16"), ("D5", "D5")):
+            with self.subTest(configured=configured):
+                environment = dict(os.environ)
+                environment.pop("MSGBOX_NFC_REQUEST_PIN", None)
+                environment.pop("MSGBOX_NFC_RESET_PIN", None)
+                if configured:
+                    environment["MSGBOX_NFC_REQUEST_PIN"] = configured
+                driver = mock.Mock()
+                modules = {"board": SimpleNamespace(D20="D20", D16="D16", D5="D5", SCL="SCL", SDA="SDA"),
+                           "busio": SimpleNamespace(I2C=mock.Mock(return_value="bus")),
+                           "digitalio": SimpleNamespace(DigitalInOut=lambda pin: pin),
+                           "adafruit_pn532": SimpleNamespace(),
+                           "adafruit_pn532.i2c": SimpleNamespace(PN532_I2C=driver)}
+                with mock.patch.dict(os.environ, environment, clear=True), mock.patch.dict(sys.modules, modules):
+                    nfc.PN532I2CReader()
+                driver.assert_called_once_with("bus", debug=False, reset="D20", req=expected)
+                driver.return_value.SAM_configuration.assert_called_once_with()
+
     @contextlib.contextmanager
     def box(self, mode, *, contact_count=2, cooldown=60):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:

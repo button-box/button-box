@@ -1,5 +1,8 @@
 """I2S application admission at the service and real transaction boundaries."""
 
+import contextlib
+import importlib.util
+import io
 import os
 import shlex
 import subprocess
@@ -41,7 +44,8 @@ raise SystemExit(module.main(sys.argv[2:]))
                                          shlex.join([sys.executable, str(runner), str(root)]))
         environment = os.environ.copy()
         environment.update(audio_config.read_settings(root / 'etc/messagebox/env'))
-        environment.update(audio_values or {})
+        environment.update({"MSGBOX_MIC_CARD": audio_config.I2S_CARD, "MSGBOX_MIC_PCM": audio_config.I2S_PCM}
+                           if audio_values is None else audio_values)
         return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
 
     def prepare(self, worker):
@@ -91,6 +95,119 @@ raise SystemExit(module.main(sys.argv[2:]))
         with mock.patch.dict(sys.modules, {'release_verify': verify}):
             return worker.install_transaction(fixture.source, fixture.manifest, root=fixture.root,
                                               run=self.run, sequence=1, health=health)
+
+    def test_ota_activates_i2s_or_restores_real_usb_helper_with_current_and_frozen_workers(self):
+        legacy = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                          'v0.3.17:scripts/install/audio_config.py'])
+        legacy_marker = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                                 'v0.3.17:messagebox/mic_capture.py'])
+        for worker in (current, load_frozen('v0.3.12', 'scripts/install/bounded_update.py')):
+            for available in (True, False):
+                with self.subTest(worker=worker.__name__, available=available), \
+                     mock.patch.object(worker, 'time', FakeTime()), \
+                     mock.patch.object(worker, '_boot', return_value='synthetic-boot'):
+                    fixture = self.prepare(worker)
+                    root = fixture.root
+                    states = fixture.systemctl.states if worker is current else fixture.states
+                    host = fixture.systemctl if worker is current else fixture.run
+                    old_release = worker._rooted(root, self.old)
+                    write(old_release / 'messagebox/mic_capture.py', legacy_marker)
+                    helper = root / 'usr/lib/messagebox/audio_config.py'
+                    write(helper, legacy)
+                    boot = write(root / 'boot/firmware/config.txt', b'[all]\n')
+                    alsa = root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf'
+                    alsa.unlink()
+                    self.guard.unlink()
+                    # Candidate helper and capability are installed by the real worker.
+                    for source, target in (('scripts/install/audio_config.py', '/usr/lib/messagebox/audio_config.py'),
+                                           ('messagebox/mic_capture.py', '/opt/messagebox/messagebox/mic_capture.py')):
+                        write(fixture.source / source, (ROOT / source).read_bytes())
+                        entry = next((e for e in fixture.manifest_data['files'] if e['source'] == source), None)
+                        if entry is None:
+                            entry = {'source': source, 'installed': target}
+                            fixture.manifest_data['files'].append(entry)
+                        entry['sha256'] = sha256(fixture.source / source)
+                    fixture.write_manifest()
+                    states['messagebox-audio-detect.service']['active'] = 'active'
+                    write(root / 'run/messagebox-audio/audio.env', b'MSGBOX_MIC_CARD=mic\nMSGBOX_MIC_DEV=plughw:CARD=mic,DEV=0\n')
+                    loads = []
+
+                    def detector():
+                        spec = importlib.util.spec_from_file_location('installed_audio_trial', helper)
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        for name, path in (('CONFIG_ENV', 'etc/messagebox/env'), ('BOOT_CONFIG', 'boot/firmware/config.txt'),
+                                           ('I2S_ALSA_CONFIG', 'etc/alsa/conf.d/60-button-box-i2s-mic.conf'),
+                                           ('I2S_GUARD', 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf')):
+                            setattr(module, name, root / path)
+                        module.I2S_CAPABILITY = worker._rooted(root, worker.controlled_release(root)) / 'messagebox/mic_capture.py'
+                        loaded = [False]
+                        def detect(**options):
+                            if options.get('kind') == 'i2s':
+                                if not loaded[0]:
+                                    raise module.AudioConfigError('not enumerated')
+                                return audio_config.I2S_CARD, audio_config.I2S_DEVICE
+                            return 'mic', 'plughw:CARD=mic,DEV=0'
+                        def load(command, **options):
+                            loads.append(command)
+                            if command[0].endswith('dtoverlay'):
+                                loaded[0] = available
+                        module.detect_microphone = detect
+                        module.detect_speaker = lambda: ('speaker', 'plughw:CARD=speaker,DEV=0')
+                        if hasattr(module, 'activate_i2s'):
+                            module.configured_mic_type = lambda: module.mic_type(module.read_settings(root / 'etc/messagebox/env'))
+                            activation = module.activate_i2s
+                            module.activate_i2s = lambda: activation(run=load, sleep=lambda seconds: None)
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            return module.main(['--runtime-output', str(root / 'run/messagebox-audio/audio.env')])
+
+                    def run(command, **options):
+                        if command[:3] == ['systemctl', '--job-mode=ignore-dependencies', 'start']:
+                            unit = command[3]
+                            if unit == 'messagebox-audio-detect.service':
+                                result = detector()
+                                states[unit]['active'] = 'failed' if result else 'active'
+                                if result and options.get('check'):
+                                    checks = dict(worker.health_checks(root, worker.read_state(root, 'journal.json'), run)[0])
+                                    self.assertFalse(checks['unit:messagebox-audio-detect.service:failed'])
+                                    raise subprocess.CalledProcessError(result, command)
+                                return subprocess.CompletedProcess(command, result, '', '')
+                            if unit == 'messagebox-button.service':
+                                values = audio_config.read_settings(root / 'run/messagebox-audio/audio.env')
+                                denied = states['messagebox-audio-detect.service']['active'] != 'active'
+                                denied = denied or self.execute_guard(root, values).returncode != 0
+                                if denied:
+                                    states[unit]['active'] = 'failed'
+                                    return subprocess.CompletedProcess(command, 1, '', '')
+                        if command[:2] == ['systemctl', 'show'] and command[3] == '--property=ActiveState,MainPID,NRestarts':
+                            state = states[command[2]]['active']
+                            return subprocess.CompletedProcess(command, 0, 'ActiveState=' + state + '\nMainPID=100\nNRestarts=0\n')
+                        if command[0] == 'runuser':
+                            return subprocess.CompletedProcess(command, 1, '', '')
+                        return host(command, **options)
+                    self.run = run
+                    def health(root, journal, run):
+                        # Producer readiness remains a hardware boundary in this
+                        # harness; exercise the real worker's failed-service health.
+                        checks = dict(worker.health_checks(root, journal, run)[0])
+                        code = 'unit:messagebox-audio-detect.service:' + ('active' if available else 'failed')
+                        self.assertEqual(checks[code], available)
+                        if not available:
+                            raise worker.UpdateError('health_timeout')
+                    if available:
+                        self.install(worker, health)
+                        self.assertEqual(worker.read_state(root, 'result.json')['state'], 'installed')
+                        self.assertIn('MSGBOX_MIC_PCM=buttonbox_mic', (root / 'run/messagebox-audio/audio.env').read_text())
+                    else:
+                        with self.assertRaisesRegex(worker.UpdateError, 'install_failed'):
+                            self.install(worker, health)
+                        self.assertEqual(worker.controlled_release(root), self.old)
+                        self.assertEqual(helper.read_bytes(), legacy)
+                        self.assertEqual(worker.read_state(root, 'result.json')['state'], 'rolled_back')
+                        self.assertEqual(states['messagebox-button.service']['active'], 'active')
+                        self.assertNotIn('MSGBOX_MIC_PCM', (root / 'run/messagebox-audio/audio.env').read_text())
+                    self.assertTrue(loads)
+                    self.assertIn('dtoverlay=googlevoicehat-soundcard', boot.read_text())
 
     def test_enabling_requires_an_i2s_capable_first_application_before_any_audio_write(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -198,7 +315,7 @@ raise SystemExit(module.main(sys.argv[2:]))
             self.assertNotEqual(self.execute_guard(fixture.root).returncode, 0)
             self.assertEqual(current.read_state(fixture.root, 'result.json')['state'], 'rollback_failed')
             audio_config.set_env_value(fixture.root / 'etc/messagebox/env', 'MSGBOX_MIC_TYPE', 'usb')
-            self.assertEqual(self.execute_guard(fixture.root).returncode, 0)
+            self.assertEqual(self.execute_guard(fixture.root, {"MSGBOX_MIC_CARD": "mic"}).returncode, 0)
 
     def test_raw_i2s_without_processed_pcm_is_blocked_even_during_interrupted_usb_switch(self):
         with mock.patch.object(current, 'time', FakeTime()), \
