@@ -34,8 +34,10 @@ the existing `D20`/`D16` NFC defaults.
 
 ## How it works
 
-- `/boot/firmware/config.txt` gets a managed block with `[all]`,
-  `dtparam=i2s=on` and `dtoverlay=googlevoicehat-soundcard`. The ALSA card is
+- The audio detector loads `dtparam i2s=on` and
+  `dtoverlay googlevoicehat-soundcard` at runtime whenever the card is absent,
+  including each cold boot. It never reads or writes `config.txt` or its includes.
+  The ALSA card is
   `sndrpigooglevoi`: 48 kHz, S32_LE, two channels, signal in the left slot only.
 - `/etc/alsa/conf.d/60-button-box-i2s-mic.conf` defines the ALSA PCM
   `buttonbox_mic`: it takes the left slot, applies a fixed gain (default
@@ -55,7 +57,7 @@ the existing `D20`/`D16` NFC defaults.
   accepts only that form.
 - A USB box never selects the I2S card, even if the overlay is enabled.
 - During OTA activation and boot, an I2S configuration validates the pins and
-  application capability, persists the service guards, boot overlay and ALSA
+  application capability, persists the service guards and ALSA
   PCM, and requires the I2S capture card. Existing gain configuration is kept.
   If the card is not already present, it runs `/usr/bin/dtparam i2s=on` and
   `/usr/bin/dtoverlay googlevoicehat-soundcard`, each with a 10-second timeout,
@@ -63,7 +65,7 @@ the existing `D20`/`D16` NFC defaults.
 - Missing tools, loader errors or a missing card fail audio detection; there is
   no USB fallback in the candidate. The existing updater health reports the
   failed audio service or missing capture device and restores the prior
-  application. Persistent boot/ALSA configuration and guards survive rollback.
+  application. Root-filesystem ALSA configuration and guards survive rollback.
   A previous USB application may use its working USB microphone; a previous
   application selecting raw I2S is blocked. With no working previous microphone,
   the box stays visibly unhealthy rather than recording raw audio.
@@ -94,8 +96,8 @@ recording services. Detection prepares persistent configuration and loads the
 overlay in the running boot if necessary. Enumeration and service readiness
 must pass the existing updater probation before the release commits. No SSH
 command or manual reboot is part of family OTA activation. On the next boot,
-the persisted overlay should enumerate the card before detection; detection
-revalidates the prerequisites and writes the processed PCM runtime settings.
+detection revalidates the prerequisites, loads the runtime overlay again if
+needed, and writes the processed PCM runtime settings.
 
 A reboot during updater probation is deliberately **not** requested: the
 existing controller treats that as an interrupted update and rolls back.
@@ -105,7 +107,7 @@ kernel remains a physical release acceptance requirement. Until that passes,
 OTA support is software-tested, not hardware-accepted.
 
 For developer setup, `MSGBOX_MIC_TYPE=i2s ./scripts/setup.sh` (or provisioning
-with the same variable) prepares the overlay and safe explicit pins. Fresh
+with the same variable) prepares the ALSA configuration, guards and safe explicit pins. Fresh
 setup retains its existing request pin `D27`; GPIO 5 wiring must explicitly
 set `MSGBOX_NFC_REQUEST_PIN=D5` in the installed environment before use.
 
@@ -118,29 +120,35 @@ sudo systemctl restart messagebox-audio-detect messagebox-button
 
 Gain is 0 to 40 dB; changing gain needs no reboot. To return a bench installation
 to USB, reconnect its USB microphone, run the helper with `--set-mic-type usb`,
-and restart audio detection and the button service. The helper removes its boot
-block and ALSA file. An `[all]` boundary keeps subsequent settings in global
-scope. A manually added overlay stays, and a running overlay remains until the
-next reboot. USB detection excludes that card. Persistent service guards permit
+and restart audio detection and the button service. The helper removes the ALSA
+file. Any existing firmware overlay entry stays untouched and still loads at
+boot; retain conflict-free GPIO assignments while that entry remains. A runtime
+overlay remains until reboot; USB detection excludes that card and does not load it. Persistent service guards permit
 USB capture but still reject a legacy application selecting raw I2S.
 
 ## Interrupted configuration and manual boot settings
 
 Microphone switches are serialized by `/etc/messagebox/.audio-config.lock`.
-Enabling first persists the application start guard, so even a later legacy
-install cannot record raw I2S after an interruption. It then writes boot
-configuration, the ALSA configuration, and activates `MSGBOX_MIC_TYPE=i2s` last. Each file
-and its containing directory is synced before proceeding, including newly
+Enabling first persists both application start guards, then the ALSA
+configuration, and activates `MSGBOX_MIC_TYPE=i2s` last. Root-filesystem files
+and their containing directories are synced before proceeding, including newly
 created parent directories. Disabling commits USB mode before removing the
-overlay and ALSA file; deletion also syncs the containing directory. This
-ordering covers separate boot and root filesystems. Repeating the switch
-after an interruption completes it safely.
+ALSA file; deletion also syncs its directory. Repeating an interrupted switch
+completes it safely. Correct regular, owned, single-link guards with mode 0644
+are reused and synced, without allocating replacement files. Missing or altered
+guards still require a successful durable replacement before detection.
 
-An unmanaged overlay is accepted only with an unconditional `dtparam=i2s=on`
-and one unparameterized overlay line in global scope. Conditional overlays,
-includes, duplicate overlays, unclear I2S parameters and incomplete or edited
-managed blocks are refused. Resolve these manually before retrying. The helper
-does not guess which Pi model or nested include will make a line effective.
+Firmware `config.txt` and included files are never read, edited, replaced or
+synced by this helper. This avoids the VFAT rename/inode durability hazard
+entirely; there is no claimed crash-safe VFAT replacement. Existing manual or
+previously managed overlay entries remain untouched, including during a USB
+switch. Detection checks the actual enumerated card rather than interpreting
+firmware sections or includes. An already corrupt boot volume is not repaired.
+
+Runtime loading must succeed after every cold boot without a firmware overlay
+entry. Failure remains visible through failed audio detection and updater
+health; there is no reboot fallback. Kernel/driver runtime loading, cold boot,
+and actual power-loss recovery still require physical Pi acceptance.
 
 ## Install and verify checklist
 
@@ -156,7 +164,7 @@ Steps marked **sudo** require administrator access.
 3. Power off, wire the INMP441 as above, power on.
 4. On a bench installation, set `MSGBOX_MIC_TYPE=i2s` in the local environment
    before requesting the signed OTA. Verify activation without a manual reboot.
-   Repeat with an already enabled overlay to verify the first subsequent boot.
+   Then cold-boot without a firmware overlay entry and verify runtime loading again.
 5. Check the card and the runtime settings:
    `arecord -l | grep sndrpigooglevoi` and
    `cat /run/messagebox-audio/audio.env` (expect
@@ -229,3 +237,22 @@ do not remove the guard to make a legacy application run on raw I2S audio.
 Manual execution outside the managed service and privileged changes can bypass
 this guard. Capability declarations are a trusted release contract, not a
 proof of audio quality or protection against dishonest signed software.
+
+## Offline firmware preservation test
+
+The normal suite checks root-filesystem durability and runtime activation.
+For the real-filesystem regression, prepare a disposable FAT32 filesystem with
+an existing `config.txt` larger than 1 MiB, then mount it read-only. Never use a
+box's actual boot volume as a test fixture. Run:
+
+```sh
+MSGBOX_TEST_VFAT_ROOT=/path/to/disposable/mount python3 -m unittest discover -s tests -p test_audio_config_vfat.py -v
+```
+
+The test validates the FAT mount type, abruptly exits helper processes before
+and after every root configuration write, replacement, deletion and sync, then
+retries configuration and cold-boot detection. Firmware must stay byte-identical
+and detection must recover. On macOS this uses the `msdos` driver; on Linux it
+requires `vfat` or `msdos`. Process exits do not simulate loss of kernel buffers,
+storage power or Pi firmware execution. The test proves the no-firmware-write
+invariant, not boot acceptance or crash-safe FAT replacement.

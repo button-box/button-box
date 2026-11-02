@@ -183,7 +183,6 @@ elif name=='python3':
         import audio_config as audio
         from unittest.mock import patch
         audio.CONFIG_ENV=root/'etc/messagebox/env'
-        audio.BOOT_CONFIG=root/'boot/firmware/config.txt'
         audio.I2S_ALSA_CONFIG=root/'etc/alsa/conf.d/60-button-box-i2s-mic.conf'
         audio.I2S_GUARD=root/'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf'
         audio.I2S_CAPABILITY=root/'opt/messagebox/messagebox/mic_capture.py'
@@ -235,13 +234,13 @@ exec /usr/bin/install "${args[@]}"
         shutil.rmtree(self.repo / 'config/release-keys')
         write(self.repo / 'config/release-keys/test.pub', self.keys[0][0].read_bytes())
 
-    def test_fresh_i2s_setup_installs_safe_pins_overlay_pcm_and_start_guard(self):
+    def test_fresh_i2s_setup_installs_safe_pins_pcm_and_guard_without_boot_writes(self):
         self.fresh_setup('i2s')
         env = (self.root / 'etc/messagebox/env').read_text()
         for setting in ('MSGBOX_MIC_TYPE=i2s', 'MSGBOX_NFC_RESET_PIN=D4',
                         'MSGBOX_NFC_REQUEST_PIN=D27', 'MSGBOX_BUTTON_PIN=17', 'MSGBOX_LED_PIN=26'):
             self.assertIn(setting + '\n', env)
-        self.assertIn('dtoverlay=googlevoicehat-soundcard', (self.root / 'boot/firmware/config.txt').read_text())
+        self.assertEqual((self.root / 'boot/firmware/config.txt').read_text(), 'dtparam=audio=on\n[all]\n')
         self.assertIn('slave.rate 48000', (self.root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf').read_text())
         self.assertIn('--check-i2s-application', (self.root / 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf').read_text())
 

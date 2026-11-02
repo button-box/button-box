@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -267,48 +268,47 @@ class AudioConfigTests(unittest.TestCase):
         env = self.root / "env"
         env.write_text("MSGBOX_MIC_TYPE=usb\nMSGBOX_BUTTON_PIN=17\n" + pins)
         env.chmod(0o640)
-        boot = self.root / "config.txt"
+        boot = self.boot_config = self.root / "config.txt"
         boot.write_text("dtparam=audio=on\n[cm4]\notg_mode=1")
         alsa = self.root / "alsa" / "60-button-box-i2s-mic.conf"
         capability = self.root / "mic_capture.py"
         capability.write_bytes((ROOT / "messagebox/mic_capture.py").read_bytes())
-        return {"env_path": env, "boot_config": boot, "alsa_config": alsa,
+        return {"env_path": env, "alsa_config": alsa,
                 "guard_path": self.root / "units" / "zz-i2s-microphone.conf",
                 "capability_file": capability}
 
     def test_set_mic_type_i2s_is_idempotent_and_keeps_env_lines_and_mode(self):
         paths = self.make_i2s_box()
-        self.assertTrue(audio_config.set_mic_type("i2s", 33, **paths))
-        boot = paths["boot_config"].read_text()
-        self.assertTrue(boot.startswith("dtparam=audio=on\n[cm4]\notg_mode=1\n"))
-        # [all] keeps the overlay out of the preceding model-specific section.
-        self.assertIn("\n[all]\ndtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n", boot)
+        audio_config.set_mic_type("i2s", 33, **paths)
+        boot = self.boot_config.read_text()
+        self.assertTrue(boot.startswith("dtparam=audio=on\n[cm4]\notg_mode=1"))
+        self.assertEqual(boot, "dtparam=audio=on\n[cm4]\notg_mode=1")
         self.assertIn("ttable.0.0 44.6684", paths["alsa_config"].read_text())
         env = paths["env_path"]
         self.assertEqual(env.read_text(), "MSGBOX_MIC_TYPE=i2s\nMSGBOX_BUTTON_PIN=17\n"
                          "MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D27\n")
         self.assertEqual(env.stat().st_mode & 0o777, 0o640)
 
-        self.assertFalse(audio_config.set_mic_type("i2s", **paths))
-        self.assertEqual(paths["boot_config"].read_text(), boot)
+        audio_config.set_mic_type("i2s", **paths)
+        self.assertEqual(self.boot_config.read_text(), boot)
         self.assertIn("ttable.0.0 31.6228", paths["alsa_config"].read_text())
 
     def test_set_mic_type_i2s_keeps_an_overlay_enabled_by_hand(self):
         paths = self.make_i2s_box()
         manual = "dtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n"
-        paths["boot_config"].write_text(manual)
-        self.assertFalse(audio_config.set_mic_type("i2s", **paths))
-        self.assertEqual(paths["boot_config"].read_text(), manual)
+        self.boot_config.write_text(manual)
+        audio_config.set_mic_type("i2s", **paths)
+        self.assertEqual(self.boot_config.read_text(), manual)
 
     def test_set_mic_type_i2s_refuses_conflicting_pins_without_changes(self):
         # Missing NFC pins mean the code defaults D20/D16, which I2S uses.
         paths = self.make_i2s_box(pins="")
-        env, boot = paths["env_path"].read_text(), paths["boot_config"].read_text()
+        env, boot = paths["env_path"].read_text(), self.boot_config.read_text()
         with self.assertRaisesRegex(audio_config.AudioConfigError,
                                     "MSGBOX_NFC_RESET_PIN=D20, MSGBOX_NFC_REQUEST_PIN=D16"):
             audio_config.set_mic_type("i2s", **paths)
         self.assertEqual(paths["env_path"].read_text(), env)
-        self.assertEqual(paths["boot_config"].read_text(), boot)
+        self.assertEqual(self.boot_config.read_text(), boot)
         self.assertFalse(paths["alsa_config"].exists())
 
     def test_each_reserved_gpio_is_refused_for_every_box_pin(self):
@@ -323,15 +323,15 @@ class AudioConfigTests(unittest.TestCase):
 
     def test_set_mic_type_usb_reverses_the_i2s_switch(self):
         paths = self.make_i2s_box()
-        original_boot = paths["boot_config"].read_text()
+        original_boot = self.boot_config.read_text()
         audio_config.set_mic_type("i2s", **paths)
-        self.assertTrue(audio_config.set_mic_type("usb", **paths))
-        self.assertEqual(paths["boot_config"].read_text(), original_boot + "\n[all]\n")
+        audio_config.set_mic_type("usb", **paths)
+        self.assertEqual(self.boot_config.read_text(), original_boot)
         self.assertFalse(paths["alsa_config"].exists())
         self.assertIn("MSGBOX_MIC_TYPE=usb\n", paths["env_path"].read_text())
-        self.assertFalse(audio_config.set_mic_type("usb", **paths))
+        audio_config.set_mic_type("usb", **paths)
 
-    def test_setup_template_for_i2s_does_not_need_the_card_before_reboot(self):
+    def test_setup_template_for_i2s_does_not_need_the_card_before_activation(self):
         output = io.StringIO()
         with (
             mock.patch.object(audio_config, "detect_microphone", side_effect=AssertionError),
@@ -351,33 +351,28 @@ class AudioConfigTests(unittest.TestCase):
                       "MSGBOX_BUTTON_PIN=17", "MSGBOX_LED_PIN=26"):
             self.assertIn(value + "\n", rendered)
 
-    def test_conditional_duplicate_include_and_malformed_boot_configs_are_refused_before_writes(self):
-        cases = ("[pi4]\ndtoverlay=googlevoicehat-soundcard\n",
-                 "[none]\ndtoverlay=googlevoicehat-soundcard\n",
-                 "[all]\ndtoverlay=googlevoicehat-soundcard\n[all]\ndtoverlay=googlevoicehat-soundcard\n",
-                 "include custom.txt\n", "include\tcustom.txt\n",
-                 "[all]\ndtoverlay=googlevoicehat-soundcard\n",
-                 "[all]\ndtoverlay=googlevoicehat-soundcard,unknown=1\n",
-                 "dtparam=i2s=off\ndtoverlay=googlevoicehat-soundcard\n",
-                 audio_config.BOOT_BLOCK_START + "\n",
-                 audio_config.BOOT_BLOCK_END + "\n",
-                 audio_config.BOOT_BLOCK_START + "\n[pi4]\n" + audio_config.BOOT_BLOCK_END + "\n")
-        for content in cases:
-            with self.subTest(content=content):
+    def test_microphone_switches_never_access_firmware_configuration(self):
+        # Includes, model sections, invalid bytes and absent/read-only firmware
+        # are immaterial: the helper has no reason even to open that volume.
+        for content in (b"include custom.txt\n[pi4]\n", b"\xff" * 200000, None):
+            with self.subTest(content=None if content is None else len(content)):
+                if hasattr(self, "boot_config") and self.boot_config.exists():
+                    self.boot_config.chmod(0o644)
                 paths = self.make_i2s_box()
-                paths["boot_config"].write_text(content)
-                with mock.patch.object(audio_config, "write_atomic", side_effect=AssertionError("write before validation")), \
-                     self.assertRaises(audio_config.AudioConfigError):
+                if content is None:
+                    self.boot_config.unlink()
+                else:
+                    self.boot_config.write_bytes(content)
+                    self.boot_config.chmod(0o444)
+                original_open = Path.open
+                def root_only(path, *args, **kwargs):
+                    if path == self.boot_config:
+                        raise AssertionError("firmware access")
+                    return original_open(path, *args, **kwargs)
+                with mock.patch.object(Path, "open", root_only):
                     audio_config.set_mic_type("i2s", **paths)
-                self.assertIn("MSGBOX_MIC_TYPE=usb", paths["env_path"].read_text())
-
-    def test_disabling_i2s_keeps_later_settings_in_global_scope(self):
-        original = "[cm4]\notg_mode=1\n"
-        configured, _ = audio_config.boot_config_with_i2s(original)
-        configured += "dtparam=i2c_arm=on\n[pi4]\narm_boost=1\n"
-        restored, changed = audio_config.boot_config_without_i2s(configured)
-        self.assertTrue(changed)
-        self.assertEqual(restored, original + "[all]\ndtparam=i2c_arm=on\n[pi4]\narm_boost=1\n")
+                    audio_config.set_mic_type("usb", **paths)
+                self.assertEqual(self.boot_config.read_bytes() if content is not None else None, content)
 
     def test_i2s_activation_failure_never_falls_back_or_replaces_runtime_output(self):
         output = self.root / "audio.env"
@@ -395,7 +390,7 @@ class AudioConfigTests(unittest.TestCase):
         paths = self.make_i2s_box(pins="MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D5\n")
         audio_config.set_env_value(paths["env_path"], "MSGBOX_MIC_TYPE", "i2s")
         with contextlib.ExitStack() as stack:
-            for name, path in (("CONFIG_ENV", "env_path"), ("BOOT_CONFIG", "boot_config"),
+            for name, path in (("CONFIG_ENV", "env_path"),
                                ("I2S_ALSA_CONFIG", "alsa_config"), ("I2S_GUARD", "guard_path"),
                                ("I2S_CAPABILITY", "capability_file")):
                 stack.enter_context(mock.patch.object(audio_config, name, paths[path]))
@@ -404,7 +399,7 @@ class AudioConfigTests(unittest.TestCase):
                                 side_effect=lambda **kw: detect(self.sound_root, **kw)))
             yield paths
 
-    def test_ota_activation_loads_once_persists_boot_and_preserves_gain_on_restart(self):
+    def test_activation_loads_each_cold_boot_without_firmware_access_and_preserves_gain(self):
         with self.activation_box() as paths:
             commands = []
             def load(command, **options):
@@ -420,9 +415,14 @@ class AudioConfigTests(unittest.TestCase):
             self.assertEqual(audio_config.activate_i2s(run=load), expected)
             self.assertEqual(commands, [["/usr/bin/dtparam", "i2s=on"],
                                         ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]])
-            self.assertIn("dtoverlay=googlevoicehat-soundcard", paths["boot_config"].read_text())
+            self.assertEqual(self.boot_config.read_bytes(), b"dtparam=audio=on\n[cm4]\notg_mode=1")
             paths["alsa_config"].write_text(audio_config.render_i2s_alsa_config(33))
             self.assertEqual(audio_config.activate_i2s(run=mock.Mock(side_effect=AssertionError("duplicate overlay"))), expected)
+            self.assertIn("44.6684", paths["alsa_config"].read_text())
+            # A subsequent cold boot has no runtime overlay. It must load again.
+            (self.sound_root / "pcmC3D0c").unlink()
+            self.assertEqual(audio_config.activate_i2s(run=load), expected)
+            self.assertEqual(len(commands), 4)
             self.assertIn("44.6684", paths["alsa_config"].read_text())
 
     def test_activation_missing_loader_timeout_and_missing_card_fail_closed(self):
@@ -510,11 +510,8 @@ class AudioConfigTests(unittest.TestCase):
                         except PowerLoss:
                             pass
                     disk.power_loss()
-                    if "dtoverlay=googlevoicehat-soundcard" in paths["boot_config"].read_text():
-                        self.assertEqual(paths["guard_path"].read_text(), audio_config.render_i2s_guard())
+                    self.assertEqual(self.boot_config.read_bytes(), b"dtparam=audio=on\n[cm4]\notg_mode=1")
                     if audio_config.mic_type(audio_config.read_settings(paths["env_path"])) == "i2s":
-                        self.assertIn("\n[all]\ndtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n",
-                                      paths["boot_config"].read_text())
                         self.assertEqual(paths["alsa_config"].read_text(), audio_config.render_i2s_alsa_config())
                         self.assertEqual(paths["guard_path"].read_text(), audio_config.render_i2s_guard())
                     audio_config.set_mic_type(kind, **paths)
@@ -530,25 +527,61 @@ class AudioConfigTests(unittest.TestCase):
                 with self.subTest(kind=kind, boundary=cut, event=event):
                     trial(kind, cut)
 
-    def test_unsynced_manual_boot_and_env_edits_are_durable_even_when_helper_changes_no_lines(self):
-        from test_controller_slots import DurableView
+    def test_valid_guards_allow_startup_under_guard_creation_enospc(self):
+        with self.activation_box() as paths:
+            audio_config.set_mic_type("i2s", **paths)
+            guards = [paths["guard_path"], paths["guard_path"].parent.with_name(
+                "messagebox-onboarding-button.service.d") / paths["guard_path"].name]
+            before = [(p.stat(), p.read_bytes()) for p in guards]
+            self.add_capture(3, 0, audio_config.I2S_CARD)
+            real_mkstemp = tempfile.mkstemp
+            attempts = []
+            def no_guard_space(*args, **kwargs):
+                if Path(kwargs["dir"]) in [p.parent for p in guards]:
+                    attempts.append(kwargs)
+                    raise OSError(errno.ENOSPC, "guard storage full")
+                return real_mkstemp(*args, **kwargs)
+            output = self.root / "run/audio.env"
+            with mock.patch.object(audio_config.tempfile, "mkstemp", side_effect=no_guard_space), \
+                 mock.patch.object(audio_config, "configured_mic_type", return_value="i2s"), \
+                 mock.patch.object(audio_config, "detect_speaker", return_value=("speaker", "plughw:CARD=speaker,DEV=0")):
+                self.assertEqual(audio_config.main(["--runtime-output", str(output)]), 0)
+            self.assertEqual(attempts, [])
+            self.assertIn("MSGBOX_MIC_PCM=buttonbox_mic", output.read_text())
+            for path, (status, content) in zip(guards, before):
+                self.assertEqual(path.stat().st_ino, status.st_ino)
+                self.assertEqual(path.stat().st_mtime_ns, status.st_mtime_ns)
+                self.assertEqual(path.read_bytes(), content)
 
+    def test_unsafe_or_wrong_guards_are_replaced_and_storage_errors_fail_closed(self):
         paths = self.make_i2s_box()
-        disk = DurableView(self.root)
-        manual = "[all]\ndtparam=i2s=on\ndtoverlay=googlevoicehat-soundcard\n"
-        paths["boot_config"].write_text(manual)
-        paths["env_path"].write_text(paths["env_path"].read_text().replace("=usb", "=i2s"))
-        real_fsync = os.fsync
-        def sync(fd):
-            real_fsync(fd)
-            disk.synced(fd)
-        with mock.patch.object(audio_config.os, "fsync", side_effect=sync):
-            self.assertFalse(audio_config.set_mic_type("i2s", **paths))
-        disk.power_loss()
-        self.assertEqual(paths["boot_config"].read_text(), manual)
-        self.assertEqual(audio_config.mic_type(audio_config.read_settings(paths["env_path"])), "i2s")
-        self.assertTrue(paths["alsa_config"].is_file())
-        self.assertTrue(paths["guard_path"].is_file())
+        audio_config.install_i2s_guards(paths["guard_path"])
+        guard = paths["guard_path"]
+        for state in ("wrong contents", "wrong mode", "symlink", "hardlink"):
+            with self.subTest(state=state):
+                guard.unlink()
+                guard.write_text(audio_config.render_i2s_guard())
+                guard.chmod(0o644)
+                if state == "wrong contents":
+                    guard.write_text("[Service]\n")
+                elif state == "wrong mode":
+                    guard.chmod(0o666)
+                else:
+                    other = self.root / state
+                    other.write_text(audio_config.render_i2s_guard())
+                    guard.unlink()
+                    if state == "symlink":
+                        guard.symlink_to(other)
+                    else:
+                        os.link(other, guard)
+                with mock.patch.object(audio_config.tempfile, "mkstemp", side_effect=OSError(errno.ENOSPC, "full")), \
+                     self.assertRaises(OSError):
+                    audio_config.install_i2s_guards(guard)
+                audio_config.install_i2s_guards(guard)
+                self.assertTrue(stat.S_ISREG(guard.lstat().st_mode))
+                self.assertEqual(guard.stat().st_nlink, 1)
+                self.assertEqual(guard.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(guard.read_text(), audio_config.render_i2s_guard())
 
     def test_poller_loads_optional_detected_audio_after_canonical_environment(self):
         unit = (ROOT / "systemd" / "messagebox-poller.service").read_text(encoding="utf-8")

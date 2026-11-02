@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,10 +32,6 @@ I2S_DEVICE = f"plughw:CARD={I2S_CARD},DEV=0"
 I2S_CAPABILITY = Path("/opt/messagebox/messagebox/mic_capture.py")
 I2S_GUARD = Path("/etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf")
 I2S_ALSA_CONFIG = Path("/etc/alsa/conf.d/60-button-box-i2s-mic.conf")
-BOOT_CONFIG = Path("/boot/firmware/config.txt")
-BOOT_BLOCK_START = "# Button Box I2S microphone (managed by audio_config.py)"
-BOOT_BLOCK_END = "# End Button Box I2S microphone"
-BOOT_LINES = ("[all]", "dtparam=i2s=on", "dtoverlay=googlevoicehat-soundcard")
 DEFAULT_I2S_GAIN_DB = 30.0
 MAX_I2S_GAIN_DB = 40.0
 # BCM pins taken by I2S (18 clock, 19 frame, 20 data in, 21 data out) and by
@@ -112,7 +109,7 @@ def detect_microphone(sound_root=Path("/sys/class/sound"), kind="usb"):
     if kind == "i2s":
         if not any(card_id == I2S_CARD and device == 0 for _, device, card_id in captures):
             raise AudioConfigError(
-                "I2S microphone not detected; enable it with --set-mic-type i2s and reboot"
+                "I2S microphone not detected; restart audio detection to activate it"
             )
         return I2S_CARD, I2S_DEVICE
 
@@ -267,7 +264,20 @@ def render_i2s_guard():
 def install_i2s_guards(guard_path):
     for path in (Path(guard_path), Path(guard_path).parent.with_name(
             "messagebox-onboarding-button.service.d") / Path(guard_path).name):
-        write_atomic(path, render_i2s_guard())
+        expected = render_i2s_guard().encode("utf-8")
+        try:
+            info = path.lstat()
+            unchanged = (stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o644
+                         and info.st_uid == os.geteuid() and info.st_nlink == 1
+                         and path.read_bytes() == expected)
+        except FileNotFoundError:
+            unchanged = False
+        if unchanged:
+            # Ordinary startup must not need free root-filesystem space just
+            # to reinstall guards which are already correct.
+            sync_existing_file(path)
+        else:
+            write_atomic(path, expected.decode("utf-8"))
 
 
 def render_i2s_alsa_config(gain_db=DEFAULT_I2S_GAIN_DB):
@@ -301,61 +311,6 @@ pcm.{I2S_PCM} {{
     slave.rate 48000
 }}
 """
-
-
-def boot_config_with_i2s(text):
-    """Return config.txt text with the managed overlay block, and if it changed."""
-    lines = text.splitlines()
-    validate_boot_block(lines)
-    section = "all"
-    overlays = []
-    i2s_enabled = False
-    for line in lines:
-        value = line.split("#", 1)[0].strip()
-        if re.match(r"include(?:\s|$)", value):
-            raise AudioConfigError("cannot establish I2S overlay scope with config.txt includes")
-        if value.startswith("["):
-            section = value
-        if re.match(r"dtparam\s*=\s*i2s=", value):
-            if value != "dtparam=i2s=on" or section not in {"all", "[all]"}:
-                raise AudioConfigError("I2S parameter has unclear scope or value; resolve config.txt first")
-            i2s_enabled = True
-        if re.fullmatch(r"dtoverlay\s*=\s*googlevoicehat-soundcard(?:,.*)?", value):
-            if value != BOOT_LINES[2]:
-                raise AudioConfigError("unmanaged I2S overlay parameters; resolve config.txt first")
-            overlays.append(section)
-    if len(overlays) > 1 or any(section not in {"all", "[all]"} for section in overlays):
-        raise AudioConfigError("I2S overlay has conditional or duplicate scope; resolve config.txt first")
-    if BOOT_BLOCK_START in lines or overlays:
-        if not i2s_enabled:
-            raise AudioConfigError("unmanaged I2S overlay requires an unconditional dtparam=i2s=on")
-        return text, False
-    block = [BOOT_BLOCK_START, *BOOT_LINES, BOOT_BLOCK_END]
-    prefix = text if not text or text.endswith("\n") else text + "\n"
-    return prefix + "\n".join(block) + "\n", True
-
-
-def boot_config_without_i2s(text):
-    lines = text.splitlines(keepends=True)
-    stripped = [line.rstrip("\r\n") for line in lines]
-    validate_boot_block(stripped)
-    if BOOT_BLOCK_START not in stripped:
-        return text, False
-    start = stripped.index(BOOT_BLOCK_START)
-    end = stripped.index(BOOT_BLOCK_END, start)
-    # Later settings were appended in the managed block's global scope.
-    return "".join(lines[:start]) + "[all]\n" + "".join(lines[end + 1:]), True
-
-
-def validate_boot_block(lines):
-    starts, ends = lines.count(BOOT_BLOCK_START), lines.count(BOOT_BLOCK_END)
-    if starts == ends == 0:
-        return
-    if starts == ends == 1:
-        start, end = lines.index(BOOT_BLOCK_START), lines.index(BOOT_BLOCK_END)
-        if lines[start + 1:end] == list(BOOT_LINES):
-            return
-    raise AudioConfigError("incomplete or modified managed I2S boot block; resolve config.txt first")
 
 
 def fsync_directory(path):
@@ -395,9 +350,7 @@ def write_atomic(path, content, mode=0o644, owner=None):
             output.flush()
             if owner is not None:
                 os.fchown(output.fileno(), *owner)
-            # The FAT boot partition cannot store modes; pass None there.
-            if mode is not None:
-                os.fchmod(output.fileno(), mode)
+            os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
         os.replace(temporary_name, path)
         fsync_directory(path.parent)
@@ -436,43 +389,27 @@ def set_mic_type(
     gain_db=DEFAULT_I2S_GAIN_DB,
     *,
     env_path=CONFIG_ENV,
-    boot_config=BOOT_CONFIG,
     alsa_config=I2S_ALSA_CONFIG,
     guard_path=I2S_GUARD,
     capability_file=I2S_CAPABILITY,
 ):
-    """Switch microphone type. Return True when boot configuration changes."""
+    """Persist the microphone choice without modifying firmware configuration."""
     with audio_lock(env_path):
         settings = read_settings(env_path)
-        boot_text = Path(boot_config).read_text(encoding="utf-8")
         if kind == "i2s":
             validate_i2s_pins(settings)
             check_i2s_application(capability_file)
             alsa_text = render_i2s_alsa_config(gain_db)
-            boot_text, changed = boot_config_with_i2s(boot_text)
-            # Protect a later legacy install even if power is lost after the
-            # overlay is durable but before the configured type becomes I2S.
+            # Guards and processed PCM must be durable before selecting I2S.
             install_i2s_guards(guard_path)
-            # Boot and root may be different filesystems. Each prerequisite must be
-            # durable before the next one; the environment is the activation point.
-            if changed:
-                write_atomic(boot_config, boot_text, mode=None)
-            else:
-                sync_existing_file(boot_config)
             write_atomic(alsa_config, alsa_text)
             # Set the type last, so a failed step leaves the box on its old microphone.
             set_env_value(env_path, "MSGBOX_MIC_TYPE", "i2s")
-            return changed
+            return
         if kind != "usb":
             raise AudioConfigError(f"MSGBOX_MIC_TYPE must be one of: {', '.join(MIC_TYPES)}")
         set_env_value(env_path, "MSGBOX_MIC_TYPE", "usb")
-        boot_text, changed = boot_config_without_i2s(boot_text)
-        if changed:
-            write_atomic(boot_config, boot_text, mode=None)
-        else:
-            sync_existing_file(boot_config)
         delete_durable(alsa_config)
-        return changed
 
 
 @contextlib.contextmanager
@@ -493,7 +430,7 @@ def configured_mic_type(env_path=CONFIG_ENV):
 
 
 def activate_i2s(*, run=subprocess.run, sleep=time.sleep):
-    """Prepare persistent audio settings, then require the card in this boot.
+    """Prepare root-filesystem settings, then require the card in this boot.
 
     A reboot during updater probation is an interrupted install, not a resume.
     Live overlay loading lets the existing health/rollback transaction decide.
@@ -510,12 +447,10 @@ def _activate_i2s(run, sleep):
         raise AudioConfigError("microphone selection changed; retry audio detection")
     validate_i2s_pins(settings)
     check_i2s_application(I2S_CAPABILITY)
-    boot_text, changed = boot_config_with_i2s(BOOT_CONFIG.read_text(encoding="utf-8"))
+    # Never edit or sync the firmware's VFAT volume: even rename+directory
+    # fsync cannot guarantee a crash-safe config.txt replacement there.
+    # Load the overlay at runtime on every boot which needs it instead.
     install_i2s_guards(I2S_GUARD)
-    if changed:
-        write_atomic(BOOT_CONFIG, boot_text, mode=None)
-    else:
-        sync_existing_file(BOOT_CONFIG)
     if not I2S_ALSA_CONFIG.exists():
         write_atomic(I2S_ALSA_CONFIG, render_i2s_alsa_config())
     else:
@@ -570,13 +505,12 @@ def main(argv=None):
             check_i2s_application(I2S_CAPABILITY)
             return 0
         if options.set_mic_type:
-            reboot = set_mic_type(options.set_mic_type, options.mic_gain_db,
-                                  env_path=CONFIG_ENV, boot_config=BOOT_CONFIG,
+            set_mic_type(options.set_mic_type, options.mic_gain_db,
+                                  env_path=CONFIG_ENV,
                                   alsa_config=I2S_ALSA_CONFIG, guard_path=I2S_GUARD,
                                   capability_file=I2S_CAPABILITY)
             print(f"Microphone type set to {options.set_mic_type}.")
-            if reboot:
-                print(f"{BOOT_CONFIG} changed: restart messagebox-audio-detect or reboot to apply it.")
+            print("Restart messagebox-audio-detect and the recording services to apply it.")
             return 0
         kind = configured_mic_type() if options.runtime_output else options.mic_type
         if options.template and kind == "i2s":

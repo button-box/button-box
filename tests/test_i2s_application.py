@@ -1,8 +1,10 @@
 """I2S application admission at the service and real transaction boundaries."""
 
 import contextlib
+import errno
 import importlib.util
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -69,9 +71,9 @@ raise SystemExit(module.main(sys.argv[2:]))
         write(fixture.root / 'usr/lib/messagebox/audio_config.py', (ROOT / 'scripts/install/audio_config.py').read_bytes())
         env = write(fixture.root / 'etc/messagebox/env',
                     b'MSGBOX_MIC_TYPE=usb\nMSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D27\n', 0o640)
-        boot = write(fixture.root / 'boot/firmware/config.txt', b'[all]\n')
+        write(fixture.root / 'boot/firmware/config.txt', b'[all]\n')
         self.guard = fixture.root / 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf'
-        audio_config.set_mic_type('i2s', env_path=env, boot_config=boot,
+        audio_config.set_mic_type('i2s', env_path=env,
                                   alsa_config=fixture.root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf',
                                   guard_path=self.guard, capability_file=old_release / 'messagebox/mic_capture.py')
         states['messagebox-button.service']['active'] = 'active'
@@ -102,8 +104,10 @@ raise SystemExit(module.main(sys.argv[2:]))
         legacy_marker = subprocess.check_output(['git', '-C', str(ROOT), 'show',
                                                  'v0.3.17:messagebox/mic_capture.py'])
         for worker in (current, load_frozen('v0.3.12', 'scripts/install/bounded_update.py')):
-            for available in (True, False):
-                with self.subTest(worker=worker.__name__, available=available), \
+            for scenario in ("cold", "configured", "missing"):
+                available = scenario != "missing"
+                configured = scenario == "configured"
+                with self.subTest(worker=worker.__name__, scenario=scenario), \
                      mock.patch.object(worker, 'time', FakeTime()), \
                      mock.patch.object(worker, '_boot', return_value='synthetic-boot'):
                     fixture = self.prepare(worker)
@@ -116,8 +120,12 @@ raise SystemExit(module.main(sys.argv[2:]))
                     write(helper, legacy)
                     boot = write(root / 'boot/firmware/config.txt', b'[all]\n')
                     alsa = root / 'etc/alsa/conf.d/60-button-box-i2s-mic.conf'
-                    alsa.unlink()
-                    self.guard.unlink()
+                    if not configured:
+                        alsa.unlink()
+                        self.guard.unlink()
+                    guards = [self.guard, self.guard.parent.with_name(
+                        'messagebox-onboarding-button.service.d') / self.guard.name]
+                    guard_before = [(p.stat().st_ino, p.read_bytes()) for p in guards] if configured else []
                     # Candidate helper and capability are installed by the real worker.
                     for source, target in (('scripts/install/audio_config.py', '/usr/lib/messagebox/audio_config.py'),
                                            ('messagebox/mic_capture.py', '/opt/messagebox/messagebox/mic_capture.py')):
@@ -136,12 +144,12 @@ raise SystemExit(module.main(sys.argv[2:]))
                         spec = importlib.util.spec_from_file_location('installed_audio_trial', helper)
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
-                        for name, path in (('CONFIG_ENV', 'etc/messagebox/env'), ('BOOT_CONFIG', 'boot/firmware/config.txt'),
+                        for name, path in (('CONFIG_ENV', 'etc/messagebox/env'),
                                            ('I2S_ALSA_CONFIG', 'etc/alsa/conf.d/60-button-box-i2s-mic.conf'),
                                            ('I2S_GUARD', 'etc/systemd/system/messagebox-button.service.d/zz-i2s-microphone.conf')):
                             setattr(module, name, root / path)
                         module.I2S_CAPABILITY = worker._rooted(root, worker.controlled_release(root)) / 'messagebox/mic_capture.py'
-                        loaded = [False]
+                        loaded = [configured]
                         def detect(**options):
                             if options.get('kind') == 'i2s':
                                 if not loaded[0]:
@@ -158,7 +166,13 @@ raise SystemExit(module.main(sys.argv[2:]))
                             module.configured_mic_type = lambda: module.mic_type(module.read_settings(root / 'etc/messagebox/env'))
                             activation = module.activate_i2s
                             module.activate_i2s = lambda: activation(run=load, sleep=lambda seconds: None)
-                        with contextlib.redirect_stderr(io.StringIO()):
+                        real_mkstemp = module.tempfile.mkstemp
+                        def no_guard_space(*args, **kwargs):
+                            if configured and Path(kwargs['dir']) in [p.parent for p in guards]:
+                                raise OSError(errno.ENOSPC, 'guard storage full')
+                            return real_mkstemp(*args, **kwargs)
+                        with contextlib.redirect_stderr(io.StringIO()), \
+                             mock.patch.object(module.tempfile, 'mkstemp', side_effect=no_guard_space):
                             return module.main(['--runtime-output', str(root / 'run/messagebox-audio/audio.env')])
 
                     def run(command, **options):
@@ -179,6 +193,14 @@ raise SystemExit(module.main(sys.argv[2:]))
                                 if denied:
                                     states[unit]['active'] = 'failed'
                                     return subprocess.CompletedProcess(command, 1, '', '')
+                                # Model the button's hardware idle boundary only after
+                                # detection and the actual installed start guard pass.
+                                journal = worker.read_state(root, 'journal.json')
+                                evidence = {key: journal[key] for key in ('transaction', 'boot')}
+                                evidence.update(software_version=journal['version'],
+                                                software_commit=journal['commit'], pid=100,
+                                                ready=True, monotonic=worker.time.monotonic())
+                                write(root / 'run/messagebox-update/button.json', json.dumps(evidence).encode())
                         if command[:2] == ['systemctl', 'show'] and command[3] == '--property=ActiveState,MainPID,NRestarts':
                             state = states[command[2]]['active']
                             return subprocess.CompletedProcess(command, 0, 'ActiveState=' + state + '\nMainPID=100\nNRestarts=0\n')
@@ -187,11 +209,16 @@ raise SystemExit(module.main(sys.argv[2:]))
                         return host(command, **options)
                     self.run = run
                     def health(root, journal, run):
-                        # Producer readiness remains a hardware boundary in this
-                        # harness; exercise the real worker's failed-service health.
+                        # Hardware/ALSA are synthetic; evidence validation and
+                        # failed-service health use the actual updater checks.
                         checks = dict(worker.health_checks(root, journal, run)[0])
                         code = 'unit:messagebox-audio-detect.service:' + ('active' if available else 'failed')
                         self.assertEqual(checks[code], available)
+                        if available:
+                            self.assertTrue(checks['unit:messagebox-button.service:active'])
+                            button = {k: v for k, v in checks.items() if k.startswith('evidence:button:')}
+                            self.assertTrue(button)
+                            self.assertTrue(all(button.values()), button)
                         if not available:
                             raise worker.UpdateError('health_timeout')
                     if available:
@@ -206,17 +233,19 @@ raise SystemExit(module.main(sys.argv[2:]))
                         self.assertEqual(worker.read_state(root, 'result.json')['state'], 'rolled_back')
                         self.assertEqual(states['messagebox-button.service']['active'], 'active')
                         self.assertNotIn('MSGBOX_MIC_PCM', (root / 'run/messagebox-audio/audio.env').read_text())
-                    self.assertTrue(loads)
-                    self.assertIn('dtoverlay=googlevoicehat-soundcard', boot.read_text())
+                    self.assertEqual(bool(loads), not configured)
+                    self.assertEqual(boot.read_bytes(), b'[all]\n')
+                    if configured:
+                        self.assertEqual([(p.stat().st_ino, p.read_bytes()) for p in guards], guard_before)
 
     def test_enabling_requires_an_i2s_capable_first_application_before_any_audio_write(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             env = write(root / 'env', b'MSGBOX_NFC_RESET_PIN=D4\nMSGBOX_NFC_REQUEST_PIN=D27\n')
-            boot = write(root / 'config.txt', b'[all]\n')
+            write(root / 'config.txt', b'[all]\n')
             with mock.patch.object(audio_config, 'write_atomic', side_effect=AssertionError('mutation')), \
                  self.assertRaisesRegex(audio_config.AudioConfigError, 'lacks I2S recording support'):
-                audio_config.set_mic_type('i2s', env_path=env, boot_config=boot,
+                audio_config.set_mic_type('i2s', env_path=env,
                                           capability_file=root / 'missing.py')
 
     def test_current_helper_refuses_missing_invalid_and_future_capabilities_without_executing_them(self):
