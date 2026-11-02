@@ -66,6 +66,8 @@ class RealFirmwareFilesystemTests(unittest.TestCase):
                             return audio_config.I2S_CARD, audio_config.I2S_DEVICE
                         return 'mic', 'plughw:CARD=mic,DEV=0'
                     def load(command, **options):
+                        if command[-1] == '-l':
+                            return subprocess.CompletedProcess(command, 0, 'No overlays loaded\n')
                         if command[0].endswith('dtoverlay'):
                             loaded[0] = True
                     activation = audio_config.activate_i2s

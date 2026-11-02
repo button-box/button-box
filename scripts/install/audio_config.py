@@ -462,7 +462,7 @@ def _activate_i2s(run, sleep, monotonic):
         sync_existing_file(I2S_ALSA_CONFIG)
     deadline = monotonic() + I2S_ACTIVATION_TIMEOUT
     loaded = False
-    check_overlay = False
+    check_overlay = True
     retry_at = monotonic()
     while True:
         try:
@@ -475,7 +475,7 @@ def _activate_i2s(run, sleep, monotonic):
         if not loaded and now >= retry_at:
             try:
                 if check_overlay:
-                    # A timed-out loader may already have applied the overlay.
+                    # A previous invocation or timed-out loader may have applied it.
                     # Establish absence before risking another application.
                     remaining = deadline - monotonic()
                     if remaining <= 0:

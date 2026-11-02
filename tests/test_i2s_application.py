@@ -158,6 +158,8 @@ raise SystemExit(module.main(sys.argv[2:]))
                             return 'mic', 'plughw:CARD=mic,DEV=0'
                         def load(command, **options):
                             loads.append(command)
+                            if command[-1] == '-l':
+                                return subprocess.CompletedProcess(command, 0, 'No overlays loaded\n')
                             if command[0].endswith('dtoverlay'):
                                 loaded[0] = available
                         module.detect_microphone = detect

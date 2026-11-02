@@ -486,6 +486,9 @@ exec /usr/bin/install "${args[@]}"
                 return audio.I2S_CARD, audio.I2S_DEVICE
             def load(command, **options):
                 loads.append(command)
+                if command[-1] == '-l':
+                    listing = '0: googlevoicehat-soundcard\n' if hardware['loaded'] else 'No overlays loaded\n'
+                    return subprocess.CompletedProcess(command, 0, listing)
                 if hardware['fail_once']:
                     hardware['fail_once'] = False
                     raise subprocess.CalledProcessError(1, command)
@@ -542,7 +545,7 @@ exec /usr/bin/install "${args[@]}"
                 run(['systemctl', '--job-mode=ignore-dependencies', 'start', 'messagebox-button.service'])
                 self.assertEqual(self.box.states['messagebox-button.service']['active'], 'active')
                 self.assertEqual(self.box.now, 45 if not available else (6 if delay == 6 else 12.75))
-                self.assertEqual(sum(c[0].endswith('dtoverlay') for c in loads), 1)
+                self.assertEqual(loads.count(['/usr/bin/dtoverlay', 'googlevoicehat-soundcard']), 1)
                 self.assertEqual(firmware.read_bytes(), b'[all]\n')
                 self.assertEqual(self.box.worker.read_state(self.root, 'journal.json')['phase'], 'committed')
 

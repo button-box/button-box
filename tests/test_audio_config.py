@@ -409,11 +409,14 @@ class AudioConfigTests(unittest.TestCase):
                 # Guard and ALSA must be durable before hardware is changed.
                 self.assertTrue(paths["guard_path"].is_file())
                 self.assertTrue(paths["alsa_config"].is_file())
+                if command[-1] == "-l":
+                    return subprocess.CompletedProcess(command, 0, "No overlays loaded\n")
                 if command[0].endswith("dtoverlay"):
                     self.add_capture(3, 0, audio_config.I2S_CARD)
             expected = (audio_config.I2S_CARD, audio_config.I2S_DEVICE)
             self.assertEqual(audio_config.activate_i2s(run=load), expected)
-            self.assertEqual(commands, [["/usr/bin/dtparam", "i2s=on"],
+            self.assertEqual(commands, [["/usr/bin/dtoverlay", "-l"],
+                                        ["/usr/bin/dtparam", "i2s=on"],
                                         ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]])
             self.assertEqual(self.boot_config.read_bytes(), b"dtparam=audio=on\n[cm4]\notg_mode=1")
             paths["alsa_config"].write_text(audio_config.render_i2s_alsa_config(33))
@@ -422,7 +425,7 @@ class AudioConfigTests(unittest.TestCase):
             # A subsequent cold boot has no runtime overlay. It must load again.
             (self.sound_root / "pcmC3D0c").unlink()
             self.assertEqual(audio_config.activate_i2s(run=load), expected)
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 6)
             self.assertIn("44.6684", paths["alsa_config"].read_text())
 
     def test_slow_enumeration_and_first_loader_failure_recover_by_card_name(self):
@@ -434,7 +437,9 @@ class AudioConfigTests(unittest.TestCase):
                 calls = []
                 def load(command, **options):
                     calls.append(command)
-                    if len(calls) == 1:
+                    if command[-1] == "-l":
+                        return subprocess.CompletedProcess(command, 0, "No overlays loaded\n")
+                    if calls.count(["/usr/bin/dtparam", "i2s=on"]) == 1:
                         raise subprocess.CalledProcessError(1, command)
                 def sleep(seconds):
                     clock.sleep(seconds)
@@ -444,7 +449,7 @@ class AudioConfigTests(unittest.TestCase):
                                  (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
                 self.assertGreaterEqual(clock.now, delay)
                 self.assertLessEqual(clock.now, delay + 0.25)
-                self.assertEqual(sum(c[0].endswith("dtoverlay") for c in calls), 1)
+                self.assertEqual(calls.count(["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]), 1)
                 (self.sound_root / f"pcmC{card}D0c").unlink()
 
     def test_failed_overlay_is_checked_before_retry_and_timeout_after_apply_is_not_duplicated(self):
@@ -459,7 +464,7 @@ class AudioConfigTests(unittest.TestCase):
                     calls.append(command)
                     if command[-1] == "-l":
                         return subprocess.CompletedProcess(command, 0,
-                            "0: googlevoicehat-soundcard\n" if applied else "No overlays loaded\n")
+                            "0: googlevoicehat-soundcard\n" if applied and overlays else "No overlays loaded\n")
                     if command[0].endswith("dtoverlay"):
                         overlays.append(command)
                         if len(overlays) == 1:
@@ -474,10 +479,10 @@ class AudioConfigTests(unittest.TestCase):
                 self.assertEqual(audio_config.activate_i2s(run=load, sleep=sleep, monotonic=clock.monotonic),
                                  (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
                 self.assertEqual(len(overlays), 1 if applied else 2)
-                self.assertEqual(calls.count(["/usr/bin/dtoverlay", "-l"]), 1)
+                self.assertEqual(calls.count(["/usr/bin/dtoverlay", "-l"]), 2)
                 (self.sound_root / "pcmC3D0c").unlink()
 
-    def test_failed_overlay_with_unknown_listing_never_reloads_blindly(self):
+    def test_unknown_overlay_listing_never_loads_blindly(self):
         from test_bounded_update import FakeTime
 
         with self.activation_box():
@@ -492,7 +497,7 @@ class AudioConfigTests(unittest.TestCase):
             with self.assertRaises(audio_config.I2SUnavailable):
                 audio_config.activate_i2s(run=load, sleep=clock.sleep, monotonic=clock.monotonic)
             self.assertEqual(clock.now, 45)
-            self.assertEqual(len(overlays), 1)
+            self.assertEqual(len(overlays), 0)
 
     def test_activation_missing_loader_timeout_and_missing_card_exhaust_one_bounded_budget(self):
         from test_bounded_update import FakeTime
@@ -504,6 +509,8 @@ class AudioConfigTests(unittest.TestCase):
                 def load(command, **options):
                     self.assertLessEqual(options["timeout"], 10)
                     self.assertLessEqual(options["timeout"], 45 - clock.now)
+                    if command[-1] == "-l":
+                        return subprocess.CompletedProcess(command, 0, "No overlays loaded\n")
                     if isinstance(failure, subprocess.TimeoutExpired):
                         clock.sleep(options["timeout"])
                     if failure is not None:
@@ -513,6 +520,64 @@ class AudioConfigTests(unittest.TestCase):
                     audio_config.activate_i2s(run=run, sleep=clock.sleep, monotonic=clock.monotonic)
                 self.assertEqual(clock.now, 45)
                 self.assertGreater(run.call_count, 2 if failure else 1)
+
+    def test_overlay_loaded_by_exhausted_run_is_not_loaded_again_in_same_boot(self):
+        from test_bounded_update import FakeTime
+
+        with self.activation_box():
+            clock = FakeTime()
+            calls = []
+            overlay_loaded = False
+            def load(command, **options):
+                nonlocal overlay_loaded
+                calls.append(command)
+                self.assertLessEqual(options["timeout"], min(10, deadline - clock.now))
+                if command[-1] == "-l":
+                    listing = "0: googlevoicehat-soundcard\n" if overlay_loaded else "No overlays loaded\n"
+                    return subprocess.CompletedProcess(command, 0, listing)
+                if command == ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]:
+                    self.assertFalse(overlay_loaded, "duplicate overlay load")
+                    overlay_loaded = True
+            deadline = 45
+            with self.assertRaises(audio_config.I2SUnavailable):
+                audio_config.activate_i2s(run=load, sleep=clock.sleep, monotonic=clock.monotonic)
+            self.assertEqual(clock.now, 45)
+            self.assertTrue(overlay_loaded)
+            first_run_calls = len(calls)
+            def sleep(seconds):
+                clock.sleep(seconds)
+                if clock.now >= 47 and not (self.sound_root / "pcmC3D0c").exists():
+                    self.add_capture(3, 0, audio_config.I2S_CARD)
+            deadline = 90
+            self.assertEqual(audio_config.activate_i2s(run=load, sleep=sleep, monotonic=clock.monotonic),
+                             (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
+            self.assertEqual(calls[first_run_calls:], [["/usr/bin/dtoverlay", "-l"]])
+            self.assertEqual(calls.count(["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]), 1)
+
+    def test_failed_initial_listing_is_retried_before_exactly_one_overlay_load(self):
+        from test_bounded_update import FakeTime
+
+        for failure in (OSError("listing unavailable"), subprocess.CalledProcessError(1, "dtoverlay")):
+            with self.subTest(failure=type(failure).__name__), self.activation_box():
+                clock = FakeTime()
+                calls = []
+                def load(command, **options):
+                    calls.append(command)
+                    self.assertLessEqual(options["timeout"], min(10, 45 - clock.now))
+                    if len(calls) == 1:
+                        self.assertEqual(command, ["/usr/bin/dtoverlay", "-l"])
+                        raise failure
+                    if command[-1] == "-l":
+                        return subprocess.CompletedProcess(command, 0, "No overlays loaded\n")
+                    if command == ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]:
+                        self.add_capture(3, 0, audio_config.I2S_CARD)
+                self.assertEqual(audio_config.activate_i2s(run=load, sleep=clock.sleep, monotonic=clock.monotonic),
+                                 (audio_config.I2S_CARD, audio_config.I2S_DEVICE))
+                self.assertEqual(clock.now, 2)
+                self.assertEqual(calls, [["/usr/bin/dtoverlay", "-l"], ["/usr/bin/dtoverlay", "-l"],
+                                         ["/usr/bin/dtparam", "i2s=on"],
+                                         ["/usr/bin/dtoverlay", "googlevoicehat-soundcard"]])
+                (self.sound_root / "pcmC3D0c").unlink()
 
     def test_exhausted_i2s_runtime_keeps_processed_pcm_and_button_dependency_successful(self):
         output = self.root / "audio.env"
